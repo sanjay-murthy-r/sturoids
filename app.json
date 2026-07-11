@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Student Hub",
+    "slug": "all-in-one-student-app",
+    "version": "1.0.0",
+    "scheme": "studenthub",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0A0F1E",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.sanjay.studenthub",
+      "versionCode": 1,
+      "softwareKeyboardLayoutMode": "pan"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

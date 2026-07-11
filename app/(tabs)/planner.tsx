@@ -1,0 +1,260 @@
+import React, { useMemo, useState } from 'react';
+import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { C, S, T, BLOCK_COLORS } from '../../src/theme';
+import { useStore, PlannerBlock, Habit } from '../../src/store';
+import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks } from '../../src/utils';
+import {
+  ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, CheckCircle,
+} from '../../src/components/UI';
+import { rescheduleHabitReminders, ensurePermission } from '../../src/notifications';
+
+export default function Planner() {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+
+  const planner = useStore((s) => s.planner);
+  const addBlock = useStore((s) => s.addBlock);
+  const updateBlock = useStore((s) => s.updateBlock);
+  const removeBlock = useStore((s) => s.removeBlock);
+  const copyDay = useStore((s) => s.copyDay);
+  const weekTemplates = useStore((s) => s.weekTemplates);
+  const saveTemplate = useStore((s) => s.saveTemplate);
+  const applyTemplate = useStore((s) => s.applyTemplate);
+  const deleteTemplate = useStore((s) => s.deleteTemplate);
+
+  const habits = useStore((s) => s.habits);
+  const addHabit = useStore((s) => s.addHabit);
+  const toggleHabitToday = useStore((s) => s.toggleHabitToday);
+  const removeHabit = useStore((s) => s.removeHabit);
+  const setHabitReminder = useStore((s) => s.setHabitReminder);
+  const remindersEnabled = useStore((s) => s.settings.remindersEnabled);
+  const hour24 = useStore((s) => s.settings.hour24);
+
+  const [day, setDay] = useState<DayName>(dayName());
+  const [blockSheet, setBlockSheet] = useState(false);
+  const [editing, setEditing] = useState<PlannerBlock | null>(null);
+  const [subj, setSubj] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [color, setColor] = useState(BLOCK_COLORS[0]);
+  const [copySheet, setCopySheet] = useState(false);
+  const [tplSheet, setTplSheet] = useState(false);
+  const [tplName, setTplName] = useState('');
+  const [habitSheet, setHabitSheet] = useState(false);
+  const [habitTitle, setHabitTitle] = useState('');
+  const [habitTime, setHabitTime] = useState('');
+  const [remindEdit, setRemindEdit] = useState<Habit | null>(null);
+  const [remindDraft, setRemindDraft] = useState('');
+
+  const blocks = useMemo(
+    () => [...planner[day]].sort((a, b) => toMinutes(a.start) - toMinutes(b.start)),
+    [planner, day]
+  );
+  const today = todayKey();
+
+  const openAdd = () => { setEditing(null); setSubj(''); setStart(''); setEnd(''); setColor(BLOCK_COLORS[0]); setBlockSheet(true); };
+  const openEdit = (b: PlannerBlock) => { setEditing(b); setSubj(b.subject); setStart(b.start); setEnd(b.end); setColor(b.color); setBlockSheet(true); };
+
+  const submitBlock = () => {
+    const s = start.trim(), e = end.trim(), t = subj.trim();
+    if (!t) { Alert.alert('Missing subject', 'Give the block a subject.'); return; }
+    if (toMinutes(s) < 0 || toMinutes(e) < 0) { Alert.alert('Time format', 'Use 24h HH:MM, e.g. 16:00'); return; }
+    if (toMinutes(e) <= toMinutes(s)) { Alert.alert('Time order', 'End must be after start.'); return; }
+    if (editing) updateBlock(day, { ...editing, subject: t, start: s, end: e, color });
+    else addBlock(day, { subject: t, start: s, end: e, color });
+    setBlockSheet(false);
+  };
+
+  const submitHabit = async () => {
+    const t = habitTitle.trim();
+    if (!t) return;
+    const time = /^\d{1,2}:\d{2}$/.test(habitTime.trim()) ? habitTime.trim() : undefined;
+    addHabit(t, time);
+    setHabitTitle(''); setHabitTime(''); setHabitSheet(false);
+    if (time && remindersEnabled) {
+      await ensurePermission();
+      rescheduleHabitReminders(useStore.getState().habits, true);
+    }
+  };
+
+  const saveReminder = async () => {
+    if (!remindEdit) return;
+    const t = remindDraft.trim();
+    const valid = /^\d{1,2}:\d{2}$/.test(t) && toMinutes(t) >= 0;
+    if (t && !valid) { Alert.alert('Time format', 'Use 24h HH:MM, e.g. 21:00 — or leave empty to clear.'); return; }
+    setHabitReminder(remindEdit.id, valid ? t : undefined);
+    setRemindEdit(null);
+    if (remindersEnabled) {
+      await ensurePermission();
+      rescheduleHabitReminders(useStore.getState().habits, true);
+    }
+  };
+
+  return (
+    <ScreenBG>
+      <ScrollView
+        contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 18, paddingBottom: 44 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <Row style={{ justifyContent: 'space-between' }}>
+          <Text style={T.display}>Planner</Text>
+          <Row>
+            <IconBtn name="copy-outline" color={C.textDim} onPress={() => setCopySheet(true)} />
+            <IconBtn name="albums-outline" color={C.textDim} onPress={() => setTplSheet(true)} />
+          </Row>
+        </Row>
+
+        {/* day selector */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 14, marginBottom: 14 }}>
+          {DAY_NAMES.map((d) => (
+            <Chip key={d} label={d} active={day === d} onPress={() => setDay(d)} />
+          ))}
+        </ScrollView>
+
+        {/* blocks */}
+        {blocks.length === 0 ? (
+          <EmptyText>No blocks on {day}.{'\n'}Add subjects with start–end times below.</EmptyText>
+        ) : (
+          blocks.map((b) => (
+            <GlassCard
+              key={b.id} pad={14}
+              onPress={() => router.push({ pathname: '/focus', params: { subject: b.subject } })}
+            >
+              <Row>
+                <View style={[st.colorBar, { backgroundColor: b.color }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={T.title}>{b.subject}</Text>
+                  <Text style={[T.caption, { marginTop: 2, fontVariant: ['tabular-nums'] }]}>
+                    {fmtClockTime(toMinutes(b.start), hour24)} – {fmtClockTime(toMinutes(b.end), hour24)}
+                    <Text style={{ color: C.textFaint }}>   ·   tap → Deep Work</Text>
+                  </Text>
+                </View>
+                <IconBtn name="create-outline" size={18} onPress={() => openEdit(b)} />
+                <IconBtn name="trash-outline" size={18} onPress={() => removeBlock(day, b.id)} />
+              </Row>
+            </GlassCard>
+          ))
+        )}
+        <PillButton label={`Add block to ${day}`} icon="add" onPress={openAdd} style={{ marginTop: 4 }} />
+
+        {/* streaks */}
+        <SectionTitle
+          right={
+            <Pressable onPress={() => setHabitSheet(true)} hitSlop={8}>
+              <Text style={{ color: C.accent, fontSize: 13, fontWeight: '600' }}>+ Habit</Text>
+            </Pressable>
+          }
+        >
+          Streaks
+        </SectionTitle>
+        {habits.length === 0 ? (
+          <EmptyText>Daily habits with streak counters.{'\n'}Small, repeatable, honest.</EmptyText>
+        ) : (
+          habits.map((h) => {
+            const { current, best } = streaks(h.doneDates);
+            const done = h.doneDates.includes(today);
+            return (
+              <GlassCard key={h.id} pad={13}>
+                <Row>
+                  <CheckCircle done={done} onPress={() => toggleHabitToday(h.id)} />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={T.title}>{h.title}</Text>
+                    <Text style={[T.caption, { marginTop: 2 }]}>
+                      🔥 {current} current · {best} best{h.remindTime ? ` · ⏰ ${h.remindTime}` : ''}
+                    </Text>
+                  </View>
+                  <IconBtn
+                    name="alarm-outline" size={18}
+                    color={h.remindTime ? C.accent : C.textFaint}
+                    onPress={() => { setRemindDraft(h.remindTime || ''); setRemindEdit(h); }}
+                  />
+                  <IconBtn name="trash-outline" size={18} onPress={() => removeHabit(h.id)} />
+                </Row>
+              </GlassCard>
+            );
+          })
+        )}
+      </ScrollView>
+
+      {/* block sheet */}
+      <Sheet visible={blockSheet} onClose={() => setBlockSheet(false)} title={editing ? 'Edit block' : `New block — ${day}`}>
+        <Field value={subj} onChangeText={setSubj} placeholder="Subject, e.g. Physics" autoFocus />
+        <Row style={{ gap: 10 }}>
+          <Field value={start} onChangeText={setStart} placeholder="Start 16:00" style={{ flex: 1 }} keyboardType="numbers-and-punctuation" />
+          <Field value={end} onChangeText={setEnd} placeholder="End 17:30" style={{ flex: 1 }} keyboardType="numbers-and-punctuation" />
+        </Row>
+        <Row style={{ marginBottom: 12, marginTop: 2 }}>
+          {BLOCK_COLORS.map((c) => (
+            <Pressable
+              key={c} onPress={() => setColor(c)}
+              style={[st.swatch, { backgroundColor: c }, color === c && st.swatchActive]}
+            />
+          ))}
+        </Row>
+        <PillButton label={editing ? 'Save' : 'Add block'} onPress={submitBlock} />
+      </Sheet>
+
+      {/* copy day sheet */}
+      <Sheet visible={copySheet} onClose={() => setCopySheet(false)} title={`Copy ${day} to…`}>
+        <Row style={{ flexWrap: 'wrap' }}>
+          {DAY_NAMES.filter((d) => d !== day).map((d) => (
+            <Chip key={d} label={d} onPress={() => { copyDay(day, d); setCopySheet(false); }} />
+          ))}
+        </Row>
+        <Text style={[T.caption, { marginTop: 8 }]}>Replaces the target day's blocks.</Text>
+      </Sheet>
+
+      {/* templates sheet */}
+      <Sheet visible={tplSheet} onClose={() => setTplSheet(false)} title="Week templates">
+        {Object.keys(weekTemplates).length === 0 && (
+          <Text style={[T.caption, { marginBottom: 10 }]}>
+            Save the whole week ("Exam week", "Normal week") and switch anytime.
+          </Text>
+        )}
+        {Object.keys(weekTemplates).map((name) => (
+          <Row key={name} style={{ paddingVertical: 8 }}>
+            <Text style={[T.body, { flex: 1 }]}>{name}</Text>
+            <PillButton small label="Apply" onPress={() => { applyTemplate(name); setTplSheet(false); }} style={{ marginRight: 8 }} />
+            <IconBtn name="trash-outline" size={18} onPress={() => deleteTemplate(name)} />
+          </Row>
+        ))}
+        <Row style={{ marginTop: 10 }}>
+          <Field value={tplName} onChangeText={setTplName} placeholder="Save current week as…" style={{ flex: 1, marginBottom: 0 }} />
+          <PillButton
+            small label="Save" style={{ marginLeft: 8 }}
+            onPress={() => { if (tplName.trim()) { saveTemplate(tplName.trim()); setTplName(''); } }}
+          />
+        </Row>
+      </Sheet>
+
+      {/* habit sheet */}
+      <Sheet visible={habitSheet} onClose={() => setHabitSheet(false)} title="New habit">
+        <Field value={habitTitle} onChangeText={setHabitTitle} placeholder="e.g. Revise formula sheet" autoFocus />
+        <Field value={habitTime} onChangeText={setHabitTime} placeholder="Reminder time 21:00 (optional)" keyboardType="numbers-and-punctuation" />
+        <PillButton label="Add habit" onPress={submitHabit} />
+      </Sheet>
+
+      {/* reminder edit sheet */}
+      <Sheet visible={!!remindEdit} onClose={() => setRemindEdit(null)} title={`Reminder — ${remindEdit?.title || ''}`}>
+        <Field
+          value={remindDraft} onChangeText={setRemindDraft}
+          placeholder="24h HH:MM, e.g. 21:00 (empty = off)" keyboardType="numbers-and-punctuation" autoFocus
+        />
+        <PillButton label="Save" onPress={saveReminder} />
+        {!remindersEnabled && (
+          <Text style={[T.caption, { marginTop: 10 }]}>
+            Note: the master reminders toggle in Settings is off — times are saved but silent until you enable it.
+          </Text>
+        )}
+      </Sheet>
+    </ScreenBG>
+  );
+}
+
+const st = StyleSheet.create({
+  colorBar: { width: 4, height: 36, borderRadius: 2, marginRight: 12 },
+  swatch: { width: 34, height: 34, borderRadius: 17, marginRight: 10 },
+  swatchActive: { borderWidth: 3, borderColor: '#fff' },
+});
