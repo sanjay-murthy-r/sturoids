@@ -113,12 +113,6 @@ export function parseYouTubeId(url: string): string | null {
   return null;
 }
 
-export function greeting(name: string, d = new Date()): string {
-  const h = d.getHours();
-  const part = h < 5 ? 'Up late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 21 ? 'Good evening' : 'Winding down';
-  return name ? `${part}, ${name}` : part;
-}
-
 export function compareVersions(a: string, b: string): number {
   const pa = a.replace(/^v/i, '').split('.').map(Number);
   const pb = b.replace(/^v/i, '').split('.').map(Number);

@@ -1,9 +1,13 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { create, all } from 'mathjs';
-import { C, S } from '../src/theme';
+import * as Clipboard from 'expo-clipboard';
+import { C, F, MIN, S, neuRaised } from '../src/theme';
 import { useStore } from '../src/store';
-import { ScreenBG, Sheet, Row, PillButton } from '../src/components/UI';
+import { ScreenBG, Sheet, Row, PillButton, Inset, Chip, IconBtn, NeuHeader, useTheme } from '../src/components/UI';
+import { SegmentedControl } from '../src/components/SegmentedControl';
+import { Bouncy } from '../src/components/Motion';
+import { tick } from '../src/haptics';
 
 // Precise engine: BigNumber arithmetic — 0.1 + 0.2 is exactly 0.3 here.
 const math = create(all, { number: 'BigNumber', precision: 40 });
@@ -36,7 +40,7 @@ const BASIC: string[][] = [
   ['7', '8', '9', '÷'],
   ['4', '5', '6', '×'],
   ['1', '2', '3', '−'],
-  ['0', '.', 'Ans', '+'],
+  ['0', '.', '^', '+'],
 ];
 const SCI: string[][] = [
   ['sin(', 'cos(', 'tan(', '√('],
@@ -46,6 +50,7 @@ const SCI: string[][] = [
 ];
 
 export default function Calculator() {
+  const theme = useTheme();
   const pushCalc = useStore((s) => s.pushCalc);
   const history = useStore((s) => s.calcHistory);
   const clearCalcHistory = useStore((s) => s.clearCalcHistory);
@@ -80,7 +85,9 @@ export default function Calculator() {
 
   const press = (k: string) => {
     if (k === 'C') { setExpr(''); setJustEvaluated(false); return; }
-    if (k === '⌫') { setExpr((e) => e.slice(0, -1)); return; }
+    // editing the result breaks the "untouched '=' output" invariant — the next
+    // keypress must append, not restart
+    if (k === '⌫') { setExpr((e) => e.slice(0, -1)); setJustEvaluated(false); return; }
     if (k === 'mod') k = ' mod ';
     setExpr((e) => {
       // start fresh after '=' unless continuing with an operator
@@ -109,53 +116,71 @@ export default function Calculator() {
 
   return (
     <ScreenBG>
-      <View style={{ flex: 1, padding: S.pad }}>
-        {/* display */}
-        <View style={st.display}>
-          <Row style={{ justifyContent: 'space-between', marginBottom: 6 }}>
-            <Row>
-              <Pressable onPress={() => setDeg(!deg)} style={st.modeBtn}>
-                <Text style={{ color: C.accent, fontWeight: '800', fontSize: 13 }}>{deg ? 'DEG' : 'RAD'}</Text>
-              </Pressable>
-              <Pressable onPress={() => setSciNotation(!sciNotation)} style={st.modeBtn}>
-                <Text style={{ color: sciNotation ? C.amber : C.textFaint, fontWeight: '800', fontSize: 13 }}>SCI</Text>
-              </Pressable>
-              <Pressable onPress={() => setSci(!sci)} style={st.modeBtn}>
-                <Text style={{ color: sci ? C.violet : C.textFaint, fontWeight: '800', fontSize: 13 }}>ƒ(x)</Text>
-              </Pressable>
+      <NeuHeader title="Calculator" />
+      <View style={{ flex: 1, padding: S.pad, paddingTop: 8 }}>
+        {/* display — carved into the material */}
+        <Inset pad={16} style={{ borderRadius: S.radius, marginBottom: 14, overflow: 'visible' }}>
+          <Row style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+            <Row style={{ flexShrink: 1 }}>
+              <SegmentedControl
+                size="sm"
+                options={[{ key: 'deg', label: 'DEG' }, { key: 'rad', label: 'RAD' }]}
+                value={deg ? 'deg' : 'rad'}
+                onChange={(k) => setDeg(k === 'deg')}
+                style={{ alignSelf: 'center', marginRight: 8, marginBottom: 8 }}
+              />
+              <Chip small label="SCI" active={sciNotation} color={C.amber} onPress={() => setSciNotation(!sciNotation)} />
+              <Chip small label="ƒ(x)" active={sci} color={C.violet} onPress={() => setSci(!sci)} />
             </Row>
-            <Pressable onPress={() => setHistSheet(true)} style={st.modeBtn}>
-              <Text style={{ color: C.textDim, fontWeight: '700', fontSize: 13 }}>History</Text>
-            </Pressable>
+            <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} />
           </Row>
           <ScrollView style={{ maxHeight: 90 }} contentContainerStyle={{ justifyContent: 'flex-end' }}>
             <Text style={st.expr} selectable>{expr || '0'}</Text>
           </ScrollView>
-          <Text style={st.preview} numberOfLines={1}>{justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
-        </View>
+          <Text style={[st.preview, { color: C.accent }]} numberOfLines={1}>{justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
+        </Inset>
 
-        {/* keys */}
+        {/* keys — rows tighten when the sci pad is out so everything fits */}
         <View style={{ flex: 1, justifyContent: 'flex-end' }}>
           {sci && SCI.map((row, i) => (
-            <Row key={`s${i}`} style={{ gap: 8, marginBottom: 8 }}>
+            <Row key={`s${i}`} style={{ gap: 8, marginBottom: 6 }}>
               {row.map((k) => (
-                <Key key={k} label={k.replace('(', '')} small onPress={() => press(k)} color={C.violet} />
+                <Key key={k} label={k.replace('(', '')} pad={8} small onPress={() => press(k)} color={C.violet} />
               ))}
             </Row>
           ))}
           {BASIC.map((row, i) => (
-            <Row key={i} style={{ gap: 8, marginBottom: 8 }}>
+            <Row key={i} style={{ gap: 8, marginBottom: sci ? 6 : 8 }}>
               {row.map((k) => (
                 <Key
-                  key={k} label={k} onPress={() => press(k)}
+                  key={k} label={k} pad={sci ? 11 : 16} onPress={() => press(k)}
+                  onLongPress={k === '⌫' ? () => { tick(); setExpr(''); setJustEvaluated(false); } : undefined}
                   color={['÷', '×', '−', '+'].includes(k) ? C.accent : ['C', '⌫'].includes(k) ? C.danger : C.text}
                 />
               ))}
             </Row>
           ))}
-          <Pressable onPress={equals} style={st.equals}>
-            <Text style={{ color: '#0A0F1E', fontSize: 26, fontWeight: '800' }}>=</Text>
-          </Pressable>
+          <Bouncy
+            onPress={() => { tick(); equals(); }}
+            onLongPress={async () => {
+              const out = justEvaluated ? expr : preview;
+              if (out) { await Clipboard.setStringAsync(out); tick(); }
+            }}
+            radius={16}
+            scaleTo={0.96}
+            style={[
+              st.equals,
+              sci && { paddingVertical: 10 },
+              theme === 'minimal'
+                ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
+                : {
+                    backgroundColor: C.accent,
+                    boxShadow: `3px -5.2px 9px rgba(128,139,159,0.36), -3px 5.2px 13px rgba(24,26,30,0.42), 0 0 10px ${C.accent}66`,
+                  },
+            ]}
+          >
+            <Text style={{ color: theme === 'minimal' ? C.accent : '#2C2D30', fontSize: 26, fontFamily: F.semi }}>=</Text>
+          </Bouncy>
         </View>
       </View>
 
@@ -165,15 +190,15 @@ export default function Calculator() {
           <Text style={{ color: C.textFaint }}>Past calculations appear here — tap one to reuse its result.</Text>
         ) : (
           history.map((h) => (
-            <Pressable
-              key={h.id} style={st.histRow}
+            <Bouncy
+              key={h.id} style={st.histRow} radius={14} scaleTo={0.98}
               onPress={() => { if (h.result !== 'Error') { setExpr((e) => e + h.result); setHistSheet(false); } }}
             >
               <Text style={{ color: C.textDim, fontSize: 13 }} numberOfLines={1}>{h.expr}</Text>
-              <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, fontWeight: '700' }} numberOfLines={1}>
+              <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, fontFamily: F.semi }} numberOfLines={1}>
                 = {h.result}
               </Text>
-            </Pressable>
+            </Bouncy>
           ))
         )}
         {history.length > 0 && (
@@ -184,29 +209,38 @@ export default function Calculator() {
   );
 }
 
-function Key({ label, onPress, color, small }: { label: string; onPress: () => void; color: string; small?: boolean }) {
+/** Raised neumorphic key — sinks + carves in on press, with a haptic tick. */
+function Key({ label, onPress, onLongPress, color, small, pad }: {
+  label: string; onPress: () => void; onLongPress?: () => void; color: string; small?: boolean; pad?: number;
+}) {
+  const theme = useTheme();
   return (
-    <Pressable onPress={onPress} style={[st.key, small && { paddingVertical: 10 }]}>
-      <Text style={{ color, fontSize: small ? 15 : 22, fontWeight: '600' }}>{label}</Text>
-    </Pressable>
+    <Bouncy
+      onPress={() => { tick(); onPress(); }}
+      onLongPress={onLongPress}
+      radius={16}
+      scaleTo={0.94}
+      style={[
+        st.key,
+        { paddingVertical: pad ?? (small ? 10 : 16) },
+        theme === 'minimal'
+          ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
+          : { backgroundColor: C.card, ...neuRaised('low') },
+      ]}
+    >
+      <Text style={{ color, fontSize: small ? 15 : 22, fontFamily: F.med }}>{label}</Text>
+    </Bouncy>
   );
 }
 
 const st = StyleSheet.create({
-  display: {
-    borderRadius: S.radius, borderWidth: 1, borderColor: C.border,
-    backgroundColor: 'rgba(255,255,255,0.05)', padding: 16, marginBottom: 14,
-  },
-  modeBtn: { paddingVertical: 4, paddingHorizontal: 8 },
-  expr: { color: C.text, fontSize: 32, fontWeight: '700', textAlign: 'right', fontVariant: ['tabular-nums'] },
-  preview: { color: C.accent, fontSize: 16, textAlign: 'right', marginTop: 4, fontVariant: ['tabular-nums'] },
+  expr: { color: C.text, fontSize: 32, fontFamily: F.semi, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  preview: { fontSize: 16, fontFamily: F.reg, textAlign: 'right', marginTop: 4, fontVariant: ['tabular-nums'] },
   key: {
     flex: 1, paddingVertical: 16, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: C.border,
   },
   equals: {
-    paddingVertical: 14, borderRadius: 16, alignItems: 'center',
-    backgroundColor: C.accent, marginBottom: 10,
+    paddingVertical: 14, borderRadius: 16, alignItems: 'center', marginBottom: 10,
   },
   histRow: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border },
 });

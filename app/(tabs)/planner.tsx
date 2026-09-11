@@ -2,17 +2,21 @@ import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { C, S, T, BLOCK_COLORS } from '../../src/theme';
+import { C, F, MIN, S, T, BLOCK_COLORS, neuInset, neuRaised } from '../../src/theme';
 import { useStore, PlannerBlock, Habit } from '../../src/store';
 import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks } from '../../src/utils';
 import {
-  ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, CheckCircle,
+  ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, CheckCircle, useTheme,
 } from '../../src/components/UI';
-import { rescheduleHabitReminders, ensurePermission } from '../../src/notifications';
+import { Bouncy, Enter, useFocusKey } from '../../src/components/Motion';
+import { tick } from '../../src/haptics';
+import { rescheduleAllReminders, ensurePermission } from '../../src/notifications';
 
 export default function Planner() {
   const insets = useSafeAreaInsets();
+  const fk = useFocusKey();
   const router = useRouter();
+  const theme = useTheme();
 
   const planner = useStore((s) => s.planner);
   const addBlock = useStore((s) => s.addBlock);
@@ -53,6 +57,14 @@ export default function Planner() {
     [planner, day]
   );
   const today = todayKey();
+  // tick every 30s so the NOW badge appears/clears while the screen sits open
+  const [now, setNow] = useState(new Date());
+  React.useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(t);
+  }, []);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const viewingToday = day === dayName();
 
   const openAdd = () => { setEditing(null); setSubj(''); setStart(''); setEnd(''); setColor(BLOCK_COLORS[0]); setBlockSheet(true); };
   const openEdit = (b: PlannerBlock) => { setEditing(b); setSubj(b.subject); setStart(b.start); setEnd(b.end); setColor(b.color); setBlockSheet(true); };
@@ -75,7 +87,7 @@ export default function Planner() {
     setHabitTitle(''); setHabitTime(''); setHabitSheet(false);
     if (time && remindersEnabled) {
       await ensurePermission();
-      rescheduleHabitReminders(useStore.getState().habits, true);
+      await rescheduleAllReminders();
     }
   };
 
@@ -88,14 +100,15 @@ export default function Planner() {
     setRemindEdit(null);
     if (remindersEnabled) {
       await ensurePermission();
-      rescheduleHabitReminders(useStore.getState().habits, true);
+      await rescheduleAllReminders();
     }
   };
 
   return (
-    <ScreenBG>
+    <ScreenBG guard>
       <ScrollView
-        contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 18, paddingBottom: 44 }}
+        key={fk}
+        contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 44 }}
         showsVerticalScrollIndicator={false}
       >
         <Row style={{ justifyContent: 'space-between' }}>
@@ -107,34 +120,49 @@ export default function Planner() {
         </Row>
 
         {/* day selector */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 14, marginBottom: 14 }}>
-          {DAY_NAMES.map((d) => (
-            <Chip key={d} label={d} active={day === d} onPress={() => setDay(d)} />
-          ))}
-        </ScrollView>
+        <Enter index={0}>
+          {/* padded content box so chip shadows aren't clipped by the scroller */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={{ marginTop: 4, marginBottom: 4, marginHorizontal: -6 }}
+            contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: 6 }}
+          >
+            {DAY_NAMES.map((d) => (
+              <Chip key={d} label={d} active={day === d} onPress={() => setDay(d)} />
+            ))}
+          </ScrollView>
+        </Enter>
 
         {/* blocks */}
         {blocks.length === 0 ? (
           <EmptyText>No blocks on {day}.{'\n'}Add subjects with start–end times below.</EmptyText>
         ) : (
-          blocks.map((b) => (
-            <GlassCard
-              key={b.id} pad={14}
-              onPress={() => router.push({ pathname: '/focus', params: { subject: b.subject } })}
-            >
-              <Row>
-                <View style={[st.colorBar, { backgroundColor: b.color }]} />
-                <View style={{ flex: 1 }}>
-                  <Text style={T.title}>{b.subject}</Text>
-                  <Text style={[T.caption, { marginTop: 2, fontVariant: ['tabular-nums'] }]}>
-                    {fmtClockTime(toMinutes(b.start), hour24)} – {fmtClockTime(toMinutes(b.end), hour24)}
-                    <Text style={{ color: C.textFaint }}>   ·   tap → Deep Work</Text>
-                  </Text>
-                </View>
-                <IconBtn name="create-outline" size={18} onPress={() => openEdit(b)} />
-                <IconBtn name="trash-outline" size={18} onPress={() => removeBlock(day, b.id)} />
-              </Row>
-            </GlassCard>
+          blocks.map((b, i) => (
+            <Enter key={b.id} index={Math.min(1 + i, 8)}>
+              <GlassCard
+                pad={14}
+                onPress={() => router.push({ pathname: '/focus', params: { subject: b.subject } })}
+              >
+                <Row>
+                  <View style={[st.colorBar, { backgroundColor: b.color }]} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={T.title}>{b.subject}</Text>
+                    <Text style={[T.caption, { marginTop: 2, fontVariant: ['tabular-nums'] }]}>
+                      {fmtClockTime(toMinutes(b.start), hour24)} – {fmtClockTime(toMinutes(b.end), hour24)}
+                      <Text style={{ color: C.textFaint }}>   ·   tap → Deep Work</Text>
+                    </Text>
+                  </View>
+                  {viewingToday && toMinutes(b.start) <= nowMin && nowMin < toMinutes(b.end) && (
+                    <View style={{ borderRadius: 999, borderWidth: 1, borderColor: C.accent + '66', backgroundColor: C.accent + '1A', paddingHorizontal: 8, paddingVertical: 3, marginRight: 4 }}>
+                      <Text style={{ color: C.accent, fontFamily: F.semi, fontSize: 10, letterSpacing: 1 }}>NOW</Text>
+                    </View>
+                  )}
+                  <IconBtn name="create-outline" size={18} onPress={() => openEdit(b)} />
+                  <IconBtn name="trash-outline" size={18} onPress={() => removeBlock(day, b.id)} />
+                </Row>
+              </GlassCard>
+            </Enter>
           ))
         )}
         <PillButton label={`Add block to ${day}`} icon="add" onPress={openAdd} style={{ marginTop: 4 }} />
@@ -143,7 +171,7 @@ export default function Planner() {
         <SectionTitle
           right={
             <Pressable onPress={() => setHabitSheet(true)} hitSlop={8}>
-              <Text style={{ color: C.accent, fontSize: 13, fontWeight: '600' }}>+ Habit</Text>
+              <Text style={{ color: C.accent, fontSize: 13, fontFamily: F.semi }}>+ Habit</Text>
             </Pressable>
           }
         >
@@ -152,11 +180,12 @@ export default function Planner() {
         {habits.length === 0 ? (
           <EmptyText>Daily habits with streak counters.{'\n'}Small, repeatable, honest.</EmptyText>
         ) : (
-          habits.map((h) => {
+          habits.map((h, i) => {
             const { current, best } = streaks(h.doneDates);
             const done = h.doneDates.includes(today);
             return (
-              <GlassCard key={h.id} pad={13}>
+              <Enter key={h.id} index={Math.min(1 + i, 8)}>
+              <GlassCard pad={13}>
                 <Row>
                   <CheckCircle done={done} onPress={() => toggleHabitToday(h.id)} />
                   <View style={{ flex: 1, marginLeft: 12 }}>
@@ -170,9 +199,15 @@ export default function Planner() {
                     color={h.remindTime ? C.accent : C.textFaint}
                     onPress={() => { setRemindDraft(h.remindTime || ''); setRemindEdit(h); }}
                   />
-                  <IconBtn name="trash-outline" size={18} onPress={() => removeHabit(h.id)} />
+                  {/* re-run the scheduler after the delete, or the habit's daily
+                      reminder keeps firing for a habit that no longer exists */}
+                  <IconBtn
+                    name="trash-outline" size={18}
+                    onPress={async () => { removeHabit(h.id); await rescheduleAllReminders(); }}
+                  />
                 </Row>
               </GlassCard>
+              </Enter>
             );
           })
         )}
@@ -185,13 +220,26 @@ export default function Planner() {
           <Field value={start} onChangeText={setStart} placeholder="Start 16:00" style={{ flex: 1 }} keyboardType="numbers-and-punctuation" />
           <Field value={end} onChangeText={setEnd} placeholder="End 17:30" style={{ flex: 1 }} keyboardType="numbers-and-punctuation" />
         </Row>
-        <Row style={{ marginBottom: 12, marginTop: 2 }}>
-          {BLOCK_COLORS.map((c) => (
-            <Pressable
-              key={c} onPress={() => setColor(c)}
-              style={[st.swatch, { backgroundColor: c }, color === c && st.swatchActive]}
-            />
-          ))}
+        <Row style={{ flexWrap: 'wrap', gap: 10, marginBottom: 12, marginTop: 2 }}>
+          {BLOCK_COLORS.map((c) => {
+            const active = color === c;
+            return (
+              <Bouncy
+                key={c} radius={20} scaleTo={0.88}
+                onPress={() => { tick(); setColor(c); }}
+                style={[
+                  st.swatchWell,
+                  theme === 'minimal'
+                    ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: active ? c : MIN.border }
+                    : active
+                      ? { backgroundColor: C.inset, ...neuInset('low') }
+                      : { backgroundColor: C.card, ...neuRaised('low') },
+                ]}
+              >
+                <View style={[st.swatchDisc, { backgroundColor: c }, active && st.swatchDiscActive]} />
+              </Bouncy>
+            );
+          })}
         </Row>
         <PillButton label={editing ? 'Save' : 'Add block'} onPress={submitBlock} />
       </Sheet>
@@ -255,6 +303,10 @@ export default function Planner() {
 
 const st = StyleSheet.create({
   colorBar: { width: 4, height: 36, borderRadius: 2, marginRight: 12 },
-  swatch: { width: 34, height: 34, borderRadius: 17, marginRight: 10 },
-  swatchActive: { borderWidth: 3, borderColor: '#fff' },
+  swatchWell: {
+    width: 40, height: 40, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  swatchDisc: { width: 22, height: 22, borderRadius: 11 },
+  swatchDiscActive: { borderWidth: 2, borderColor: '#FFFFFF' },
 });

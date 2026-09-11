@@ -1,39 +1,64 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Switch, Alert, Pressable, Linking } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Alert, Linking } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import Constants from 'expo-constants';
-import { C, S, GlassIntensity } from '../src/theme';
+import { Ionicons } from '@expo/vector-icons';
+import { C, F, MIN, S, T, ThemeMode, AnimLevel, ACCENT_CHOICES, neuInset, neuRaised } from '../src/theme';
 import { useStore, exportSnapshot, importSnapshot } from '../src/store';
 import { compareVersions, todayKey } from '../src/utils';
-import { ScreenBG, GlassCard, SectionTitle, Field, PillButton, Row, Chip } from '../src/components/UI';
-import { ensurePermission, rescheduleHabitReminders } from '../src/notifications';
+import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, Chip, InfoDot, NeuHeader, useTheme } from '../src/components/UI';
+import { DEFAULT_TAB_SLOTS, TAB_SLOT_OPTIONS } from '../src/components/NeuTabBar';
+import { Bouncy, Pop } from '../src/components/Motion';
+import { tick } from '../src/haptics';
+import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
 
-const APP_VERSION = Constants.expoConfig?.version || '1.0.0';
+// keep this fallback in step with app.json — it also seeds the update check's comparison below
+const APP_VERSION = Constants.expoConfig?.version || '1.3.0';
+
+const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
+  { key: 'default', label: 'Default', desc: 'Soft grey neumorphism — one continuous material' },
+  { key: 'minimal', label: 'Minimalistic', desc: 'High contrast, flat, maximum legibility' },
+];
+
+const ANIMS: { key: AnimLevel; label: string; desc: string }[] = [
+  { key: 'none', label: 'Off', desc: 'No motion at all' },
+  { key: 'some', label: 'Some', desc: 'Feedback only — taps & state changes' },
+  { key: 'full', label: 'Everything', desc: 'Bouncy springs on all the things' },
+];
 
 export default function Settings() {
+  const theme = useTheme();
   const settings = useStore((s) => s.settings);
   const setSetting = useStore((s) => s.setSetting);
-  const habits = useStore((s) => s.habits);
   const [checking, setChecking] = useState(false);
+
+  const slots = settings.tabSlots || DEFAULT_TAB_SLOTS;
+  const setSlot = (i: number, key: string) => {
+    const next = [...slots];
+    const j = next.indexOf(key);
+    if (j >= 0 && j !== i) next[j] = next[i]; // swap so no destination repeats
+    next[i] = key;
+    setSetting('tabSlots', next);
+  };
 
   const toggleReminders = async (v: boolean) => {
     if (v) {
       const ok = await ensurePermission();
-      if (!ok) { Alert.alert('Permission needed', 'Allow notifications in system settings to get habit reminders.'); return; }
+      if (!ok) { Alert.alert('Permission needed', 'Allow notifications in system settings first.'); return; }
     }
     setSetting('remindersEnabled', v);
-    rescheduleHabitReminders(habits, v);
+    setTimeout(rescheduleAllReminders, 200);
   };
 
   const exportData = async () => {
     try {
       const json = JSON.stringify(exportSnapshot(), null, 2);
-      const uri = FileSystem.cacheDirectory + `student-hub-backup-${todayKey()}.json`;
+      const uri = FileSystem.cacheDirectory + 'sturoids-backup-' + todayKey() + '.json';
       await FileSystem.writeAsStringAsync(uri, json);
       if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json' });
-      else Alert.alert('Saved', `Backup written to:\n${uri}`);
+      else Alert.alert('Saved', 'Backup written to:\n' + uri);
     } catch (e: any) {
       Alert.alert('Export failed', String(e?.message || e));
     }
@@ -50,8 +75,7 @@ export default function Settings() {
           text: 'Replace', style: 'destructive',
           onPress: () => {
             const ok = importSnapshot(json);
-            Alert.alert(ok ? 'Imported' : 'Invalid file',
-              ok ? 'Your data is restored.' : 'That file is not a Student Hub backup.');
+            Alert.alert(ok ? 'Imported' : 'Invalid file', ok ? 'Your data is restored.' : 'That file is not a Sturoids backup.');
           },
         },
       ]);
@@ -63,22 +87,22 @@ export default function Settings() {
   const checkUpdate = async () => {
     const repo = settings.githubRepo.trim();
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-      Alert.alert('Set the repo first', 'Enter it as owner/repo — e.g. sanjay/student-hub — once the app is on GitHub Releases.');
+      Alert.alert('Set the repo first', 'Enter it as owner/repo once the app is on GitHub Releases.');
       return;
     }
     setChecking(true);
     try {
-      const r = await fetch(`https://api.github.com/repos/${repo}/releases/latest`);
-      if (!r.ok) throw new Error(`GitHub said ${r.status}`);
+      const r = await fetch('https://api.github.com/repos/' + repo + '/releases/latest');
+      if (!r.ok) throw new Error('GitHub said ' + r.status);
       const j = await r.json();
       const latest = String(j.tag_name || '');
       if (compareVersions(latest, APP_VERSION) > 0) {
-        Alert.alert(`${latest} available`, 'Download the new APK from GitHub?', [
+        Alert.alert(latest + ' available', 'Download the new APK from GitHub?', [
           { text: 'Later', style: 'cancel' },
           { text: 'Open', onPress: () => Linking.openURL(j.html_url) },
         ]);
       } else {
-        Alert.alert('Up to date', `You're on v${APP_VERSION} — nothing newer on Releases.`);
+        Alert.alert('Up to date', "You're on v" + APP_VERSION + ' — nothing newer on Releases.');
       }
     } catch (e: any) {
       Alert.alert('Check failed', String(e?.message || e));
@@ -87,68 +111,151 @@ export default function Settings() {
     }
   };
 
+  const OptionPicker = <K extends string>({
+    options, value, onPick,
+  }: { options: { key: K; label: string; desc: string }[]; value: K; onPick: (k: K) => void }) => (
+    <View>
+      {options.map((o, i) => {
+        const active = value === o.key;
+        return (
+          <View key={o.key}>
+            {i > 0 && <Hairline />}
+            <Bouncy onPress={() => { tick(); onPick(o.key); }} scaleTo={0.98} radius={S.radiusSm} style={st.optRow}>
+              <View
+                style={[
+                  st.radioWell,
+                  theme === 'minimal'
+                    ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: active ? C.accent : MIN.border }
+                    : { backgroundColor: C.inset, ...neuInset('low') },
+                ]}
+              >
+                {active && (
+                  <Pop dep={value}>
+                    <View
+                      style={[
+                        st.radioDot,
+                        { backgroundColor: C.accent },
+                        theme === 'minimal' ? null : (neuRaised('low') as object),
+                      ]}
+                    />
+                  </Pop>
+                )}
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={[T.body, { fontFamily: active ? F.semi : F.med }]}>{o.label}</Text>
+                <Text style={[T.caption, { marginTop: 1 }]}>{o.desc}</Text>
+              </View>
+            </Bouncy>
+          </View>
+        );
+      })}
+    </View>
+  );
+
   return (
     <ScreenBG>
-      <ScrollView contentContainerStyle={{ padding: S.pad, paddingBottom: 40 }}>
+      <NeuHeader title="Settings" />
+      <ScrollView contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 }}>
         <SectionTitle>Profile</SectionTitle>
-        <GlassCard>
+        <Card>
           <Text style={st.label}>Name (used in the greeting)</Text>
           <Field value={settings.name} onChangeText={(v) => setSetting('name', v)} placeholder="Your name" />
-        </GlassCard>
+        </Card>
 
-        <SectionTitle>Theme</SectionTitle>
-        <GlassCard>
-          <Text style={st.label}>Glass intensity</Text>
-          <Row style={{ marginBottom: 4 }}>
-            {(['off', 'subtle', 'full'] as GlassIntensity[]).map((g) => (
-              <Chip key={g} label={g[0].toUpperCase() + g.slice(1)} active={settings.glassIntensity === g}
-                onPress={() => setSetting('glassIntensity', g)} />
-            ))}
-          </Row>
-          <Text style={st.hint}>Off is the escape hatch for low-end phones; Full is the bubbbly look.</Text>
-        </GlassCard>
+        <SectionTitle>Appearance</SectionTitle>
+        <Card pad={10}>
+          <OptionPicker options={THEMES} value={settings.theme} onPick={(k) => setSetting('theme', k)} />
+        </Card>
 
-        <SectionTitle>Clock</SectionTitle>
-        <GlassCard>
-          <Row style={{ marginBottom: 10 }}>
-            <Chip label="Digital" active={settings.clockStyle === 'digital'} onPress={() => setSetting('clockStyle', 'digital')} />
-            <Chip label="Analogue" active={settings.clockStyle === 'analog'} onPress={() => setSetting('clockStyle', 'analog')} />
+        <SectionTitle>Accent colour</SectionTitle>
+        <Card>
+          <Row style={{ flexWrap: 'wrap', gap: 12 }}>
+            {ACCENT_CHOICES.map((a) => {
+              const active = settings.accent === a.color;
+              return (
+                <Bouncy
+                  key={a.key}
+                  onPress={() => { tick(); setSetting('accent', a.color); }}
+                  scaleTo={0.85}
+                  radius={22}
+                  style={[
+                    st.swatchWell,
+                    theme === 'minimal'
+                      ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: active ? a.color : MIN.border }
+                      : active
+                        ? { backgroundColor: C.inset, ...neuInset('mid') }
+                        : { backgroundColor: C.card, ...neuRaised('low') },
+                  ]}
+                >
+                  <View style={[st.swatchDisc, { backgroundColor: a.color }]}>
+                    {active && <Ionicons name="checkmark" size={14} color="#2C2D30" />}
+                  </View>
+                </Bouncy>
+              );
+            })}
           </Row>
-          <Row style={{ justifyContent: 'space-between' }}>
-            <Text style={{ color: C.text, fontSize: 15 }}>24-hour time</Text>
-            <Switch value={settings.hour24} onValueChange={(v) => setSetting('hour24', v)}
-              trackColor={{ true: C.accent + '88', false: 'rgba(255,255,255,0.15)' }} thumbColor={settings.hour24 ? C.accent : '#ccc'} />
-          </Row>
-        </GlassCard>
+          <Text style={st.hint}>
+            {ACCENT_CHOICES.find((a) => a.color === settings.accent)?.label || 'Custom'} — recolours highlights, links and controls everywhere.
+          </Text>
+        </Card>
 
-        <SectionTitle>Reminders</SectionTitle>
-        <GlassCard>
-          <Row style={{ justifyContent: 'space-between' }}>
-            <Text style={{ color: C.text, fontSize: 15 }}>Habit reminders</Text>
-            <Switch value={settings.remindersEnabled} onValueChange={toggleReminders}
-              trackColor={{ true: C.green + '88', false: 'rgba(255,255,255,0.15)' }} thumbColor={settings.remindersEnabled ? C.green : '#ccc'} />
-          </Row>
-          <Text style={st.hint}>Per-habit times are set when adding a habit in Planner → Streaks.</Text>
-        </GlassCard>
+        <SectionTitle right={<InfoDot text="Today and More stay fixed — pick the three tabs in between. Choosing a tool that isn't a tab (like Calculator) turns that slot into a one-tap shortcut." />}>
+          Tab bar
+        </SectionTitle>
+        <Card>
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={{ marginTop: 12 }}>
+              <Text style={st.label}>Slot {i + 1}</Text>
+              <Row style={{ flexWrap: 'wrap' }}>
+                {TAB_SLOT_OPTIONS.map((o) => (
+                  <Chip key={o.key} small label={o.label} active={slots[i] === o.key} onPress={() => setSlot(i, o.key)} />
+                ))}
+              </Row>
+            </View>
+          ))}
+        </Card>
 
-        <SectionTitle>Data — you own it</SectionTitle>
-        <GlassCard>
+        <SectionTitle>Animations</SectionTitle>
+        <Card pad={10}>
+          <OptionPicker options={ANIMS} value={settings.animLevel} onPick={(k) => setSetting('animLevel', k)} />
+        </Card>
+
+        <SectionTitle>Time & reminders</SectionTitle>
+        <Card>
+          <Row style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+            <Text style={T.body}>24-hour time</Text>
+            <Toggle value={settings.hour24} onChange={(v) => setSetting('hour24', v)} color={C.accent} />
+          </Row>
+          <Hairline />
+          <Row style={{ justifyContent: 'space-between', marginTop: 12 }}>
+            <Row>
+              <Text style={T.body}>All reminders (master)</Text>
+              <InfoDot text="The master switch for every notification. Habit times live in Planner → Streaks; ToDo nudges in Tasks → bell icon." />
+            </Row>
+            <Toggle value={settings.remindersEnabled} onChange={toggleReminders} color={C.green} />
+          </Row>
+        </Card>
+
+        <SectionTitle right={<InfoDot text="Everything is stored locally on this phone — no accounts. Export a JSON backup before changing phones; importing replaces all current data." />}>
+          Data — you own it
+        </SectionTitle>
+        <Card>
           <PillButton label="Export backup (JSON)" icon="download-outline" onPress={exportData} style={{ marginBottom: 10 }} />
           <PillButton label="Import backup" icon="push-outline" color={C.amber} outline onPress={importData} />
-          <Text style={st.hint}>Everything local, no accounts — so back up before changing phones.</Text>
-        </GlassCard>
+        </Card>
 
-        <SectionTitle>Updates</SectionTitle>
-        <GlassCard>
+        <SectionTitle right={<InfoDot text="Sideloaded APKs don't auto-update. This checks the GitHub Releases of the repo below for a newer version tag and links you to the download." />}>
+          Updates
+        </SectionTitle>
+        <Card>
           <Text style={st.label}>GitHub repo (owner/repo)</Text>
           <Field value={settings.githubRepo} onChangeText={(v) => setSetting('githubRepo', v)}
-            placeholder="e.g. sanjay/student-hub" autoCapitalize="none" />
+            placeholder="e.g. sanjay/sturoids" autoCapitalize="none" />
           <PillButton label={checking ? 'Checking…' : 'Check for updates'} icon="cloud-download-outline" onPress={checkUpdate} />
-          <Text style={st.hint}>Sideloaded APKs don't auto-update; this checks GitHub Releases for a newer tag.</Text>
-        </GlassCard>
+        </Card>
 
-        <Text style={{ color: C.textFaint, textAlign: 'center', marginTop: 16, fontSize: 12 }}>
-          Student Hub v{APP_VERSION} · local-first · made for focused work
+        <Text style={[T.caption, { textAlign: 'center', marginTop: 16 }]}>
+          Sturoids v{APP_VERSION} · local-first · made for focused work
         </Text>
       </ScrollView>
     </ScreenBG>
@@ -156,6 +263,20 @@ export default function Settings() {
 }
 
 const st = StyleSheet.create({
-  label: { color: C.textDim, fontSize: 13, marginBottom: 8 },
-  hint: { color: C.textFaint, fontSize: 12, marginTop: 8, lineHeight: 17 },
+  label: { color: C.textDim, fontFamily: F.med, fontSize: 13, marginBottom: 8 },
+  hint: { color: C.textFaint, fontSize: 12, marginTop: 10, lineHeight: 17 },
+  optRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 6 },
+  radioWell: {
+    width: 22, height: 22, borderRadius: 11,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  radioDot: { width: 10, height: 10, borderRadius: 5 },
+  swatchWell: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  swatchDisc: {
+    width: 26, height: 26, borderRadius: 13,
+    alignItems: 'center', justifyContent: 'center',
+  },
 });
