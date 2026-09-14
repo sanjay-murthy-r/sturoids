@@ -1,7 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, Alert, BackHandler, Image, useWindowDimensions,
-} from 'react-native';
+  View, Text, ScrollView, StyleSheet, Alert, BackHandler, useWindowDimensions, FlatList } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
@@ -185,6 +184,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   );
 
   const pageW = width;
+  const pageStyle = { padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) };
 
   return (
     <ScreenBG guard={mode === 'tab'} fling={false}>
@@ -232,7 +232,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
             setTab((['library', 'recent', 'notes'] as ViewTab[])[idx] || 'library');
           }}
         >
-          <ScrollView style={{ width: pageW }} contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}>
+          <ScrollView style={{ width: pageW }} contentContainerStyle={pageStyle}>
             {/* the header already names the folder: this row only moves between folders and adds one */}
             <Row style={{ marginBottom: 10, flexWrap: 'wrap' }}>
               <Chip small icon="home-outline" label="All" active={cwd === null} color={C.pink} onPress={() => setCwd(null)} />
@@ -268,41 +268,50 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
             )}
           </ScrollView>
 
-          <ScrollView style={{ width: pageW }} contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}>
-            {recentVideos.length === 0 ? (
-              <EmptyState icon="time-outline" title="Nothing added yet" body="Recently added videos land here, newest first." />
-            ) : (
-              recentVideos.map((v, i) => videoRow(v, i, true))
-            )}
-          </ScrollView>
+          <FlatList
+            style={{ width: pageW }}
+            contentContainerStyle={pageStyle}
+            data={recentVideos}
+            keyExtractor={(v) => v.id}
+            initialNumToRender={8}
+            windowSize={7}
+            renderItem={({ item, index }) => videoRow(item, index, true)}
+            ListEmptyComponent={<EmptyState icon="time-outline" title="Nothing added yet" body="Recently added videos land here, newest first." />}
+          />
 
-          <ScrollView style={{ width: pageW }} contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}>
-            {allNotes.length === 0 ? (
+          <FlatList
+            style={{ width: pageW }}
+            contentContainerStyle={pageStyle}
+            data={allNotes}
+            keyExtractor={(x) => (x.isBookmark ? 'b' : 'n') + x.item.id}
+            initialNumToRender={10}
+            windowSize={7}
+            renderItem={({ item: x, index: i }) => {
+              const card = (
+                <Card pad={11} onPress={() => openAt(x.video.id, x.item.time)}>
+                  <Row>
+                    <View style={[st.timePill, { borderColor: (x.isBookmark ? C.pink : C.green) + '66', backgroundColor: (x.isBookmark ? C.pink : C.green) + '14' }]}>
+                      <Ionicons name={x.isBookmark ? 'bookmark' : 'create-outline'} size={11} color={x.isBookmark ? C.pink : C.green} />
+                      <Text style={{ color: x.isBookmark ? C.pink : C.green, fontSize: 11, fontFamily: F.semi, marginLeft: 4, fontVariant: ['tabular-nums'] }}>
+                        {fmtMediaTime(x.item.time)}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={[T.body, { fontSize: 14 }]} numberOfLines={2}>
+                        {x.isBookmark ? x.item.label : x.item.text}
+                      </Text>
+                      <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{x.video.title}</Text>
+                    </View>
+                    <IconBtn name="ellipsis-vertical" size={17} onPress={() => setNoteMenu(x)} />
+                  </Row>
+                </Card>
+              );
+              return i < 8 ? <Enter index={i}>{card}</Enter> : card;
+            }}
+            ListEmptyComponent={
               <EmptyState icon="bookmark-outline" title="No notes or bookmarks yet" body="Timed notes and bookmarks from every video appear here. Tap one to jump to that moment." />
-            ) : (
-              allNotes.map((x, i) => (
-                <Enter key={(x.isBookmark ? 'b' : 'n') + x.item.id} index={Math.min(i, 8)}>
-                  <Card pad={11} onPress={() => openAt(x.video.id, x.item.time)}>
-                    <Row>
-                      <View style={[st.timePill, { borderColor: (x.isBookmark ? C.pink : C.green) + '66', backgroundColor: (x.isBookmark ? C.pink : C.green) + '14' }]}>
-                        <Ionicons name={x.isBookmark ? 'bookmark' : 'create-outline'} size={11} color={x.isBookmark ? C.pink : C.green} />
-                        <Text style={{ color: x.isBookmark ? C.pink : C.green, fontSize: 11, fontFamily: F.semi, marginLeft: 4, fontVariant: ['tabular-nums'] }}>
-                          {fmtMediaTime(x.item.time)}
-                        </Text>
-                      </View>
-                      <View style={{ flex: 1, marginLeft: 10 }}>
-                        <Text style={[T.body, { fontSize: 14 }]} numberOfLines={2}>
-                          {x.isBookmark ? x.item.label : x.item.text}
-                        </Text>
-                        <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{x.video.title}</Text>
-                      </View>
-                      <IconBtn name="ellipsis-vertical" size={17} onPress={() => setNoteMenu(x)} />
-                    </Row>
-                  </Card>
-                </Enter>
-              ))
-            )}
-          </ScrollView>
+            }
+          />
         </ScrollView>
       </View>
 
