@@ -328,6 +328,24 @@ const BLOCK_REMAP: Record<string, string> = {
   '#E895A5': '#E39EAC', '#B3A3E8': '#745FF2', '#7FD0D6': '#83DBD6',
 };
 
+/** The earliest moment the data itself records, so the same data always migrates to the same result. */
+function earliestActivity(p: any): number {
+  let min = Infinity;
+  const each = (items: any, key: string) => {
+    if (!Array.isArray(items)) return;
+    for (const x of items) {
+      const n = Number(x?.[key]);
+      if (n > 0 && n < min) min = n;
+    }
+  };
+  each(p?.notes, 'createdAt');
+  each(p?.dailyTasks, 'createdAt');
+  each(p?.sessions, 'endedAt');
+  each(p?.vaultVideos, 'addedAt');
+  each(p?.journal, 'createdAt');
+  return Number.isFinite(min) ? min : 1;
+}
+
 function hasAnyUserData(p: any): boolean {
   const nonEmpty = (a: any) => Array.isArray(a) && a.length > 0;
   return !!(p?.settings?.name) || nonEmpty(p?.dailyTasks) || nonEmpty(p?.missions) || nonEmpty(p?.sessions)
@@ -360,13 +378,13 @@ function normaliseQuick(items: any): QuickItem[] {
   return out;
 }
 
-const remapBlocks = (week: any) => {
-  if (!week || typeof week !== 'object') return week;
-  const outWeek: any = {};
+const remapBlocks = (week: any): PlannerWeek => {
+  const outWeek: any = emptyWeek();
+  if (!week || typeof week !== 'object' || Array.isArray(week)) return outWeek;
   for (const d of Object.keys(week)) {
-    outWeek[d] = (Array.isArray(week[d]) ? week[d] : []).map((b: any) => ({
-      ...b, color: BLOCK_REMAP[String(b?.color || '').toUpperCase()] || b.color,
-    }));
+    outWeek[d] = (Array.isArray(week[d]) ? week[d] : [])
+      .filter((b: any) => b && typeof b === 'object')
+      .map((b: any) => ({ ...b, color: BLOCK_REMAP[String(b.color || '').toUpperCase()] || b.color }));
   }
   return outWeek;
 };
@@ -377,6 +395,28 @@ const remapBlocks = (week: any) => {
  */
 export function migrateV5(p: any): any {
   const out = { ...(p || {}) };
+  // a malformed collection becomes its fresh value and anything that is not a record is dropped, so no screen
+  // ever maps over a string or reads a field of null
+  const isRecord = (x: any) => !!x && typeof x === 'object' && !Array.isArray(x);
+  const list = (a: any): any[] => (Array.isArray(a) ? a : []);
+  const fresh = initialData();
+  for (const k of ['dailyTasks', 'missions', 'habits', 'vaultVideos', 'vaultFolders', 'aiLinks', 'sessions', 'calcHistory', 'todoReminders'] as const) {
+    if (k in out) out[k] = Array.isArray(out[k]) ? out[k].filter(isRecord) : fresh[k];
+  }
+  if (Array.isArray(out.habits)) {
+    out.habits = out.habits.map((h: any) => ({ ...h, doneDates: list(h.doneDates).filter((d) => typeof d === 'string') }));
+  }
+  if (Array.isArray(out.missions)) {
+    out.missions = out.missions.map((m: any) => ({ ...m, subtasks: list(m.subtasks).filter(isRecord) }));
+  }
+  if (Array.isArray(out.vaultVideos)) {
+    out.vaultVideos = out.vaultVideos.map((v: any) => ({
+      ...v, tags: list(v.tags), notes: list(v.notes).filter(isRecord), bookmarks: list(v.bookmarks).filter(isRecord),
+    }));
+  }
+  if ('noteFolders' in out) {
+    out.noteFolders = Array.isArray(out.noteFolders) ? out.noteFolders.filter((x: any) => typeof x === 'string') : fresh.noteFolders;
+  }
   const s = { ...(p?.settings || {}) };
   out.settings = {
     ...DEFAULT_SETTINGS,
@@ -384,13 +424,15 @@ export function migrateV5(p: any): any {
     accent: s.accent || DEFAULT_ACCENT,
     tabSlots: normaliseSlots(s.tabSlots),
     // an upgrading user with data is "returning", never "first launch"
-    firstOpenedAt: s.firstOpenedAt ?? (hasAnyUserData(p) ? Date.now() - 1 : undefined),
+    firstOpenedAt: s.firstOpenedAt ?? (hasAnyUserData(p) ? earliestActivity(p) : undefined),
   };
   out.quickAccess = normaliseQuick(p?.quickAccess);
-  if (out.planner) out.planner = remapBlocks(out.planner);
-  if (out.weekTemplates && typeof out.weekTemplates === 'object') {
+  // every week comes back with all seven days holding blocks only, so a screen can read any day
+  if ('planner' in out) out.planner = remapBlocks(out.planner);
+  if ('weekTemplates' in out) {
+    const src = isRecord(out.weekTemplates) ? out.weekTemplates : {};
     const t: any = {};
-    for (const name of Object.keys(out.weekTemplates)) t[name] = remapBlocks(out.weekTemplates[name]);
+    for (const name of Object.keys(src)) if (isRecord(src[name])) t[name] = remapBlocks(src[name]);
     out.weekTemplates = t;
   }
   out.notes = (Array.isArray(p?.notes) ? p.notes : [])
@@ -407,13 +449,15 @@ export function migrateV5(p: any): any {
       wordCount: Number(e.wordCount) || 0,
       pinned: !!e.pinned,
     }));
-  out.journalTags = Array.isArray(p?.journalTags) ? p.journalTags : [];
+  out.journalTags = list(p?.journalTags).filter((t) => typeof t === 'string');
   return out;
 }
 
 // ---------- persistence ----------
 
 const STORE_KEY = 'student-hub-v1';
+/** Set once a load has applied saved state, so a failure after that point is never taken for a failed load. */
+let mergedFromStorage = false;
 const jsonStorage = createJSONStorage<any>(() => AsyncStorage);
 
 /** Every persisted-shape migration, oldest first. Also restores the app's own saved blob on import. */
@@ -691,6 +735,11 @@ export const useStore = create<AppState>()(
       storage: jsonStorage,
       version: 5,
       migrate: (persisted: any, version) => migratePersisted(persisted, version),
+      // zustand's own shallow merge, plus the one fact the failure handler needs
+      merge: (persisted: any, current) => {
+        if (persisted) mergedFromStorage = true;
+        return { ...current, ...(persisted || {}) };
+      },
       // zustand reports a load that throws only here and never marks the store hydrated
       onRehydrateStorage: () => (_state, error) => {
         if (error) void handleHydrationError(error);
@@ -721,6 +770,29 @@ let settledOnError = false;
 let timedOut = false;
 let persistPaused = false;
 const settledListeners = new Set<() => void>();
+
+/** What the user should be told about this launch's load. The root layout shows it once the intro is gone. */
+export type LoadNotice = 'late-load' | 'failed-kept' | 'failed-paused';
+let pendingNotice: LoadNotice | null = null;
+const noticeListeners = new Set<(n: LoadNotice) => void>();
+
+function raiseNotice(n: LoadNotice) {
+  if (noticeListeners.size === 0) pendingNotice = n;
+  else noticeListeners.forEach((cb) => cb(n));
+}
+
+/** Delivers a notice raised before anyone listened, then every later one as it happens. */
+export function subscribeLoadNotices(cb: (n: LoadNotice) => void): () => void {
+  noticeListeners.add(cb);
+  if (pendingNotice) {
+    const n = pendingNotice;
+    pendingNotice = null;
+    cb(n);
+  }
+  return () => {
+    noticeListeners.delete(cb);
+  };
+}
 const noopStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 
 function settleHydration() {
@@ -743,8 +815,9 @@ function resumePersistence() {
 
 async function handleHydrationError(error: unknown) {
   console.warn('[store] saved data could not be loaded', error);
-  // the blob can load and only its write-back fail: the data is already in, nothing to rescue
-  if (hasAnyUserData(useStore.getState())) {
+  // the blob loaded and only its write-back failed: the data is already in, nothing to rescue
+  if (mergedFromStorage) {
+    if (timedOut) finishLateLoad();
     settledOnError = true;
     settleHydration();
     return;
@@ -767,16 +840,23 @@ async function handleHydrationError(error: unknown) {
   } catch {
     safe = false;
   }
-  if (!safe) pausePersistence();
+  if (safe) resumePersistence();
+  else pausePersistence();
   loadFailed = true;
   // settled only now, after the copy: nothing may render (and write) before the blob is safe
   settledOnError = true;
   settleHydration();
+  raiseNotice(safe ? 'failed-kept' : 'failed-paused');
 }
 
-// storage that answered late: saving resumes once the real data is in
+// Storage that answered after the wait: its data replaces the defaults the app started on and saving resumes.
+// Changes made in that window were never saved, so the user is told instead of finding them gone.
+function finishLateLoad() {
+  resumePersistence();
+  raiseNotice('late-load');
+}
 useStore.persist.onFinishHydration(() => {
-  if (timedOut) resumePersistence();
+  if (timedOut) finishLateLoad();
 });
 
 /** True once the saved data has loaded, or its failure to load has been handled. */

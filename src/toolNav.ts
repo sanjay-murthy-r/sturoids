@@ -47,7 +47,10 @@ function rootStack(): any {
   if (!containerRef?.isReady()) return undefined;
   // expo-router wraps the root layout's navigator in a single internal route
   const stack: any = containerRef.getRootState()?.routes?.[0]?.state;
-  return stack?.type === 'stack' && stack.key && stack.routeNames?.includes(TABS_GROUP) ? stack : undefined;
+  const ok = stack?.type === 'stack' && !!stack.key && !!stack.routeNames?.includes(TABS_GROUP);
+  // this reads an expo-router internal: say so in development if an upgrade changes its shape
+  if (__DEV__ && stack && !ok) console.warn('toolNav: unexpected root stack shape; openTool falls back to router.navigate');
+  return ok ? stack : undefined;
 }
 
 /**
@@ -66,6 +69,8 @@ export function openTool(key: ToolKey, params?: ToolParams) {
   }
   const stack = rootStack();
   if (!containerRef || !stack) {
+    // only before the container is ready (the first frames of a cold start), when no full page can be open
+    // yet, so a plain navigate cannot stack a second copy of the tabs
     const href = '/' + slotRouteName(slot);
     router.navigate(p ? { pathname: href, params: p } : href);
     return;

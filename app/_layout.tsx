@@ -10,7 +10,7 @@ import {
 } from '@expo-google-fonts/rubik';
 import { IBMPlexMono_600SemiBold } from '@expo-google-fonts/ibm-plex-mono';
 import { bgFor } from '../src/theme';
-import { useStore, loadFailedThisLaunch, savingPaused } from '../src/store';
+import { useStore, subscribeLoadNotices } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
 import { StartScreen } from '../src/components/StartScreen';
 
@@ -43,24 +43,29 @@ export default function RootLayout() {
     return () => task.cancel();
   }, [revealed]);
 
-  // a load that failed is never silent: once the intro is gone, say what happened and what is safe
+  // a load that failed or finished late is never silent: once the intro is gone, say what happened and what is
+  // safe, including a notice raised long after the app opened
   useEffect(() => {
-    if (!introDone || !loadFailedThisLaunch()) return;
-    if (savingPaused()) {
-      Alert.alert(
-        'Your saved data could not be opened',
-        'Nothing on this phone was changed, but changes you make now will not be saved. Restart the app to try again.',
-      );
-    } else {
-      Alert.alert(
-        'Your saved data could not be opened',
-        'A copy was kept on this phone and the app started fresh. You can share the copy or restore it from Settings, under Data.',
-        [
-          { text: 'Later', style: 'cancel' },
-          { text: 'Open Settings', onPress: () => router.push('/settings') },
-        ],
-      );
-    }
+    if (!introDone) return;
+    return subscribeLoadNotices((notice) => {
+      if (notice === 'late-load') {
+        Alert.alert('Your saved data has loaded', 'Changes made while it was loading were replaced by it.');
+      } else if (notice === 'failed-paused') {
+        Alert.alert(
+          'Your saved data could not be opened',
+          'Nothing on this phone was changed, but changes you make now will not be saved. Restart the app to try again.',
+        );
+      } else {
+        Alert.alert(
+          'Your saved data could not be opened',
+          'A copy was kept on this phone and the app started fresh. You can share the copy or restore it from Settings, under Data.',
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => router.push('/settings') },
+          ],
+        );
+      }
+    });
   }, [introDone]);
 
   // the system navigation bar follows the theme's material (app.json only sets the launch colour)

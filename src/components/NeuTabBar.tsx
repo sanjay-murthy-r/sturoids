@@ -2,7 +2,7 @@ import React from 'react';
 import { Keyboard, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { StackActions } from '@react-navigation/native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { C, F, MIN, NEU, bgFor } from '../theme';
@@ -105,7 +105,21 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
   }, [targetX, level]);
   const pillStyle = useAnimatedStyle(() => ({ transform: [{ translateX: px.value }] }));
 
-  if (keyboardOpen) return <View style={st.hidden} />;
+  // While the keyboard is up the bar leaves the layout at once, so the screen takes the room, and slides below
+  // the edge. When the keyboard closes the bar takes its room back and slides up into it. It stays mounted
+  // throughout, so a keyboard toggle never rebuilds the tabs.
+  const barH = useSharedValue(0);
+  const hide = useSharedValue(0);
+  React.useEffect(() => {
+    const to = keyboardOpen ? 1 : 0;
+    hide.value = level === 'none'
+      ? to
+      : withTiming(to, keyboardOpen
+        ? { duration: 180, easing: Easing.in(Easing.quad) }
+        : { duration: 240, easing: Easing.out(Easing.cubic) });
+  }, [keyboardOpen, level]);
+  // past its own height by the reach of the raised highlight, so no line of light is left at the edge
+  const slideStyle = useAnimatedStyle(() => ({ transform: [{ translateY: hide.value * (barH.value + 16) }] }));
 
   const metaFor = (name: string): ItemMeta => {
     if (name === 'index') return TODAY;
@@ -115,11 +129,15 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
   };
 
   return (
-    <View
+    <Animated.View
+      pointerEvents={keyboardOpen ? 'none' : 'auto'}
+      onLayout={(e) => { barH.value = e.nativeEvent.layout.height; }}
       style={[
         st.bar,
         { paddingBottom: Math.max(insets.bottom, 10), backgroundColor: bgFor(theme) },
         theme === 'minimal' ? { borderTopWidth: 1, borderTopColor: MIN.hairline } : NEU.raisedMid,
+        keyboardOpen && st.lifted,
+        slideStyle,
       ]}
     >
       <View style={st.row} onLayout={(e) => setRowW(e.nativeEvent.layout.width)}>
@@ -156,13 +174,13 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
           return <TabItem key={name} meta={metaFor(name)} focused={focused} onPress={onPress} />;
         })}
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
 const st = StyleSheet.create({
   bar: { paddingTop: 10 },
-  hidden: { height: 0 },
+  lifted: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   row: { flexDirection: 'row' },
   pill: { position: 'absolute', top: 0, left: 0, height: PILL_H, borderRadius: PILL_R },
   item: { flex: 1, height: PILL_H, alignItems: 'center', justifyContent: 'center' },
