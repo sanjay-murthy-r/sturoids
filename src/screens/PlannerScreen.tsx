@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, F, MIN, S, T, BLOCK_COLORS, neuInset, neuRaised } from '../theme';
 import { useStore, PlannerBlock, Habit } from '../store';
 import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks } from '../utils';
+import { useNow } from '../hooks/useNow';
 import {
   ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, CheckCircle, useTheme, NeuHeader,
 } from '../components/UI';
@@ -59,11 +60,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   );
   const today = todayKey();
   // tick every 30s so the NOW badge appears/clears while the screen sits open
-  const [now, setNow] = useState(new Date());
-  React.useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 30000);
-    return () => clearInterval(t);
-  }, []);
+  const now = useNow();
   const nowMin = now.getHours() * 60 + now.getMinutes();
   const viewingToday = day === dayName();
 

@@ -30,20 +30,28 @@ export function SegmentedControl<K extends string>({
   const c = color || C.accent;
   const x = useSharedValue(0);
   const w = useSharedValue(0);
+  const sx = useSharedValue(1);
   const layouts = React.useRef<Record<string, { x: number; width: number }>>({}).current;
   const place = React.useCallback((animate: boolean) => {
     const l = layouts[value];
     if (!l) return;
-    if (animate && level !== 'none') {
+    if (animate && level !== 'none' && w.value > 0) {
+      // the thumb takes its new width at once and springs its scale from the old width: only transforms move
+      sx.value = w.value / l.width;
+      w.value = l.width;
+      sx.value = withSpring(1, RISE_OUT);
       x.value = withSpring(l.x, RISE_OUT);
-      w.value = w.value === 0 ? l.width : withSpring(l.width, RISE_OUT);
     } else {
       x.value = l.x;
       w.value = l.width;
+      sx.value = 1;
     }
   }, [value, level]);
   React.useEffect(() => { place(true); }, [value]);
-  const thumbStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }], width: w.value }));
+  const thumbStyle = useAnimatedStyle(() => ({
+    width: w.value,
+    transform: [{ translateX: x.value }, { scaleX: sx.value }] as const,
+  }));
 
   const padV = size === 'sm' ? 7 : 9;
   const padH = size === 'sm' ? 12 : 16;
@@ -65,7 +73,7 @@ export function SegmentedControl<K extends string>({
       <Animated.View
         pointerEvents="none"
         style={[
-          { position: 'absolute', left: 0, top: 4, bottom: 4, borderRadius: 999 },
+          { position: 'absolute', left: 0, top: 4, bottom: 4, borderRadius: 999, transformOrigin: 'left' },
           theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: c }
             : { backgroundColor: C.card, ...neuRaised('low') },

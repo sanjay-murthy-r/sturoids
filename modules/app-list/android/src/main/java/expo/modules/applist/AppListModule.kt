@@ -9,8 +9,9 @@ class AppListModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("AppList")
 
-    Function("getInstalledApps") {
-      val context = appContext.reactContext ?: return@Function emptyList<Map<String, String>>()
+    // AsyncFunction: the package manager query runs on the modules queue, never on the JS thread
+    AsyncFunction("getInstalledApps") {
+      val context = appContext.reactContext ?: return@AsyncFunction emptyList<Map<String, String>>()
       val pm = context.packageManager
       val intent = Intent(Intent.ACTION_MAIN, null).apply {
         addCategory(Intent.CATEGORY_LAUNCHER)

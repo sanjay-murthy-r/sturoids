@@ -20,6 +20,7 @@ import { openTool } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
 import { journalDayFor } from '../../src/journal';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
+import { useNow } from '../../src/hooks/useNow';
 
 export default function Today() {
   const insets = useSafeAreaInsets();
@@ -49,12 +50,7 @@ export default function Today() {
   const [installed, setInstalled] = useState<InstalledApp[]>([]);
   const [appsLoaded, setAppsLoaded] = useState(false);
   const [customLabel, setCustomLabel] = useState('');
-  const [now, setNow] = useState(new Date());
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 30000);
-    return () => clearInterval(t);
-  }, []);
+  const now = useNow();
 
   const today = todayKey();
 
@@ -131,9 +127,15 @@ export default function Today() {
   };
   useEffect(() => {
     if (!qaAddSheet) return;
-    const t = setTimeout(() => { setInstalled(getInstalledApps()); setAppsLoaded(true); }, 60);
-    return () => clearTimeout(t);
+    // the native lookup runs off the JS thread, so the sheet opens and settles while the list loads
+    let live = true;
+    getInstalledApps().then((apps) => { if (live) { setInstalled(apps); setAppsLoaded(true); } });
+    return () => { live = false; };
   }, [qaAddSheet]);
+  const appMatches = useMemo(() => {
+    const query = appQuery.trim().toLowerCase();
+    return installed.filter((a) => !quickAccess.some((x) => x.target === a.packageName) && (!query || a.label.toLowerCase().includes(query)));
+  }, [installed, quickAccess, appQuery]);
   const addQuick = (item: Omit<QuickItem, 'id'>) => {
     if (quickAccess.some((q) => q.kind === item.kind && q.target === item.target)) return;
     setQuickAccess([...quickAccess, { ...item, id: uid() }]);
@@ -344,10 +346,7 @@ export default function Today() {
             <Field value={appQuery} onChangeText={setAppQuery} placeholder="Search your apps…" />
             <View style={{ maxHeight: 320 }}>
               <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                {installed
-                  .filter((a) => !quickAccess.some((q) => q.target === a.packageName))
-                  .filter((a) => !appQuery.trim() || a.label.toLowerCase().includes(appQuery.trim().toLowerCase()))
-                  .map((a) => (
+                {appMatches.slice(0, 60).map((a) => (
                     <Bouncy
                       key={a.packageName}
                       onPress={() => addQuick({ label: a.label, icon: 'apps-outline', color: 'teal', kind: 'app', target: a.packageName })}
@@ -358,6 +357,9 @@ export default function Today() {
                       <Ionicons name="add" size={18} color={C.textFaint} />
                     </Bouncy>
                   ))}
+                {appMatches.length > 60 ? (
+                  <Text style={[T.caption, { textAlign: 'center', paddingVertical: 10 }]}>Search to find the rest.</Text>
+                ) : null}
               </ScrollView>
             </View>
           </>
@@ -569,7 +571,8 @@ function WeekBar({ label, mins, maxMins, isToday }: {
   React.useEffect(() => {
     h.value = level === 'none' ? target : withSpring(target, BAR_SPRING);
   }, [target, level]);
-  const fillStyle = useAnimatedStyle(() => ({ height: h.value }));
+  // a full-height fill rises from the trough floor: a transform, never a height
+  const fillStyle = useAnimatedStyle(() => ({ transform: [{ translateY: 56 - h.value }] }));
   const fillColor = isToday ? C.accent : C.slate + '73';
   return (
     <View style={{ alignItems: 'center', flex: 1 }}>
@@ -589,7 +592,7 @@ function WeekBar({ label, mins, maxMins, isToday }: {
         <Animated.View
           style={[
             {
-              width: '100%', borderRadius: 8, backgroundColor: fillColor,
+              width: '100%', height: 56, borderRadius: 8, backgroundColor: fillColor,
             },
             fillStyle,
           ]}

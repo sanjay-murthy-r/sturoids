@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Linking, Alert, Image } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Linking, Alert } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore, AiLink } from '../store';
@@ -36,6 +37,7 @@ function LinkIcon({ link }: { link: AiLink }) {
     <Image
       source={{ uri: 'https://www.google.com/s2/favicons?domain=' + domain + '&sz=128' }}
       style={{ width: 40, height: 40, borderRadius: 10 }}
+      cachePolicy="memory-disk"
       onError={() => setFailed(true)}
     />
   );

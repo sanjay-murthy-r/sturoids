@@ -8,6 +8,7 @@ import Animated, {
   useAnimatedStyle, useSharedValue, withRepeat, withSpring, withTiming, Easing, cancelAnimation,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
+import { Image as CachedImage } from 'expo-image';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -328,7 +329,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
             {note.attachments.map((a) => (
               <View key={a.id}>
                 {a.kind === 'image' && (
-                  <Image source={{ uri: a.uri }} style={{ width: mediaW, height: mediaW * 0.75, borderRadius: 14 }} resizeMode="cover" />
+                  <CachedImage source={{ uri: a.uri }} style={{ width: mediaW, height: mediaW * 0.75, borderRadius: 14 }} contentFit="cover" cachePolicy="memory" />
                 )}
                 {a.kind === 'video' && <InlineVideo uri={a.uri} width={mediaW} />}
                 {a.kind === 'file' && (

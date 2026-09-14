@@ -23,9 +23,10 @@ export function appListAvailable(): boolean {
   return !!native();
 }
 
-export function getInstalledApps(): InstalledApp[] {
+/** Resolves off the JS thread (the native side is an AsyncFunction); empty where the module is missing. */
+export async function getInstalledApps(): Promise<InstalledApp[]> {
   try {
-    return (native()?.getInstalledApps() as InstalledApp[]) ?? [];
+    return ((await native()?.getInstalledApps()) as InstalledApp[]) ?? [];
   } catch {
     return [];
   }

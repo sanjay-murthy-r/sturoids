@@ -475,9 +475,16 @@ export function ProgressBar({ value, color, height = 8 }: { value: number; color
   React.useEffect(() => {
     w.value = level === 'none' ? v : withSpring(v, RISE_OUT);
   }, [v, level]);
-  const fillStyle = useAnimatedStyle(() => ({ width: `${w.value * 100}%` }));
+  const trackW = useSharedValue(0);
+  // a full-width fill slides in from the left: a transform, so no layout pass per frame. Hidden until the track
+  // has measured, so it never flashes full on its first frame
+  const fillStyle = useAnimatedStyle(() => ({
+    opacity: trackW.value > 0 ? 1 : 0,
+    transform: [{ translateX: (w.value - 1) * trackW.value }],
+  }));
   return (
     <View
+      onLayout={(e) => { trackW.value = e.nativeEvent.layout.width; }}
       style={[
         { height, borderRadius: height / 2, overflow: 'hidden' },
         theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...neuInset('hairline') },
