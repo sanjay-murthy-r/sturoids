@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { InteractionManager, View } from 'react-native';
+import { Alert, InteractionManager, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
 import {
@@ -9,7 +9,7 @@ import {
 } from '@expo-google-fonts/rubik';
 import { IBMPlexMono_600SemiBold } from '@expo-google-fonts/ibm-plex-mono';
 import { bgFor } from '../src/theme';
-import { useStore } from '../src/store';
+import { useStore, loadFailedThisLaunch, savingPaused } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
 import { StartScreen } from '../src/components/StartScreen';
 
@@ -38,6 +38,26 @@ export default function RootLayout() {
     });
     return () => task.cancel();
   }, [revealed]);
+
+  // a load that failed is never silent: once the intro is gone, say what happened and what is safe
+  useEffect(() => {
+    if (!introDone || !loadFailedThisLaunch()) return;
+    if (savingPaused()) {
+      Alert.alert(
+        'Your saved data could not be opened',
+        'Nothing on this phone was changed, but changes you make now will not be saved. Restart the app to try again.',
+      );
+    } else {
+      Alert.alert(
+        'Your saved data could not be opened',
+        'A copy was kept on this phone and the app started fresh. You can share the copy or restore it from Settings, under Data.',
+        [
+          { text: 'Later', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => router.push('/settings') },
+        ],
+      );
+    }
+  }, [introDone]);
 
   // wait for the persisted settings too: the intro's animation level, the theme
   // background and the accent must all be the user's on the very first frame

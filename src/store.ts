@@ -357,7 +357,7 @@ const remapBlocks = (week: any) => {
   if (!week || typeof week !== 'object') return week;
   const outWeek: any = {};
   for (const d of Object.keys(week)) {
-    outWeek[d] = (week[d] || []).map((b: any) => ({
+    outWeek[d] = (Array.isArray(week[d]) ? week[d] : []).map((b: any) => ({
       ...b, color: BLOCK_REMAP[String(b?.color || '').toUpperCase()] || b.color,
     }));
   }
@@ -386,11 +386,29 @@ export function migrateV5(p: any): any {
     for (const name of Object.keys(out.weekTemplates)) t[name] = remapBlocks(out.weekTemplates[name]);
     out.weekTemplates = t;
   }
-  out.notes = (p?.notes || []).map((n: any) => ({ ...n, attachments: n.attachments || [], locked: !!n.locked }));
+  out.notes = (Array.isArray(p?.notes) ? p.notes : [])
+    .filter((n: any) => n && typeof n === 'object')
+    .map((n: any) => ({ ...n, attachments: Array.isArray(n.attachments) ? n.attachments : [], locked: !!n.locked }));
   out.deepWork = p?.deepWork ?? null;
   out.journal = Array.isArray(p?.journal) ? p.journal : [];
   out.journalTags = Array.isArray(p?.journalTags) ? p.journalTags : [];
   return out;
+}
+
+// ---------- persistence ----------
+
+const STORE_KEY = 'student-hub-v1';
+const jsonStorage = createJSONStorage<any>(() => AsyncStorage);
+
+/** Every persisted-shape migration, oldest first. Also restores the app's own saved blob on import. */
+function migratePersisted(persisted: any, version: number): any {
+  let p = version < 2 ? migrateData(persisted) : persisted;
+  if (version < 3) p = migrateToGrey(p);
+  if (version < 4) {
+    p = { ...p, settings: { ...(p?.settings || {}), accent: p?.settings?.accent || DEFAULT_ACCENT } };
+  }
+  if (version < 5) p = migrateV5(p);
+  return p;
 }
 
 // ---------- store ----------
@@ -646,17 +664,13 @@ export const useStore = create<AppState>()(
       },
     }),
     {
-      name: 'student-hub-v1',
-      storage: createJSONStorage(() => AsyncStorage),
+      name: STORE_KEY,
+      storage: jsonStorage,
       version: 5,
-      migrate: (persisted: any, version) => {
-        let p = version < 2 ? migrateData(persisted) : persisted;
-        if (version < 3) p = migrateToGrey(p);
-        if (version < 4) {
-          p = { ...p, settings: { ...(p?.settings || {}), accent: p?.settings?.accent || DEFAULT_ACCENT } };
-        }
-        if (version < 5) p = migrateV5(p);
-        return p;
+      migrate: (persisted: any, version) => migratePersisted(persisted, version),
+      // zustand reports a load that throws only here and never marks the store hydrated
+      onRehydrateStorage: () => (_state, error) => {
+        if (error) void handleHydrationError(error);
       },
     }
   )
@@ -669,6 +683,131 @@ useStore.subscribe((s, prev) => {
 });
 useStore.persist.onFinishHydration((s) => setAccent(s.settings.accent));
 if (useStore.persist.hasHydrated()) setAccent(useStore.getState().settings.accent);
+
+// ---------- hydration can never strand the app ----------
+// The app renders nothing until the saved data has loaded. When reading or migrating the saved
+// blob throws (unreadable storage, a corrupt blob, a migration bug) zustand never marks the store
+// hydrated, so the failure is settled here instead: the raw blob is copied aside (Settings > Data
+// can share or restore it) and only then does the app render, on defaults. If that copy cannot be
+// made, saving pauses for this launch, so the defaults never overwrite the blob still on disk.
+
+export const RECOVERY_KEY = 'student-hub-v1.recovery';
+
+let loadFailed = false;
+let settledOnError = false;
+let timedOut = false;
+let persistPaused = false;
+const settledListeners = new Set<() => void>();
+const noopStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+
+function settleHydration() {
+  const listeners = [...settledListeners];
+  settledListeners.clear();
+  listeners.forEach((cb) => cb());
+}
+
+function pausePersistence() {
+  if (persistPaused) return;
+  persistPaused = true;
+  useStore.persist.setOptions({ storage: noopStorage as any });
+}
+
+function resumePersistence() {
+  if (!persistPaused) return;
+  persistPaused = false;
+  useStore.persist.setOptions({ storage: jsonStorage });
+}
+
+async function handleHydrationError(error: unknown) {
+  console.warn('[store] saved data could not be loaded', error);
+  // the blob can load and only its write-back fail: the data is already in, nothing to rescue
+  if (hasAnyUserData(useStore.getState())) {
+    settledOnError = true;
+    settleHydration();
+    return;
+  }
+  let safe = false;
+  try {
+    const raw = await AsyncStorage.getItem(STORE_KEY);
+    if (raw == null) {
+      safe = true; // nothing on disk to protect
+    } else {
+      const kept = await AsyncStorage.getItem(RECOVERY_KEY);
+      if (kept == null) {
+        await AsyncStorage.setItem(RECOVERY_KEY, raw);
+        safe = true;
+      } else {
+        // an older copy is already kept: never replace it, and never overwrite this blob either
+        safe = kept === raw;
+      }
+    }
+  } catch {
+    safe = false;
+  }
+  if (!safe) pausePersistence();
+  loadFailed = true;
+  // settled only now, after the copy: nothing may render (and write) before the blob is safe
+  settledOnError = true;
+  settleHydration();
+}
+
+// storage that answered late: saving resumes once the real data is in
+useStore.persist.onFinishHydration(() => {
+  if (timedOut) resumePersistence();
+});
+
+/** True once the saved data has loaded, or its failure to load has been handled. */
+export function hydrationSettled(): boolean {
+  return useStore.persist.hasHydrated() || settledOnError || timedOut;
+}
+
+/** Calls cb once hydration settles (immediately if it already has). Returns an unsubscribe. */
+export function onHydrationSettled(cb: () => void): () => void {
+  if (hydrationSettled()) {
+    cb();
+    return () => {};
+  }
+  settledListeners.add(cb);
+  const unsubscribe = useStore.persist.onFinishHydration(() => {
+    settledListeners.delete(cb);
+    cb();
+  });
+  return () => {
+    settledListeners.delete(cb);
+    unsubscribe();
+  };
+}
+
+/** Last resort when storage never answers: render on defaults and save nothing until it does. */
+export function giveUpWaitingForHydration() {
+  if (hydrationSettled()) return;
+  console.warn('[store] storage did not answer; starting on defaults with saving paused');
+  timedOut = true;
+  pausePersistence();
+  settleHydration();
+}
+
+/** The saved data failed to load this launch; the app is running on defaults. */
+export const loadFailedThisLaunch = () => loadFailed;
+/** Saving is paused this launch so nothing overwrites data that could not be loaded. */
+export const savingPaused = () => persistPaused;
+
+/** The raw saved blob kept aside when it could not be opened, if any. */
+export async function readRecoveryCopy(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(RECOVERY_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteRecoveryCopy(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(RECOVERY_KEY);
+  } catch {
+    // nothing left to clean up
+  }
+}
 
 /** Everything worth backing up, as a plain object. */
 export function exportSnapshot() {
@@ -702,11 +841,20 @@ export function exportSnapshot() {
 export function importSnapshot(json: string): boolean {
   try {
     const data = JSON.parse(json);
-    if (!data || data._app !== 'student-hub') return false;
-    const { _app, _exportedAt, _v, ...rest } = data;
-    let d: any = rest;
-    if (_v !== 2 && _v !== 3) d = migrateToGrey(migrateData(d));
+    if (!data || typeof data !== 'object') return false;
+    let d: any;
+    if (data._app === 'student-hub') {
+      const { _app, _exportedAt, _v, ...rest } = data;
+      d = _v === 2 || _v === 3 ? rest : migrateToGrey(migrateData(rest));
+    } else if (data.state && typeof data.state === 'object' && typeof data.version === 'number') {
+      // the app's own saved blob, such as the copy kept when it could not be opened
+      d = migratePersisted(data.state, data.version);
+    } else {
+      return false;
+    }
     d = migrateV5(d);
+    // an explicit import replaces everything, so saving resumes even if this launch paused it
+    resumePersistence();
     useStore.getState().replaceAll(d);
     return true;
   } catch {

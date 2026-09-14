@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Alert, Linking } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -6,7 +6,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, ThemeMode, AnimLevel, ACCENT_CHOICES, neuInset, neuRaised } from '../src/theme';
-import { useStore, exportSnapshot, importSnapshot } from '../src/store';
+import { useStore, exportSnapshot, importSnapshot, readRecoveryCopy, deleteRecoveryCopy } from '../src/store';
 import { compareVersions, todayKey } from '../src/utils';
 import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, Chip, InfoDot, NeuHeader, useTheme } from '../src/components/UI';
 import { DEFAULT_TAB_SLOTS, TAB_SLOT_OPTIONS } from '../src/components/NeuTabBar';
@@ -142,6 +142,63 @@ export default function Settings() {
     }
   };
 
+  // a copy of saved data that could not be opened (see store.ts): share it, restore it, or let it go
+  const [recovery, setRecovery] = useState<string | null>(null);
+  useEffect(() => {
+    readRecoveryCopy().then(setRecovery);
+  }, []);
+
+  const shareRecovery = async () => {
+    if (!recovery) return;
+    try {
+      const uri = FileSystem.cacheDirectory + 'sturoids-kept-copy-' + todayKey() + '.json';
+      await FileSystem.writeAsStringAsync(uri, recovery);
+      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json' });
+      else Alert.alert('Saved', 'Copy written to:\n' + uri);
+    } catch (e: any) {
+      Alert.alert('Could not share the copy', String(e?.message || e));
+    }
+  };
+
+  const restoreRecovery = () => {
+    if (!recovery) return;
+    Alert.alert(
+      'Restore the kept copy?',
+      'This replaces all current data with the copy. Calculator history is cleared and any running Deep Work session ends.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Restore', style: 'destructive',
+          onPress: async () => {
+            const ok = importSnapshot(recovery);
+            if (ok) {
+              rescheduleAllReminders();
+              await deleteRecoveryCopy();
+              setRecovery(null);
+            }
+            Alert.alert(
+              ok ? 'Restored' : 'Still could not be opened',
+              ok ? 'Your data is back.' : 'Keep the copy and try again after updating the app.'
+            );
+          },
+        },
+      ]
+    );
+  };
+
+  const discardRecovery = () => {
+    Alert.alert('Delete the kept copy?', 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: async () => {
+          await deleteRecoveryCopy();
+          setRecovery(null);
+        },
+      },
+    ]);
+  };
+
   const checkUpdate = async () => {
     const repo = settings.githubRepo.trim();
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
@@ -259,6 +316,17 @@ export default function Settings() {
         <Card>
           <PillButton label="Export backup (JSON)" icon="download-outline" onPress={exportData} style={{ marginBottom: 10 }} />
           <PillButton label="Import backup" icon="push-outline" color={C.amber} outline onPress={importData} />
+          {recovery ? (
+            <View style={st.recovery}>
+              <Text style={st.recoveryTitle}>A copy of data that could not be opened</Text>
+              <Text style={st.recoveryBody}>
+                It was set aside so nothing is lost. Share it to keep it safe, or restore it after updating the app.
+              </Text>
+              <PillButton label="Share copy" icon="share-outline" outline onPress={shareRecovery} style={{ marginTop: 12 }} />
+              <PillButton label="Restore copy" icon="refresh-outline" color={C.amber} outline onPress={restoreRecovery} style={{ marginTop: 10 }} />
+              <PillButton label="Delete copy" icon="trash-outline" color={C.danger} outline onPress={discardRecovery} style={{ marginTop: 10 }} />
+            </View>
+          ) : null}
         </Card>
 
         <SectionTitle right={<InfoDot text="Sideloaded APKs don't auto-update. This checks the GitHub Releases of the repo below for a newer version tag and links you to the download." />}>
@@ -280,6 +348,12 @@ export default function Settings() {
 }
 
 const st = StyleSheet.create({
+  recovery: {
+    marginTop: 16, paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,
+  },
+  recoveryTitle: { ...T.label, color: C.text },
+  recoveryBody: { ...T.caption, marginTop: 4 },
   label: { color: C.textDim, fontFamily: F.med, fontSize: 13, marginBottom: 8 },
   hint: { color: C.textFaint, fontSize: 12, marginTop: 10, lineHeight: 17 },
   optRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 6 },
