@@ -144,7 +144,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {tab === 'daily' && leftovers.length > 0 && (
           <Enter index={0}>
             <Card pad={14}>
-              <Text style={st.triageTitle}>Yesterday's leftovers — 5-second triage</Text>
+              <Text style={st.triageTitle}>Yesterday's leftovers</Text>
               {leftovers.map((t) => (
                 <Row key={t.id} style={{ paddingVertical: 6 }}>
                   <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{t.title}</Text>
@@ -249,7 +249,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
           { bottom: tabMode ? 24 : insets.bottom + 20 },
           theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
-            : { backgroundColor: C.card, boxShadow: neuRaised('high').boxShadow + ', 0 0 14px ' + C.accent + '55' },
+            : { backgroundColor: C.card, ...neuRaised('high') },
         ]}
       >
         <Ionicons name="add" size={30} color={C.accent} />
@@ -326,7 +326,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         </Row>
         {!settings.remindersEnabled && (
           <Text style={[T.caption, { marginTop: 10 }]}>
-            Reminders master switch is off — turning any reminder on will ask for notification permission and enable it.
+            Reminders are off in Settings. Turning one on here asks for notification permission and switches them on.
           </Text>
         )}
       </Sheet>

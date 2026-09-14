@@ -196,7 +196,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       if (await ensurePermission()) {
         finishNotifId.current = await Notifications.scheduleNotificationAsync({
           identifier: FINISH_NOTIF_ID,
-          content: { title: 'Finish line reached', body: 'Your Deep Work finish line has passed — open Sturoids to wrap up.' },
+          content: { title: 'Finish line reached', body: 'Your Deep Work finish line has passed. Open Sturoids to wrap up.' },
           trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: d, channelId: NOTIF_CHANNEL_ID } as any,
         });
       }
@@ -228,7 +228,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       } else if (startedLiveRef.current) {
         // paused at the finish line: conclude immediately, notify
         Notifications.scheduleNotificationAsync({
-          content: { title: 'Session wrapped up', body: 'The stopwatch was paused at your finish line — the session was concluded automatically.' },
+          content: { title: 'Session wrapped up', body: 'The stopwatch was paused at your finish line, so the session ended on its own.' },
           trigger: null,
         }).catch(() => {});
         endSessionRef.current();
@@ -411,7 +411,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         </Enter>
 
         <Enter index={1}>
-          <Field value={subject} onChangeText={setSubject} placeholder="Subject (optional) — e.g. Physics" />
+          <Field value={subject} onChangeText={setSubject} placeholder="Subject, like Physics (optional)" />
         </Enter>
 
         {/* attached tasks */}
@@ -517,7 +517,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       {/* countdown until a time of day */}
       <Sheet visible={untilSheet} onClose={() => setUntilSheet(false)} title="Count down until…">
         <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginBottom: 10 }}>
-          Pick a time of day — the gap from now becomes the countdown length. Nothing stops automatically at that time.
+          Pick a time of day. The gap from now becomes the countdown length, and nothing stops on its own at that time.
         </Text>
         <Field
           value={untilTime} onChangeText={setUntilTime}

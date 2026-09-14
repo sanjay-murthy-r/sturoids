@@ -91,7 +91,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       '## Timed notes',
       ...video.notes.map((n) => '- [' + fmtMediaTime(n.time) + '] ' + n.text),
     ];
-    addNote({ title: 'Revision — ' + video.title, body: lines.join('\n'), folder: 'General' });
+    addNote({ title: 'Revision: ' + video.title, body: lines.join('\n'), folder: 'General' });
     toast('Revision sheet added to Notes.');
   };
 

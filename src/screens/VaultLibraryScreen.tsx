@@ -311,7 +311,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         onClose={() => setFolderSheet(null)}
         title={folderSheet?.mode === 'new' ? (cwdFolder ? 'New subfolder in ' + cwdFolder.name : 'New folder') : 'Rename folder'}
       >
-        <Field value={folderName} onChangeText={setFolderName} placeholder="e.g. Physics — Rotation" autoFocus />
+        <Field value={folderName} onChangeText={setFolderName} placeholder="Folder name, like Physics" autoFocus />
         <PillButton label={folderSheet?.mode === 'new' ? 'Create' : 'Rename'} color={C.pink} onPress={submitFolder} />
       </Sheet>
 

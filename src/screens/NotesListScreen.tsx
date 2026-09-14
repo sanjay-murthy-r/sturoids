@@ -124,7 +124,7 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
           { bottom: mode === 'tab' ? 24 : insets.bottom + 20 },
           theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.green }
-            : { backgroundColor: C.card, boxShadow: neuRaised('high').boxShadow + ', 0 0 14px ' + C.green + '55' },
+            : { backgroundColor: C.card, ...neuRaised('high') },
         ]}
         onPress={() => { tap(); newNote(); }}
       >

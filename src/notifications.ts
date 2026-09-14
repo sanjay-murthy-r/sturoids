@@ -121,7 +121,7 @@ export async function rescheduleAllReminders() {
         'todo-daily',
         s.settings.todoReminderTime,
         "Plan today's ToDos",
-        'Two minutes now saves the whole day — set up your list.'
+        'Two minutes now saves the whole day. Set up your list.'
       );
     }
     for (const r of s.todoReminders) {

@@ -225,7 +225,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </ScrollView>
 
       {/* block sheet */}
-      <Sheet visible={blockSheet} onClose={() => setBlockSheet(false)} title={editing ? 'Edit block' : `New block — ${day}`}>
+      <Sheet visible={blockSheet} onClose={() => setBlockSheet(false)} title={editing ? 'Edit block' : `New block for ${day}`}>
         <Field value={subj} onChangeText={setSubj} placeholder="Subject, e.g. Physics" autoFocus />
         <Row style={{ gap: 10 }}>
           <Field value={start} onChangeText={setStart} placeholder="Start 16:00" style={{ flex: 1 }} keyboardType="numbers-and-punctuation" />
@@ -296,7 +296,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </Sheet>
 
       {/* reminder edit sheet */}
-      <Sheet visible={!!remindEdit} onClose={() => setRemindEdit(null)} title={`Reminder — ${remindEdit?.title || ''}`}>
+      <Sheet visible={!!remindEdit} onClose={() => setRemindEdit(null)} title={`Reminder for ${remindEdit?.title || 'this habit'}`}>
         <Field
           value={remindDraft} onChangeText={setRemindDraft}
           placeholder="24h HH:MM, e.g. 21:00 (empty = off)" keyboardType="numbers-and-punctuation" autoFocus
@@ -304,7 +304,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <PillButton label="Save" onPress={saveReminder} />
         {!remindersEnabled && (
           <Text style={[T.caption, { marginTop: 10 }]}>
-            Note: the master reminders toggle in Settings is off — times are saved but silent until you enable it.
+            Reminders are off in Settings, so times are saved but stay silent until you turn them on.
           </Text>
         )}
       </Sheet>

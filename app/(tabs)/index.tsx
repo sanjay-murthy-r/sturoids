@@ -200,7 +200,7 @@ export default function Today() {
             <Row>
               <Glance value={String(tasksLeft)} label="tasks left" color={C.accent} />
               <View style={st.vDivider} />
-              <Glance value={habits.length ? habitsDone + '/' + habits.length : '—'} label="habits" color={C.green} />
+              <Glance value={habits.length ? habitsDone + '/' + habits.length : '–'} label="habits" color={C.green} />
               <View style={st.vDivider} />
               <Glance value={String(focusToday)} suffix=" min" label="focused" color={C.accent} />
             </Row>
@@ -339,7 +339,7 @@ export default function Today() {
               ? 'Loading apps…'
               : appListAvailable()
                 ? 'No launchable apps found.'
-                : 'The live app list needs the installed APK build - meanwhile add by package name below.'}
+                : 'The live app list needs the installed app. Meanwhile, add apps by package name below.'}
           </Text>
         ) : (
           <>

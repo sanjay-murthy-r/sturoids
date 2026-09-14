@@ -196,7 +196,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       {/* history */}
       <Sheet visible={histSheet} onClose={() => setHistSheet(false)} title="History">
         {history.length === 0 ? (
-          <Text style={{ color: C.textFaint }}>Past calculations appear here — tap one to reuse its result.</Text>
+          <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 13 }}>Past calculations appear here. Tap one to reuse its result.</Text>
         ) : (
           history.map((h) => (
             <Bouncy

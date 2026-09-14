@@ -373,7 +373,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <View style={[st.liveBar, { bottom: 66 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, boxShadow: undefined }]}>
           <View style={st.liveDot} />
           <Text style={st.liveBarText} numberOfLines={2}>
-            {liveText || 'Listening — speak away…'}
+            {liveText || 'Listening…'}
           </Text>
         </View>
       )}

@@ -25,13 +25,13 @@ import { TOOLS, ToolKey, colorOf, normaliseSlots, toolByKey } from '../src/tools
 const APP_VERSION = Constants.expoConfig?.version || '1.3.0';
 
 const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
-  { key: 'default', label: 'Default', desc: 'Soft grey neumorphism — one continuous material' },
+  { key: 'default', label: 'Default', desc: 'Soft grey neumorphism, one continuous material' },
   { key: 'minimal', label: 'Minimalistic', desc: 'High contrast, flat, maximum legibility' },
 ];
 
 const ANIMS: { key: AnimLevel; label: string; desc: string }[] = [
   { key: 'none', label: 'Off', desc: 'No motion at all' },
-  { key: 'some', label: 'Some', desc: 'Feedback only — taps & state changes' },
+  { key: 'some', label: 'Some', desc: 'Feedback only: taps and state changes' },
   { key: 'full', label: 'Everything', desc: 'Bouncy springs on all the things' },
 ];
 
@@ -356,7 +356,7 @@ export default function Settings() {
             })}
           </Row>
           <Text style={st.hint}>
-            {ACCENT_CHOICES.find((a) => a.color === settings.accent)?.label || 'Custom'} — recolours highlights, links and controls everywhere.
+            {ACCENT_CHOICES.find((a) => a.color === settings.accent)?.label || 'Custom'}. Recolours highlights, links and controls everywhere.
           </Text>
         </Card>
 
@@ -475,8 +475,8 @@ export default function Settings() {
         </Card>
         <PinSheet visible={!!pinStep} mode={pinStep?.mode ?? 'enter'} onClose={() => setPinStep(null)} onDone={pinDone} />
 
-        <SectionTitle right={<InfoDot text="Everything is stored locally on this phone — no accounts. Export a JSON backup before changing phones; importing replaces all current data." />}>
-          Data — you own it
+        <SectionTitle right={<InfoDot text="Everything is stored locally on this phone, with no accounts. Export a JSON backup before changing phones; importing replaces all current data." />}>
+          Data
         </SectionTitle>
         <Card>
           <PillButton label="Export backup (JSON)" icon="download-outline" onPress={() => exportData()} style={{ marginBottom: 10 }} />
