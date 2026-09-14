@@ -5,7 +5,8 @@
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
-    "lint:type": "node scripts/lint-type.js"
+    "lint:type": "node scripts/lint-type.js",
+    "test:store": "node scripts/test-store.js"
   },
   "dependencies": {
     "@expo-google-fonts/ibm-plex-mono": "^0.4.1",

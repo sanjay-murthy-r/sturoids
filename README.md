@@ -13,10 +13,13 @@ Version 1.4 adds native modules (device unlock, secure storage, screen capture p
 ```
 npx tsc --noEmit
 npm run lint:type
+npm run test:store
 node scripts/build-signature.js --check
 ```
 
 `lint:type` fails on `fontWeight`, fractional or sub-11 font sizes, and any size set without a font family.
+
+`test:store` boots the real store in Node over an in-memory storage and checks a fresh install, the upgrade from a v4 blob, malformed data, backup round trips, and every load-failure path (an unreadable blob, an older copy already kept, storage that answers late).
 
 ## How it fits together
 
