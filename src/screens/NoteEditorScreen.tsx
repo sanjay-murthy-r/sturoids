@@ -16,6 +16,7 @@ import { C, F, MIN, S, T, neuInset, neuPressedInner, neuRaised, NEU } from '../t
 import { useStore, Attachment } from '../store';
 import { todayKey, uid } from '../utils';
 import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuHeader, NeuIconBtn, PillButton, DotMenu, useTheme } from '../components/UI';
+import { toast } from '../components/Toast';
 import { LockGate, PinSheet } from '../components/LockGate';
 import { lockProtectionAvailable, markUnlocked, useUnlocked } from '../lock';
 import { Bouncy } from '../components/Motion';
@@ -229,7 +230,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
         addAttachment(note.id, { kind: a.type === 'video' ? 'video' : 'image', uri: stored, name });
       }
     } catch (e: any) {
-      Alert.alert('Could not attach', String(e?.message || e));
+      toast('Could not attach that file.');
     }
   };
 
@@ -241,7 +242,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       const stored = await persistFile(f.uri, f.name || 'file');
       addAttachment(note.id, { kind: 'file', uri: stored, name: f.name || 'file' });
     } catch (e: any) {
-      Alert.alert('Could not attach', String(e?.message || e));
+      toast('Could not attach that file.');
     }
   };
 
@@ -249,7 +250,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     try {
       if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(a.uri);
     } catch {
-      Alert.alert('Could not open', a.name);
+      toast('Could not open ' + a.name);
     }
   };
 

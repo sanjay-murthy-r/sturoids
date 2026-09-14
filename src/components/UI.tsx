@@ -438,8 +438,31 @@ export function Field(props: React.ComponentProps<typeof TextInput> & { style?: 
   );
 }
 
-export function EmptyText({ children }: { children: React.ReactNode }) {
-  return <Text style={st.empty}>{children}</Text>;
+/**
+ * What an empty list says: a carved icon well, one line in the text colour, an optional quieter line, and at
+ * most one way forward. `compact` sits inside a card.
+ */
+export function EmptyState({ icon, title, body, actionLabel, onAction, compact }: {
+  icon: any; title: string; body?: string; actionLabel?: string; onAction?: () => void; compact?: boolean;
+}) {
+  const theme = useTheme();
+  return (
+    <View style={[st.emptyWrap, compact && { marginVertical: 14 }]}>
+      <View
+        style={[
+          st.emptyWell,
+          theme === 'minimal'
+            ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
+            : { backgroundColor: C.inset, ...neuInset('low') },
+        ]}
+      >
+        <Ionicons name={icon} size={22} color={C.textFaint} />
+      </View>
+      <Text style={st.emptyTitle}>{title}</Text>
+      {body ? <Text style={st.emptyBody}>{body}</Text> : null}
+      {actionLabel && onAction ? <PillButton small outline label={actionLabel} onPress={onAction} style={{ marginTop: 14 }} /> : null}
+    </View>
+  );
 }
 
 /** A carved hairline track with a sprung accent fill. No glow: one accent, lit by the material. */
@@ -619,9 +642,11 @@ const st = StyleSheet.create({
     color: C.text, fontFamily: F.reg, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15,
     marginBottom: 0,
   },
-  empty: {
-    color: C.textFaint, fontFamily: F.reg, textAlign: 'center', marginVertical: 26,
-    fontSize: 13, lineHeight: 19, paddingHorizontal: 10,
+  emptyWrap: { alignItems: 'center', marginVertical: 24, paddingHorizontal: 16 },
+  emptyWell: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  emptyTitle: { color: C.text, fontFamily: F.semi, fontSize: 15, textAlign: 'center' },
+  emptyBody: {
+    color: C.textFaint, fontFamily: F.reg, fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 4, maxWidth: 300,
   },
   sheetOverlay: { flex: 1, backgroundColor: C.scrim },
   sheet: {

@@ -13,6 +13,8 @@ import { bgFor } from '../src/theme';
 import { useStore, subscribeLoadNotices } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
 import { StartScreen } from '../src/components/StartScreen';
+import { ErrorBoundary } from '../src/components/ErrorBoundary';
+import { ToastHost } from '../src/components/Toast';
 
 // the native splash stays up until the intro (or the app) has painted its first
 // frame — no bare-material gap between the splash icon and the first real frame
@@ -91,6 +93,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: bg }} onLayout={hideSplash}>
       <StatusBar style="light" />
       {revealed && appFonts && (
+        <ErrorBoundary>
         <Stack
           screenOptions={{
             // headers are app-owned (NeuHeader) — status-bar spacing is padded
@@ -101,7 +104,9 @@ export default function RootLayout() {
             animationDuration: 220,
           }}
         />
+        </ErrorBoundary>
       )}
+      {revealed && appFonts && <ToastHost />}
       {!introDone && (
         <StartScreen onReveal={() => setRevealed(true)} onDone={() => setIntroDone(true)} />
       )}

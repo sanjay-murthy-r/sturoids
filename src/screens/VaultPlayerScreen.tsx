@@ -6,8 +6,9 @@ import { C, F, S, T } from '../theme';
 import { useStore, TimedNote, Bookmark } from '../store';
 import { fmtMediaTime } from '../utils';
 import {
-  ScreenBG, Card, SectionTitle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, DotMenu, NeuHeader,
+  ScreenBG, Card, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, DotMenu, NeuHeader,
 } from '../components/UI';
+import { toast } from '../components/Toast';
 import { Enter } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -91,7 +92,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       ...video.notes.map((n) => '- [' + fmtMediaTime(n.time) + '] ' + n.text),
     ];
     addNote({ title: 'Revision — ' + video.title, body: lines.join('\n'), folder: 'General' });
-    Alert.alert('Exported', 'A revision sheet was created in Notes.');
+    toast('Revision sheet added to Notes.');
   };
 
   const itemRow = (item: TimedNote | Bookmark, isBookmark: boolean, i: number) => (
@@ -150,14 +151,14 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
           <SectionTitle>Bookmarks</SectionTitle>
           {video.bookmarks.length === 0 ? (
-            <EmptyText>Mark key moments — tap one to jump there.</EmptyText>
+            <EmptyState compact icon="bookmark-outline" title="No bookmarks yet" body="Mark key moments, then tap one to jump there." />
           ) : (
             video.bookmarks.map((b, i) => itemRow(b, true, i))
           )}
 
           <SectionTitle>Timed notes</SectionTitle>
           {video.notes.length === 0 ? (
-            <EmptyText>Notes pinned to timestamps — "why does this step work?" @ 12:34.</EmptyText>
+            <EmptyState compact icon="create-outline" title="No timed notes yet" body='Pin a note to a moment, like "why does this step work?" at 12:34.' />
           ) : (
             video.notes.map((n, i) => itemRow(n, false, i))
           )}

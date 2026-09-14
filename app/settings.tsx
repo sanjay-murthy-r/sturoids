@@ -9,6 +9,7 @@ import { C, F, MIN, S, T, ThemeMode, AnimLevel, ACCENT_CHOICES, neuInset, neuRai
 import { useStore, exportSnapshot, importSnapshot, readRecoveryCopy, deleteRecoveryCopy } from '../src/store';
 import { compareVersions, todayKey } from '../src/utils';
 import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, Chip, InfoDot, NeuHeader, Sheet, useTheme } from '../src/components/UI';
+import { toast } from '../src/components/Toast';
 import { Bouncy, Pop } from '../src/components/Motion';
 import { tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
@@ -102,7 +103,7 @@ export default function Settings() {
   const toggleReminders = async (v: boolean) => {
     if (v) {
       const ok = await ensurePermission();
-      if (!ok) { Alert.alert('Permission needed', 'Allow notifications in system settings first.'); return; }
+      if (!ok) { toast('Allow notifications in system settings first.'); return; }
     }
     setSetting('remindersEnabled', v);
     setTimeout(rescheduleAllReminders, 200);
@@ -288,7 +289,7 @@ export default function Settings() {
   const checkUpdate = async () => {
     const repo = settings.githubRepo.trim();
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-      Alert.alert('Set the repo first', 'Enter it as owner/repo once the app is on GitHub Releases.');
+      toast('Enter the repo as owner/repo first.');
       return;
     }
     setChecking(true);
@@ -303,7 +304,7 @@ export default function Settings() {
           { text: 'Open', onPress: () => Linking.openURL(j.html_url) },
         ]);
       } else {
-        Alert.alert('Up to date', "You're on v" + APP_VERSION + ' — nothing newer on Releases.');
+        toast('Up to date: v' + APP_VERSION + ' is the newest release.');
       }
     } catch (e: any) {
       Alert.alert('Check failed', String(e?.message || e));

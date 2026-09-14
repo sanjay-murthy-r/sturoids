@@ -6,7 +6,7 @@ import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore } from '../store';
 import { todayKey, yesterdayKey, daysUntil, fmtShortDate, toMinutes } from '../utils';
 import {
-  ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyText, Row, IconBtn, Chip, Toggle, NeuHeader, useTheme,
+  ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Chip, Toggle, NeuHeader, useTheme,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Enter, Bouncy, useFocusKey } from '../components/Motion';
@@ -161,7 +161,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
         {tab === 'daily' &&
           (dailyTasks.length === 0 ? (
-            <EmptyText>Your daily list — it resets each morning.{'\n'}Tap the bell to get a daily "plan your day" nudge.</EmptyText>
+            <EmptyState icon="sunny-outline" title="Your daily list resets each morning" body='Tap the bell for a daily "plan your day" nudge.' />
           ) : (
             dailyTasks.map((t, i) => {
               const done = t.doneOn === today;
@@ -181,7 +181,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
         {tab === 'missions' &&
           (sortedMissions.length === 0 ? (
-            <EmptyText>Long-term, deadline-bound work —{'\n'}mock tests, revision targets, projects.</EmptyText>
+            <EmptyState icon="flag-outline" title="Deadline-bound work lives here" body="Mock tests, revision targets, projects." />
           ) : (
             sortedMissions.map((m, idx) => {
               const d = daysUntil(m.deadline);

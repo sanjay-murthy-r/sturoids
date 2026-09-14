@@ -9,7 +9,7 @@ import { C, F, MIN, S, T, neuRaised, neuInset } from '../../src/theme';
 import { useStore, QuickItem } from '../../src/store';
 import { uid, fmtDate, todayKey, dayName, DAY_NAMES, toMinutes, fmtClockTime, daysUntil } from '../../src/utils';
 import {
-  ScreenBG, Card, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyText, Row, Hairline, Chip, IconBtn,
+  ScreenBG, Card, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Hairline, Chip, IconBtn,
   ProgressBar, useTheme,
 } from '../../src/components/UI';
 import { Enter, Bouncy, Pop, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
@@ -240,7 +240,7 @@ export default function Today() {
         <Enter index={4}>
           <Card pad={6}>
             {todayList.length === 0 ? (
-              <EmptyText>Nothing on the list — add ToDos from the Tasks tab.</EmptyText>
+              <EmptyState compact icon="checkbox-outline" title="Nothing on the list yet" body="Add ToDos from Tasks." actionLabel="Open Tasks" onAction={() => openTool('tasks')} />
             ) : (
               todayList.map((t, i) => (
                 <View key={t.kind + t.id}>

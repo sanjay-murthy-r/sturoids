@@ -9,8 +9,9 @@ import { C, F, S, T } from '../theme';
 import { useStore, VaultVideo, VaultFolder } from '../store';
 import { parseYouTubeId, fmtMediaTime } from '../utils';
 import {
-  ScreenBG, Card, Field, EmptyText, Row, Chip, Sheet, PillButton, IconBtn, NeuHeader, NeuIconBtn, DotMenu,
+  ScreenBG, Card, Field, EmptyState, Row, Chip, Sheet, PillButton, IconBtn, NeuHeader, NeuIconBtn, DotMenu,
 } from '../components/UI';
+import { toast } from '../components/Toast';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Enter } from '../components/Motion';
 import { useToolNav } from '../toolNav';
@@ -113,8 +114,8 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const submit = async (raw: string) => {
     const id = parseYouTubeId(raw);
-    if (!id) { Alert.alert('Not a YouTube link', 'Paste a full YouTube URL (watch, youtu.be, shorts…).'); return; }
-    if (videos.some((v) => v.videoId === id)) { Alert.alert('Already saved', 'That video is in the Vault.'); return; }
+    if (!id) { toast('That is not a YouTube link. Paste the full video link.'); return; }
+    if (videos.some((v) => v.videoId === id)) { toast('That video is already in the Vault.'); return; }
     setAdding(true);
     const title = await fetchTitle(id);
     const vid = addVideo({ url: raw.trim(), videoId: id, title, folderId: cwd });
@@ -125,7 +126,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const paste = async () => {
     const t = await Clipboard.getStringAsync();
     if (t) submit(t);
-    else Alert.alert('Clipboard empty', 'Copy a YouTube link first.');
+    else toast('Copy a YouTube link first.');
   };
 
   const submitFolder = () => {
@@ -240,15 +241,17 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
             {hereVideos.map((v, i) => videoRow(v, subFolders.length + i))}
             {subFolders.length === 0 && hereVideos.length === 0 && (
-              <EmptyText>
-                {cwd ? 'This folder is empty.' : 'Your study-video library.\nPaste a lecture link above — folders and subfolders keep it tidy.'}
-              </EmptyText>
+              <EmptyState
+                icon={cwd ? 'folder-open-outline' : 'play-circle-outline'}
+                title={cwd ? 'This folder is empty' : 'Your study-video library'}
+                body={cwd ? undefined : 'Paste a lecture link above to start your library.'}
+              />
             )}
           </ScrollView>
 
           <ScrollView style={{ width: pageW }} contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}>
             {recentVideos.length === 0 ? (
-              <EmptyText>Recently added videos land here, newest first.</EmptyText>
+              <EmptyState icon="time-outline" title="Nothing added yet" body="Recently added videos land here, newest first." />
             ) : (
               recentVideos.map((v, i) => videoRow(v, i, true))
             )}
@@ -256,7 +259,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
           <ScrollView style={{ width: pageW }} contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}>
             {allNotes.length === 0 ? (
-              <EmptyText>Every timed note and bookmark from every video, in one place.{'\n'}Tap one to jump straight into the video at that moment.</EmptyText>
+              <EmptyState icon="bookmark-outline" title="No notes or bookmarks yet" body="Timed notes and bookmarks from every video appear here. Tap one to jump to that moment." />
             ) : (
               allNotes.map((x, i) => (
                 <Enter key={(x.isBookmark ? 'b' : 'n') + x.item.id} index={Math.min(i, 8)}>

@@ -5,7 +5,7 @@ import { C, F, MIN, S, T, BLOCK_COLORS, neuInset, neuRaised } from '../theme';
 import { useStore, PlannerBlock, Habit } from '../store';
 import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks } from '../utils';
 import {
-  ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, CheckCircle, useTheme, NeuHeader,
+  ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, CheckCircle, useTheme, NeuHeader,
 } from '../components/UI';
 import { Ionicons } from '@expo/vector-icons';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -96,7 +96,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     if (!remindEdit) return;
     const t = remindDraft.trim();
     const valid = /^\d{1,2}:\d{2}$/.test(t) && toMinutes(t) >= 0;
-    if (t && !valid) { Alert.alert('Time format', 'Use 24h HH:MM, e.g. 21:00 — or leave empty to clear.'); return; }
+    if (t && !valid) { Alert.alert('Time format', 'Use 24h HH:MM, like 21:00, or leave it empty to clear.'); return; }
     setHabitReminder(remindEdit.id, valid ? t : undefined);
     setRemindEdit(null);
     if (remindersEnabled) {
@@ -143,7 +143,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
         {/* blocks */}
         {blocks.length === 0 ? (
-          <EmptyText>No blocks on {day}.{'\n'}Add subjects with start–end times below.</EmptyText>
+          <EmptyState compact icon="calendar-outline" title={'No blocks on ' + day} body="Add subjects with start and end times below." />
         ) : (
           blocks.map((b, i) => (
             <Enter key={b.id} index={Math.min(1 + i, 8)}>
@@ -185,7 +185,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
           Streaks
         </SectionTitle>
         {habits.length === 0 ? (
-          <EmptyText>Daily habits with streak counters.{'\n'}Small, repeatable, honest.</EmptyText>
+          <EmptyState compact icon="repeat-outline" title="No habits yet" body="Daily habits with streak counters. Small, repeatable, honest." />
         ) : (
           habits.map((h, i) => {
             const { current, best } = streaks(h.doneDates);

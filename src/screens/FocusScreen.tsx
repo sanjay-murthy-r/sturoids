@@ -8,7 +8,7 @@ import { C, F, S, T } from '../theme';
 import { useStore } from '../store';
 import { todayKey, fmtDuration, uid, toMinutes, fmtClockTime } from '../utils';
 import {
-  ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, NeuIconBtn, ProgressBar, NeuHeader,
+  ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, NeuIconBtn, ProgressBar, NeuHeader,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Enter, useFocusKey } from '../components/Motion';
@@ -210,7 +210,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const d = new Date();
     d.setHours(Math.floor(t / 60), t % 60, 0, 0);
     if (finishDay === 'tomorrow') d.setDate(d.getDate() + 1);
-    else if (d.getTime() <= Date.now()) { Alert.alert('Already passed', 'That time is behind us today — pick Tomorrow or a later time.'); return; }
+    else if (d.getTime() <= Date.now()) { Alert.alert('Already passed', 'That time has already passed today. Pick Tomorrow or a later time.'); return; }
     clearFinishLine();
     setFinishAt(d.getTime());
     setFinishSheet(false);
@@ -444,7 +444,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <Enter index={2}>
           <GlassCard pad={10}>
             {attached.length === 0 ? (
-              <EmptyText>Attach tasks before or during the session —{'\n'}check them off as you go.</EmptyText>
+              <EmptyState compact icon="link-outline" title="No tasks attached" body="Attach tasks before or during the session, then check them off as you go." />
             ) : (
               attached.map((a) => (
                 <Row key={a.key} style={{ paddingVertical: 7, paddingHorizontal: 4 }}>
@@ -460,7 +460,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {/* recent sessions */}
         <SectionTitle>Recent sessions</SectionTitle>
         {sessions.length === 0 ? (
-          <EmptyText>Finished sessions land here.</EmptyText>
+          <EmptyState compact icon="time-outline" title="No sessions yet" body="Finished sessions land here." />
         ) : (
           [...sessions].reverse().slice(0, 6).map((s, i) => (
             <Enter key={s.id} index={3 + i}>

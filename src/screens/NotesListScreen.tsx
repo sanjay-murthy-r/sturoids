@@ -5,7 +5,7 @@ import { useToolNav } from '../toolNav';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, neuRaised } from '../theme';
 import { useStore, Note } from '../store';
-import { ScreenBG, GlassCard, Field, EmptyText, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
+import { ScreenBG, GlassCard, Field, EmptyState, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
 import { Bouncy, Enter } from '../components/Motion';
 import { tap } from '../haptics';
 import { deleteAttachmentFiles } from '../attachments';
@@ -83,7 +83,7 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
         </ScrollView>
 
         {filtered.length === 0 ? (
-          <EmptyText>No notes here yet.{'\n'}Folders, pinning, search, voice input, photos, videos & file attachments — all inside.</EmptyText>
+          <EmptyState icon="document-text-outline" title="No notes here yet" body="Folders, pins, search, voice, photos and files all live inside a note." actionLabel="New note" onAction={newNote} />
         ) : (
           filtered.map((n, i) => (
             <Enter key={n.id} index={Math.min(i, 8)}>

@@ -5,6 +5,7 @@ import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore, AiLink } from '../store';
 import { uid } from '../utils';
 import { ScreenBG, Card, Sheet, Field, PillButton, Row, IconBtn, InfoDot, NeuHeader, useTheme } from '../components/UI';
+import { toast } from '../components/Toast';
 import { Enter } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -51,7 +52,7 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const open = async (l: AiLink) => {
     try { await Linking.openURL(l.url); }
-    catch { Alert.alert('Could not open', l.url); }
+    catch { toast('Could not open ' + l.url); }
   };
 
   const move = (i: number, dir: -1 | 1) => {
