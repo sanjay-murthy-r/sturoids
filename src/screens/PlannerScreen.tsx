@@ -7,6 +7,8 @@ import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks
 import {
   ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, CheckCircle, useTheme, NeuHeader,
 } from '../components/UI';
+import { Ionicons } from '@expo/vector-icons';
+import { SegmentedControl } from '../components/SegmentedControl';
 import { Bouncy, Enter, useFocusKey } from '../components/Motion';
 import { tick } from '../haptics';
 import { rescheduleAllReminders, ensurePermission } from '../notifications';
@@ -128,17 +130,15 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
         {/* day selector */}
         <Enter index={0}>
-          {/* padded content box so chip shadows aren't clipped by the scroller */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={{ marginTop: 4, marginBottom: 4, marginHorizontal: -6 }}
-            contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: 6 }}
-          >
-            {DAY_NAMES.map((d) => (
-              <Chip key={d} label={d} active={day === d} onPress={() => setDay(d)} />
-            ))}
-          </ScrollView>
+          {/* all seven days always in view: the chosen one never scrolls away */}
+          <SegmentedControl
+            size="sm"
+            stretch
+            options={DAY_NAMES.map((d) => ({ key: d, label: d.slice(0, 2) }))}
+            value={day}
+            onChange={(d) => setDay(d)}
+            style={{ marginTop: 8, marginBottom: 12 }}
+          />
         </Enter>
 
         {/* blocks */}
@@ -197,9 +197,16 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   <CheckCircle done={done} onPress={() => toggleHabitToday(h.id)} />
                   <View style={{ flex: 1, marginLeft: 12 }}>
                     <Text style={T.title}>{h.title}</Text>
-                    <Text style={[T.caption, { marginTop: 2 }]}>
-                      🔥 {current} current · {best} best{h.remindTime ? ` · ⏰ ${h.remindTime}` : ''}
-                    </Text>
+                    <Row style={{ marginTop: 3 }}>
+                      <Ionicons name="flame-outline" size={13} color={C.textFaint} />
+                      <Text style={[T.caption, { marginLeft: 4 }]}>{current} current · {best} best</Text>
+                      {h.remindTime ? (
+                        <>
+                          <Ionicons name="alarm-outline" size={13} color={C.textFaint} style={{ marginLeft: 10 }} />
+                          <Text style={[T.caption, { marginLeft: 4 }]}>{h.remindTime}</Text>
+                        </>
+                      ) : null}
+                    </Row>
                   </View>
                   <IconBtn
                     name="alarm-outline" size={18}

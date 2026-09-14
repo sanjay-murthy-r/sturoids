@@ -89,6 +89,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [timerMode, setTimerMode] = useState<'stopwatch' | 'countdown'>(saved?.mode ?? 'countdown');
   const [targetMin, setTargetMin] = useState(saved?.targetMin ?? 50);
   const [customMin, setCustomMin] = useState('');
+  const [customSheet, setCustomSheet] = useState(false);
   const [running, setRunning] = useState(saved?.running ?? false);
   const [startTs, setStartTs] = useState<number | null>(saved?.startTs ?? null);
   const [accumSec, setAccumSec] = useState(saved?.accumSec ?? 0);
@@ -369,17 +370,18 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               style={{ marginBottom: 10 }}
             />
             {timerMode === 'countdown' && (
-              <Row style={{ flexWrap: 'wrap', marginBottom: 4 }}>
-                {[25, 50, 90, 120].map((m) => (
-                  <Chip key={m} small label={`${m}m`} active={targetMin === m} onPress={() => setTargetMin(m)} />
-                ))}
-                <Chip small label="Until…" onPress={() => setUntilSheet(true)} />
-                <Field
-                  value={customMin} keyboardType="number-pad" placeholder="custom"
-                  onChangeText={(v) => { setCustomMin(v); const n = parseInt(v, 10); if (n > 0) setTargetMin(n); }}
-                  style={{ width: 90, marginBottom: 0, paddingVertical: 6 }}
-                />
-              </Row>
+              <SegmentedControl
+                size="sm"
+                stretch
+                options={[
+                  { key: '25', label: '25' }, { key: '50', label: '50' }, { key: '90', label: '90' },
+                  { key: '120', label: '120' }, { key: 'custom', label: 'Custom' },
+                ]}
+                value={[25, 50, 90, 120].includes(targetMin) ? String(targetMin) : 'custom'}
+                onChange={(k) => { if (k === 'custom') { setCustomMin(''); setCustomSheet(true); } else setTargetMin(Number(k)); }}
+                onPressActive={(k) => { if (k === 'custom') { setCustomMin(String(targetMin)); setCustomSheet(true); } }}
+                style={{ marginBottom: 12 }}
+              />
             )}
           </>
         )}
@@ -557,6 +559,27 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             setTargetMin(m); setCustomMin(''); setUntilSheet(false);
           }}
         />
+      </Sheet>
+
+      {/* a length that is not a preset: minutes, or until a clock time */}
+      <Sheet visible={customSheet} onClose={() => setCustomSheet(false)} title="Custom length">
+        <Field
+          value={customMin} onChangeText={setCustomMin} placeholder="Minutes"
+          keyboardType="number-pad" autoFocus
+          onSubmitEditing={() => { const n = parseInt(customMin, 10); if (n > 0) { setTargetMin(Math.min(n, 600)); setCustomSheet(false); } }}
+        />
+        <PillButton
+          label="Set length"
+          onPress={() => { const n = parseInt(customMin, 10); if (n > 0) { setTargetMin(Math.min(n, 600)); setCustomSheet(false); } }}
+        />
+        <Pressable
+          onPress={() => { setCustomSheet(false); setTimeout(() => setUntilSheet(true), 320); }}
+          style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 16, marginTop: 6 }}
+        >
+          <Ionicons name="alarm-outline" size={18} color={C.textDim} />
+          <Text style={[T.body, { flex: 1, marginLeft: 10 }]}>Until a time</Text>
+          <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+        </Pressable>
       </Sheet>
 
       {/* stopwatch finish line */}

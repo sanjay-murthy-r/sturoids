@@ -12,11 +12,13 @@ import { tick } from '../haptics';
  * active segment. Replaces every ad-hoc `st.seg` in the app.
  */
 export function SegmentedControl<K extends string>({
-  options, value, onChange, color, size = 'md', stretch, style,
+  options, value, onChange, onPressActive, color, size = 'md', stretch, style,
 }: {
   options: { key: K; label: string; icon?: any }[];
   value: K;
   onChange: (k: K) => void;
+  /** a tap on the segment that is already chosen, e.g. to edit a custom value */
+  onPressActive?: (k: K) => void;
   color?: string;
   size?: 'sm' | 'md';
   /** fill the row — each segment takes equal width */
@@ -75,7 +77,9 @@ export function SegmentedControl<K extends string>({
         return (
           <Pressable
             key={o.key}
-            onPress={() => { if (!active) { tick(); onChange(o.key); } }}
+            onPress={() => {
+              if (!active) { tick(); onChange(o.key); } else onPressActive?.(o.key);
+            }}
             onLayout={(e) => {
               layouts[o.key] = { x: e.nativeEvent.layout.x, width: e.nativeEvent.layout.width };
               if (active) place(false);

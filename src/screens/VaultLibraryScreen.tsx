@@ -213,13 +213,13 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
           }}
         >
           <ScrollView style={{ width: pageW }} contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}>
+            {/* the header already names the folder: this row only moves between folders and adds one */}
             <Row style={{ marginBottom: 10, flexWrap: 'wrap' }}>
-              <Chip small label="⌂ All" active={cwd === null} color={C.pink} onPress={() => setCwd(null)} />
-              {cwdFolder && <Chip small label={cwdFolder.name} active color={C.pink} onPress={() => {}} />}
-              <Chip small label="+ folder" onPress={() => { setFolderName(''); setFolderSheet({ mode: 'new' }); }} />
+              <Chip small icon="home-outline" label="All" active={cwd === null} color={C.pink} onPress={() => setCwd(null)} />
               {cwdFolder && (
-                <Chip small label="↑ up" onPress={() => setCwd(cwdFolder.parentId)} />
+                <Chip small icon="arrow-up-outline" label="Up" onPress={() => setCwd(cwdFolder.parentId)} />
               )}
+              <Chip small icon="add" label="Folder" onPress={() => { setFolderName(''); setFolderSheet({ mode: 'new' }); }} />
             </Row>
 
             {subFolders.map((f, i) => {

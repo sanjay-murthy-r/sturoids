@@ -68,18 +68,18 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
         keyboardShouldPersistTaps="handled"
       >
         <Field value={q} onChangeText={setQ} placeholder="Search titles & bodies…" />
-        {/* padded content box so chip shadows aren't clipped by the scroller */}
+        {/* the scroller runs to the screen edges, so chip shadows are never clipped at its bounds */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          style={{ marginBottom: 2, marginHorizontal: -6 }}
-          contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: 6 }}
+          style={{ marginBottom: 2, marginHorizontal: -S.pad }}
+          contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: S.pad }}
         >
           <Chip label="All" active={!folder} onPress={() => setFolder(null)} />
           {folders.map((f) => (
             <Chip key={f} label={f} active={folder === f} onPress={() => setFolder(f)} />
           ))}
-          <Chip label="+ folder" onPress={() => setFolderSheet(true)} />
+          <Chip icon="add" label="Folder" onPress={() => setFolderSheet(true)} />
         </ScrollView>
 
         {filtered.length === 0 ? (

@@ -129,26 +129,28 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <NeuHeader title="Calculator" variant={mode === 'tab' ? 'tab' : 'page'} compact />
       <View style={{ flex: 1, padding: S.pad, paddingTop: 8, paddingBottom: S.pad + (mode === 'tab' ? 0 : insets.bottom) }}>
         {/* display — carved into the material */}
-        <Inset pad={16} style={{ borderRadius: S.radius, marginBottom: 14, overflow: 'visible' }}>
-          <Row style={{ justifyContent: 'space-between', marginBottom: 8 }}>
-            <Row style={{ flexShrink: 1 }}>
-              <SegmentedControl
-                size="sm"
-                options={[{ key: 'deg', label: 'DEG' }, { key: 'rad', label: 'RAD' }]}
-                value={deg ? 'deg' : 'rad'}
-                onChange={(k) => setDeg(k === 'deg')}
-                style={{ alignSelf: 'center', marginRight: 8, marginBottom: 8 }}
-              />
-              <Chip small label="SCI" active={sciNotation} color={C.amber} onPress={() => setSciNotation(!sciNotation)} />
-              <Chip small label="ƒ(x)" active={sci} color={C.accent} onPress={() => setSci(!sci)} />
-            </Row>
-            <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} />
-          </Row>
+        <Inset pad={16} style={{ borderRadius: S.radius, marginBottom: 12, overflow: 'visible' }}>
           <ScrollView style={{ maxHeight: 90 }} contentContainerStyle={{ justifyContent: 'flex-end' }}>
             <Text style={st.expr} selectable>{expr || '0'}</Text>
           </ScrollView>
           <Text style={[st.preview, { color: evalError ? C.danger : C.accent }]} numberOfLines={1}>{evalError ? "Can't evaluate" : justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
         </Inset>
+
+        {/* controls sit under the display, so the well holds only the sum and its answer */}
+        <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+          <Row style={{ flexShrink: 1, flexWrap: 'wrap' }}>
+            <SegmentedControl
+              size="sm"
+              options={[{ key: 'deg', label: 'DEG' }, { key: 'rad', label: 'RAD' }]}
+              value={deg ? 'deg' : 'rad'}
+              onChange={(k) => setDeg(k === 'deg')}
+              style={{ marginRight: 8, marginBottom: 8 }}
+            />
+            <Chip small label="SCI" active={sciNotation} color={C.amber} onPress={() => setSciNotation(!sciNotation)} />
+            <Chip small icon="grid-outline" label="Functions" active={sci} onPress={() => setSci(!sci)} />
+          </Row>
+          <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} />
+        </Row>
 
         {/* keys — rows tighten when the sci pad is out so everything fits */}
         <View style={{ flex: 1, justifyContent: 'flex-end' }}>
