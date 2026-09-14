@@ -24,9 +24,12 @@ export default function RootLayout() {
   const bg = bgFor(theme);
   const [revealed, setRevealed] = useState(false);
   const [introDone, setIntroDone] = useState(false);
-  // the intro renders only these two faces, so only they gate its first frame
-  const [introFonts] = useFonts({ Rubik_500Medium, Rubik_600SemiBold });
-  const [appFonts] = useFonts({ Rubik_400Regular, Rubik_700Bold, IBMPlexMono_600SemiBold });
+  // the intro renders only these two faces, so only they gate its first frame. A face that fails
+  // to load falls back to the system font instead of holding the app on its splash forever.
+  const [introLoaded, introError] = useFonts({ Rubik_500Medium, Rubik_600SemiBold });
+  const [appLoaded, appError] = useFonts({ Rubik_400Regular, Rubik_700Bold, IBMPlexMono_600SemiBold });
+  const introFonts = introLoaded || !!introError;
+  const appFonts = appLoaded || !!appError;
   const splashHidden = useRef(false);
 
   // notifications and reminder rescheduling never compete with the intro
