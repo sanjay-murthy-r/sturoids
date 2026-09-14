@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Text, ScrollView, StyleSheet } from 'react-native';
+import { Alert, Text, ScrollView, StyleSheet, FlatList } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useToolNav } from '../toolNav';
 import { Ionicons } from '@expo/vector-icons';
@@ -63,31 +63,12 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
   return (
     <ScreenBG guard={mode === 'tab'}>
       <NeuHeader title="Notes" variant={mode === 'tab' ? 'tab' : 'page'} />
-      <ScrollView
-        contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 110 + (mode === 'tab' ? 0 : insets.bottom) }}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Field value={q} onChangeText={setQ} placeholder="Search titles & bodies…" />
-        {/* the scroller runs to the screen edges, so chip shadows are never clipped at its bounds */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={{ marginBottom: 2, marginHorizontal: -S.pad }}
-          contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: S.pad }}
-        >
-          <Chip label="All" active={!folder} onPress={() => setFolder(null)} />
-          {folders.map((f) => (
-            <Chip key={f} label={f} active={folder === f} onPress={() => setFolder(f)} />
-          ))}
-          <Chip icon="add" label="Folder" onPress={() => setFolderSheet(true)} />
-        </ScrollView>
-
-        {filtered.length === 0 ? (
-          <EmptyState icon="document-text-outline" title="No notes here yet" body="Folders, pins, search, voice, photos and files all live inside a note." actionLabel="New note" onAction={newNote} />
-        ) : (
-          filtered.map((n, i) => (
-            <Enter key={n.id} index={Math.min(i, 8)}>
-              <GlassCard pad={14} onPress={() => nav.openNote(n.id)} onLongPress={() => { tap(); setMenuNote(n); }}>
+      <FlatList
+        data={filtered}
+        keyExtractor={(n) => n.id}
+        renderItem={({ item: n, index: i }) => {
+          const card = (
+            <GlassCard pad={14} onPress={() => nav.openNote(n.id)} onLongPress={() => { tap(); setMenuNote(n); }}>
               <Row style={{ justifyContent: 'space-between' }}>
                 <Text style={{ color: C.text, fontSize: 16, fontFamily: F.semi, flex: 1 }} numberOfLines={1}>
                   {n.title || 'Untitled'}
@@ -103,11 +84,37 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
               <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 11, marginTop: 6 }}>
                 {n.folder}{n.subject ? ` · ${n.subject}` : ''} · {new Date(n.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
               </Text>
-              </GlassCard>
-            </Enter>
-          ))
-        )}
-      </ScrollView>
+            </GlassCard>
+          );
+          // only the first screenful plays its entrance; rows scrolled into view later appear at once
+          return i < 10 ? <Enter index={Math.min(i, 8)}>{card}</Enter> : card;
+        }}
+        contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 110 + (mode === 'tab' ? 0 : insets.bottom) }}
+        keyboardShouldPersistTaps="handled"
+        initialNumToRender={10}
+        windowSize={9}
+        ListHeaderComponent={
+          <>
+            <Field value={q} onChangeText={setQ} placeholder="Search titles & bodies…" />
+            {/* the scroller runs to the screen edges, so chip shadows are never clipped at its bounds */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginBottom: 2, marginHorizontal: -S.pad }}
+              contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: S.pad }}
+            >
+              <Chip label="All" active={!folder} onPress={() => setFolder(null)} />
+              {folders.map((f) => (
+                <Chip key={f} label={f} active={folder === f} onPress={() => setFolder(f)} />
+              ))}
+              <Chip icon="add" label="Folder" onPress={() => setFolderSheet(true)} />
+            </ScrollView>
+          </>
+        }
+        ListEmptyComponent={
+          <EmptyState icon="document-text-outline" title="No notes here yet" body="Folders, pins, search, voice, photos and files all live inside a note." actionLabel="New note" onAction={newNote} />
+        }
+      />
 
       <Bouncy
         radius={999}
