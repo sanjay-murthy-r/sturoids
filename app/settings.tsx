@@ -11,6 +11,12 @@ import { compareVersions, todayKey } from '../src/utils';
 import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, Chip, InfoDot, NeuHeader, Sheet, useTheme } from '../src/components/UI';
 import { Bouncy, Pop } from '../src/components/Motion';
 import { tick } from '../src/haptics';
+import { SegmentedControl } from '../src/components/SegmentedControl';
+import { PinSheet } from '../src/components/LockGate';
+import { journalForBackup, restoreBodies } from '../src/journal';
+import {
+  deviceAuthAvailable, hasPin, isUnlocked, lockProtectionAvailable, markUnlocked, removePin, unlockWithDevice,
+} from '../src/lock';
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
 import { TOOLS, ToolKey, colorOf, normaliseSlots, toolByKey } from '../src/tools';
 
@@ -104,7 +110,9 @@ export default function Settings() {
 
   const exportData = async () => {
     try {
-      const json = JSON.stringify(exportSnapshot(), null, 2);
+      const snap = exportSnapshot();
+      // journal text lives in files, so the backup carries it inline
+      const json = JSON.stringify({ ...snap, journal: await journalForBackup(snap.journal) }, null, 2);
       const uri = FileSystem.cacheDirectory + 'sturoids-backup-' + todayKey() + '.json';
       await FileSystem.writeAsStringAsync(uri, json);
       if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json' });
@@ -126,9 +134,16 @@ export default function Settings() {
           { text: 'Cancel', style: 'cancel' },
           {
             text: 'Replace', style: 'destructive',
-            onPress: () => {
+            onPress: async () => {
               const ok = importSnapshot(json);
-              if (ok) rescheduleAllReminders();
+              if (ok) {
+                try {
+                  await restoreBodies(JSON.parse(json)?.journal);
+                } catch {
+                  // the index is restored either way; text that fails to write stays in the backup file
+                }
+                rescheduleAllReminders();
+              }
               Alert.alert(
                 ok ? 'Imported' : 'Not a Sturoids backup',
                 ok ? 'Your data is restored.' : 'That file could not be read as a backup.'
@@ -197,6 +212,72 @@ export default function Settings() {
         },
       },
     ]);
+  };
+
+  // ---- privacy: the journal lock, the app PIN, and how soon an open session closes ----
+  const lockedNotes = useStore((s) => s.notes.filter((n) => n.locked).length);
+  const [pinSet, setPinSet] = useState(false);
+  const [deviceLock, setDeviceLock] = useState(false);
+  const [pinStep, setPinStep] = useState<null | { mode: 'enter' | 'set'; then: 'journal-on' | 'journal-off' | 'change' | 'remove' }>(null);
+  const refreshLockInfo = () => {
+    hasPin().then(setPinSet);
+    deviceAuthAvailable().then(setDeviceLock);
+  };
+  useEffect(refreshLockInfo, []);
+
+  /** Asks for the owner before a lock is weakened. Resolves true when it is already confirmed. */
+  const confirmOwner = async (then: 'journal-off' | 'change' | 'remove'): Promise<boolean> => {
+    if (isUnlocked()) return true;
+    const r = await unlockWithDevice('Confirm it is you');
+    if (r === 'unlocked') return true;
+    if (r === 'needs-pin') setPinStep({ mode: 'enter', then });
+    return false;
+  };
+
+  const setJournalLock = async (on: boolean) => {
+    if (!on) {
+      if (await confirmOwner('journal-off')) setSetting('journalLocked', false);
+      return;
+    }
+    if (await lockProtectionAvailable()) setSetting('journalLocked', true);
+    else setPinStep({ mode: 'set', then: 'journal-on' });
+  };
+
+  const changePin = async () => {
+    if (pinSet && !(await confirmOwner('change'))) return;
+    setPinStep({ mode: 'set', then: 'change' });
+  };
+
+  const dropPin = () => {
+    const remove = async () => {
+      if (!(await confirmOwner('remove'))) return;
+      await removePin();
+      refreshLockInfo();
+    };
+    if (!deviceLock && (settings.journalLocked || lockedNotes > 0)) {
+      Alert.alert(
+        'Remove the PIN?',
+        'This phone has no screen lock, so locked content will open without asking.',
+        [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: remove }],
+      );
+    } else {
+      remove();
+    }
+  };
+
+  const pinDone = async () => {
+    const step = pinStep;
+    setPinStep(null);
+    if (!step) return;
+    if (step.mode === 'enter') {
+      markUnlocked();
+      if (step.then === 'journal-off') setSetting('journalLocked', false);
+      else if (step.then === 'change') setTimeout(() => setPinStep({ mode: 'set', then: 'change' }), 350);
+      else if (step.then === 'remove') { await removePin(); refreshLockInfo(); }
+      return;
+    }
+    refreshLockInfo();
+    if (step.then === 'journal-on') setSetting('journalLocked', true);
   };
 
   const checkUpdate = async () => {
@@ -342,6 +423,51 @@ export default function Settings() {
             <Toggle value={settings.remindersEnabled} onChange={toggleReminders} color={C.green} />
           </Row>
         </Card>
+
+        <SectionTitle>Privacy</SectionTitle>
+        <Card>
+          <Row style={{ justifyContent: 'space-between' }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[T.body, { fontFamily: F.med }]}>Lock journal</Text>
+              <Text style={[T.caption, { marginTop: 2 }]}>
+                {lockedNotes > 0
+                  ? lockedNotes + (lockedNotes === 1 ? ' note is locked too.' : ' notes are locked too.')
+                  : 'Single notes lock from their menu.'}
+              </Text>
+            </View>
+            <Toggle value={settings.journalLocked} onChange={setJournalLock} color={C.gold} />
+          </Row>
+          <Hairline />
+          <Text style={[st.label, { marginTop: 10, marginBottom: 8 }]}>Re-lock after</Text>
+          <SegmentedControl
+            size="sm"
+            stretch
+            value={String(settings.lockGraceSec)}
+            onChange={(k) => setSetting('lockGraceSec', Number(k))}
+            options={[{ key: '0', label: 'Immediately' }, { key: '90', label: '90 s' }, { key: '300', label: '5 min' }]}
+          />
+          <Hairline />
+          <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[T.body, { fontFamily: F.med }]}>App PIN</Text>
+              <Text style={[T.caption, { marginTop: 2 }]}>
+                {pinSet
+                  ? 'Asked for when fingerprint or face is not available.'
+                  : deviceLock
+                    ? 'Optional. Your screen lock already protects locked content.'
+                    : 'Needed for locks, because this phone has no screen lock.'}
+              </Text>
+            </View>
+            <PillButton small outline label={pinSet ? 'Change PIN' : 'Set PIN'} onPress={changePin} />
+          </Row>
+          {pinSet ? (
+            <PillButton small outline color={C.danger} label="Remove PIN" onPress={dropPin} style={{ marginTop: 10, alignSelf: 'flex-end' }} />
+          ) : null}
+          <Text style={[T.caption, { marginTop: 14 }]}>
+            Locks hide content behind your fingerprint, face or PIN. Backups still include everything, so keep them somewhere safe.
+          </Text>
+        </Card>
+        <PinSheet visible={!!pinStep} mode={pinStep?.mode ?? 'enter'} onClose={() => setPinStep(null)} onDone={pinDone} />
 
         <SectionTitle right={<InfoDot text="Everything is stored locally on this phone — no accounts. Export a JSON backup before changing phones; importing replaces all current data." />}>
           Data — you own it

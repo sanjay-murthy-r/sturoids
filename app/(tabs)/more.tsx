@@ -22,9 +22,12 @@ export default function More() {
   const rawSlots = useStore((s) => s.settings.tabSlots);
   const notes = useStore((s) => s.notes.length);
   const videos = useStore((s) => s.vaultVideos.length);
+  const journalCount = useStore((s) => s.journal.length);
+  const journalLocked = useStore((s) => s.settings.journalLocked);
   const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
   const tools = TOOLS.filter((t) => !slots.includes(t.key));
-  const counts: Partial<Record<ToolKey, number>> = { notes, vault: videos };
+  // a locked journal shows no count: even the number of entries stays private
+  const counts: Partial<Record<ToolKey, number>> = { notes, vault: videos, journal: journalLocked ? 0 : journalCount };
   // the icon sits in a carved well: a raised boss on a raised card doubled the depth
   const well =
     theme === 'minimal'
@@ -50,6 +53,9 @@ export default function More() {
                     <Text style={st.title} numberOfLines={1}>{t.label}</Text>
                     <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{t.desc}</Text>
                   </View>
+                  {t.key === 'journal' && journalLocked ? (
+                    <Ionicons name="lock-closed-outline" size={15} color={C.textFaint} style={{ marginRight: 8 }} />
+                  ) : null}
                   {count ? <Text style={st.count}>{count}</Text> : null}
                   <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
                 </Row>

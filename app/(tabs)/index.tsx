@@ -18,6 +18,7 @@ import { ROUTE_CATALOG, launchExternal } from '../../src/quickAccess';
 import { ToolKey, colorOf } from '../../src/tools';
 import { openTool } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
+import { journalDayFor } from '../../src/journal';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
 
 export default function Today() {
@@ -36,6 +37,7 @@ export default function Today() {
   const planner = useStore((s) => s.planner);
   const sessions = useStore((s) => s.sessions);
   const quickAccess = useStore((s) => s.quickAccess);
+  const journal = useStore((s) => s.journal);
   const setQuickAccess = useStore((s) => s.setQuickAccess);
 
   const [nameSheet, setNameSheet] = useState(false);
@@ -108,6 +110,10 @@ export default function Today() {
     now, name: settings.name, sessions, habits, planner,
     listTotal: todayList.length, listDone: doneCount, nextBlock,
   });
+
+  // a quiet reminder of the Journal's page for today, never shown while the journal is locked
+  const journalDay = journalDayFor(now, settings.journalCutoffHour);
+  const journalNudge = !settings.journalLocked && !journal.some((e) => e.dateKey === journalDay);
 
   const runQuick = (q: QuickItem) => {
     if (qaEdit) return;
@@ -204,6 +210,20 @@ export default function Today() {
             onAdd={openQaAdd}
           />
         </Enter>
+
+        {journalNudge ? (
+          <Pressable
+            onPress={() => openTool('journal')}
+            style={[
+              st.journalNudge,
+              theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
+            ]}
+          >
+            <Ionicons name="book-outline" size={17} color={C.gold} />
+            <Text style={st.journalNudgeText}>{journalDay === today ? "Today's page is empty" : "Yesterday's page is empty"}</Text>
+            <Text style={[st.link, { color: C.gold }]}>Write</Text>
+          </Pressable>
+        ) : null}
 
         <SectionTitle
           right={
@@ -579,6 +599,11 @@ const st = StyleSheet.create({
   glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: 0.4 },
   gridLabel: { color: C.text, fontFamily: F.med, fontSize: 12, marginTop: 7, letterSpacing: 0.1 },
   link: { fontFamily: F.semi, fontSize: 13 },
+  journalNudge: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 12, paddingHorizontal: 14, borderRadius: S.radiusSm, marginTop: 6, marginBottom: 4,
+  },
+  journalNudgeText: { flex: 1, color: C.textDim, fontFamily: F.med, fontSize: 14 },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 12, flex: 1, letterSpacing: 0.1 },
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   missionPill: {

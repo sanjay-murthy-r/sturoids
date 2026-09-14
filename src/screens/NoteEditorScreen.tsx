@@ -16,6 +16,8 @@ import { C, F, MIN, S, T, neuInset, neuPressedInner, neuRaised, NEU } from '../t
 import { useStore, Attachment } from '../store';
 import { todayKey, uid } from '../utils';
 import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuHeader, NeuIconBtn, PillButton, useTheme } from '../components/UI';
+import { LockGate, PinSheet } from '../components/LockGate';
+import { lockProtectionAvailable, markUnlocked, useUnlocked } from '../lock';
 import { Bouncy } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -85,6 +87,8 @@ function MicButton({ listening, onPress }: { listening: boolean; onPress: () => 
 
 export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
+  const unlocked = useUnlocked();
+  const [lockPin, setLockPin] = useState(false);
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const theme = useTheme();
@@ -251,6 +255,22 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setLineSheet(false);
   };
 
+  if (note.locked && !unlocked) {
+    return (
+      <ScreenBG>
+        <NeuHeader title={note.folder} />
+        <LockGate locked title="This note is locked"><View /></LockGate>
+      </ScreenBG>
+    );
+  }
+
+  const toggleLock = async () => {
+    // an open note means the session is unlocked, so the lock can come off without asking again
+    if (note.locked) { updateNote(note.id, { locked: false }); return; }
+    if (await lockProtectionAvailable()) updateNote(note.id, { locked: true });
+    else setLockPin(true);
+  };
+
   const words = note.body.trim() ? note.body.trim().split(/\s+/).length : 0;
   const mediaW = (width - S.pad * 2 - 10) / 2;
 
@@ -260,10 +280,14 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
         title={note.folder}
         right={
           <Row>
+            <IconBtn name={note.locked ? 'lock-closed' : 'lock-open-outline'} size={20} pad={6} color={note.locked ? C.gold : C.textDim}
+              onPress={toggleLock} />
             <IconBtn name={note.pinned ? 'pin' : 'pin-outline'} size={20} pad={6} color={note.pinned ? C.gold : C.textDim}
               onPress={() => updateNote(note.id, { pinned: !note.pinned })} />
             <IconBtn name="folder-outline" size={20} pad={6} onPress={() => setFolderSheet(true)} />
-            <IconBtn name="share-outline" size={20} pad={6} onPress={() => Share.share({ message: note.title + '\n\n' + note.body })} />
+            {!note.locked && (
+              <IconBtn name="share-outline" size={20} pad={6} onPress={() => Share.share({ message: note.title + '\n\n' + note.body })} />
+            )}
             <IconBtn name="trash-outline" size={20} pad={6} color={C.danger}
               onPress={() =>
                 Alert.alert('Delete note', 'This cannot be undone.', [
@@ -383,6 +407,12 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
           ))}
         </Row>
       </Sheet>
+      <PinSheet
+        visible={lockPin}
+        mode="set"
+        onClose={() => setLockPin(false)}
+        onDone={() => { setLockPin(false); updateNote(note.id, { locked: true }); markUnlocked(); }}
+      />
     </ScreenBG>
   );
 }

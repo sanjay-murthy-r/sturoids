@@ -13,6 +13,7 @@ import { CalculatorScreen } from './CalculatorScreen';
 import { DesmosScreen } from './DesmosScreen';
 import { VaultLibraryScreen } from './VaultLibraryScreen';
 import { AiLinksScreen } from './AiLinksScreen';
+import { JournalScreen } from './JournalScreen';
 
 /**
  * The screen each tool shows at the root of a bar slot. A new slot-eligible tool registers here, and
@@ -23,6 +24,7 @@ export const SLOT_SCREENS: { [K in ToolKey]?: React.ComponentType<{ mode: Screen
   focus: FocusScreen,
   planner: PlannerScreen,
   notes: NotesListScreen,
+  journal: JournalScreen,
   calculator: CalculatorScreen,
   desmos: DesmosScreen,
   vault: VaultLibraryScreen,

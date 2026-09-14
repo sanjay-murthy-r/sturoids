@@ -8,6 +8,8 @@ import { useStore, Note } from '../store';
 import { ScreenBG, GlassCard, Field, EmptyText, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
 import { Bouncy, Enter } from '../components/Motion';
 import { tap } from '../haptics';
+import { PinSheet } from '../components/LockGate';
+import { isUnlocked, lockProtectionAvailable, markUnlocked, unlockWithDevice } from '../lock';
 
 export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const nav = useToolNav();
@@ -25,12 +27,30 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [folderSheet, setFolderSheet] = useState(false);
   const [newFolder, setNewFolder] = useState('');
   const [menuNote, setMenuNote] = useState<Note | null>(null);
+  const [pinFor, setPinFor] = useState<{ note: Note; mode: 'enter' | 'set' } | null>(null);
+
+  const toggleLock = async (n: Note) => {
+    if (n.locked) {
+      // taking a lock off needs the owner
+      if (!isUnlocked()) {
+        const r = await unlockWithDevice('Unlock the note');
+        if (r === 'needs-pin') { setPinFor({ note: n, mode: 'enter' }); return; }
+        if (r !== 'unlocked') return;
+      }
+      updateNote(n.id, { locked: false });
+    } else if (await lockProtectionAvailable()) {
+      updateNote(n.id, { locked: true });
+    } else {
+      setPinFor({ note: n, mode: 'set' });
+    }
+  };
 
   const filtered = useMemo(() => {
     const ql = q.trim().toLowerCase();
     return notes
       .filter((n) => (folder ? n.folder === folder : true))
-      .filter((n) => !ql || n.title.toLowerCase().includes(ql) || n.body.toLowerCase().includes(ql))
+      // a locked note is found by its title only: its text never surfaces outside the note
+      .filter((n) => !ql || n.title.toLowerCase().includes(ql) || (!n.locked && n.body.toLowerCase().includes(ql)))
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
   }, [notes, q, folder]);
 
@@ -72,8 +92,9 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   {n.title || 'Untitled'}
                 </Text>
                 {n.pinned && <Ionicons name="pin" size={15} color={C.amber} />}
+                {n.locked && <Ionicons name="lock-closed" size={14} color={C.textFaint} style={{ marginLeft: 6 }} />}
               </Row>
-              {!!n.body && (
+              {!!n.body && !n.locked && (
                 <Text style={{ color: C.textDim, fontSize: 13, marginTop: 4, lineHeight: 18 }} numberOfLines={2}>
                   {n.body}
                 </Text>
@@ -107,6 +128,11 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
         onClose={() => setMenuNote(null)}
         items={menuNote ? [
           {
+            label: menuNote.locked ? 'Unlock note' : 'Lock note',
+            icon: menuNote.locked ? 'lock-open-outline' : 'lock-closed-outline',
+            onPress: () => toggleLock(menuNote),
+          },
+          {
             label: menuNote.pinned ? 'Unpin' : 'Pin to top',
             icon: menuNote.pinned ? 'pin' : 'pin-outline',
             onPress: () => updateNote(menuNote.id, { pinned: !menuNote.pinned }),
@@ -122,6 +148,19 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
               ]),
           },
         ] : []}
+      />
+
+      <PinSheet
+        visible={!!pinFor}
+        mode={pinFor?.mode ?? 'enter'}
+        onClose={() => setPinFor(null)}
+        onDone={() => {
+          if (!pinFor) return;
+          const { note, mode } = pinFor;
+          setPinFor(null);
+          if (mode === 'enter') { markUnlocked(); updateNote(note.id, { locked: false }); }
+          else updateNote(note.id, { locked: true });
+        }}
       />
 
       <Sheet visible={folderSheet} onClose={() => setFolderSheet(false)} title="New folder">

@@ -127,6 +127,9 @@ export async function rescheduleAllReminders() {
     for (const r of s.todoReminders) {
       await scheduleDaily(`todo:${r.id}`, r.time, 'ToDo check-in', r.label || 'How is the list going?');
     }
+    if (s.settings.journalReminderTime) {
+      await scheduleDaily('journal-daily', s.settings.journalReminderTime, 'Journal', 'A few lines about your day?');
+    }
   } catch {
     // notifications can be unavailable in some environments — fail quietly
   }

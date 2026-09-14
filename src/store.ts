@@ -62,7 +62,8 @@ export interface JournalEntry {
   /** YYYY-MM-DD — the day the entry is ABOUT (not when it was typed) */
   dateKey: string;
   title: string;
-  body: string;
+  /** the first ~200 characters, for lists; the full text lives in a file (src/journal.ts) */
+  excerpt: string;
   mood?: 1 | 2 | 3 | 4 | 5;
   tags: string[];
   wordCount: number;
@@ -260,6 +261,12 @@ export interface AppState {
   updateBookmark: (videoId: string, bookmarkId: string, label: string) => void;
   removeBookmark: (videoId: string, bookmarkId: string) => void;
 
+  /** the journal index; entry text lives in files (src/journal.ts) */
+  upsertJournalEntry: (e: JournalEntry) => void;
+  patchJournalEntry: (id: string, patch: Partial<JournalEntry>) => void;
+  removeJournalEntry: (id: string) => void;
+  setJournalTags: (tags: string[]) => void;
+
   pushCalc: (expr: string, result: string) => void;
   clearCalcHistory: () => void;
 
@@ -390,7 +397,16 @@ export function migrateV5(p: any): any {
     .filter((n: any) => n && typeof n === 'object')
     .map((n: any) => ({ ...n, attachments: Array.isArray(n.attachments) ? n.attachments : [], locked: !!n.locked }));
   out.deepWork = p?.deepWork ?? null;
-  out.journal = Array.isArray(p?.journal) ? p.journal : [];
+  out.journal = (Array.isArray(p?.journal) ? p.journal : [])
+    .filter((e: any) => e && typeof e === 'object' && typeof e.id === 'string' && typeof e.dateKey === 'string')
+    .map(({ body, ...e }: any) => ({
+      ...e,
+      title: typeof e.title === 'string' ? e.title : '',
+      excerpt: typeof e.excerpt === 'string' ? e.excerpt : String(body || '').slice(0, 200),
+      tags: Array.isArray(e.tags) ? e.tags.filter((t: any) => typeof t === 'string') : [],
+      wordCount: Number(e.wordCount) || 0,
+      pinned: !!e.pinned,
+    }));
   out.journalTags = Array.isArray(p?.journalTags) ? p.journalTags : [];
   return out;
 }
@@ -650,6 +666,13 @@ export const useStore = create<AppState>()(
             v.id === videoId ? { ...v, bookmarks: v.bookmarks.filter((b) => b.id !== bookmarkId) } : v
           ),
         })),
+
+      upsertJournalEntry: (e) =>
+        set((s) => ({ journal: [e, ...s.journal.filter((x) => x.id !== e.id)] })),
+      patchJournalEntry: (id, patch) =>
+        set((s) => ({ journal: s.journal.map((x) => (x.id === id ? { ...x, ...patch } : x)) })),
+      removeJournalEntry: (id) => set((s) => ({ journal: s.journal.filter((x) => x.id !== id) })),
+      setJournalTags: (tags) => set({ journalTags: tags }),
 
       pushCalc: (expr, result) =>
         set((s) => ({ calcHistory: [{ id: uid(), expr, result }, ...s.calcHistory].slice(0, 100) })),
