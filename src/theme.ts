@@ -124,7 +124,6 @@ export const C = {
   green: '#9AD6B0',
   amber: '#E3C08D',
   pink: '#E39EAC',
-  violet: '#745FF2',
   teal: '#83DBD6',
   danger: '#E0958A',
   gold: '#D5C68E',
@@ -182,17 +181,27 @@ export const F = {
 };
 
 // type scale (~1.25 ratio)
-export const T: Record<string, TextStyle> = {
+export type TName =
+  | 'display' | 'h1' | 'title' | 'body' | 'bodyLong' | 'label' | 'caption' | 'kicker' | 'mono48' | 'monoAmbient';
+
+// faces carry the weight, so no token can hold a fontWeight (scripts/lint-type.js guards the call sites too)
+export const T: Record<TName, Omit<TextStyle, 'fontWeight'>> = {
   display: { color: C.text, fontFamily: F.bold, fontSize: 30, letterSpacing: -0.5 },
-  h1: { color: C.text, fontFamily: F.bold, fontSize: 24, letterSpacing: -0.3 },
+  h1: { color: C.text, fontFamily: F.bold, fontSize: 22, letterSpacing: -0.3 },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1 },
   body: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21 },
+  /** long-form writing: the journal page */
+  bodyLong: { color: C.text, fontFamily: F.reg, fontSize: 16, lineHeight: 26 },
   label: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: 0.1 },
   caption: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 17 },
   kicker: {
     color: C.textFaint, fontFamily: F.semi, fontSize: 11,
     letterSpacing: 2.2, textTransform: 'uppercase',
   },
+  /** the Deep Work hero timer */
+  mono48: { color: C.text, fontFamily: F.mono, fontSize: 48 },
+  /** the ambient clock */
+  monoAmbient: { color: C.text, fontFamily: F.mono, fontSize: 68 },
 };
 
 export const BLOCK_COLORS = ['#9DBCE3', '#9AD6B0', '#E3C08D', '#E39EAC', '#745FF2', '#83DBD6', '#C2D392', '#D5C68E'];

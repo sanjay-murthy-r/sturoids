@@ -96,11 +96,11 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 {n.locked && <Ionicons name="lock-closed" size={14} color={C.textFaint} style={{ marginLeft: 6 }} />}
               </Row>
               {!!n.body && !n.locked && (
-                <Text style={{ color: C.textDim, fontSize: 13, marginTop: 4, lineHeight: 18 }} numberOfLines={2}>
+                <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginTop: 4, lineHeight: 18 }} numberOfLines={2}>
                   {n.body}
                 </Text>
               )}
-              <Text style={{ color: C.textFaint, fontSize: 11, marginTop: 6 }}>
+              <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 11, marginTop: 6 }}>
                 {n.folder}{n.subject ? ` · ${n.subject}` : ''} · {new Date(n.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
               </Text>
               </GlassCard>

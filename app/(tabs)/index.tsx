@@ -186,7 +186,7 @@ export default function Today() {
               <View style={st.vDivider} />
               <Glance value={habits.length ? habitsDone + '/' + habits.length : '—'} label="habits" color={C.green} />
               <View style={st.vDivider} />
-              <Glance value={String(focusToday)} suffix=" min" label="focused" color={C.violet} />
+              <Glance value={String(focusToday)} suffix=" min" label="focused" color={C.accent} />
             </Row>
           </Card>
         </Enter>
@@ -567,14 +567,13 @@ function WeekBar({ label, mins, maxMins, isToday }: {
           st.barTrough,
           theme === 'minimal'
             ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
-            : { backgroundColor: C.inset, ...neuInset('low') },
+            : { backgroundColor: C.inset, ...neuInset('hairline') },
         ]}
       >
         <Animated.View
           style={[
             {
               width: '100%', borderRadius: 8, backgroundColor: fillColor,
-              ...(theme === 'minimal' ? null : { boxShadow: '0 0 4px ' + fillColor }),
             },
             fillStyle,
           ]}
@@ -593,7 +592,7 @@ const st = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, marginLeft: 10,
   },
-  tagText: { fontFamily: F.bold, fontSize: 10, letterSpacing: 1.2 },
+  tagText: { fontFamily: F.bold, fontSize: 11, letterSpacing: 1.2 },
   vDivider: { width: StyleSheet.hairlineWidth, backgroundColor: C.hairline, alignSelf: 'stretch', marginVertical: 12 },
   glanceValue: { fontFamily: F.bold, fontSize: 22, fontVariant: ['tabular-nums'], letterSpacing: -0.3 },
   glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: 0.4 },
@@ -610,9 +609,9 @@ const st = StyleSheet.create({
     backgroundColor: C.amber + '1C', borderColor: C.amber + '55', borderWidth: 1,
     borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8,
   },
-  missionPillText: { color: C.amber, fontFamily: F.bold, fontSize: 9.5, letterSpacing: 1 },
-  barValue: { color: C.textFaint, fontFamily: F.med, fontSize: 9.5, marginBottom: 4, fontVariant: ['tabular-nums'] },
-  barLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 10.5, marginTop: 7 },
+  missionPillText: { color: C.amber, fontFamily: F.bold, fontSize: 11, letterSpacing: 1 },
+  barValue: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginBottom: 4, fontVariant: ['tabular-nums'] },
+  barLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 7 },
   barTrough: {
     width: 16, height: 56, borderRadius: 8,
     overflow: 'hidden', justifyContent: 'flex-end',

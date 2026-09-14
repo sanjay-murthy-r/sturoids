@@ -4,7 +4,8 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android"
+    "android": "expo start --android",
+    "lint:type": "node scripts/lint-type.js"
   },
   "dependencies": {
     "@expo-google-fonts/ibm-plex-mono": "^0.4.1",

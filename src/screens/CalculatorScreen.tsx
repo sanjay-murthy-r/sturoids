@@ -140,7 +140,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 style={{ alignSelf: 'center', marginRight: 8, marginBottom: 8 }}
               />
               <Chip small label="SCI" active={sciNotation} color={C.amber} onPress={() => setSciNotation(!sciNotation)} />
-              <Chip small label="ƒ(x)" active={sci} color={C.violet} onPress={() => setSci(!sci)} />
+              <Chip small label="ƒ(x)" active={sci} color={C.accent} onPress={() => setSci(!sci)} />
             </Row>
             <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} />
           </Row>
@@ -155,7 +155,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
           {sci && SCI.map((row, i) => (
             <Row key={`s${i}`} style={{ gap: 8, marginBottom: 6 }}>
               {row.map((k) => (
-                <Key key={k} label={k.replace('(', '')} pad={8} small onPress={() => press(k)} color={C.violet} />
+                <Key key={k} label={k.replace('(', '')} pad={8} small onPress={() => press(k)} color={C.accent} />
               ))}
             </Row>
           ))}
@@ -201,7 +201,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
               key={h.id} style={st.histRow} radius={14} scaleTo={0.98}
               onPress={() => { if (h.result !== 'Error') { setExpr((e) => e + h.result); setHistSheet(false); } }}
             >
-              <Text style={{ color: C.textDim, fontSize: 13 }} numberOfLines={1}>{h.expr}</Text>
+              <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13 }} numberOfLines={1}>{h.expr}</Text>
               <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, fontFamily: F.semi }} numberOfLines={1}>
                 = {h.result}
               </Text>
@@ -241,7 +241,7 @@ function Key({ label, onPress, onLongPress, color, small, pad }: {
 }
 
 const st = StyleSheet.create({
-  expr: { color: C.text, fontSize: 32, fontFamily: F.semi, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  expr: { color: C.text, fontSize: 34, fontFamily: F.semi, textAlign: 'right', fontVariant: ['tabular-nums'] },
   preview: { fontSize: 16, fontFamily: F.reg, textAlign: 'right', marginTop: 4, fontVariant: ['tabular-nums'] },
   key: {
     flex: 1, paddingVertical: 16, borderRadius: 16, alignItems: 'center', justifyContent: 'center',

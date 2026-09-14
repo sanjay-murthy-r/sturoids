@@ -141,7 +141,7 @@ export function InfoDot({ text, size = 15 }: { text: string; size?: number }) {
                 : { backgroundColor: C.card, ...neuRaised('high') },
             ]}
           >
-            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 12.5, lineHeight: 18 }}>{text}</Text>
+            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 12, lineHeight: 17 }}>{text}</Text>
           </View>
         </Pressable>
       </Modal>
@@ -169,7 +169,7 @@ export function Card({
 
   if (onPress || onLongPress) {
     return (
-      <Bouncy onPress={onPress} onLongPress={onLongPress} style={[st.cardBase, surface, style as any]}>
+      <Bouncy onPress={onPress} onLongPress={onLongPress} radius={S.radius} style={[st.cardBase, surface, style as any]}>
         {inner}
       </Bouncy>
     );
@@ -442,7 +442,7 @@ export function EmptyText({ children }: { children: React.ReactNode }) {
   return <Text style={st.empty}>{children}</Text>;
 }
 
-/** Inset track + sprung accent fill with the kit's soft glow. */
+/** A carved hairline track with a sprung accent fill. No glow: one accent, lit by the material. */
 export function ProgressBar({ value, color, height = 8 }: { value: number; color?: string; height?: number }) {
   const theme = useTheme();
   const level = useAnimLevel();
@@ -457,14 +457,13 @@ export function ProgressBar({ value, color, height = 8 }: { value: number; color
     <View
       style={[
         { height, borderRadius: height / 2, overflow: 'hidden' },
-        theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...neuInset('low') },
+        theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...neuInset('hairline') },
       ]}
     >
       <Animated.View
         style={[
           {
             height: height - 2, borderRadius: height / 2, backgroundColor: c, margin: 1,
-            ...(theme === 'minimal' ? null : { boxShadow: `0 0 4px ${c}B0` }),
           },
           fillStyle,
         ]}
@@ -571,7 +570,7 @@ const st = StyleSheet.create({
   cardBase: {
     borderRadius: S.radius,
     marginBottom: S.gap,
-    overflow: 'hidden',
+    // no overflow clip: it would cut the raised shadow; images inside round their own corners
   },
   insetBase: {
     borderRadius: S.radiusSm,
@@ -622,7 +621,7 @@ const st = StyleSheet.create({
   },
   empty: {
     color: C.textFaint, fontFamily: F.reg, textAlign: 'center', marginVertical: 26,
-    fontSize: 13.5, lineHeight: 20, paddingHorizontal: 10,
+    fontSize: 13, lineHeight: 19, paddingHorizontal: 10,
   },
   sheetOverlay: { flex: 1, backgroundColor: C.scrim },
   sheet: {
@@ -630,13 +629,13 @@ const st = StyleSheet.create({
     padding: 22, paddingBottom: 36,
     borderTopWidth: 1.5, borderColor: C.lite,
     boxShadow: SH.sheetLift,
-    overflow: 'hidden', // clips content bg to the rounded corners
   },
   sheetHandle: {
     alignSelf: 'center', width: 44, height: 5, borderRadius: 3,
     backgroundColor: C.inset, marginBottom: 16,
+    ...neuInset('hairline'),
   },
-  sheetTitle: { color: C.text, fontFamily: F.semi, fontSize: 18, letterSpacing: -0.2, marginBottom: 14 },
+  sheetTitle: { color: C.text, fontFamily: F.bold, fontSize: 22, letterSpacing: -0.3, marginBottom: 14 },
   menuRow: {
     flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.hairline,

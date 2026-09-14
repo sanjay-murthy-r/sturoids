@@ -162,7 +162,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   </View>
                   {viewingToday && toMinutes(b.start) <= nowMin && nowMin < toMinutes(b.end) && (
                     <View style={{ borderRadius: 999, borderWidth: 1, borderColor: C.accent + '66', backgroundColor: C.accent + '1A', paddingHorizontal: 8, paddingVertical: 3, marginRight: 4 }}>
-                      <Text style={{ color: C.accent, fontFamily: F.semi, fontSize: 10, letterSpacing: 1 }}>NOW</Text>
+                      <Text style={{ color: C.accent, fontFamily: F.semi, fontSize: 11, letterSpacing: 1 }}>NOW</Text>
                     </View>
                   )}
                   <IconBtn name="create-outline" size={18} onPress={() => openEdit(b)} />

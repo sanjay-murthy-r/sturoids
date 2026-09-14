@@ -27,7 +27,7 @@ function LinkIcon({ link }: { link: AiLink }) {
             : { backgroundColor: C.card, ...neuRaised('low') },
         ]}
       >
-        <Ionicons name="sparkles" size={22} color={C.violet} />
+        <Ionicons name="sparkles" size={22} color={C.accent} />
       </View>
     );
   }
@@ -93,7 +93,7 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   <Text style={{ color: C.text, fontFamily: F.semi, marginTop: 10, fontSize: 14 }} numberOfLines={1}>
                     {l.label}
                   </Text>
-                  <Text style={[T.caption, { fontSize: 10.5, marginTop: 2 }]} numberOfLines={1}>{domainOf(l.url)}</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{domainOf(l.url)}</Text>
                   {edit && (
                     <Row style={{ marginTop: 8 }}>
                       <IconBtn name="chevron-back" size={18} onPress={() => move(i, -1)} />

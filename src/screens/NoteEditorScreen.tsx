@@ -333,7 +333,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 {a.kind === 'file' && (
                   <Bouncy onPress={() => openFile(a)} style={[st.fileRow, { borderColor: C.accent + '44', backgroundColor: C.accent + '18' }]}>
                     <Ionicons name="document-attach-outline" size={18} color={C.accent} />
-                    <Text style={{ color: C.accent, marginLeft: 8, fontSize: 13, maxWidth: mediaW * 1.6 }} numberOfLines={1}>
+                    <Text style={{ color: C.accent, fontFamily: F.med, marginLeft: 8, fontSize: 13, maxWidth: mediaW * 1.6 }} numberOfLines={1}>
                       {a.name}
                     </Text>
                   </Bouncy>
@@ -453,7 +453,7 @@ function InlineVideo({ uri, width }: { uri: string; width: number }) {
 }
 
 const st = StyleSheet.create({
-  title: { color: C.text, fontFamily: F.bold, fontSize: 23, letterSpacing: -0.3, paddingVertical: 6 },
+  title: { color: C.text, fontFamily: F.bold, fontSize: 30, letterSpacing: -0.5, paddingVertical: 6 },
   body: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: LINE_H, minHeight: 300, paddingTop: 4 },
   // Rubik ships no italic, so Android would synthesise a slant: live text reads as faint instead
   liveInline: { color: C.textFaint, fontFamily: F.reg, fontSize: 15, lineHeight: LINE_H },

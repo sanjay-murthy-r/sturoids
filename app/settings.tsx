@@ -522,7 +522,7 @@ const st = StyleSheet.create({
   slotIndex: { width: 58, color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 4 },
   label: { color: C.textDim, fontFamily: F.med, fontSize: 13, marginBottom: 8 },
-  hint: { color: C.textFaint, fontSize: 12, marginTop: 10, lineHeight: 17 },
+  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, marginTop: 10, lineHeight: 17 },
   optRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 6 },
   radioWell: {
     width: 22, height: 22, borderRadius: 11,

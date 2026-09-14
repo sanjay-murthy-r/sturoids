@@ -204,7 +204,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                         </Text>
                       </Pressable>
                       <View style={[st.pill, { borderColor: pillColor + '55', backgroundColor: pillColor + '18' }]}>
-                        <Text style={{ color: pillColor, fontSize: 10, fontFamily: F.semi, letterSpacing: 0.8 }}>{pillText}</Text>
+                        <Text style={{ color: pillColor, fontSize: 11, fontFamily: F.semi, letterSpacing: 0.8 }}>{pillText}</Text>
                       </View>
                       <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(m.title, () => removeMission(m.id))} />
                     </Row>
@@ -214,7 +214,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                         {m.subtasks.map((sub) => (
                           <Row key={sub.id} style={{ paddingVertical: 5 }}>
                             <CheckCircle done={sub.done} size={20} onPress={() => toggleSubtask(m.id, sub.id)} />
-                            <Text style={[{ color: C.textDim, fontSize: 14, marginLeft: 10, flex: 1 }, sub.done && st.taskDone]}>
+                            <Text style={[{ color: C.textDim, fontFamily: F.reg, fontSize: 14, marginLeft: 10, flex: 1 }, sub.done && st.taskDone]}>
                               {sub.title}
                             </Text>
                             <IconBtn name="close" size={16} onPress={() => removeSubtask(m.id, sub.id)} />
@@ -336,7 +336,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 const st = StyleSheet.create({
   triageTitle: { color: C.amber, fontFamily: F.semi, fontSize: 13, marginBottom: 10, letterSpacing: 0.2 },
-  taskText: { color: C.text, fontSize: 15, marginLeft: 12, flex: 1, letterSpacing: 0.1 },
+  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 12, flex: 1, letterSpacing: 0.1 },
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginHorizontal: 6 },
   fab: {

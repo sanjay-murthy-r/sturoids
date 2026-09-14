@@ -348,7 +348,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       >
         {mode === 'tab' && <Text style={st.h1}>Deep Work</Text>}
         {todayFocusMin > 0 ? (
-          <Text style={{ color: C.textDim, fontSize: 13, marginBottom: 14 }}>
+          <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginBottom: 14 }}>
             {todayFocusMin} focused minutes today
           </Text>
         ) : (
@@ -399,7 +399,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   onPress={() => { haptic(); setTargetMin((m) => m + 1); }} />
               )}
             </Row>
-            <Text style={{ color: C.textDim, fontSize: 13, marginTop: 4 }}>
+            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginTop: 4 }}>
               {timerMode === 'countdown' ? `${targetMin} min block` : 'stopwatch'}
               {subject ? ` · ${subject}` : ''}
             </Text>
@@ -409,7 +409,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   small
                   label={finishAt ? `Finish ${fmtClockTime(new Date(finishAt).getHours() * 60 + new Date(finishAt).getMinutes(), hour24)}` : 'Finish line'}
                   active={!!finishAt}
-                  color={C.violet}
+                  color={C.accent}
                   onPress={() => setFinishSheet(true)}
                 />
               </View>
@@ -426,7 +426,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 <PillButton label="Pause" icon="pause" color={C.amber} onPress={pause} />
               )}
               {started && <PillButton label="End" icon="stop" color={C.danger} outline onPress={endSession} />}
-              {running && <PillButton label="Ambient" icon="moon" color={C.violet} outline onPress={() => setAmbient(true)} />}
+              {running && <PillButton label="Ambient" icon="moon" color={C.accent} outline onPress={() => setAmbient(true)} />}
             </Row>
           </GlassCard>
         </Enter>
@@ -436,7 +436,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         </Enter>
 
         {/* attached tasks */}
-        <SectionTitle right={<Text style={{ color: C.accent, fontSize: 13 }} onPress={() => setPickSheet(true)}>+ Attach</Text>}>
+        <SectionTitle right={<Text style={{ color: C.accent, fontFamily: F.semi, fontSize: 13 }} onPress={() => setPickSheet(true)}>+ Attach</Text>}>
           Session tasks
         </SectionTitle>
         <Enter index={2}>
@@ -468,11 +468,11 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
                     <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14 }}>
                       {Math.round(s.netSeconds / 60)} min{s.subject ? ` · ${s.subject}` : ''}
                     </Text>
-                    <Text style={{ color: C.textFaint, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+                    <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
                       {s.dateKey}{s.taskTitles.length ? ` · ${s.taskTitles.join(', ')}` : ''}
                     </Text>
                   </View>
-                  <Ionicons name="flash" size={18} color={C.violet} />
+                  <Ionicons name="flash" size={18} color={C.accent} />
                 </Row>
               </GlassCard>
             </Enter>
@@ -514,12 +514,12 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
       {/* post-session review */}
       <Sheet visible={!!review} onClose={() => review && commit(accumSec, review.choices)} title="Session review">
-        <Text style={{ color: C.textDim, marginBottom: 12, fontSize: 13 }}>
+        <Text style={{ color: C.textDim, fontFamily: F.reg, marginBottom: 12, fontSize: 13 }}>
           {Math.round(accumSec / 60)} focused minutes. What happened to the unchecked items?
         </Text>
         {review?.items.map((it) => (
           <View key={it.key} style={{ marginBottom: 12 }}>
-            <Text style={{ color: C.text, fontSize: 14, marginBottom: 6 }}>{it.title}</Text>
+            <Text style={{ color: C.text, fontFamily: F.med, fontSize: 14, marginBottom: 6 }}>{it.title}</Text>
             <Row>
               {(['done', 'pending', 'drop'] as ReviewChoice[]).map((c) => (
                 <Chip
@@ -537,7 +537,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
       {/* countdown until a time of day */}
       <Sheet visible={untilSheet} onClose={() => setUntilSheet(false)} title="Count down until…">
-        <Text style={{ color: C.textDim, fontSize: 13, marginBottom: 10 }}>
+        <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginBottom: 10 }}>
           Pick a time of day — the gap from now becomes the countdown length. Nothing stops automatically at that time.
         </Text>
         <Field
@@ -561,7 +561,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
       {/* stopwatch finish line */}
       <Sheet visible={finishSheet} onClose={() => setFinishSheet(false)} title="Finish line">
-        <Text style={{ color: C.textDim, fontSize: 13, marginBottom: 10 }}>
+        <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginBottom: 10 }}>
           A soft endpoint for the stopwatch. When it passes while running you'll be asked to wrap up (auto-concludes after 10 quiet minutes); if you're paused at that moment, the session wraps up on its own.
         </Text>
         <Row style={{ marginBottom: 4 }}>
@@ -586,7 +586,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         onClose={() => { if (autoConcludeTimer.current) clearTimeout(autoConcludeTimer.current); clearFinishLine(); }}
         title="Finish line reached"
       >
-        <Text style={{ color: C.textDim, fontSize: 13, marginBottom: 14 }}>
+        <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginBottom: 14 }}>
           End the session here, or skip the finish line and keep going. If you do nothing, the session wraps up on its own in 10 minutes.
         </Text>
         <PillButton
@@ -606,7 +606,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <LiveClock timer={timer} style={st.ambientTime} />
           {subject ? <Text style={[st.ambientSub, { color: C.accent }]}>{subject}</Text> : null}
           {currentTask && <Text style={st.ambientTask}>{currentTask.title}</Text>}
-          <Text style={{ color: C.textFaint, fontSize: 12, position: 'absolute', bottom: Math.max(insets.bottom, 20) + 20 }}>tap anywhere to exit</Text>
+          <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 12, position: 'absolute', bottom: Math.max(insets.bottom, 20) + 20 }}>tap anywhere to exit</Text>
         </Pressable>
       </Modal>
     </ScreenBG>
@@ -616,7 +616,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 const st = StyleSheet.create({
   h1: { ...(T.display as object), marginBottom: 2 } as any,
   time: { color: C.text, fontSize: 48, fontFamily: F.mono, letterSpacing: 0 },
-  taskText: { color: C.text, fontSize: 15, marginLeft: 10, flex: 1 },
+  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 10, flex: 1 },
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   sheetSection: { color: C.textFaint, fontSize: 12, fontFamily: F.semi, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10, marginBottom: 6 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border },
@@ -627,5 +627,5 @@ const st = StyleSheet.create({
   },
   ambientTime: { color: C.text, fontSize: 58, fontFamily: F.mono, letterSpacing: 0 },
   ambientSub: { fontSize: 16, marginTop: 8, fontFamily: F.semi },
-  ambientTask: { color: C.textDim, fontSize: 14, marginTop: 14 },
+  ambientTask: { color: C.textDim, fontFamily: F.reg, fontSize: 14, marginTop: 14 },
 });
