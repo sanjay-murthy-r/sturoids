@@ -14,6 +14,8 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { Enter, useFocusKey } from '../components/Motion';
 import { tick as haptic } from '../haptics';
 import { NOTIF_CHANNEL_ID, ensurePermission } from '../notifications';
+import { TimerState, displayOf, elapsedOf, useSessionTick } from '../deepWork';
+import { AmbientView } from '../components/AmbientView';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
@@ -23,31 +25,6 @@ const FINISH_NOTIF_ID = 'sturoids-finish-line';
 const HERO_SIZES = [48, 42, 38];
 /** a stopwatch left running with no finish line (a killed app, a forgotten session) logs at most this much */
 const STOPWATCH_CAP_SEC = 12 * 3600;
-
-interface TimerState {
-  mode: 'stopwatch' | 'countdown'; targetMin: number; running: boolean; startTs: number | null; accumSec: number;
-}
-
-const elapsedOf = (t: TimerState) => t.accumSec + (t.running && t.startTs ? (Date.now() - t.startTs) / 1000 : 0);
-const displayOf = (t: TimerState) => (t.mode === 'countdown' ? Math.max(0, t.targetMin * 60 - elapsedOf(t)) : elapsedOf(t));
-
-/** Re-renders its caller once per displayed second, aligned to the session's own second boundary. */
-function useSessionTick(t: TimerState) {
-  const [, setN] = useState(0);
-  useEffect(() => {
-    if (!t.running || !t.startTs) return undefined;
-    const anchor = t.startTs - t.accumSec * 1000;
-    let iv: ReturnType<typeof setInterval> | undefined;
-    const first = setTimeout(() => {
-      setN((x) => x + 1);
-      iv = setInterval(() => setN((x) => x + 1), 1000);
-    }, 1000 - ((Date.now() - anchor) % 1000) + 8);
-    return () => {
-      clearTimeout(first);
-      if (iv) clearInterval(iv);
-    };
-  }, [t.running, t.startTs, t.accumSec]);
-}
 
 /** The live time. Only this re-renders each second; the screen around it does not. */
 function LiveClock({ timer, style, availW = 0, reserve = 0 }: {
@@ -622,16 +599,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         />
       </Sheet>
 
-      {/* ambient mode */}
-      <Modal visible={ambient} animationType="fade" onRequestClose={() => setAmbient(false)}>
-        <Pressable style={[st.ambient, { paddingTop: insets.top }]} onPress={() => setAmbient(false)}>
-          <View style={[st.ambientGlow, { backgroundColor: C.accent }]} />
-          <LiveClock timer={timer} style={st.ambientTime} />
-          {subject ? <Text style={[st.ambientSub, { color: C.accent }]}>{subject}</Text> : null}
-          {currentTask && <Text style={st.ambientTask}>{currentTask.title}</Text>}
-          <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 12, position: 'absolute', bottom: Math.max(insets.bottom, 20) + 20 }}>tap anywhere to exit</Text>
-        </Pressable>
-      </Modal>
+      <AmbientView
+        visible={ambient} timer={timer} subject={subject} task={currentTask?.title}
+        finishAt={finishAt} hour24={hour24} onExit={() => setAmbient(false)}
+      />
     </ScreenBG>
   );
 }
@@ -643,12 +614,4 @@ const st = StyleSheet.create({
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   sheetSection: { color: C.textFaint, fontSize: 12, fontFamily: F.semi, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10, marginBottom: 6 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border },
-  ambient: { flex: 1, backgroundColor: C.ambient, alignItems: 'center', justifyContent: 'center' },
-  ambientGlow: {
-    position: 'absolute', width: 320, height: 320, borderRadius: 160,
-    opacity: 0.10, transform: [{ scale: 1.4 }],
-  },
-  ambientTime: { color: C.text, fontSize: 58, fontFamily: F.mono, letterSpacing: 0 },
-  ambientSub: { fontSize: 16, marginTop: 8, fontFamily: F.semi },
-  ambientTask: { color: C.textDim, fontFamily: F.reg, fontSize: 14, marginTop: 14 },
 });
