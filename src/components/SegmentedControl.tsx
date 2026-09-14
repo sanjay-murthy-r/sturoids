@@ -94,12 +94,13 @@ export function SegmentedControl<K extends string>({
             }}
             style={{
               flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
-              paddingVertical: padV, paddingHorizontal: padH, borderRadius: 999,
+              // equal stretched segments centre their label, so padding only eats the room a narrow screen needs
+              paddingVertical: padV, paddingHorizontal: stretch ? 4 : padH, borderRadius: 999,
               flex: stretch ? 1 : undefined,
             }}
           >
             {o.icon ? <Ionicons name={o.icon} size={fontSize + 1} color={active ? c : C.textFaint} /> : null}
-            <Text style={{ fontFamily: F.med, fontSize, letterSpacing: 0.1, color: active ? c : C.textFaint }}>
+            <Text numberOfLines={1} style={{ fontFamily: F.med, fontSize, letterSpacing: 0.1, color: active ? c : C.textFaint }}>
               {o.label}
             </Text>
           </Pressable>

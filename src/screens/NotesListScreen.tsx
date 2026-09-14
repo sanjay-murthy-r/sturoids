@@ -55,6 +55,10 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
   }, [notes, q, folder]);
 
+  // rows present on the first paint play the entrance; rows that mount later (scrolling, searching) appear at once
+  const firstPaint = React.useRef(true);
+  React.useEffect(() => { firstPaint.current = false; }, []);
+
   const newNote = () => {
     const id = addNote({ folder: folder || 'General' });
     nav.openNote(id);
@@ -86,8 +90,7 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
               </Text>
             </GlassCard>
           );
-          // only the first screenful plays its entrance; rows scrolled into view later appear at once
-          return i < 10 ? <Enter index={Math.min(i, 8)}>{card}</Enter> : card;
+          return i < 10 && firstPaint.current ? <Enter index={Math.min(i, 8)}>{card}</Enter> : card;
         }}
         contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 110 + (mode === 'tab' ? 0 : insets.bottom) }}
         keyboardShouldPersistTaps="handled"

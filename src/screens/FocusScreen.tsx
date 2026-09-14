@@ -67,6 +67,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [targetMin, setTargetMin] = useState(saved?.targetMin ?? 50);
   const [customMin, setCustomMin] = useState('');
   const [customSheet, setCustomSheet] = useState(false);
+  const untilNext = useRef(false);
   const [running, setRunning] = useState(saved?.running ?? false);
   const [startTs, setStartTs] = useState<number | null>(saved?.startTs ?? null);
   const [accumSec, setAccumSec] = useState(saved?.accumSec ?? 0);
@@ -539,7 +540,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </Sheet>
 
       {/* a length that is not a preset: minutes, or until a clock time */}
-      <Sheet visible={customSheet} onClose={() => setCustomSheet(false)} title="Custom length">
+      <Sheet
+        visible={customSheet} onClose={() => setCustomSheet(false)} title="Custom length"
+        onClosed={() => { if (untilNext.current) { untilNext.current = false; setUntilSheet(true); } }}
+      >
         <Field
           value={customMin} onChangeText={setCustomMin} placeholder="Minutes"
           keyboardType="number-pad" autoFocus
@@ -550,7 +554,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           onPress={() => { const n = parseInt(customMin, 10); if (n > 0) { setTargetMin(Math.min(n, 600)); setCustomSheet(false); } }}
         />
         <Pressable
-          onPress={() => { setCustomSheet(false); setTimeout(() => setUntilSheet(true), 320); }}
+          onPress={() => { untilNext.current = true; setCustomSheet(false); }}
           style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 16, marginTop: 6 }}
         >
           <Ionicons name="alarm-outline" size={18} color={C.textDim} />
@@ -609,7 +613,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 const st = StyleSheet.create({
   h1: { ...(T.display as object), marginBottom: 2 } as any,
-  time: { color: C.text, fontSize: 48, fontFamily: F.mono, letterSpacing: 0 },
+  time: { ...T.mono48, letterSpacing: 0 },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 10, flex: 1 },
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   sheetSection: { color: C.textFaint, fontSize: 12, fontFamily: F.semi, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10, marginBottom: 6 },

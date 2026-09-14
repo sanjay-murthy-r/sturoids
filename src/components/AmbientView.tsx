@@ -1,11 +1,11 @@
 import React from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { AppState, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { StatusBar } from 'expo-status-bar';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Brightness from 'expo-brightness';
 import * as NavigationBar from 'expo-navigation-bar';
-import { C, F } from '../theme';
+import { C, F, T } from '../theme';
 import { fmtClockTime } from '../utils';
 import { TimerState, displayOf, useSessionTick } from '../deepWork';
 import { useAnimLevel } from './Motion';
@@ -22,32 +22,42 @@ const clockAt = (ms: number, hour24: boolean) => {
   return fmtClockTime(d.getHours() * 60 + d.getMinutes(), hour24);
 };
 
-/** Keeps the screen awake, dims it and hides the system bars; everything is put back when ambient closes. */
+/**
+ * Keeps the screen awake, dims it and hides the system bars. Brightness is handed back whenever the app leaves the
+ * foreground (so a dimmed screen never outlives the view) and taken again on return; everything is put back on close.
+ */
 function useAmbientSystem() {
   useKeepAwake('sturoids-ambient');
   React.useEffect(() => {
     let previous: number | null = null;
     let live = true;
-    (async () => {
+    const dim = async () => {
       try {
-        previous = await Brightness.getBrightnessAsync();
-        if (live) await Brightness.setBrightnessAsync(Math.min(previous, DIM_TO));
+        const current = await Brightness.getBrightnessAsync();
+        if (previous == null) previous = current;
+        if (live) await Brightness.setBrightnessAsync(Math.min(current, DIM_TO));
       } catch {
         // some skins refuse: the phone keeps its own brightness
       }
-    })();
+    };
+    const restore = () => {
+      if (Platform.OS === 'android') Brightness.restoreSystemBrightnessAsync().catch(() => {});
+      else if (previous != null) Brightness.setBrightnessAsync(previous).catch(() => {});
+    };
+    dim();
     if (Platform.OS === 'android') {
       NavigationBar.setVisibilityAsync('hidden').catch(() => {});
       NavigationBar.setBehaviorAsync('overlay-swipe').catch(() => {});
     }
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') dim();
+      else restore();
+    });
     return () => {
       live = false;
-      if (Platform.OS === 'android') {
-        Brightness.restoreSystemBrightnessAsync().catch(() => {});
-        NavigationBar.setVisibilityAsync('visible').catch(() => {});
-      } else if (previous != null) {
-        Brightness.setBrightnessAsync(previous).catch(() => {});
-      }
+      sub.remove();
+      restore();
+      if (Platform.OS === 'android') NavigationBar.setVisibilityAsync('visible').catch(() => {});
     };
   }, []);
 }
@@ -161,7 +171,7 @@ const st = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.ambient, alignItems: 'center', justifyContent: 'center' },
   center: { alignItems: 'center' },
   subject: { fontFamily: F.semi, fontSize: 24, marginBottom: 18, maxWidth: 320, textAlign: 'center' },
-  clock: { color: C.text, fontFamily: F.mono, textAlign: 'center', fontVariant: ['tabular-nums'] },
+  clock: { ...T.monoAmbient, textAlign: 'center', fontVariant: ['tabular-nums'] },
   rule: { height: 2, marginTop: 18, backgroundColor: C.textFaint + '4D', overflow: 'hidden' },
   meta: { color: C.textDim, fontFamily: F.reg, fontSize: 18, marginTop: 16, fontVariant: ['tabular-nums'] },
   task: { color: C.textDim, fontFamily: F.reg, fontSize: 18, marginTop: 30, maxWidth: 300, textAlign: 'center' },

@@ -508,8 +508,12 @@ export function Hairline() {
 
 /** Bottom sheet — backdrop fades while the panel springs up from the material. */
 export function Sheet({
-  visible, onClose, title, children,
-}: { visible: boolean; onClose: () => void; title?: string; children: React.ReactNode }) {
+  visible, onClose, onClosed, title, children,
+}: {
+  visible: boolean; onClose: () => void; title?: string; children: React.ReactNode;
+  /** runs once the sheet has finished closing: the moment to open another sheet or show a toast */
+  onClosed?: () => void;
+}) {
   const theme = useTheme();
   const level = useAnimLevel();
   const { height: winH } = useWindowDimensions();
@@ -520,6 +524,12 @@ export function Sheet({
   const [render, setRender] = React.useState(visible);
   const prog = useSharedValue(visible ? 1 : 0);
   const drag = useSharedValue(0);
+  const closedRef = React.useRef(onClosed);
+  closedRef.current = onClosed;
+  const finishClose = React.useCallback(() => {
+    setRender(false);
+    closedRef.current?.();
+  }, []);
   React.useEffect(() => {
     if (visible) {
       drag.value = 0;
@@ -528,10 +538,10 @@ export function Sheet({
       if (level === 'none') { prog.value = 1; }
       else { prog.value = 0; prog.value = withSpring(1, RISE_OUT); }
     } else if (render) {
-      if (level === 'none') { prog.value = 0; setRender(false); }
+      if (level === 'none') { prog.value = 0; finishClose(); }
       else {
         prog.value = withTiming(0, { duration: 200 }, (fin) => {
-          if (fin) runOnJS(setRender)(false);
+          if (fin) runOnJS(finishClose)();
         });
       }
     }
@@ -596,12 +606,14 @@ export function DotMenu({
   visible: boolean; onClose: () => void;
   items: { label: string; icon: any; color?: string; onPress: () => void }[];
 }) {
+  // the chosen action runs once the menu has closed, so a sheet it opens or a toast it shows is never behind it
+  const pending = React.useRef<(() => void) | null>(null);
   return (
-    <Sheet visible={visible} onClose={onClose}>
+    <Sheet visible={visible} onClose={onClose} onClosed={() => { const run = pending.current; pending.current = null; run?.(); }}>
       {items.map((it, i) => (
         <Bouncy
           key={i}
-          onPress={() => { onClose(); setTimeout(it.onPress, 120); }}
+          onPress={() => { pending.current = it.onPress; onClose(); }}
           style={st.menuRow}
         >
           <Ionicons name={it.icon} size={19} color={it.color || C.textDim} />
