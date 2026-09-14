@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { C, F, MIN, bgFor, neuInset } from '../theme';
+import { C, F, MIN, SH, bgFor, neuInset } from '../theme';
 import { useTheme } from './UI';
 import { RISE_OUT, useAnimLevel } from './Motion';
 import { useStore } from '../store';
@@ -123,7 +123,7 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
         paddingTop: 9, paddingBottom: Math.max(insets.bottom, 6) + 5,
         ...(theme === 'minimal'
           ? { borderTopWidth: 1, borderTopColor: MIN.border }
-          : { boxShadow: '0 -6px 14px rgba(24,26,30,0.35)' }),
+          : { boxShadow: SH.barLift }),
       }}
     >
       <View style={{ flexDirection: 'row' }}>

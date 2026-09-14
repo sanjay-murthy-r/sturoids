@@ -15,6 +15,7 @@ import {
 import { Enter, Bouncy, Pop, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { tap } from '../../src/haptics';
 import { ROUTE_CATALOG, launchExternal } from '../../src/quickAccess';
+import { colorOf, toolPath } from '../../src/tools';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
 
 function greetWord(d = new Date()) {
@@ -108,7 +109,8 @@ export default function Today() {
 
   const runQuick = (q: QuickItem) => {
     if (qaEdit) return;
-    if (q.kind === 'route') router.push(q.target as any);
+    if (q.kind === 'tool') router.push(toolPath(q.target) as any);
+    else if (q.kind === 'route') router.push(q.target as any);
     else launchExternal(q);
   };
   const removeQuick = (id: string) => setQuickAccess(quickAccess.filter((q) => q.id !== id));
@@ -286,8 +288,8 @@ export default function Today() {
       <Sheet visible={qaAddSheet} onClose={() => setQaAddSheet(false)} title="Add to quick access">
         <Text style={st.sheetSection}>In-app</Text>
         <Row style={{ flexWrap: 'wrap' }}>
-          {ROUTE_CATALOG.filter((r) => !quickAccess.some((q) => q.target === r.target)).map((r) => (
-            <Chip key={r.target} label={r.label} color={r.color} onPress={() => addQuick(r)} />
+          {ROUTE_CATALOG.filter((r) => !quickAccess.some((q) => q.kind === r.kind && q.target === r.target)).map((r) => (
+            <Chip key={r.kind + r.target} label={r.label} color={colorOf(r.color)} onPress={() => addQuick(r)} />
           ))}
         </Row>
         <Text style={st.sheetSection}>Apps on this phone</Text>
@@ -310,7 +312,7 @@ export default function Today() {
                   .map((a) => (
                     <Bouncy
                       key={a.packageName}
-                      onPress={() => addQuick({ label: a.label, icon: 'apps-outline', color: C.teal, kind: 'app', target: a.packageName })}
+                      onPress={() => addQuick({ label: a.label, icon: 'apps-outline', color: 'teal', kind: 'app', target: a.packageName })}
                       style={{ paddingVertical: 9, flexDirection: 'row', alignItems: 'center' }}
                     >
                       <Ionicons name="apps-outline" size={16} color={C.teal} />
@@ -334,7 +336,7 @@ export default function Today() {
             onPress={() => {
               const p = customPkg.trim();
               if (!p.includes('.')) return;
-              addQuick({ label: customLabel.trim() || p.split('.').pop() || 'App', icon: 'apps-outline', color: C.teal, kind: 'app', target: p });
+              addQuick({ label: customLabel.trim() || p.split('.').pop() || 'App', icon: 'apps-outline', color: 'teal', kind: 'app', target: p });
               setCustomPkg(''); setCustomLabel('');
             }}
           />
@@ -453,7 +455,7 @@ function QuickTile({ q, index, count, cell, isDragging, onDragState, onCross, on
               : { backgroundColor: C.card, ...neuRaised('mid') },
           ]}
         >
-          <Ionicons name={q.icon as any} size={24} color={q.color} />
+          <Ionicons name={q.icon as any} size={24} color={colorOf(q.color)} />
           <Text style={[st.gridLabel, { maxWidth: cell - 10 }]} numberOfLines={1}>{q.label}</Text>
         </Bouncy>
         {edit && (
@@ -561,16 +563,18 @@ function WeekBar({ label, mins, maxMins, isToday }: {
 
 const st = StyleSheet.create({
   blockBar: { width: 4, height: 34, borderRadius: 2, marginRight: 12 },
+  // accent colours are applied inline at the call site: a StyleSheet freezes
+  // C.accent at import time and would never follow an accent change
   tagPill: {
-    borderWidth: 1, borderColor: C.accent + '55', backgroundColor: C.accent + '18',
+    borderWidth: 1,
     borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, marginLeft: 10,
   },
-  tagText: { color: C.accent, fontFamily: F.bold, fontSize: 10, letterSpacing: 1.2 },
+  tagText: { fontFamily: F.bold, fontSize: 10, letterSpacing: 1.2 },
   vDivider: { width: StyleSheet.hairlineWidth, backgroundColor: C.hairline, alignSelf: 'stretch', marginVertical: 12 },
   glanceValue: { fontFamily: F.bold, fontSize: 22, fontVariant: ['tabular-nums'], letterSpacing: -0.3 },
   glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: 0.4 },
   gridLabel: { color: C.text, fontFamily: F.med, fontSize: 12, marginTop: 7, letterSpacing: 0.1 },
-  link: { color: C.accent, fontFamily: F.semi, fontSize: 13 },
+  link: { fontFamily: F.semi, fontSize: 13 },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 12, flex: 1, letterSpacing: 0.1 },
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   missionPill: {

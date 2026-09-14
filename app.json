@@ -51,6 +51,22 @@
           "microphonePermission": "Sturoids uses the microphone for voice notes.",
           "speechRecognitionPermission": "Sturoids converts your speech to note text on-device."
         }
+      ],
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Sturoids uses Face ID to unlock your journal and locked notes."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#343A47"
+        }
       ]
     ],
     "experiments": {

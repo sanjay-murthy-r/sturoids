@@ -8,7 +8,7 @@ import { usePathname, useRouter } from 'expo-router';
 import { Directions, Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
+import { C, F, MIN, S, SH, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
 import { useStore } from '../store';
 import { Bouncy, Pop, RISE_OUT, useAnimLevel } from './Motion';
 import { tap, tick } from '../haptics';
@@ -385,7 +385,7 @@ export function Toggle({ value, onChange, color }: {
           <Animated.View
             style={[
               st.thumb,
-              { backgroundColor: value ? c : '#454C59' },
+              { backgroundColor: value ? c : C.knob },
               theme === 'minimal' && { boxShadow: undefined },
               thumbStyle,
             ]}
@@ -615,12 +615,12 @@ const st = StyleSheet.create({
     color: C.textFaint, fontFamily: F.reg, textAlign: 'center', marginVertical: 26,
     fontSize: 13.5, lineHeight: 20, paddingHorizontal: 10,
   },
-  sheetOverlay: { flex: 1, backgroundColor: 'rgba(15,16,19,0.55)' },
+  sheetOverlay: { flex: 1, backgroundColor: C.scrim },
   sheet: {
     backgroundColor: C.card, borderTopLeftRadius: 30, borderTopRightRadius: 30,
     padding: 22, paddingBottom: 36,
     borderTopWidth: 1.5, borderColor: C.lite,
-    boxShadow: '0 -8px 20px rgba(24,26,30,0.45)',
+    boxShadow: SH.sheetLift,
     overflow: 'hidden', // clips content bg to the rounded corners
   },
   sheetHandle: {

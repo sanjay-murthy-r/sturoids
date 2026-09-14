@@ -308,5 +308,5 @@ const st = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   swatchDisc: { width: 22, height: 22, borderRadius: 11 },
-  swatchDiscActive: { borderWidth: 2, borderColor: '#FFFFFF' },
+  swatchDiscActive: { borderWidth: 2, borderColor: C.text },
 });

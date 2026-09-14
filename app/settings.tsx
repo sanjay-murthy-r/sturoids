@@ -13,6 +13,7 @@ import { DEFAULT_TAB_SLOTS, TAB_SLOT_OPTIONS } from '../src/components/NeuTabBar
 import { Bouncy, Pop } from '../src/components/Motion';
 import { tick } from '../src/haptics';
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
+import { normaliseSlots } from '../src/tools';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.3.0';
@@ -28,92 +29,16 @@ const ANIMS: { key: AnimLevel; label: string; desc: string }[] = [
   { key: 'full', label: 'Everything', desc: 'Bouncy springs on all the things' },
 ];
 
-export default function Settings() {
+/**
+ * Radio list. Declared at module scope: a component defined inside Settings'
+ * render would be a NEW component type every render, remounting the whole list
+ * (and every press/pop animation in it) on each settings change.
+ */
+function OptionPicker<K extends string>({
+  options, value, onPick,
+}: { options: { key: K; label: string; desc: string }[]; value: K; onPick: (k: K) => void }) {
   const theme = useTheme();
-  const settings = useStore((s) => s.settings);
-  const setSetting = useStore((s) => s.setSetting);
-  const [checking, setChecking] = useState(false);
-
-  const slots = settings.tabSlots || DEFAULT_TAB_SLOTS;
-  const setSlot = (i: number, key: string) => {
-    const next = [...slots];
-    const j = next.indexOf(key);
-    if (j >= 0 && j !== i) next[j] = next[i]; // swap so no destination repeats
-    next[i] = key;
-    setSetting('tabSlots', next);
-  };
-
-  const toggleReminders = async (v: boolean) => {
-    if (v) {
-      const ok = await ensurePermission();
-      if (!ok) { Alert.alert('Permission needed', 'Allow notifications in system settings first.'); return; }
-    }
-    setSetting('remindersEnabled', v);
-    setTimeout(rescheduleAllReminders, 200);
-  };
-
-  const exportData = async () => {
-    try {
-      const json = JSON.stringify(exportSnapshot(), null, 2);
-      const uri = FileSystem.cacheDirectory + 'sturoids-backup-' + todayKey() + '.json';
-      await FileSystem.writeAsStringAsync(uri, json);
-      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json' });
-      else Alert.alert('Saved', 'Backup written to:\n' + uri);
-    } catch (e: any) {
-      Alert.alert('Export failed', String(e?.message || e));
-    }
-  };
-
-  const importData = async () => {
-    try {
-      const res = await DocumentPicker.getDocumentAsync({ type: 'application/json', copyToCacheDirectory: true });
-      if (res.canceled || !res.assets?.[0]) return;
-      const json = await FileSystem.readAsStringAsync(res.assets[0].uri);
-      Alert.alert('Import backup', 'This replaces ALL current data with the backup. Continue?', [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Replace', style: 'destructive',
-          onPress: () => {
-            const ok = importSnapshot(json);
-            Alert.alert(ok ? 'Imported' : 'Invalid file', ok ? 'Your data is restored.' : 'That file is not a Sturoids backup.');
-          },
-        },
-      ]);
-    } catch (e: any) {
-      Alert.alert('Import failed', String(e?.message || e));
-    }
-  };
-
-  const checkUpdate = async () => {
-    const repo = settings.githubRepo.trim();
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-      Alert.alert('Set the repo first', 'Enter it as owner/repo once the app is on GitHub Releases.');
-      return;
-    }
-    setChecking(true);
-    try {
-      const r = await fetch('https://api.github.com/repos/' + repo + '/releases/latest');
-      if (!r.ok) throw new Error('GitHub said ' + r.status);
-      const j = await r.json();
-      const latest = String(j.tag_name || '');
-      if (compareVersions(latest, APP_VERSION) > 0) {
-        Alert.alert(latest + ' available', 'Download the new APK from GitHub?', [
-          { text: 'Later', style: 'cancel' },
-          { text: 'Open', onPress: () => Linking.openURL(j.html_url) },
-        ]);
-      } else {
-        Alert.alert('Up to date', "You're on v" + APP_VERSION + ' — nothing newer on Releases.');
-      }
-    } catch (e: any) {
-      Alert.alert('Check failed', String(e?.message || e));
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const OptionPicker = <K extends string>({
-    options, value, onPick,
-  }: { options: { key: K; label: string; desc: string }[]; value: K; onPick: (k: K) => void }) => (
+  return (
     <View>
       {options.map((o, i) => {
         const active = value === o.key;
@@ -151,6 +76,98 @@ export default function Settings() {
       })}
     </View>
   );
+}
+
+export default function Settings() {
+  const theme = useTheme();
+  const settings = useStore((s) => s.settings);
+  const setSetting = useStore((s) => s.setSetting);
+  const [checking, setChecking] = useState(false);
+
+  const slots: string[] = settings.tabSlots || DEFAULT_TAB_SLOTS;
+  const setSlot = (i: number, key: string) => {
+    const next = [...slots];
+    const j = next.indexOf(key);
+    if (j >= 0 && j !== i) next[j] = next[i]; // swap so no destination repeats
+    next[i] = key;
+    setSetting('tabSlots', normaliseSlots(next));
+  };
+
+  const toggleReminders = async (v: boolean) => {
+    if (v) {
+      const ok = await ensurePermission();
+      if (!ok) { Alert.alert('Permission needed', 'Allow notifications in system settings first.'); return; }
+    }
+    setSetting('remindersEnabled', v);
+    setTimeout(rescheduleAllReminders, 200);
+  };
+
+  const exportData = async () => {
+    try {
+      const json = JSON.stringify(exportSnapshot(), null, 2);
+      const uri = FileSystem.cacheDirectory + 'sturoids-backup-' + todayKey() + '.json';
+      await FileSystem.writeAsStringAsync(uri, json);
+      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json' });
+      else Alert.alert('Saved', 'Backup written to:\n' + uri);
+    } catch (e: any) {
+      Alert.alert('Export failed', String(e?.message || e));
+    }
+  };
+
+  const importData = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ type: 'application/json', copyToCacheDirectory: true });
+      if (res.canceled || !res.assets?.[0]) return;
+      const json = await FileSystem.readAsStringAsync(res.assets[0].uri);
+      Alert.alert(
+        'Replace everything?',
+        'This replaces all current data with the backup. Calculator history is cleared and any running Deep Work session ends.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Replace', style: 'destructive',
+            onPress: () => {
+              const ok = importSnapshot(json);
+              if (ok) rescheduleAllReminders();
+              Alert.alert(
+                ok ? 'Imported' : 'Not a Sturoids backup',
+                ok ? 'Your data is restored.' : 'That file could not be read as a backup.'
+              );
+            },
+          },
+        ]
+      );
+    } catch (e: any) {
+      Alert.alert('Import failed', String(e?.message || e));
+    }
+  };
+
+  const checkUpdate = async () => {
+    const repo = settings.githubRepo.trim();
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+      Alert.alert('Set the repo first', 'Enter it as owner/repo once the app is on GitHub Releases.');
+      return;
+    }
+    setChecking(true);
+    try {
+      const r = await fetch('https://api.github.com/repos/' + repo + '/releases/latest');
+      if (!r.ok) throw new Error('GitHub said ' + r.status);
+      const j = await r.json();
+      const latest = String(j.tag_name || '');
+      if (compareVersions(latest, APP_VERSION) > 0) {
+        Alert.alert(latest + ' available', 'Download the new APK from GitHub?', [
+          { text: 'Later', style: 'cancel' },
+          { text: 'Open', onPress: () => Linking.openURL(j.html_url) },
+        ]);
+      } else {
+        Alert.alert('Up to date', "You're on v" + APP_VERSION + ' — nothing newer on Releases.');
+      }
+    } catch (e: any) {
+      Alert.alert('Check failed', String(e?.message || e));
+    } finally {
+      setChecking(false);
+    }
+  };
 
   return (
     <ScreenBG>
@@ -188,7 +205,7 @@ export default function Settings() {
                   ]}
                 >
                   <View style={[st.swatchDisc, { backgroundColor: a.color }]}>
-                    {active && <Ionicons name="checkmark" size={14} color="#2C2D30" />}
+                    {active && <Ionicons name="checkmark" size={14} color={C.onAccent} />}
                   </View>
                 </Bouncy>
               );

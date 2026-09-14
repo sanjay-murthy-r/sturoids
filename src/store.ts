@@ -2,7 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { uid, todayKey, DayName, DAY_NAMES } from './utils';
-import { ThemeMode, AnimLevel, DEFAULT_ACCENT } from './theme';
+import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
+import { ToolKey, DEFAULT_SLOTS, ROUTE_TO_TOOL, TOOLS, normaliseSlots, toolByKey } from './tools';
 
 // ---------- types ----------
 
@@ -18,6 +19,8 @@ export interface Note {
   id: string; title: string; body: string; folder: string; tags: string[];
   pinned: boolean; createdAt: number; updatedAt: number; subject?: string;
   attachments: Attachment[];
+  /** hidden behind the app lock: no excerpt, no body search, no share */
+  locked?: boolean;
 }
 
 export interface TimedNote { id: string; time: number; text: string }
@@ -30,8 +33,44 @@ export interface VaultVideo {
 
 export interface AiLink { id: string; label: string; url: string; custom?: boolean }
 export interface CalcEntry { id: string; expr: string; result: string }
-export interface QuickItem { id: string; label: string; icon: string; color: string; kind: 'route' | 'app' | 'url'; target: string }
+/**
+ * `tool` targets a ToolKey (opens wherever that tool currently lives — its tab
+ * slot or its full page); `route` is a plain path (Settings); `app` a package
+ * name; `url` a link. `color` is a palette slot (e.g. 'green') or a literal hex.
+ */
+export interface QuickItem { id: string; label: string; icon: string; color: string; kind: 'tool' | 'route' | 'app' | 'url'; target: string }
 export interface TodoReminder { id: string; time: string; label: string }
+
+/** A Deep Work session in flight — persisted so a process kill cannot lose it. */
+export interface ActiveSession {
+  mode: 'stopwatch' | 'countdown';
+  targetMin: number;
+  running: boolean;
+  /** wall-clock ms when the current running stretch began; null while paused */
+  startTs: number | null;
+  /** seconds banked from earlier running stretches */
+  accumSec: number;
+  /** wall-clock ms of the very first start, for the session's day */
+  startedAt: number;
+  subject: string;
+  attached: { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }[];
+  finishAt: number | null;
+}
+
+export interface JournalEntry {
+  id: string;
+  /** YYYY-MM-DD — the day the entry is ABOUT (not when it was typed) */
+  dateKey: string;
+  title: string;
+  body: string;
+  mood?: 1 | 2 | 3 | 4 | 5;
+  tags: string[];
+  wordCount: number;
+  pinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+  promptId?: string;
+}
 
 export interface Settings {
   name: string;
@@ -43,8 +82,23 @@ export interface Settings {
   githubRepo: string;
   todoReminderEnabled: boolean;
   todoReminderTime: string;
-  /** the three customizable middle tab slots (Home and More are fixed) */
-  tabSlots?: string[];
+  /** the three customizable middle tab slots (Today and More are fixed) */
+  tabSlots: ToolKey[];
+  /** first launch on this install — undefined until the app has been opened once */
+  firstOpenedAt?: number;
+  /** the most recent time the app came to the foreground */
+  lastOpenedAt?: number;
+  /** Journal: hidden behind the app lock */
+  journalLocked: boolean;
+  /** seconds in the background before any unlocked content re-locks (0 = immediately) */
+  lockGraceSec: number;
+  /** before this hour, opening the Journal writes about yesterday */
+  journalCutoffHour: number;
+  journalPromptsOn: boolean;
+  /** daily word goal, 0 = off */
+  journalWordGoal: number;
+  /** 'HH:MM' daily journal nudge, '' = off */
+  journalReminderTime: string;
 }
 
 export type PlannerWeek = Record<DayName, PlannerBlock[]>;
@@ -60,16 +114,71 @@ const DEFAULT_AI_LINKS: AiLink[] = [
   { id: 'wolfram', label: 'WolframAlpha', url: 'https://www.wolframalpha.com' },
 ];
 
+/** The Settings shortcut is the one quick item that is not a tool. */
+export const SETTINGS_QUICK: Omit<QuickItem, 'id'> = {
+  label: 'Settings', icon: 'settings-outline', color: 'slate', kind: 'route', target: '/settings',
+};
+
+const toolQuick = (key: ToolKey, label?: string): Omit<QuickItem, 'id'> => {
+  const t = toolByKey(key)!;
+  return { label: label || t.shortLabel, icon: t.icon, color: t.colorKey, kind: 'tool', target: t.key };
+};
+
+// derived from the tools registry, so fresh installs and upgraded installs match
 export const DEFAULT_QUICK: QuickItem[] = [
-  { id: 'q-notes', label: 'Notes', icon: 'document-text-outline', color: '#8CD9A8', kind: 'route', target: '/notes' },
-  { id: 'q-calc', label: 'Calc', icon: 'calculator-outline', color: '#E9BC7A', kind: 'route', target: '/calculator' },
-  { id: 'q-vault', label: 'YT Vault', icon: 'play-circle-outline', color: '#E895A5', kind: 'route', target: '/vault' },
-  { id: 'q-desmos', label: 'Desmos', icon: 'analytics-outline', color: '#7FD0D6', kind: 'route', target: '/desmos' },
-  { id: 'q-ai', label: 'AI', icon: 'sparkles-outline', color: '#B3A3E8', kind: 'route', target: '/ai-links' },
-  // slate, matching ROUTE_CATALOG — '#8FB6E8' is the Tasks tile's blue, and a user
-  // who removes and re-adds Settings would otherwise watch the colour change on them
-  { id: 'q-settings', label: 'Settings', icon: 'settings-outline', color: '#9AA6C0', kind: 'route', target: '/settings' },
+  { id: 'q-notes', ...toolQuick('notes') },
+  { id: 'q-calc', ...toolQuick('calculator') },
+  { id: 'q-vault', ...toolQuick('vault', 'YT Vault') },
+  { id: 'q-desmos', ...toolQuick('desmos') },
+  { id: 'q-ai', ...toolQuick('ai') },
+  { id: 'q-settings', ...SETTINGS_QUICK },
 ];
+
+export const DEFAULT_SETTINGS: Settings = {
+  name: '',
+  theme: 'default',
+  accent: DEFAULT_ACCENT,
+  animLevel: 'full',
+  hour24: false,
+  remindersEnabled: false,
+  githubRepo: '',
+  todoReminderEnabled: false,
+  todoReminderTime: '07:00',
+  tabSlots: [...DEFAULT_SLOTS],
+  journalLocked: false,
+  lockGraceSec: 90,
+  journalCutoffHour: 11,
+  journalPromptsOn: true,
+  journalWordGoal: 0,
+  journalReminderTime: '',
+};
+
+/** Every persisted data key with its fresh-install value (actions excluded). */
+export function initialData() {
+  return {
+    settings: { ...DEFAULT_SETTINGS, tabSlots: [...DEFAULT_SLOTS] },
+    aiLinks: DEFAULT_AI_LINKS,
+    quickAccess: DEFAULT_QUICK,
+    todoReminders: [] as TodoReminder[],
+    dailyTasks: [] as DailyTask[],
+    missions: [] as Mission[],
+    lastTriage: '',
+    sessions: [] as FocusSession[],
+    planner: emptyWeek(),
+    weekTemplates: {} as Record<string, PlannerWeek>,
+    habits: [] as Habit[],
+    notes: [] as Note[],
+    noteFolders: ['General'],
+    vaultVideos: [] as VaultVideo[],
+    vaultFolders: [] as VaultFolder[],
+    calcHistory: [] as CalcEntry[],
+    deepWork: null as ActiveSession | null,
+    journal: [] as JournalEntry[],
+    journalTags: [] as string[],
+  };
+}
+type DataKey = keyof ReturnType<typeof initialData>;
+const DATA_KEYS = Object.keys(initialData()) as DataKey[];
 
 export interface AppState {
   settings: Settings;
@@ -88,6 +197,9 @@ export interface AppState {
   vaultVideos: VaultVideo[];
   vaultFolders: VaultFolder[];
   calcHistory: CalcEntry[];
+  deepWork: ActiveSession | null;
+  journal: JournalEntry[];
+  journalTags: string[];
 
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   setAiLinks: (links: AiLink[]) => void;
@@ -108,6 +220,8 @@ export interface AppState {
   removeSubtask: (missionId: string, subId: string) => void;
 
   logSession: (s: Omit<FocusSession, 'id'>) => void;
+  setDeepWork: (s: ActiveSession | null) => void;
+  patchDeepWork: (patch: Partial<ActiveSession>) => void;
 
   addBlock: (day: DayName, b: Omit<PlannerBlock, 'id'>) => void;
   updateBlock: (day: DayName, b: PlannerBlock) => void;
@@ -149,6 +263,7 @@ export interface AppState {
   pushCalc: (expr: string, result: string) => void;
   clearCalcHistory: () => void;
 
+  /** a TRUE replace: every data key not in `data` goes back to its fresh value */
   replaceAll: (data: Partial<AppState>) => void;
 }
 
@@ -183,33 +298,98 @@ export function migrateData(old: any): any {
   return out;
 }
 
-
-// v2 -> v3: two-theme grey app; remap old navy-era colours to the grey palette.
-const COLOR_REMAP: Record<string, string> = {
-  '#8FB6E8': '#8FB6E8', '#8CD9A8': '#8CD9A8', '#E9BC7A': '#E9BC7A',
-  '#E895A5': '#E895A5', '#B3A3E8': '#B3A3E8', '#7FD0D6': '#7FD0D6',
-};
+// v2 -> v3: two-theme grey app. (Colour remapping moved to v5, where it is done
+// against the live palette in one coherent pass.)
 export function migrateToGrey(old: any): any {
   const out = { ...old };
   const st = { ...(old.settings || {}) };
   st.theme = st.theme === 'minimal' ? 'minimal' : 'default';
   out.settings = st;
-  const remap = (c: string) => COLOR_REMAP[c] || c;
-  if (Array.isArray(out.quickAccess)) {
-    out.quickAccess = out.quickAccess.map((q: any) => ({ ...q, color: remap(q.color) }));
-  }
-  if (out.planner) {
-    for (const d of Object.keys(out.planner)) {
-      out.planner[d] = (out.planner[d] || []).map((b: any) => ({ ...b, color: remap(b.color) }));
+  return out;
+}
+
+// ---------- v4 -> v5 ----------
+
+/** navy-era quick-tile hexes -> palette slots, so tiles follow the live theme */
+const QUICK_COLOR_REMAP: Record<string, string> = {
+  '#8CD9A8': 'green', '#E9BC7A': 'amber', '#E895A5': 'pink', '#7FD0D6': 'teal',
+  '#B3A3E8': 'accent', '#9AA6C0': 'slate', '#8FB6E8': 'slate', '#83DBD6': 'teal',
+};
+/** navy-era planner block hexes -> the current BLOCK_COLORS they correspond to */
+const BLOCK_REMAP: Record<string, string> = {
+  '#8FB6E8': '#9DBCE3', '#8CD9A8': '#9AD6B0', '#E9BC7A': '#E3C08D',
+  '#E895A5': '#E39EAC', '#B3A3E8': '#745FF2', '#7FD0D6': '#83DBD6',
+};
+
+function hasAnyUserData(p: any): boolean {
+  const nonEmpty = (a: any) => Array.isArray(a) && a.length > 0;
+  return !!(p?.settings?.name) || nonEmpty(p?.dailyTasks) || nonEmpty(p?.missions) || nonEmpty(p?.sessions)
+    || nonEmpty(p?.notes) || nonEmpty(p?.habits) || nonEmpty(p?.vaultVideos) || nonEmpty(p?.journal);
+}
+
+function normaliseQuick(items: any): QuickItem[] {
+  if (!Array.isArray(items)) return DEFAULT_QUICK;
+  const out: QuickItem[] = [];
+  for (const raw of items) {
+    if (!raw || typeof raw.target !== 'string') continue;
+    let q: QuickItem = { ...raw, id: raw.id || uid() };
+    if (q.kind === 'route' && ROUTE_TO_TOOL[q.target]) {
+      const t = toolByKey(ROUTE_TO_TOOL[q.target])!;
+      q = { ...q, kind: 'tool', target: t.key, icon: t.icon };
     }
-  }
-  if (out.weekTemplates) {
-    for (const t of Object.keys(out.weekTemplates)) {
-      for (const d of Object.keys(out.weekTemplates[t] || {})) {
-        out.weekTemplates[t][d] = (out.weekTemplates[t][d] || []).map((b: any) => ({ ...b, color: remap(b.color) }));
-      }
+    if (q.kind === 'tool') {
+      const t = toolByKey(q.target);
+      if (!t) continue;
+      q = { ...q, color: t.colorKey }; // one colour per tool, everywhere
+    } else if (q.kind === 'route' && q.target === '/settings') {
+      q = { ...q, color: 'slate' };
+    } else if (typeof q.color === 'string' && QUICK_COLOR_REMAP[q.color.toUpperCase()]) {
+      q = { ...q, color: QUICK_COLOR_REMAP[q.color.toUpperCase()] };
     }
+    if (!['tool', 'route', 'app', 'url'].includes(q.kind)) continue;
+    if (out.some((o) => o.kind === q.kind && o.target === q.target)) continue;
+    out.push(q);
   }
+  return out;
+}
+
+const remapBlocks = (week: any) => {
+  if (!week || typeof week !== 'object') return week;
+  const outWeek: any = {};
+  for (const d of Object.keys(week)) {
+    outWeek[d] = (week[d] || []).map((b: any) => ({
+      ...b, color: BLOCK_REMAP[String(b?.color || '').toUpperCase()] || b.color,
+    }));
+  }
+  return outWeek;
+};
+
+/**
+ * The ONE v5 migration. Pure and idempotent — it is also run on every imported
+ * backup, so running it twice must change nothing.
+ */
+export function migrateV5(p: any): any {
+  const out = { ...(p || {}) };
+  const s = { ...(p?.settings || {}) };
+  out.settings = {
+    ...DEFAULT_SETTINGS,
+    ...s,
+    accent: s.accent || DEFAULT_ACCENT,
+    tabSlots: normaliseSlots(s.tabSlots),
+    // an upgrading user with data is "returning", never "first launch"
+    firstOpenedAt: s.firstOpenedAt ?? (hasAnyUserData(p) ? Date.now() - 1 : undefined),
+  };
+  out.quickAccess = normaliseQuick(p?.quickAccess);
+  if (out.planner) out.planner = remapBlocks(out.planner);
+  if (out.weekTemplates && typeof out.weekTemplates === 'object') {
+    const t: any = {};
+    for (const name of Object.keys(out.weekTemplates)) t[name] = remapBlocks(out.weekTemplates[name]);
+    out.weekTemplates = t;
+  }
+  out.notes = (p?.notes || []).map((n: any) => ({ ...n, attachments: n.attachments || [], locked: !!n.locked }));
+  out.deepWork = p?.deepWork ?? null;
+  out.journal = Array.isArray(p?.journal) ? p.journal : [];
+  out.journalTags = Array.isArray(p?.journalTags) ? p.journalTags : [];
   return out;
 }
 
@@ -218,33 +398,7 @@ export function migrateToGrey(old: any): any {
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
-      settings: {
-        name: '',
-        theme: 'default',
-        accent: '#8B7CF8',
-        animLevel: 'full',
-        hour24: false,
-        remindersEnabled: false,
-        githubRepo: '',
-        todoReminderEnabled: false,
-        todoReminderTime: '07:00',
-        tabSlots: ['tasks', 'focus', 'planner'],
-      },
-      aiLinks: DEFAULT_AI_LINKS,
-      quickAccess: DEFAULT_QUICK,
-      todoReminders: [],
-      dailyTasks: [],
-      missions: [],
-      lastTriage: '',
-      sessions: [],
-      planner: emptyWeek(),
-      weekTemplates: {},
-      habits: [],
-      notes: [],
-      noteFolders: ['General'],
-      vaultVideos: [],
-      vaultFolders: [],
-      calcHistory: [],
+      ...initialData(),
 
       setSetting: (key, value) =>
         set((s) => ({ settings: { ...s.settings, [key]: value } })),
@@ -293,6 +447,9 @@ export const useStore = create<AppState>()(
         })),
 
       logSession: (sess) => set((s) => ({ sessions: [...s.sessions, { ...sess, id: uid() }] })),
+      setDeepWork: (session) => set({ deepWork: session }),
+      patchDeepWork: (patch) =>
+        set((s) => (s.deepWork ? { deepWork: { ...s.deepWork, ...patch } } : {})),
 
       addBlock: (day, b) =>
         set((s) => ({ planner: { ...s.planner, [day]: [...s.planner[day], { ...b, id: uid() }] } })),
@@ -346,7 +503,7 @@ export const useStore = create<AppState>()(
             {
               id, title: n.title || '', body: n.body || '', folder: n.folder || 'General',
               tags: n.tags || [], pinned: false, createdAt: now, updatedAt: now, subject: n.subject,
-              attachments: [],
+              attachments: [], locked: false,
             },
             ...s.notes,
           ],
@@ -480,30 +637,45 @@ export const useStore = create<AppState>()(
         set((s) => ({ calcHistory: [{ id: uid(), expr, result }, ...s.calcHistory].slice(0, 100) })),
       clearCalcHistory: () => set({ calcHistory: [] }),
 
-      replaceAll: (data) => set(() => ({ ...data })),
+      replaceAll: (data) => {
+        const fresh = initialData();
+        const next: any = {};
+        for (const k of DATA_KEYS) next[k] = (data as any)[k] !== undefined ? (data as any)[k] : fresh[k];
+        next.deepWork = null; // an import always ends any running Deep Work session
+        set(next);
+      },
     }),
     {
       name: 'student-hub-v1',
       storage: createJSONStorage(() => AsyncStorage),
-      version: 4,
+      version: 5,
       migrate: (persisted: any, version) => {
         let p = version < 2 ? migrateData(persisted) : persisted;
         if (version < 3) p = migrateToGrey(p);
         if (version < 4) {
           p = { ...p, settings: { ...(p?.settings || {}), accent: p?.settings?.accent || DEFAULT_ACCENT } };
         }
+        if (version < 5) p = migrateV5(p);
         return p;
       },
     }
   )
 );
 
+// ---------- accent stays in step with the store (never set during render) ----------
+// registered before any component subscribes, so it runs first on every change
+useStore.subscribe((s, prev) => {
+  if (s.settings.accent !== prev.settings.accent) setAccent(s.settings.accent);
+});
+useStore.persist.onFinishHydration((s) => setAccent(s.settings.accent));
+if (useStore.persist.hasHydrated()) setAccent(useStore.getState().settings.accent);
+
 /** Everything worth backing up, as a plain object. */
 export function exportSnapshot() {
   const s = useStore.getState();
   return {
     _app: 'student-hub',
-    _v: 2,
+    _v: 3,
     _exportedAt: new Date().toISOString(),
     settings: s.settings,
     aiLinks: s.aiLinks,
@@ -511,6 +683,7 @@ export function exportSnapshot() {
     todoReminders: s.todoReminders,
     dailyTasks: s.dailyTasks,
     missions: s.missions,
+    lastTriage: s.lastTriage,
     sessions: s.sessions,
     planner: s.planner,
     weekTemplates: s.weekTemplates,
@@ -519,17 +692,27 @@ export function exportSnapshot() {
     noteFolders: s.noteFolders,
     vaultVideos: s.vaultVideos,
     vaultFolders: s.vaultFolders,
+    calcHistory: s.calcHistory,
+    journal: s.journal,
+    journalTags: s.journalTags,
   };
 }
 
+/** Restores a backup of any version through the same migration chain as persisted state. */
 export function importSnapshot(json: string): boolean {
   try {
     const data = JSON.parse(json);
     if (!data || data._app !== 'student-hub') return false;
     const { _app, _exportedAt, _v, ...rest } = data;
-    useStore.getState().replaceAll(_v === 2 ? rest : migrateData(rest));
+    let d: any = rest;
+    if (_v !== 2 && _v !== 3) d = migrateToGrey(migrateData(d));
+    d = migrateV5(d);
+    useStore.getState().replaceAll(d);
     return true;
   } catch {
     return false;
   }
 }
+
+/** Used by the tab bar and settings: the registry's tools, in slot-picker order. */
+export const SLOT_TOOLS = TOOLS;

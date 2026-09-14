@@ -3,14 +3,31 @@ import * as Notifications from 'expo-notifications';
 import { useStore } from './store';
 import { toMinutes } from './utils';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-  }),
-});
+let handlerSet = false;
+function ensureHandler() {
+  if (handlerSet) return;
+  handlerSet = true;
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+    }),
+  });
+}
+ensureHandler();
+
+/**
+ * Boot-time notification setup, run once after the app has revealed (never on
+ * the startup path): the channel exists before anything posts to it, and
+ * reminders a reboot or an OS alarm purge dropped are scheduled again.
+ */
+export async function initNotifications() {
+  ensureHandler();
+  await ensureChannel();
+  if (useStore.getState().settings.remindersEnabled) await rescheduleAllReminders();
+}
 
 export async function ensurePermission(): Promise<boolean> {
   try {

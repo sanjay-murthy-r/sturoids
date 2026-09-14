@@ -1,7 +1,7 @@
 import { TextStyle } from 'react-native';
 
 // ============================================================================
-// Sturoids v4 — dark soft-UI (dual-shadow neumorphism)
+// Sturoids v5 — dark soft-UI (dual-shadow neumorphism)
 //
 // Palette extracted from "Gray colour strip.svg" (exact, not guessed):
 //   #F4F5F7  #DDE3ED  #808B9F  #5B6577  #39404E  #2C2D30
@@ -11,6 +11,10 @@ import { TextStyle } from 'react-native';
 //   inner (pressed) variants use the same pair inverted.
 // Overrides requested: distance = 6px for BOTH sides, light angle = 60°,
 // dark side derived automatically as the exact opposite (240°).
+//
+// Every colour the shadow system uses flows from `darkSh` / `liteSh`, and every
+// shadow string is computed ONCE at load (see NEU) — so a palette swap is a
+// token-only change and no render allocates a fresh shadow string.
 // ============================================================================
 
 export type ThemeMode = 'default' | 'minimal';
@@ -34,55 +38,62 @@ export const LX = +(NEU_DIST * Math.cos(rad)).toFixed(2); // 3
 export const LY = +(-NEU_DIST * Math.sin(rad)).toFixed(2); // -5.2
 // dark side is the exact opposite end of the same line: (-LX, -LY)
 
-// dark theme shadow pair, colours from the strip (alpha tiers from the kit)
-const darkSh = (a: number) => `rgba(24, 26, 30, ${a})`; // derived from #2C2D30 deepened for contrast on g800
-const liteSh = (a: number) => `rgba(128, 139, 159, ${a})`; // #808B9F — the strip's light grey
+// the two shadow sources — the ONLY colours the neumorphic recipe reads
+const DARK_RGB = '24, 26, 30'; // #2C2D30 deepened for contrast on g800
+const LITE_RGB = '128, 139, 159'; // GREY.g400, the strip's light grey
+export const darkSh = (a: number) => `rgba(${DARK_RGB}, ${a})`;
+export const liteSh = (a: number) => `rgba(${LITE_RGB}, ${a})`;
+
+const raisedPair = (dA: number, lA: number, dBlur: number, lBlur: number, k = 1) =>
+  `${+(LX * k).toFixed(2)}px ${+(LY * k).toFixed(2)}px ${lBlur}px ${liteSh(lA)}, ` +
+  `${+(-LX * k).toFixed(2)}px ${+(-LY * k).toFixed(2)}px ${dBlur}px ${darkSh(dA)}`;
+const insetPair = (dA: number, lA: number, dBlur: number, lBlur: number, k = 1) =>
+  `inset ${+(LX * k).toFixed(2)}px ${+(LY * k).toFixed(2)}px ${lBlur}px ${liteSh(lA)}, ` +
+  `inset ${+(-LX * k).toFixed(2)}px ${+(-LY * k).toFixed(2)}px ${dBlur}px ${darkSh(dA)}`;
 
 /**
- * Raised surface: highlight toward the light, dark shadow opposite.
- * Asymmetric pair: tight, restrained highlight (~55% of the dark blur, low
- * alpha, natural gaussian falloff), softer wider dark side.
+ * Every neumorphic surface value in the app, computed once.
+ * Raised: tight, restrained highlight (~55% of the dark blur, low alpha), softer
+ * wider dark side — user-tuned; do not re-balance them.
+ * Inset physics: inside a pit, the wall NEAREST the light throws its shadow
+ * across the floor (dark hugs the light-side edges — top and right at 60°), while
+ * the FAR lip catches the light. CSS inset offsets paint the edge OPPOSITE the
+ * offset, so dark = (-LX,-LY), light = (LX,LY) — the mirror of the raised pair.
  */
-export const neuRaised = (strength: 'low' | 'mid' | 'high' = 'mid') => {
-  // light deliberately weaker AND tighter than the shadow (user-tuned);
-  // the dark side keeps its intensity/radius — do not re-balance them.
-  const [dA, lA, dBlur, lBlur] =
-    strength === 'high' ? [0.48, 0.25, 15, 6] : strength === 'mid' ? [0.4, 0.22, 12, 5] : [0.32, 0.18, 9, 4];
-  return {
-    boxShadow:
-      `${LX}px ${LY}px ${lBlur}px ${liteSh(lA)}, ` +
-      `${-LX}px ${-LY}px ${dBlur}px ${darkSh(dA)}`,
-  } as any;
-};
+export const NEU = Object.freeze({
+  raisedLow: Object.freeze({ boxShadow: raisedPair(0.32, 0.18, 9, 4) }),
+  raisedMid: Object.freeze({ boxShadow: raisedPair(0.4, 0.22, 12, 5) }),
+  raisedHigh: Object.freeze({ boxShadow: raisedPair(0.48, 0.25, 15, 6) }),
+  /** for anything under ~20px on its short axis — a full inset rim collapses there */
+  insetHairline: Object.freeze({ boxShadow: insetPair(0.34, 0.12, 3, 2, 0.5) }),
+  insetLow: Object.freeze({ boxShadow: insetPair(0.38, 0.16, 8, 4) }),
+  insetMid: Object.freeze({ boxShadow: insetPair(0.5, 0.2, 10, 5) }),
+  /** the kit's carved inner panel — goes on an overlay INSIDE a raised control */
+  pressedInner: Object.freeze({ boxShadow: insetPair(0.5, 0.14, 8, 5) }),
+});
 
-/**
- * Carved-in valley. Physics: inside a pit, the wall NEAREST the light throws
- * its shadow across the floor (dark hugs the light-side edges — here top and
- * right, since the light sits at 60°), while the FAR lip catches the light
- * (light hugs the bottom-left edges). CSS inset offsets place a shadow on the
- * edge OPPOSITE the offset direction, so: dark = (-LX,-LY), light = (LX,LY) —
- * the exact mirror of the raised pair, matching the kit's pressed recipe.
- */
-export const neuInset = (strength: 'low' | 'mid' = 'mid') => {
-  const [dA, lA, dBlur, lBlur] = strength === 'mid' ? [0.5, 0.2, 10, 5] : [0.38, 0.16, 8, 4];
-  return {
-    boxShadow:
-      `inset ${LX}px ${LY}px ${lBlur}px ${liteSh(lA)}, ` +
-      `inset ${-LX}px ${-LY}px ${dBlur}px ${darkSh(dA)}`,
-  } as any;
-};
+/** Raised surface (frozen object — safe to spread in render). */
+export const neuRaised = (strength: 'low' | 'mid' | 'high' = 'mid') =>
+  (strength === 'high' ? NEU.raisedHigh : strength === 'mid' ? NEU.raisedMid : NEU.raisedLow) as any;
+
+/** Carved-in valley (frozen object — safe to spread in render). */
+export const neuInset = (strength: 'hairline' | 'low' | 'mid' = 'mid') =>
+  (strength === 'mid' ? NEU.insetMid : strength === 'low' ? NEU.insetLow : NEU.insetHairline) as any;
 
 /**
  * Kit "pressed" state, dark adaptation — the inner panel that carves into a
- * control which keeps its own raised silhouette (and the kit's faint rim
- * border) from its call site. Goes on an overlay/panel inside the control,
- * never on the control surface itself.
+ * control which keeps its own raised silhouette from its call site. Goes on an
+ * overlay/panel inside the control, never on the control surface itself.
  */
-export const neuPressedInner = () => ({
-  boxShadow:
-    `inset ${LX}px ${LY}px 5px rgba(128,139,159,0.14), ` +
-    `inset ${-LX}px ${-LY}px 8px rgba(24,26,30,0.50)`,
-} as any);
+export const neuPressedInner = () => NEU.pressedInner as any;
+
+/** Non-neumorphic lifts that still ride the same shadow source. */
+export const SH = Object.freeze({
+  /** a bottom sheet lifting off the material */
+  sheetLift: `0 -8px 20px ${darkSh(0.45)}`,
+  /** the bar lifting off the screen edge */
+  barLift: `0 -6px 14px ${darkSh(0.35)}`,
+});
 
 // ---- accent themes (complementary colour, user-selectable) ----
 // six curated accents — distinct hues, saturated enough to strike on #343A47
@@ -101,10 +112,10 @@ export const C = {
   bg: GREY.g800,          // #343A47 — the material
   card: GREY.g800,        // classic soft-UI: same colour, depth from shadows
   inset: '#2F3541',       // g800 dimmed ~2% (kit's #EEEEEE-vs-#F0F0F3 ratio)
-  lite: 'rgba(128,139,159,0.34)',
-  border: 'rgba(128,139,159,0.16)',
+  lite: liteSh(0.34),
+  border: liteSh(0.16),
   borderBright: 'rgba(221,227,237,0.28)',
-  hairline: 'rgba(128,139,159,0.20)',
+  hairline: liteSh(0.2),
   text: GREY.g50,          // #F4F5F7
   textDim: GREY.g100 + 'C9', // #DDE3ED at ~79%
   textFaint: GREY.g400,    // #808B9F
@@ -118,9 +129,19 @@ export const C = {
   danger: '#E0958A',
   gold: '#D5C68E',
   slate: '#728AB7',
+  /** Deep Work ambient screen — a deliberate AOD-like near-black (user decision D-1) */
+  ambient: '#05070F',
+  /** toggle knob when off */
+  knob: '#454C59',
+  /** glyphs sitting ON an accent fill */
+  onAccent: GREY.g900,
+  /** sheet / dialog backdrop */
+  scrim: 'rgba(15,16,19,0.55)',
+  /** the faint dim laid under a pressed carve */
+  pressDim: darkSh(0.1),
 };
 
-/** Runtime accent swap — the whole tree re-renders from the root when it changes. */
+/** Runtime accent swap — the store keeps this in step with settings.accent. */
 export function setAccent(hex: string) {
   (C as any).accent = hex || DEFAULT_ACCENT;
 }
@@ -131,7 +152,10 @@ export const MIN = {
   card: GREY.g800,   // #343A47
   inset: '#232427',
   text: '#FFFFFF',
-  border: 'rgba(128,139,159,0.35)',
+  textDim: C.textDim,
+  textFaint: C.textFaint,
+  hairline: liteSh(0.35),
+  border: liteSh(0.35),
 };
 
 export const bgFor = (theme: ThemeMode) => (theme === 'minimal' ? MIN.bg : C.bg);

@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { create, all } from 'mathjs';
 import * as Clipboard from 'expo-clipboard';
-import { C, F, MIN, S, neuRaised } from '../src/theme';
+import { C, F, MIN, NEU, S, neuRaised } from '../src/theme';
 import { useStore } from '../src/store';
 import { ScreenBG, Sheet, Row, PillButton, Inset, Chip, IconBtn, NeuHeader, useTheme } from '../src/components/UI';
 import { SegmentedControl } from '../src/components/SegmentedControl';
@@ -173,13 +173,10 @@ export default function Calculator() {
               sci && { paddingVertical: 10 },
               theme === 'minimal'
                 ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
-                : {
-                    backgroundColor: C.accent,
-                    boxShadow: `3px -5.2px 9px rgba(128,139,159,0.36), -3px 5.2px 13px rgba(24,26,30,0.42), 0 0 10px ${C.accent}66`,
-                  },
+                : { backgroundColor: C.accent, ...NEU.raisedMid },
             ]}
           >
-            <Text style={{ color: theme === 'minimal' ? C.accent : '#2C2D30', fontSize: 26, fontFamily: F.semi }}>=</Text>
+            <Text style={{ color: theme === 'minimal' ? C.accent : C.onAccent, fontSize: 26, fontFamily: F.semi }}>=</Text>
           </Bouncy>
         </View>
       </View>

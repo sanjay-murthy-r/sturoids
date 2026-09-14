@@ -8,7 +8,7 @@ import Svg, { Path } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { C, F, bgFor } from '../theme';
 import { useStore } from '../store';
-import { RISE_OUT } from './Motion';
+import { RISE_OUT, useAnimLevel } from './Motion';
 
 const PLATE = 160;
 const R = 42;
@@ -33,7 +33,7 @@ const GROOVE_BOT = 'M -6 98 C 40 86 78 90 104 112';
  */
 export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone: () => void }) {
   const theme = useStore((s) => s.settings.theme);
-  const level = useStore((s) => s.settings.animLevel);
+  const level = useAnimLevel();
   const [gone, setGone] = useState(false);
   const staticStart = level === 'none';
 

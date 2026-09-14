@@ -1,21 +1,14 @@
 import { Alert, Linking } from 'react-native';
-import * as IntentLauncher from 'expo-intent-launcher';
-import { QuickItem } from './store';
+import { QuickItem, SETTINGS_QUICK } from './store';
+import { TOOLS } from './tools';
 
-/** In-app destinations for the quick-access editor. */
+/** In-app destinations for the quick-access editor: every tool, then Settings. */
 export const ROUTE_CATALOG: Omit<QuickItem, 'id'>[] = [
-  { label: 'Notes', icon: 'document-text-outline', color: '#8CD9A8', kind: 'route', target: '/notes' },
-  { label: 'Calc', icon: 'calculator-outline', color: '#E9BC7A', kind: 'route', target: '/calculator' },
-  { label: 'Desmos', icon: 'analytics-outline', color: '#7FD0D6', kind: 'route', target: '/desmos' },
-  { label: 'YT Vault', icon: 'play-circle-outline', color: '#E895A5', kind: 'route', target: '/vault' },
-  { label: 'AI', icon: 'sparkles-outline', color: '#B3A3E8', kind: 'route', target: '/ai-links' },
-  { label: 'Settings', icon: 'settings-outline', color: '#9AA6C0', kind: 'route', target: '/settings' },
-  { label: 'Tasks', icon: 'checkbox-outline', color: '#8FB6E8', kind: 'route', target: '/tasks' },
-  { label: 'Deep Work', icon: 'timer-outline', color: '#B3A3E8', kind: 'route', target: '/focus' },
-  { label: 'Planner', icon: 'calendar-outline', color: '#7FD0D6', kind: 'route', target: '/planner' },
+  ...TOOLS.map((t) => ({ label: t.shortLabel, icon: t.icon, color: t.colorKey, kind: 'tool' as const, target: t.key })),
+  SETTINGS_QUICK,
 ];
 
-/** Launch a quick item (apps + urls; routes are handled by the caller). */
+/** Launch a quick item (apps + urls; tools and routes are handled by the caller). */
 export async function launchExternal(item: QuickItem) {
   try {
     if (item.kind === 'url') {
@@ -23,6 +16,9 @@ export async function launchExternal(item: QuickItem) {
       return;
     }
     if (item.kind === 'app') {
+      // required lazily: the launcher module stays off the startup path
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const IntentLauncher = require('expo-intent-launcher');
       // The proper way: PackageManager#getLaunchIntentForPackage under the hood.
       // Must be awaited — an un-awaited rejection (app uninstalled) would skip
       // the catch below and never show the "not installed" alert.

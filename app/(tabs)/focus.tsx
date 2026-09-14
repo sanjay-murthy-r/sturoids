@@ -522,7 +522,7 @@ const st = StyleSheet.create({
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   sheetSection: { color: C.textFaint, fontSize: 12, fontFamily: F.semi, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10, marginBottom: 6 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border },
-  ambient: { flex: 1, backgroundColor: '#05070F', alignItems: 'center', justifyContent: 'center' },
+  ambient: { flex: 1, backgroundColor: C.ambient, alignItems: 'center', justifyContent: 'center' },
   ambientGlow: {
     position: 'absolute', width: 320, height: 320, borderRadius: 160,
     opacity: 0.10, transform: [{ scale: 1.4 }],

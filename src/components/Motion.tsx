@@ -3,10 +3,10 @@ import { Pressable, View, ViewStyle } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import Animated, {
   FadeIn, FadeInDown, LinearTransition,
-  useAnimatedStyle, useSharedValue, withSpring, withTiming, Easing,
+  useAnimatedStyle, useReducedMotion, useSharedValue, withSpring, withTiming, Easing,
 } from 'react-native-reanimated';
 import { useStore } from '../store';
-import { neuPressedInner } from '../theme';
+import { C, neuPressedInner } from '../theme';
 
 /**
  * Bumps on every screen focus. Use as a `key` on a screen's content container
@@ -26,7 +26,15 @@ export function useFocusKey() {
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-export const useAnimLevel = () => useStore((s) => s.settings.animLevel);
+/**
+ * The motion level every animated component obeys. The OS "reduce motion" /
+ * "remove animations" setting wins over the in-app dial.
+ */
+export const useAnimLevel = () => {
+  const reduced = useReducedMotion();
+  const level = useStore((s) => s.settings.animLevel);
+  return reduced ? 'none' : level;
+};
 
 /** Neumorphic motion: presses SINK into the material, releases ease back out. */
 export const SINK_IN = { duration: 90, easing: Easing.out(Easing.quad) };
@@ -102,7 +110,7 @@ export function Bouncy({
         style={[
           {
             position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: 'rgba(24,26,30,0.10)', borderRadius: radius,
+            backgroundColor: C.pressDim, borderRadius: radius,
             ...neuPressedInner(),
           },
           dimStyle,
