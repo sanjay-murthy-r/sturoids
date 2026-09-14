@@ -8,6 +8,7 @@ import { useStore, Note } from '../store';
 import { ScreenBG, GlassCard, Field, EmptyText, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
 import { Bouncy, Enter } from '../components/Motion';
 import { tap } from '../haptics';
+import { deleteAttachmentFiles } from '../attachments';
 import { PinSheet } from '../components/LockGate';
 import { isUnlocked, lockProtectionAvailable, markUnlocked, unlockWithDevice } from '../lock';
 
@@ -144,7 +145,7 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
             onPress: () =>
               Alert.alert('Delete note', 'This cannot be undone.', [
                 { text: 'Cancel', style: 'cancel' },
-                { text: 'Delete', style: 'destructive', onPress: () => deleteNote(menuNote.id) },
+                { text: 'Delete', style: 'destructive', onPress: () => deleteAttachmentFiles(deleteNote(menuNote.id)) },
               ]),
           },
         ] : []}

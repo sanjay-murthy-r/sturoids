@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Alert, InteractionManager, View } from 'react-native';
+import { Alert, InteractionManager, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
+import * as NavigationBar from 'expo-navigation-bar';
 import {
   useFonts, Rubik_400Regular, Rubik_500Medium, Rubik_600SemiBold, Rubik_700Bold,
 } from '@expo-google-fonts/rubik';
@@ -61,6 +62,13 @@ export default function RootLayout() {
       );
     }
   }, [introDone]);
+
+  // the system navigation bar follows the theme's material (app.json only sets the launch colour)
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    NavigationBar.setBackgroundColorAsync(bg).catch(() => {});
+    NavigationBar.setButtonStyleAsync('light').catch(() => {});
+  }, [bg]);
 
   // wait for the persisted settings too: the intro's animation level, the theme
   // background and the accent must all be the user's on the very first frame

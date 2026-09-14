@@ -64,6 +64,9 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [histSheet, setHistSheet] = useState(false);
   const ansRef = useRef<any>(null);
   const [justEvaluated, setJustEvaluated] = useState(false);
+  // "=" on an expression that cannot be evaluated says so where the answer would be, briefly
+  const [evalError, setEvalError] = useState(false);
+  const errTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fmt = (v: any) =>
     math.format(v, sciNotation ? { notation: 'exponential', precision: 12 } : { precision: 14 });
@@ -86,6 +89,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, [expr, deg, sciNotation]);
 
   const press = (k: string) => {
+    setEvalError(false);
     if (k === 'C') { setExpr(''); setJustEvaluated(false); return; }
     // editing the result breaks the "untouched '=' output" invariant — the next
     // keypress must append, not restart
@@ -111,8 +115,11 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       setExpr(out);
       setJustEvaluated(true);
     } catch {
-      pushCalc(expr, 'Error');
+      // no "Error" row in the history: the expression stays, and the preview line explains
       setJustEvaluated(false);
+      setEvalError(true);
+      if (errTimer.current) clearTimeout(errTimer.current);
+      errTimer.current = setTimeout(() => setEvalError(false), 1200);
     }
   };
 
@@ -139,7 +146,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <ScrollView style={{ maxHeight: 90 }} contentContainerStyle={{ justifyContent: 'flex-end' }}>
             <Text style={st.expr} selectable>{expr || '0'}</Text>
           </ScrollView>
-          <Text style={[st.preview, { color: C.accent }]} numberOfLines={1}>{justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
+          <Text style={[st.preview, { color: evalError ? C.danger : C.accent }]} numberOfLines={1}>{evalError ? "Can't evaluate" : justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
         </Inset>
 
         {/* keys — rows tighten when the sci pad is out so everything fits */}

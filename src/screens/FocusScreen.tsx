@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, Modal, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import { C, F, S, T } from '../theme';
@@ -13,10 +13,58 @@ import {
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Enter, useFocusKey } from '../components/Motion';
 import { tick as haptic } from '../haptics';
-import { ensurePermission } from '../notifications';
+import { NOTIF_CHANNEL_ID, ensurePermission } from '../notifications';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
+
+/** The finish-line heads-up has a fixed id, so it can be cancelled even after the app was killed. */
+const FINISH_NOTIF_ID = 'sturoids-finish-line';
+const HERO_SIZES = [48, 42, 38];
+
+interface TimerState {
+  mode: 'stopwatch' | 'countdown'; targetMin: number; running: boolean; startTs: number | null; accumSec: number;
+}
+
+const elapsedOf = (t: TimerState) => t.accumSec + (t.running && t.startTs ? (Date.now() - t.startTs) / 1000 : 0);
+const displayOf = (t: TimerState) => (t.mode === 'countdown' ? Math.max(0, t.targetMin * 60 - elapsedOf(t)) : elapsedOf(t));
+
+/** Re-renders its caller once per displayed second, aligned to the session's own second boundary. */
+function useSessionTick(t: TimerState) {
+  const [, setN] = useState(0);
+  useEffect(() => {
+    if (!t.running || !t.startTs) return undefined;
+    const anchor = t.startTs - t.accumSec * 1000;
+    let iv: ReturnType<typeof setInterval> | undefined;
+    const first = setTimeout(() => {
+      setN((x) => x + 1);
+      iv = setInterval(() => setN((x) => x + 1), 1000);
+    }, 1000 - ((Date.now() - anchor) % 1000) + 8);
+    return () => {
+      clearTimeout(first);
+      if (iv) clearInterval(iv);
+    };
+  }, [t.running, t.startTs, t.accumSec]);
+}
+
+/** The live time. Only this re-renders each second; the screen around it does not. */
+function LiveClock({ timer, style, availW = 0, reserve = 0 }: {
+  timer: TimerState; style: any; availW?: number; reserve?: number;
+}) {
+  useSessionTick(timer);
+  const text = fmtDuration(displayOf(timer));
+  // m:ss always keeps the hero size; h:mm:ss steps down only when it would not fit the card
+  let size: number | undefined;
+  if (availW > 0 && text.length >= 7) {
+    size = HERO_SIZES.find((px) => text.length * 0.6 * px + reserve <= availW - 24) ?? HERO_SIZES[HERO_SIZES.length - 1];
+  }
+  return <Text style={[style, size ? { fontSize: size } : null]}>{text}</Text>;
+}
+
+function LiveProgress({ timer }: { timer: TimerState }) {
+  useSessionTick(timer);
+  return <ProgressBar value={Math.min(1, Math.max(0, 1 - displayOf(timer) / (timer.targetMin * 60)))} />;
+}
 
 export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
@@ -31,16 +79,21 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const logSession = useStore((s) => s.logSession);
   const sessions = useStore((s) => s.sessions);
   const hour24 = useStore((s) => s.settings.hour24);
+  const setDeepWork = useStore((s) => s.setDeepWork);
+  const patchDeepWork = useStore((s) => s.patchDeepWork);
+  // a session in flight survives a process kill: the store keeps a copy and this screen resumes from it
+  const saved = useRef(useStore.getState().deepWork).current;
 
-  const [timerMode, setTimerMode] = useState<'stopwatch' | 'countdown'>('countdown');
-  const [targetMin, setTargetMin] = useState(50);
+  const [timerMode, setTimerMode] = useState<'stopwatch' | 'countdown'>(saved?.mode ?? 'countdown');
+  const [targetMin, setTargetMin] = useState(saved?.targetMin ?? 50);
   const [customMin, setCustomMin] = useState('');
-  const [running, setRunning] = useState(false);
-  const [startTs, setStartTs] = useState<number | null>(null);
-  const [accumSec, setAccumSec] = useState(0);
-  const [, setTick] = useState(0);
-  const [subject, setSubject] = useState('');
-  const [attached, setAttached] = useState<Attached[]>([]);
+  const [running, setRunning] = useState(saved?.running ?? false);
+  const [startTs, setStartTs] = useState<number | null>(saved?.startTs ?? null);
+  const [accumSec, setAccumSec] = useState(saved?.accumSec ?? 0);
+  const [subject, setSubject] = useState(saved?.subject ?? '');
+  const [attached, setAttached] = useState<Attached[]>(saved?.attached ?? []);
+  const [heroW, setHeroW] = useState(0);
+  const startedAtRef = useRef<number | null>(saved?.startedAt ?? null);
   const [pickSheet, setPickSheet] = useState(false);
   const [customTask, setCustomTask] = useState('');
   const [ambient, setAmbient] = useState(false);
@@ -55,42 +108,68 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [finishSheet, setFinishSheet] = useState(false);
   const [finishDay, setFinishDay] = useState<'today' | 'tomorrow'>('today');
   const [finishTime, setFinishTime] = useState('');
-  const [finishAt, setFinishAt] = useState<number | null>(null);
+  const [finishAt, setFinishAt] = useState<number | null>(saved?.finishAt ?? null);
   const [finishPrompt, setFinishPrompt] = useState(false);
   const finishNotifId = useRef<string | null>(null);
   const finishHandled = useRef(false);
   const autoConcludeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // planner deep-link
-  useEffect(() => {
-    if (params.subject) setSubject(String(params.subject));
-    if (params.minutes) {
-      const m = parseInt(String(params.minutes), 10);
+  const started = running || accumSec > 0;
+  const startedRef = useRef(started);
+  startedRef.current = started;
+  const subjectRef = useRef(subject);
+  subjectRef.current = subject;
+  const timer: TimerState = { mode: timerMode, targetMin, running, startTs, accumSec };
+
+  // planner deep link: a subject (or a length) seeds only a session that has not started, and the params
+  // are cleared after, so the same link works again and can never rewrite a session in progress
+  useFocusEffect(useCallback(() => {
+    if (!params.subject && !params.minutes) return;
+    if (!startedRef.current) {
+      if (params.subject) setSubject(String(params.subject));
+      const m = parseInt(String(params.minutes || ''), 10);
       if (m > 0) { setTimerMode('countdown'); setTargetMin(m); }
     }
-  }, [params.subject, params.minutes]);
+    router.setParams({ subject: undefined, minutes: undefined });
+  }, [params.subject, params.minutes]));
 
-  // ticking
+  // the store keeps a copy of the session in flight, so a killed app resumes it exactly
   useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => setTick((x) => x + 1), 500);
-    return () => clearInterval(t);
-  }, [running]);
-
-  const elapsed = accumSec + (running && startTs ? (Date.now() - startTs) / 1000 : 0);
-  const remaining = Math.max(0, targetMin * 60 - elapsed);
-  const displaySec = timerMode === 'countdown' ? remaining : elapsed;
-  const started = running || accumSec > 0;
-
-  // countdown auto-finish
-  useEffect(() => {
-    if (timerMode === 'countdown' && running && remaining <= 0 && !endedRef.current) {
-      endedRef.current = true;
-      endSession();
+    if (!started) {
+      if (useStore.getState().deepWork) setDeepWork(null);
+      return;
     }
-  });
+    setDeepWork({
+      mode: timerMode, targetMin, running, startTs, accumSec, finishAt, attached,
+      startedAt: startedAtRef.current ?? Date.now(), subject: subjectRef.current,
+    });
+  }, [started, timerMode, targetMin, running, startTs, accumSec, finishAt, attached]);
+  // typing a subject writes once it settles, not on every keystroke
+  useEffect(() => {
+    if (!startedRef.current) return undefined;
+    const t = setTimeout(() => patchDeepWork({ subject }), 500);
+    return () => clearTimeout(t);
+  }, [subject]);
 
-  const start = () => { endedRef.current = false; setStartTs(Date.now()); setRunning(true); };
+  // countdown auto-finish: one timeout for the moment it runs out, which fires at once for a resumed
+  // session that ran out while the app was closed
+  useEffect(() => {
+    if (timerMode !== 'countdown' || !running || !startTs) return undefined;
+    const left = targetMin * 60 - (accumSec + (Date.now() - startTs) / 1000);
+    const t = setTimeout(() => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      endSessionRef.current();
+    }, Math.max(0, left * 1000));
+    return () => clearTimeout(t);
+  }, [timerMode, running, startTs, accumSec, targetMin]);
+
+  const start = () => {
+    endedRef.current = false;
+    if (startedAtRef.current == null) startedAtRef.current = Date.now();
+    setStartTs(Date.now());
+    setRunning(true);
+  };
   const pause = () => {
     if (startTs) setAccumSec((a) => a + (Date.now() - startTs) / 1000);
     setRunning(false); setStartTs(null);
@@ -114,10 +193,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const clearFinishLine = () => {
     if (autoConcludeTimer.current) { clearTimeout(autoConcludeTimer.current); autoConcludeTimer.current = null; }
-    if (finishNotifId.current) {
-      Notifications.cancelScheduledNotificationAsync(finishNotifId.current).catch(() => {});
-      finishNotifId.current = null;
-    }
+    // cancelled by its fixed id, so a finish line set before the app was killed still clears
+    Notifications.cancelScheduledNotificationAsync(FINISH_NOTIF_ID).catch(() => {});
+    finishNotifId.current = null;
     finishHandled.current = false;
     setFinishPrompt(false);
     setFinishAt(null);
@@ -133,23 +211,22 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     clearFinishLine();
     setFinishAt(d.getTime());
     setFinishSheet(false);
-    // heads-up for when the app is backgrounded; the in-app flow below is primary.
-    // (a reminders reschedule elsewhere cancels ALL scheduled notifications — rare
-    // mid-session; the in-app check still concludes correctly.)
+    // heads-up for when the app is backgrounded; the in-app flow below is primary
     try {
       if (await ensurePermission()) {
         finishNotifId.current = await Notifications.scheduleNotificationAsync({
+          identifier: FINISH_NOTIF_ID,
           content: { title: 'Finish line reached', body: 'Your Deep Work finish line has passed — open Sturoids to wrap up.' },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: d } as any,
+          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: d, channelId: NOTIF_CHANNEL_ID } as any,
         });
       }
     } catch {}
   };
 
-  // unmount safety: never leave a 10-min timer or scheduled notification behind
+  // unmount safety: never leave the 10-minute timer behind. The finish-line notification stays: the
+  // session is persisted and still running, and the heads-up is exactly what an absent user needs.
   useEffect(() => () => {
     if (autoConcludeTimer.current) clearTimeout(autoConcludeTimer.current);
-    if (finishNotifId.current) Notifications.cancelScheduledNotificationAsync(finishNotifId.current).catch(() => {});
   }, []);
 
   // watch the finish line even while paused (the tick interval only runs when running)
@@ -186,8 +263,14 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, [finishAt]);
 
   function endSession() {
+    const reachedFinish = finishAt != null && Date.now() >= finishAt;
     clearFinishLine();
-    const net = accumSec + (running && startTs ? (Date.now() - startTs) / 1000 : 0);
+    let net = accumSec + (running && startTs ? (Date.now() - startTs) / 1000 : 0);
+    // never log more than the block, or time after a finish line that passed while away
+    if (timerMode === 'countdown') net = Math.min(net, targetMin * 60);
+    else if (reachedFinish && finishAt != null && startedAtRef.current != null) {
+      net = Math.min(net, Math.max(0, (finishAt - startedAtRef.current) / 1000));
+    }
     setRunning(false); setStartTs(null); setAccumSec(net); setAmbient(false);
     const unchecked = attached.filter((a) => !a.done);
     if (net < 5 && attached.length === 0) { reset(); return; }
@@ -200,15 +283,12 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   function commit(netSeconds: number, choices: Record<string, ReviewChoice>) {
     // apply review outcomes
     for (const a of attached) {
-      const c = choices[a.key];
-      if (c === 'done' && !a.done) {
-        if (a.kind === 'daily' && a.refId) toggleDaily(a.refId);
-        if (a.kind === 'mission' && a.refId) toggleMission(a.refId);
-      }
+      if (choices[a.key] === 'done' && !a.done) completeInStore(a);
     }
     if (netSeconds >= 5) {
       logSession({
-        dateKey: todayKey(), endedAt: Date.now(),
+        // the day the session began, so a session across midnight counts where it started
+        dateKey: todayKey(new Date(startedAtRef.current ?? Date.now())), endedAt: Date.now(),
         netSeconds: Math.round(netSeconds),
         taskTitles: attached.map((a) => a.title),
         subject: subject.trim() || undefined,
@@ -219,18 +299,28 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   function reset() {
     setReview(null); setAttached([]); setAccumSec(0); setRunning(false); setStartTs(null);
-    setSubject(''); endedRef.current = false;
+    setSubject(''); endedRef.current = false; startedAtRef.current = null;
   }
-  endSessionRef.current = endSession;
+  useEffect(() => { endSessionRef.current = endSession; });
 
+  /** Completes a task's store copy, only ever forward: a task already done elsewhere stays done. */
+  const completeInStore = (a: Attached) => {
+    const st0 = useStore.getState();
+    if (a.kind === 'daily' && a.refId) {
+      const t = st0.dailyTasks.find((x) => x.id === a.refId);
+      if (t && t.doneOn !== todayKey()) toggleDaily(a.refId);
+    } else if (a.kind === 'mission' && a.refId) {
+      const m = st0.missions.find((x) => x.id === a.refId);
+      if (m && !m.done) toggleMission(a.refId);
+    }
+  };
+
+  // ticking completes the task for real; un-ticking inside the session only clears the session's mark
   const markAttached = (key: string) => {
-    setAttached((list) => list.map((a) => {
-      if (a.key !== key) return a;
-      const done = !a.done;
-      if (a.kind === 'daily' && a.refId) toggleDaily(a.refId);
-      if (a.kind === 'mission' && a.refId) toggleMission(a.refId);
-      return { ...a, done };
-    }));
+    const a = attached.find((x) => x.key === key);
+    if (!a) return;
+    if (!a.done) completeInStore(a);
+    setAttached((list) => list.map((x) => (x.key === key ? { ...x, done: !x.done } : x)));
   };
 
   const attach = (kind: Attached['kind'], title: string, refId?: string) => {
@@ -294,12 +384,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {/* timer hero */}
         <Enter index={0}>
           <GlassCard hero style={{ alignItems: 'center', paddingVertical: 30 }}>
+            <View style={{ alignSelf: 'stretch' }} onLayout={(e) => setHeroW(e.nativeEvent.layout.width)} />
             <Row style={{ alignItems: 'center', gap: 12 }}>
               {!started && timerMode === 'countdown' && (
                 <NeuIconBtn name="remove" dim={38} size={18} color={C.textDim}
                   onPress={() => { haptic(); setTargetMin((m) => Math.max(1, m - 1)); }} />
               )}
-              <Text style={st.time}>{fmtDuration(displaySec)}</Text>
+              <LiveClock timer={timer} style={st.time} availW={heroW} reserve={!started && timerMode === 'countdown' ? 100 : 0} />
               {!started && timerMode === 'countdown' && (
                 <NeuIconBtn name="add" dim={38} size={18} color={C.textDim}
                   onPress={() => { haptic(); setTargetMin((m) => m + 1); }} />
@@ -322,7 +413,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             )}
             {timerMode === 'countdown' && (
               <View style={{ alignSelf: 'stretch', marginTop: 12 }}>
-                <ProgressBar value={Math.min(1, Math.max(0, 1 - remaining / (targetMin * 60)))} />
+                <LiveProgress timer={timer} />
               </View>
             )}
             <Row style={{ marginTop: 20, gap: 10 }}>
@@ -509,7 +600,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <Modal visible={ambient} animationType="fade" onRequestClose={() => setAmbient(false)}>
         <Pressable style={[st.ambient, { paddingTop: insets.top }]} onPress={() => setAmbient(false)}>
           <View style={[st.ambientGlow, { backgroundColor: C.accent }]} />
-          <Text style={st.ambientTime}>{fmtDuration(displaySec)}</Text>
+          <LiveClock timer={timer} style={st.ambientTime} />
           {subject ? <Text style={[st.ambientSub, { color: C.accent }]}>{subject}</Text> : null}
           {currentTask && <Text style={st.ambientTask}>{currentTask.title}</Text>}
           <Text style={{ color: C.textFaint, fontSize: 12, position: 'absolute', bottom: Math.max(insets.bottom, 20) + 20 }}>tap anywhere to exit</Text>

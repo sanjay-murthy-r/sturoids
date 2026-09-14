@@ -15,14 +15,14 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { C, F, MIN, S, T, neuInset, neuPressedInner, neuRaised, NEU } from '../theme';
 import { useStore, Attachment } from '../store';
 import { todayKey, uid } from '../utils';
-import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuHeader, NeuIconBtn, PillButton, useTheme } from '../components/UI';
+import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuHeader, NeuIconBtn, PillButton, DotMenu, useTheme } from '../components/UI';
 import { LockGate, PinSheet } from '../components/LockGate';
 import { lockProtectionAvailable, markUnlocked, useUnlocked } from '../lock';
 import { Bouncy } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ATT_DIR, deleteAttachmentFiles } from '../attachments';
 
-const ATT_DIR = FileSystem.documentDirectory + 'attachments/';
 const LINE_H = 24;
 const FREE_LINES = 9; // keep ~8-10 lines of breathing room while dictating
 
@@ -113,6 +113,10 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const lastPush = useRef(0);
   const scrollRef = useRef<ScrollView>(null);
   const sizesRef = useRef({ content: 0, viewport: 0 });
+  const [toolMenu, setToolMenu] = useState(false);
+
+  // a dictation still running when the note closes is stopped, never left listening
+  React.useEffect(() => () => { voiceRef.current?.stop(); }, []);
 
   const lines = useMemo(
     () => (note?.body || '').split('\n').map((l) => l.trim()).filter((l) => l.length > 2),
@@ -272,6 +276,8 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   };
 
   const words = note.body.trim() ? note.body.trim().split(/\s+/).length : 0;
+  // under 372dp the nine toolbar targets overflow: media, file, undo and redo move into a menu
+  const narrow = width < 372;
   const mediaW = (width - S.pad * 2 - 10) / 2;
 
   return (
@@ -292,7 +298,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
               onPress={() =>
                 Alert.alert('Delete note', 'This cannot be undone.', [
                   { text: 'Cancel', style: 'cancel' },
-                  { text: 'Delete', style: 'destructive', onPress: () => { deleteNote(note.id); router.back(); } },
+                  { text: 'Delete', style: 'destructive', onPress: () => { deleteAttachmentFiles(deleteNote(note.id)); router.back(); } },
                 ])
               } />
           </Row>
@@ -335,7 +341,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 <IconBtn
                   name="close-circle" size={20} color={C.danger}
                   style={{ position: 'absolute', top: -6, right: -6 }}
-                  onPress={() => removeAttachment(note.id, a.id)}
+                  onPress={() => deleteAttachmentFiles(removeAttachment(note.id, a.id))}
                 />
               </View>
             ))}
@@ -362,7 +368,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
       {/* live transcript strip */}
       {listening && (
-        <View style={[st.liveBar, { bottom: 66 + (mode === 'tab' ? 0 : insets.bottom) }]}>
+        <View style={[st.liveBar, { bottom: 66 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, boxShadow: undefined }]}>
           <View style={st.liveDot} />
           <Text style={st.liveBarText} numberOfLines={2}>
             {liveText || 'Listening — speak away…'}
@@ -371,16 +377,22 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       )}
 
       {/* editor toolbar */}
-      <View style={[st.toolbar, { paddingBottom: 9 + (mode === 'tab' ? 0 : insets.bottom) }]}>
+      <View style={[st.toolbar, { paddingBottom: 9 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: undefined }]}>
         <MicButton listening={listening} onPress={toggleVoice} />
         <IconBtn name="ellipse-outline" size={20} pad={6} onPress={() => prefixLine('•  ')} />
         <IconBtn name="checkbox-outline" size={20} pad={6} onPress={() => prefixLine('☐  ')} />
         <IconBtn name="checkmark-done-outline" size={20} pad={6} onPress={() => setLineSheet(true)} />
         <View style={{ flex: 1 }} />
-        <NeuIconBtn name="image-outline" dim={40} size={19} color={C.violet} onPress={pickMedia} />
-        <NeuIconBtn name="attach-outline" dim={40} size={19} color={C.violet} onPress={pickFile} />
-        <IconBtn name="arrow-undo-outline" size={20} pad={6} onPress={undo} />
-        <IconBtn name="arrow-redo-outline" size={20} pad={6} onPress={redo} />
+        {narrow ? (
+          <NeuIconBtn name="ellipsis-horizontal" dim={40} size={19} color={C.textDim} onPress={() => setToolMenu(true)} />
+        ) : (
+          <>
+            <NeuIconBtn name="image-outline" dim={40} size={19} color={C.accent} onPress={pickMedia} />
+            <NeuIconBtn name="attach-outline" dim={40} size={19} color={C.accent} onPress={pickFile} />
+            <IconBtn name="arrow-undo-outline" size={20} pad={6} onPress={undo} />
+            <IconBtn name="arrow-redo-outline" size={20} pad={6} onPress={redo} />
+          </>
+        )}
       </View>
 
       <Sheet visible={lineSheet} onClose={() => setLineSheet(false)} title="Promote a line to a task">
@@ -407,6 +419,17 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
           ))}
         </Row>
       </Sheet>
+      <DotMenu
+        visible={toolMenu}
+        onClose={() => setToolMenu(false)}
+        items={[
+          { label: 'Add a photo or video', icon: 'image-outline', onPress: pickMedia },
+          { label: 'Attach a file', icon: 'attach-outline', onPress: pickFile },
+          { label: 'Undo', icon: 'arrow-undo-outline', onPress: undo },
+          { label: 'Redo', icon: 'arrow-redo-outline', onPress: redo },
+        ]}
+      />
+
       <PinSheet
         visible={lockPin}
         mode="set"
@@ -432,7 +455,8 @@ function InlineVideo({ uri, width }: { uri: string; width: number }) {
 const st = StyleSheet.create({
   title: { color: C.text, fontFamily: F.bold, fontSize: 23, letterSpacing: -0.3, paddingVertical: 6 },
   body: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: LINE_H, minHeight: 300, paddingTop: 4 },
-  liveInline: { color: C.textFaint, fontSize: 15, lineHeight: LINE_H, fontStyle: 'italic' },
+  // Rubik ships no italic, so Android would synthesise a slant: live text reads as faint instead
+  liveInline: { color: C.textFaint, fontFamily: F.reg, fontSize: 15, lineHeight: LINE_H },
   toolbar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center',
@@ -454,7 +478,7 @@ const st = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 9,
   },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.danger, marginRight: 10 },
-  liveBarText: { color: C.text, fontSize: 13.5, flex: 1, fontStyle: 'italic' },
+  liveBarText: { color: C.textDim, fontFamily: F.reg, fontSize: 13, flex: 1 },
   pulseRing: {
     position: 'absolute', width: 44, height: 44, borderRadius: 22,
     borderWidth: 2, borderColor: C.danger,
