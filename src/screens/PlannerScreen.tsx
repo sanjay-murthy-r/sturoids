@@ -1,21 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { C, F, MIN, S, T, BLOCK_COLORS, neuInset, neuRaised } from '../../src/theme';
-import { useStore, PlannerBlock, Habit } from '../../src/store';
-import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks } from '../../src/utils';
+import { C, F, MIN, S, T, BLOCK_COLORS, neuInset, neuRaised } from '../theme';
+import { useStore, PlannerBlock, Habit } from '../store';
+import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks } from '../utils';
 import {
-  ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, CheckCircle, useTheme,
-} from '../../src/components/UI';
-import { Bouncy, Enter, useFocusKey } from '../../src/components/Motion';
-import { tick } from '../../src/haptics';
-import { rescheduleAllReminders, ensurePermission } from '../../src/notifications';
+  ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, CheckCircle, useTheme, NeuHeader,
+} from '../components/UI';
+import { Bouncy, Enter, useFocusKey } from '../components/Motion';
+import { tick } from '../haptics';
+import { rescheduleAllReminders, ensurePermission } from '../notifications';
+import { openTool } from '../toolNav';
 
-export default function Planner() {
+export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const fk = useFocusKey();
-  const router = useRouter();
   const theme = useTheme();
 
   const planner = useStore((s) => s.planner);
@@ -104,20 +103,28 @@ export default function Planner() {
     }
   };
 
+  const tabMode = mode === 'tab';
+  const plannerActions = (
+    <Row>
+      <IconBtn name="copy-outline" color={C.textDim} onPress={() => setCopySheet(true)} />
+      <IconBtn name="albums-outline" color={C.textDim} onPress={() => setTplSheet(true)} />
+    </Row>
+  );
+
   return (
-    <ScreenBG guard>
+    <ScreenBG guard={tabMode}>
+      {!tabMode && <NeuHeader title="Planner" right={plannerActions} />}
       <ScrollView
         key={fk}
-        contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 44 }}
+        contentContainerStyle={{ padding: S.pad, paddingTop: tabMode ? insets.top + 20 : 8, paddingBottom: 44 + (tabMode ? 0 : insets.bottom) }}
         showsVerticalScrollIndicator={false}
       >
-        <Row style={{ justifyContent: 'space-between' }}>
-          <Text style={T.display}>Planner</Text>
-          <Row>
-            <IconBtn name="copy-outline" color={C.textDim} onPress={() => setCopySheet(true)} />
-            <IconBtn name="albums-outline" color={C.textDim} onPress={() => setTplSheet(true)} />
+        {tabMode && (
+          <Row style={{ justifyContent: 'space-between' }}>
+            <Text style={T.display}>Planner</Text>
+            {plannerActions}
           </Row>
-        </Row>
+        )}
 
         {/* day selector */}
         <Enter index={0}>
@@ -142,7 +149,7 @@ export default function Planner() {
             <Enter key={b.id} index={Math.min(1 + i, 8)}>
               <GlassCard
                 pad={14}
-                onPress={() => router.push({ pathname: '/focus', params: { subject: b.subject } })}
+                onPress={() => openTool('focus', { subject: b.subject })}
               >
                 <Row>
                   <View style={[st.colorBar, { backgroundColor: b.color }]} />

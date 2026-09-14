@@ -2,18 +2,18 @@ import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, neuRaised } from '../../src/theme';
-import { useStore } from '../../src/store';
-import { todayKey, yesterdayKey, daysUntil, fmtShortDate, toMinutes } from '../../src/utils';
+import { C, F, MIN, S, T, neuRaised } from '../theme';
+import { useStore } from '../store';
+import { todayKey, yesterdayKey, daysUntil, fmtShortDate, toMinutes } from '../utils';
 import {
-  ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyText, Row, IconBtn, Chip, Toggle, useTheme,
-} from '../../src/components/UI';
-import { SegmentedControl } from '../../src/components/SegmentedControl';
-import { Enter, Bouncy, useFocusKey } from '../../src/components/Motion';
-import { tap } from '../../src/haptics';
-import { ensurePermission, rescheduleAllReminders } from '../../src/notifications';
+  ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyText, Row, IconBtn, Chip, Toggle, NeuHeader, useTheme,
+} from '../components/UI';
+import { SegmentedControl } from '../components/SegmentedControl';
+import { Enter, Bouncy, useFocusKey } from '../components/Motion';
+import { tap } from '../haptics';
+import { ensurePermission, rescheduleAllReminders } from '../notifications';
 
-export default function Tasks() {
+export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const fk = useFocusKey();
   const theme = useTheme();
@@ -103,12 +103,21 @@ export default function Tasks() {
   };
 
   const doneToday = dailyTasks.filter((t) => t.doneOn === today).length;
+  const tabMode = mode === 'tab';
+  const reminderButton = (
+    <IconBtn
+      name={settings.todoReminderEnabled || todoReminders.length ? 'notifications' : 'notifications-outline'}
+      color={settings.todoReminderEnabled ? C.accent : C.textDim} size={24}
+      onPress={() => { setSetupTime(settings.todoReminderTime); setRemindSheet(true); }}
+    />
+  );
 
   return (
-    <ScreenBG guard>
+    <ScreenBG guard={tabMode}>
+      {!tabMode && <NeuHeader title={tab === 'daily' ? 'ToDos' : 'Tasks'} right={reminderButton} />}
       <ScrollView
         key={fk}
-        contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 130 }}
+        contentContainerStyle={{ padding: S.pad, paddingTop: tabMode ? insets.top + 20 : 8, paddingBottom: 130 + (tabMode ? 0 : insets.bottom) }}
         showsVerticalScrollIndicator={false}
       >
         <Row style={{ justifyContent: 'space-between' }}>
@@ -116,13 +125,9 @@ export default function Tasks() {
             <Text style={T.kicker}>
               {tab === 'daily' ? doneToday + '/' + dailyTasks.length + ' done today' : missions.filter((m) => !m.done).length + ' open'}
             </Text>
-            <Text style={[T.display, { marginTop: 4 }]}>{tab === 'daily' ? 'ToDos' : 'Tasks'}</Text>
+            {tabMode && <Text style={[T.display, { marginTop: 4 }]}>{tab === 'daily' ? 'ToDos' : 'Tasks'}</Text>}
           </View>
-          <IconBtn
-            name={settings.todoReminderEnabled || todoReminders.length ? 'notifications' : 'notifications-outline'}
-            color={settings.todoReminderEnabled ? C.accent : C.textDim} size={24}
-            onPress={() => { setSetupTime(settings.todoReminderTime); setRemindSheet(true); }}
-          />
+          {tabMode && reminderButton}
         </Row>
 
         <SegmentedControl
@@ -241,6 +246,7 @@ export default function Tasks() {
         radius={999}
         style={[
           st.fab,
+          { bottom: tabMode ? 24 : insets.bottom + 20 },
           theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
             : { backgroundColor: C.card, boxShadow: neuRaised('high').boxShadow + ', 0 0 14px ' + C.accent + '55' },

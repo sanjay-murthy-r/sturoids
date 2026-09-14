@@ -8,12 +8,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, ThemeMode, AnimLevel, ACCENT_CHOICES, neuInset, neuRaised } from '../src/theme';
 import { useStore, exportSnapshot, importSnapshot, readRecoveryCopy, deleteRecoveryCopy } from '../src/store';
 import { compareVersions, todayKey } from '../src/utils';
-import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, Chip, InfoDot, NeuHeader, useTheme } from '../src/components/UI';
-import { DEFAULT_TAB_SLOTS, TAB_SLOT_OPTIONS } from '../src/components/NeuTabBar';
+import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, Chip, InfoDot, NeuHeader, Sheet, useTheme } from '../src/components/UI';
 import { Bouncy, Pop } from '../src/components/Motion';
 import { tick } from '../src/haptics';
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
-import { normaliseSlots } from '../src/tools';
+import { TOOLS, ToolKey, colorOf, normaliseSlots, toolByKey } from '../src/tools';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.3.0';
@@ -84,8 +83,9 @@ export default function Settings() {
   const setSetting = useStore((s) => s.setSetting);
   const [checking, setChecking] = useState(false);
 
-  const slots: string[] = settings.tabSlots || DEFAULT_TAB_SLOTS;
-  const setSlot = (i: number, key: string) => {
+  const slots = normaliseSlots(settings.tabSlots);
+  const [slotPicker, setSlotPicker] = useState<number | null>(null);
+  const setSlot = (i: number, key: ToolKey) => {
     const next = [...slots];
     const j = next.indexOf(key);
     if (j >= 0 && j !== i) next[j] = next[i]; // swap so no destination repeats
@@ -273,21 +273,54 @@ export default function Settings() {
           </Text>
         </Card>
 
-        <SectionTitle right={<InfoDot text="Today and More stay fixed — pick the three tabs in between. Choosing a tool that isn't a tab (like Calculator) turns that slot into a one-tap shortcut." />}>
+        <SectionTitle right={<InfoDot text="Today and More stay fixed. Tools placed in a slot open as tabs; the rest live in More." />}>
           Tab bar
         </SectionTitle>
-        <Card>
-          {[0, 1, 2].map((i) => (
-            <View key={i} style={{ marginTop: 12 }}>
-              <Text style={st.label}>Slot {i + 1}</Text>
-              <Row style={{ flexWrap: 'wrap' }}>
-                {TAB_SLOT_OPTIONS.map((o) => (
-                  <Chip key={o.key} small label={o.label} active={slots[i] === o.key} onPress={() => setSlot(i, o.key)} />
-                ))}
-              </Row>
-            </View>
-          ))}
+        <Card pad={6}>
+          {slots.map((key, i) => {
+            const tool = toolByKey(key);
+            return (
+              <View key={i}>
+                {i > 0 && <Hairline />}
+                <Bouncy onPress={() => { tick(); setSlotPicker(i); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}>
+                  <Text style={st.slotIndex}>Slot {i + 1}</Text>
+                  <Ionicons name={(tool?.icon || 'ellipse-outline') as any} size={19} color={colorOf(tool?.colorKey)} />
+                  <Text style={[T.body, { flex: 1, marginLeft: 10, fontFamily: F.med }]} numberOfLines={1}>{tool?.label}</Text>
+                  <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
+                </Bouncy>
+              </View>
+            );
+          })}
         </Card>
+        <Sheet visible={slotPicker !== null} onClose={() => setSlotPicker(null)} title="Choose a tool">
+          {TOOLS.map((t, k) => {
+            const active = slotPicker !== null && slots[slotPicker] === t.key;
+            const elsewhere = slots.indexOf(t.key);
+            return (
+              <View key={t.key}>
+                {k > 0 && <Hairline />}
+                <Bouncy
+                  onPress={() => {
+                    if (slotPicker !== null && !active) { tick(); setSlot(slotPicker, t.key); }
+                    setSlotPicker(null);
+                  }}
+                  scaleTo={0.98}
+                  radius={S.radiusSm}
+                  style={st.pickRow}
+                >
+                  <Ionicons name={t.icon as any} size={20} color={colorOf(t.colorKey)} />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={[T.body, { fontFamily: active ? F.semi : F.med }]}>{t.label}</Text>
+                    <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>
+                      {elsewhere >= 0 && !active ? 'Now in slot ' + (elsewhere + 1) + '. Picking it swaps the two.' : t.desc}
+                    </Text>
+                  </View>
+                  {active ? <Ionicons name="checkmark" size={18} color={C.accent} /> : null}
+                </Bouncy>
+              </View>
+            );
+          })}
+        </Sheet>
 
         <SectionTitle>Animations</SectionTitle>
         <Card pad={10}>
@@ -354,6 +387,9 @@ const st = StyleSheet.create({
   },
   recoveryTitle: { ...T.label, color: C.text },
   recoveryBody: { ...T.caption, marginTop: 4 },
+  slotRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 10 },
+  slotIndex: { width: 58, color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2 },
+  pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 4 },
   label: { color: C.textDim, fontFamily: F.med, fontSize: 13, marginBottom: 8 },
   hint: { color: C.textFaint, fontSize: 12, marginTop: 10, lineHeight: 17 },
   optRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 6 },

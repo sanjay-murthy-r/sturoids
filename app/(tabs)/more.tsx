@@ -3,30 +3,33 @@ import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, neuRaised } from '../../src/theme';
+import { C, F, MIN, S, T, neuInset } from '../../src/theme';
 import { ScreenBG, Card, Row, SectionTitle, useTheme } from '../../src/components/UI';
 import { Enter, useFocusKey } from '../../src/components/Motion';
 import { useStore } from '../../src/store';
+import { TOOLS, ToolKey, colorOf, normaliseSlots } from '../../src/tools';
+import { openTool } from '../../src/toolNav';
 
-const FEATURES = [
-  { label: 'Notes', desc: 'Text, voice, images & files', icon: 'document-text-outline', route: '/notes', color: C.green },
-  { label: 'Calculator', desc: 'Precise scientific calc', icon: 'calculator-outline', route: '/calculator', color: C.amber },
-  { label: 'Desmos', desc: 'Graphing calculator', icon: 'analytics-outline', route: '/desmos', color: C.teal },
-  { label: 'YT Vault', desc: 'YouTube study library', icon: 'play-circle-outline', route: '/vault', color: C.pink },
-  { label: 'AI Quick-Links', desc: 'Claude, ChatGPT, Gemini…', icon: 'sparkles-outline', route: '/ai-links', color: C.violet },
-] as const;
-
+/**
+ * Every tool that is not in a bar slot, then Settings. A tool opened from here is a full page with a
+ * back button; moving it into a slot (Settings, Tab bar) takes it off this list.
+ */
 export default function More() {
   const insets = useSafeAreaInsets();
   const fk = useFocusKey();
   const router = useRouter();
   const theme = useTheme();
+  const rawSlots = useStore((s) => s.settings.tabSlots);
   const notes = useStore((s) => s.notes.length);
   const videos = useStore((s) => s.vaultVideos.length);
-  const tile =
+  const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
+  const tools = TOOLS.filter((t) => !slots.includes(t.key));
+  const counts: Partial<Record<ToolKey, number>> = { notes, vault: videos };
+  // the icon sits in a carved well: a raised boss on a raised card doubled the depth
+  const well =
     theme === 'minimal'
-      ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
-      : { backgroundColor: C.card, ...neuRaised('low') };
+      ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
+      : { backgroundColor: C.inset, ...neuInset('low') };
 
   return (
     <ScreenBG guard>
@@ -34,38 +37,38 @@ export default function More() {
         <Text style={T.kicker}>Toolbox</Text>
         <Text style={[T.display, { marginTop: 4, marginBottom: 16 }]}>More</Text>
 
-        {FEATURES.map((it, i) => (
-          <Enter key={it.label} index={i}>
-            <Card pad={14} onPress={() => router.push(it.route as any)}>
-              <Row>
-                <View style={[st.iconWrap, tile]}>
-                  <Ionicons name={it.icon as any} size={22} color={it.color} />
-                </View>
-                <View style={{ flex: 1, marginLeft: 14 }}>
-                  <Text style={{ color: C.text, fontSize: 16, fontFamily: F.semi, letterSpacing: -0.2 }}>
-                    {it.label}
-                    {it.label === 'Notes' && notes > 0 ? <Text style={{ color: C.textFaint, fontSize: 13 }}>  {notes}</Text> : null}
-                    {it.label === 'YT Vault' && videos > 0 ? <Text style={{ color: C.textFaint, fontSize: 13 }}>  {videos}</Text> : null}
-                  </Text>
-                  <Text style={[T.caption, { marginTop: 2 }]}>{it.desc}</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
-              </Row>
-            </Card>
-          </Enter>
-        ))}
+        {tools.map((t, i) => {
+          const count = counts[t.key];
+          return (
+            <Enter key={t.key} index={i}>
+              <Card pad={14} onPress={() => openTool(t.key)}>
+                <Row>
+                  <View style={[st.iconWell, well]}>
+                    <Ionicons name={t.icon as any} size={22} color={colorOf(t.colorKey)} />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 14 }}>
+                    <Text style={st.title} numberOfLines={1}>{t.label}</Text>
+                    <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{t.desc}</Text>
+                  </View>
+                  {count ? <Text style={st.count}>{count}</Text> : null}
+                  <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+                </Row>
+              </Card>
+            </Enter>
+          );
+        })}
 
-        {/* system — deliberately separated: settings is not a feature */}
+        {/* system, deliberately separated: settings is not a tool */}
         <SectionTitle>System</SectionTitle>
-        <Enter index={5}>
+        <Enter index={tools.length}>
           <Card pad={14} onPress={() => router.push('/settings')}>
             <Row>
-              <View style={[st.settingsIcon, tile]}>
-                <Ionicons name="settings-sharp" size={20} color={C.accent} />
+              <View style={[st.iconWell, well]}>
+                <Ionicons name="settings-outline" size={21} color={C.accent} />
               </View>
               <View style={{ flex: 1, marginLeft: 14 }}>
-                <Text style={{ color: C.text, fontSize: 15, fontFamily: F.semi }}>Settings</Text>
-                <Text style={[T.caption, { marginTop: 2 }]}>Theme · animations · reminders · backup · updates</Text>
+                <Text style={st.title}>Settings</Text>
+                <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>Theme, tab bar, reminders and backup</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
             </Row>
@@ -77,12 +80,7 @@ export default function More() {
 }
 
 const st = StyleSheet.create({
-  iconWrap: {
-    width: 44, height: 44, borderRadius: 14,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  settingsIcon: {
-    width: 38, height: 38, borderRadius: 12,
-    alignItems: 'center', justifyContent: 'center',
-  },
+  iconWell: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1 },
+  count: { color: C.textFaint, fontFamily: F.med, fontSize: 13, marginRight: 8, fontVariant: ['tabular-nums'] },
 });

@@ -4,7 +4,7 @@ import {
   KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { usePathname, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Directions, Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,7 @@ import { C, F, MIN, S, SH, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedI
 import { useStore } from '../store';
 import { Bouncy, Pop, RISE_OUT, useAnimLevel } from './Motion';
 import { tap, tick } from '../haptics';
+import { stepTab } from '../toolNav';
 
 export const useTheme = (): ThemeMode => {
   // subscribing to the accent here makes EVERY themed component repaint the
@@ -20,36 +21,24 @@ export const useTheme = (): ThemeMode => {
   return useStore((s) => s.settings.theme);
 };
 
-const NATIVE_TABS = ['tasks', 'focus', 'planner'];
-const PATH_TO_TAB: Record<string, string> = { '/': 'index', '/tasks': 'tasks', '/focus': 'focus', '/planner': 'planner', '/more': 'more' };
-
 /**
  * Screen background.
- * `guard` paints an opaque status-bar zone AND enables left/right fling
- * navigation between tab screens — use it ONLY on the five tabs.
+ * `guard` marks a screen shown in the tab bar: it paints an opaque status-bar zone and lets a
+ * left or right fling move to the neighbouring tab, in bar order. `fling={false}` keeps the guard
+ * but leaves horizontal gestures to the screen (a pager, a web view).
  */
-export function ScreenBG({ children, guard = false }: { children: React.ReactNode; guard?: boolean }) {
-  const theme = useTheme();
-  const accent = useStore((s) => (s.settings as any).accent); // subscribe: accent changes re-render every screen
-  const slots = useStore((s) => s.settings.tabSlots);
+export function ScreenBG({ children, guard = false, fling = true }: {
+  children: React.ReactNode; guard?: boolean; fling?: boolean;
+}) {
+  const theme = useTheme(); // subscribes to the accent too, so every screen repaints on a new accent
   const insets = useSafeAreaInsets();
-  const router = useRouter();
-  const pathname = usePathname();
   const bg = bgFor(theme);
-  void accent;
 
   const go = React.useCallback((dir: 1 | -1) => {
-    const order = ['index', ...(slots || NATIVE_TABS).filter((k) => NATIVE_TABS.includes(k)), 'more'];
-    const cur = PATH_TO_TAB[pathname];
-    const i = order.indexOf(cur);
-    if (i < 0) return;
-    const next = order[i + dir];
-    if (!next) return;
-    tick();
-    router.navigate((next === 'index' ? '/' : '/' + next) as any);
-  }, [pathname, slots]);
+    if (stepTab(dir)) tick();
+  }, []);
 
-  const fling = React.useMemo(() => Gesture.Race(
+  const gesture = React.useMemo(() => Gesture.Race(
     Gesture.Fling().direction(Directions.LEFT).onEnd(() => { 'worklet'; runOnJS(go)(1); }),
     Gesture.Fling().direction(Directions.RIGHT).onEnd(() => { 'worklet'; runOnJS(go)(-1); }),
   ), [go]);
@@ -65,30 +54,50 @@ export function ScreenBG({ children, guard = false }: { children: React.ReactNod
       )}
     </View>
   );
-  if (!guard) return body;
-  return <GestureDetector gesture={fling}>{body}</GestureDetector>;
+  if (!guard || !fling) return body;
+  return <GestureDetector gesture={gesture}>{body}</GestureDetector>;
 }
 
 /**
- * App-owned header for tool screens — the ONE place status-bar spacing for
- * headered screens is decided (insets.top is padded explicitly, consistent
- * with the tabs' insets.top + 20 content rule).
+ * App-owned header for tool screens: the ONE place status-bar spacing for headered screens is decided.
+ * `page` (the default) has a back button. `tab` is the root of a bar slot, where there is nothing
+ * to go back to, so it shows the tab's title instead; `compact` keeps that title one line tall for
+ * tools that need the height (the calculator, Desmos).
  */
-export function NeuHeader({ title, right, onBack }: {
-  title: string; right?: React.ReactNode; onBack?: () => void;
+export function NeuHeader({ title, right, onBack, variant = 'page', compact = false }: {
+  title: string; right?: React.ReactNode; onBack?: () => void; variant?: 'page' | 'tab'; compact?: boolean;
 }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  if (variant === 'tab' && !compact) {
+    return (
+      <View
+        style={{
+          paddingTop: insets.top + 20, paddingBottom: 10, paddingHorizontal: S.pad,
+          flexDirection: 'row', alignItems: 'center', backgroundColor: bgFor(theme),
+        }}
+      >
+        <Text numberOfLines={1} style={[T.display, { flex: 1 }]}>{title}</Text>
+        {right}
+      </View>
+    );
+  }
+  const page = variant === 'page';
   return (
     <View
       style={{
-        paddingTop: insets.top + 8, paddingBottom: 10, paddingHorizontal: 14,
-        flexDirection: 'row', alignItems: 'center', backgroundColor: bgFor(theme),
+        paddingTop: insets.top + 8, paddingBottom: 10, paddingHorizontal: page ? 14 : S.pad,
+        minHeight: insets.top + 56, flexDirection: 'row', alignItems: 'center', backgroundColor: bgFor(theme),
       }}
     >
-      <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={onBack || (() => router.back())} />
-      <Text numberOfLines={1} style={{ flex: 1, marginLeft: 12, color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1 }}>
+      {page ? (
+        <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={onBack || (() => router.back())} />
+      ) : null}
+      <Text
+        numberOfLines={1}
+        style={{ flex: 1, marginLeft: page ? 12 : 0, color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1 }}
+      >
         {title}
       </Text>
       {right}

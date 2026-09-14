@@ -1,67 +1,69 @@
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Keyboard, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import { StackActions } from '@react-navigation/native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { C, F, MIN, SH, bgFor, neuInset } from '../theme';
+import { C, F, MIN, NEU, bgFor } from '../theme';
 import { useTheme } from './UI';
-import { RISE_OUT, useAnimLevel } from './Motion';
+import { RISE_OUT, SINK_IN, useAnimLevel } from './Motion';
 import { useStore } from '../store';
+import { normaliseSlots, toolByKey } from '../tools';
+import { TAB_ROUTES } from '../toolNav';
 import { tick } from '../haptics';
 
-export const DEFAULT_TAB_SLOTS = ['tasks', 'focus', 'planner'];
+interface ItemMeta {
+  /** full name, read by screen readers */
+  label: string;
+  /** what the bar shows; fits a 64dp slot at 11px */
+  shortLabel: string;
+  icon: string;
+}
 
-/** Everything a middle tab slot can hold. No `route` = a native tab screen. */
-export const TAB_SLOT_OPTIONS: { key: string; label: string; icon: any; iconOn: any; route?: string }[] = [
-  { key: 'tasks', label: 'Tasks', icon: 'checkbox-outline', iconOn: 'checkbox' },
-  { key: 'focus', label: 'Deep Work', icon: 'timer-outline', iconOn: 'timer' },
-  { key: 'planner', label: 'Planner', icon: 'calendar-outline', iconOn: 'calendar' },
-  { key: 'notes', label: 'Notes', icon: 'document-text-outline', iconOn: 'document-text', route: '/notes' },
-  { key: 'calculator', label: 'Calc', icon: 'calculator-outline', iconOn: 'calculator', route: '/calculator' },
-  { key: 'desmos', label: 'Desmos', icon: 'analytics-outline', iconOn: 'analytics', route: '/desmos' },
-  { key: 'vault', label: 'Vault', icon: 'play-circle-outline', iconOn: 'play-circle', route: '/vault' },
-  { key: 'ai', label: 'AI', icon: 'sparkles-outline', iconOn: 'sparkles', route: '/ai-links' },
-];
+const TODAY: ItemMeta = { label: 'Today', shortLabel: 'Today', icon: 'sunny-outline' };
+const MORE: ItemMeta = { label: 'More', shortLabel: 'More', icon: 'grid-outline' };
 
-const FIXED: Record<string, { label: string; icon: any; iconOn: any }> = {
-  index: { label: 'Today', icon: 'sunny-outline', iconOn: 'sunny' },
-  more: { label: 'More', icon: 'grid-outline', iconOn: 'grid' },
-};
+const PILL_H = 54;
+const PILL_R = 18;
 
-const PILL_H = 46;
-
-/** Tab content: icon over label, lifting slightly while focused. */
-function TabItem({ focused, icon, label, onPress, onLayoutSlot }: {
-  focused: boolean; icon: { on: any; off: any }; label: string; onPress: () => void;
-  onLayoutSlot: (x: number, width: number) => void;
-}) {
-  const level = useAnimLevel();
-  const f = useSharedValue(focused ? 1 : 0);
+/** The bar steps aside while the keyboard is up, so a text field never sits under a row of tabs. */
+function useKeyboardOpen() {
+  const [open, setOpen] = React.useState(false);
   React.useEffect(() => {
-    f.value = level === 'none' ? (focused ? 1 : 0) : withSpring(focused ? 1 : 0, RISE_OUT);
-  }, [focused, level]);
-  const lift = useAnimatedStyle(() => ({ transform: [{ translateY: f.value * -3 }] }));
+    const shown = Keyboard.addListener('keyboardDidShow', () => setOpen(true));
+    const hidden = Keyboard.addListener('keyboardDidHide', () => setOpen(false));
+    return () => {
+      shown.remove();
+      hidden.remove();
+    };
+  }, []);
+  return open;
+}
+
+/** Icon over label. The same outline glyph in both states, so the row's optical weight never jumps. */
+function TabItem({ meta, focused, onPress }: { meta: ItemMeta; focused: boolean; onPress: () => void }) {
+  const level = useAnimLevel();
+  const press = useSharedValue(0);
+  const sink = useAnimatedStyle(() => ({ transform: [{ scale: 1 - 0.06 * press.value }] }));
   return (
     <Pressable
       onPress={onPress}
-      onLayout={(e) => onLayoutSlot(e.nativeEvent.layout.x, e.nativeEvent.layout.width)}
-      style={{ flex: 1, alignItems: 'center', height: PILL_H, justifyContent: 'center' }}
+      onPressIn={() => { if (level !== 'none') press.value = withTiming(1, SINK_IN); }}
+      onPressOut={() => { if (level !== 'none') press.value = withSpring(0, RISE_OUT); }}
+      style={st.item}
       accessibilityRole="tab"
       accessibilityState={{ selected: focused }}
-      accessibilityLabel={label}
+      accessibilityLabel={meta.label}
     >
-      <Animated.View style={[{ alignItems: 'center' }, lift]}>
-        <Ionicons name={focused ? icon.on : icon.off} size={20} color={focused ? C.accent : C.textFaint} />
+      <Animated.View style={[st.itemInner, sink]}>
+        <Ionicons name={meta.icon as any} size={22} color={focused ? C.accent : C.textDim} />
         <Text
           numberOfLines={1}
-          style={{
-            marginTop: 2, fontFamily: F.med, fontSize: 10, letterSpacing: 0.1,
-            color: focused ? C.accent : C.textFaint,
-          }}
+          maxFontSizeMultiplier={1.2}
+          style={[st.label, focused && { color: C.accent, fontFamily: F.semi }]}
         >
-          {label}
+          {meta.shortLabel}
         </Text>
       </Animated.View>
     </Pressable>
@@ -69,105 +71,103 @@ function TabItem({ focused, icon, label, onPress, onLayoutSlot }: {
 }
 
 /**
- * Custom neumorphic tab bar: ONE carved valley pill slides (springs) between
- * tabs, wrapping the active icon + label. Middle slots are customizable
- * (Settings → Tab bar); non-tab tools act as launcher shortcuts.
+ * The neumorphic tab bar: a raised plate with one carved pill sliding between five fixed routes
+ * (Today, three slots, More). A slot's icon and name follow whichever tool Settings put in it, so a
+ * swap can never add, drop or reflow a tab.
  */
 export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
   const theme = useTheme();
   const level = useAnimLevel();
   const insets = useSafeAreaInsets();
-  const router = useRouter();
-  const slots = useStore((s) => s.settings.tabSlots) || DEFAULT_TAB_SLOTS;
-  const focusedKey = state.routes[state.index]?.name;
-  // Set-dedupe defends against a corrupt persisted tabSlots (duplicate React
-  // keys would collide and the pill could measure the wrong instance)
-  const base = ['index', ...[...new Set(slots)], 'more'];
-  // a native tab screen can be reached while holding no slot — Today's
-  // "All tasks →" pushes /tasks even when Tasks was swapped out. With no item
-  // for it nothing is focused, so the pill and every focused style go dead;
-  // lend it a slot just before More until the user leaves it again.
-  const stray = !!focusedKey && !base.includes(focusedKey)
-    && TAB_SLOT_OPTIONS.some((o) => o.key === focusedKey && !o.route);
-  const order = stray ? [...base.slice(0, -1), focusedKey, 'more'] : base;
-  const layouts = React.useRef<Record<string, { x: number; width: number }>>({}).current;
-  const px = useSharedValue(0);
-  const pw = useSharedValue(0);
-  const po = useSharedValue(0);
+  const { width: winW } = useWindowDimensions();
+  const [rowW, setRowW] = React.useState(winW);
+  const rawSlots = useStore((s) => s.settings.tabSlots);
+  const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
+  const keyboardOpen = useKeyboardOpen();
 
-  const place = React.useCallback(() => {
-    const l = focusedKey ? layouts[focusedKey] : undefined;
-    const visible = !!l && order.includes(focusedKey);
-    if (!l || !visible) { po.value = level === 'none' ? 0 : withSpring(0, RISE_OUT); return; }
-    const w = Math.max(56, l.width - 10);
-    const x = l.x + (l.width - w) / 2;
-    if (pw.value === 0 || level === 'none') { px.value = x; pw.value = w; po.value = 1; }
-    else {
-      px.value = withSpring(x, RISE_OUT);
-      pw.value = withSpring(w, RISE_OUT);
-      po.value = withSpring(1, RISE_OUT);
+  const routeNames = TAB_ROUTES as readonly string[];
+  const focusedName = state.routes[state.index]?.name;
+  const focusedAt = Math.max(0, routeNames.indexOf(focusedName));
+  const slotW = rowW / TAB_ROUTES.length;
+  // one constant width, never wider than its slot: only the pill's position ever animates
+  const pillW = Math.max(Math.min(slotW - 14, 84), Math.min(58, slotW - 6));
+  const targetX = slotW * focusedAt + (slotW - pillW) / 2;
+
+  const px = useSharedValue(targetX);
+  const placed = React.useRef(false);
+  React.useEffect(() => {
+    if (!placed.current || level === 'none') {
+      placed.current = true;
+      px.value = targetX;
+      return;
     }
-  }, [focusedKey, level, order.join(',')]);
-  React.useEffect(() => { place(); }, [place]);
+    px.value = withSpring(targetX, RISE_OUT);
+  }, [targetX, level]);
+  const pillStyle = useAnimatedStyle(() => ({ transform: [{ translateX: px.value }] }));
 
-  const pillStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: px.value }],
-    width: pw.value,
-    opacity: po.value,
-  }));
+  if (keyboardOpen) return <View style={st.hidden} />;
+
+  const metaFor = (name: string): ItemMeta => {
+    if (name === 'index') return TODAY;
+    if (name === 'more') return MORE;
+    const tool = toolByKey(slots[routeNames.indexOf(name) - 1]);
+    return tool ? { label: tool.label, shortLabel: tool.shortLabel, icon: tool.icon } : MORE;
+  };
 
   return (
     <View
-      style={{
-        backgroundColor: bgFor(theme),
-        paddingTop: 9, paddingBottom: Math.max(insets.bottom, 6) + 5,
-        ...(theme === 'minimal'
-          ? { borderTopWidth: 1, borderTopColor: MIN.border }
-          : { boxShadow: SH.barLift }),
-      }}
+      style={[
+        st.bar,
+        { paddingBottom: Math.max(insets.bottom, 10), backgroundColor: bgFor(theme) },
+        theme === 'minimal' ? { borderTopWidth: 1, borderTopColor: MIN.hairline } : NEU.raisedMid,
+      ]}
     >
-      <View style={{ flexDirection: 'row' }}>
+      <View style={st.row} onLayout={(e) => setRowW(e.nativeEvent.layout.width)}>
         <Animated.View
           pointerEvents="none"
           style={[
-            { position: 'absolute', top: 0, height: PILL_H, borderRadius: 17 },
+            st.pill,
+            { width: pillW },
             theme === 'minimal'
-              ? { backgroundColor: MIN.inset }
-              : { backgroundColor: C.inset, ...neuInset('low') },
+              ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: C.accent }
+              : { backgroundColor: C.inset, ...NEU.insetLow },
             pillStyle,
           ]}
         />
-        {order.map((key) => {
-          const opt = FIXED[key] || TAB_SLOT_OPTIONS.find((o) => o.key === key);
-          if (!opt) return null;
-          const routeIndex = state.routes.findIndex((r) => r.name === key);
-          const isNative = routeIndex >= 0 && !(opt as any).route;
-          const focused = isNative && state.index === routeIndex;
+        {TAB_ROUTES.map((name) => {
+          const route = state.routes.find((r) => r.name === name);
+          if (!route) return null;
+          const focused = focusedName === name;
           const onPress = () => {
-            if (isNative) {
-              const route = state.routes[routeIndex];
-              const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
-              if (!focused && !event.defaultPrevented) {
-                tick();
-                navigation.navigate(route.name as never);
-              }
-            } else if ((opt as any).route) {
+            const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
+            if (event.defaultPrevented) return;
+            if (!focused) {
               tick();
-              router.push((opt as any).route);
+              navigation.navigate(route.name as never);
+              return;
+            }
+            // already here: a slot with pages open (a note, a video) goes back to its tool
+            const nested: any = route.state;
+            if (nested?.key && (nested.index ?? 0) > 0) {
+              tick();
+              navigation.dispatch({ ...StackActions.popToTop(), target: nested.key });
             }
           };
-          return (
-            <TabItem
-              key={key}
-              focused={focused}
-              icon={{ on: (opt as any).iconOn, off: (opt as any).icon }}
-              label={opt.label}
-              onPress={onPress}
-              onLayoutSlot={(x, width) => { layouts[key] = { x, width }; if (key === focusedKey) place(); }}
-            />
-          );
+          return <TabItem key={name} meta={metaFor(name)} focused={focused} onPress={onPress} />;
         })}
       </View>
     </View>
   );
 }
+
+const st = StyleSheet.create({
+  bar: { paddingTop: 10 },
+  hidden: { height: 0 },
+  row: { flexDirection: 'row' },
+  pill: { position: 'absolute', top: 0, left: 0, height: PILL_H, borderRadius: PILL_R },
+  item: { flex: 1, height: PILL_H, alignItems: 'center', justifyContent: 'center' },
+  itemInner: { alignItems: 'center' },
+  label: {
+    marginTop: 4, color: C.textFaint, fontFamily: F.med, fontSize: 11, lineHeight: 13, letterSpacing: 0.2,
+  },
+});

@@ -15,13 +15,10 @@ import {
 import { Enter, Bouncy, Pop, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { tap } from '../../src/haptics';
 import { ROUTE_CATALOG, launchExternal } from '../../src/quickAccess';
-import { colorOf, toolPath } from '../../src/tools';
+import { ToolKey, colorOf } from '../../src/tools';
+import { openTool } from '../../src/toolNav';
+import { useGreeting } from '../../src/greeting';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
-
-function greetWord(d = new Date()) {
-  const h = d.getHours();
-  return h < 5 ? 'Up late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 21 ? 'Good evening' : 'Winding down';
-}
 
 export default function Today() {
   const insets = useSafeAreaInsets();
@@ -107,9 +104,14 @@ export default function Today() {
   ];
   const doneCount = todayList.filter((t) => t.done).length;
 
+  const greeting = useGreeting({
+    now, name: settings.name, sessions, habits, planner,
+    listTotal: todayList.length, listDone: doneCount, nextBlock,
+  });
+
   const runQuick = (q: QuickItem) => {
     if (qaEdit) return;
-    if (q.kind === 'tool') router.push(toolPath(q.target) as any);
+    if (q.kind === 'tool') openTool(q.target as ToolKey);
     else if (q.kind === 'route') router.push(q.target as any);
     else launchExternal(q);
   };
@@ -141,16 +143,18 @@ export default function Today() {
         <Enter index={0}>
           <Pressable onPress={() => { setNameDraft(settings.name); setNameSheet(true); }}>
             <Text style={T.kicker}>{fmtDate(now)}</Text>
-            <Text style={[T.display, { marginTop: 6, marginBottom: 18 }]}>
-              {greetWord(now)}
-              {settings.name ? <Text>{','}{'\n'}<Text style={{ color: C.accent }}>{settings.name}</Text></Text> : null}
+            <Text style={[T.display, { marginTop: 6, marginBottom: greeting.sub ? 4 : 18 }]}>
+              {greeting.parts.map((part, i) => (
+                <Text key={i} style={part.name ? { color: C.accent } : undefined}>{part.text}</Text>
+              ))}
             </Text>
+            {greeting.sub ? <Text style={[T.label, { marginBottom: 18 }]}>{greeting.sub}</Text> : null}
           </Pressable>
         </Enter>
 
         {nextBlock && (
           <Enter index={1}>
-            <Card hero pad={14} onPress={() => router.push('/planner')}>
+            <Card hero pad={14} onPress={() => openTool('planner')}>
               <Row style={{ justifyContent: 'space-between' }}>
                 <Row style={{ flex: 1 }}>
                   <View style={[st.blockBar, { backgroundColor: nextBlock.block.color }]} />
@@ -203,7 +207,7 @@ export default function Today() {
 
         <SectionTitle
           right={
-            <Pressable onPress={() => router.push('/tasks')} hitSlop={8}>
+            <Pressable onPress={() => openTool('tasks')} hitSlop={8}>
               <Text style={[st.link, { color: C.accent }]}>All tasks →</Text>
             </Pressable>
           }

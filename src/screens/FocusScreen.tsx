@@ -4,21 +4,21 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
-import { C, F, S, T } from '../../src/theme';
-import { useStore } from '../../src/store';
-import { todayKey, fmtDuration, uid, toMinutes, fmtClockTime } from '../../src/utils';
+import { C, F, S, T } from '../theme';
+import { useStore } from '../store';
+import { todayKey, fmtDuration, uid, toMinutes, fmtClockTime } from '../utils';
 import {
-  ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, NeuIconBtn, ProgressBar,
-} from '../../src/components/UI';
-import { SegmentedControl } from '../../src/components/SegmentedControl';
-import { Enter, useFocusKey } from '../../src/components/Motion';
-import { tick as haptic } from '../../src/haptics';
-import { ensurePermission } from '../../src/notifications';
+  ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyText, Row, Chip, IconBtn, NeuIconBtn, ProgressBar, NeuHeader,
+} from '../components/UI';
+import { SegmentedControl } from '../components/SegmentedControl';
+import { Enter, useFocusKey } from '../components/Motion';
+import { tick as haptic } from '../haptics';
+import { ensurePermission } from '../notifications';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
 
-export default function Focus() {
+export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const fk = useFocusKey();
   const router = useRouter();
@@ -32,7 +32,7 @@ export default function Focus() {
   const sessions = useStore((s) => s.sessions);
   const hour24 = useStore((s) => s.settings.hour24);
 
-  const [mode, setMode] = useState<'stopwatch' | 'countdown'>('countdown');
+  const [timerMode, setTimerMode] = useState<'stopwatch' | 'countdown'>('countdown');
   const [targetMin, setTargetMin] = useState(50);
   const [customMin, setCustomMin] = useState('');
   const [running, setRunning] = useState(false);
@@ -66,7 +66,7 @@ export default function Focus() {
     if (params.subject) setSubject(String(params.subject));
     if (params.minutes) {
       const m = parseInt(String(params.minutes), 10);
-      if (m > 0) { setMode('countdown'); setTargetMin(m); }
+      if (m > 0) { setTimerMode('countdown'); setTargetMin(m); }
     }
   }, [params.subject, params.minutes]);
 
@@ -79,12 +79,12 @@ export default function Focus() {
 
   const elapsed = accumSec + (running && startTs ? (Date.now() - startTs) / 1000 : 0);
   const remaining = Math.max(0, targetMin * 60 - elapsed);
-  const displaySec = mode === 'countdown' ? remaining : elapsed;
+  const displaySec = timerMode === 'countdown' ? remaining : elapsed;
   const started = running || accumSec > 0;
 
   // countdown auto-finish
   useEffect(() => {
-    if (mode === 'countdown' && running && remaining <= 0 && !endedRef.current) {
+    if (timerMode === 'countdown' && running && remaining <= 0 && !endedRef.current) {
       endedRef.current = true;
       endSession();
     }
@@ -247,9 +247,13 @@ export default function Focus() {
   );
 
   return (
-    <ScreenBG guard>
-      <ScrollView key={fk} contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 40 }}>
-        <Text style={st.h1}>Deep Work</Text>
+    <ScreenBG guard={mode === 'tab'}>
+      {mode !== 'tab' && <NeuHeader title="Deep Work" />}
+      <ScrollView
+        key={fk}
+        contentContainerStyle={{ padding: S.pad, paddingTop: mode === 'tab' ? insets.top + 20 : 8, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
+      >
+        {mode === 'tab' && <Text style={st.h1}>Deep Work</Text>}
         {todayFocusMin > 0 ? (
           <Text style={{ color: C.textDim, fontSize: 13, marginBottom: 14 }}>
             {todayFocusMin} focused minutes today
@@ -258,7 +262,7 @@ export default function Focus() {
           <View style={{ height: 14 }} />
         )}
 
-        {/* mode + presets */}
+        {/* timer mode + presets */}
         {!started && (
           <>
             <SegmentedControl
@@ -267,11 +271,11 @@ export default function Focus() {
                 { key: 'countdown', label: 'Countdown' },
                 { key: 'stopwatch', label: 'Stopwatch' },
               ]}
-              value={mode}
-              onChange={(k) => { setMode(k); if (k === 'countdown') clearFinishLine(); }}
+              value={timerMode}
+              onChange={(k) => { setTimerMode(k); if (k === 'countdown') clearFinishLine(); }}
               style={{ marginBottom: 10 }}
             />
-            {mode === 'countdown' && (
+            {timerMode === 'countdown' && (
               <Row style={{ flexWrap: 'wrap', marginBottom: 4 }}>
                 {[25, 50, 90, 120].map((m) => (
                   <Chip key={m} small label={`${m}m`} active={targetMin === m} onPress={() => setTargetMin(m)} />
@@ -291,21 +295,21 @@ export default function Focus() {
         <Enter index={0}>
           <GlassCard hero style={{ alignItems: 'center', paddingVertical: 30 }}>
             <Row style={{ alignItems: 'center', gap: 12 }}>
-              {!started && mode === 'countdown' && (
+              {!started && timerMode === 'countdown' && (
                 <NeuIconBtn name="remove" dim={38} size={18} color={C.textDim}
                   onPress={() => { haptic(); setTargetMin((m) => Math.max(1, m - 1)); }} />
               )}
               <Text style={st.time}>{fmtDuration(displaySec)}</Text>
-              {!started && mode === 'countdown' && (
+              {!started && timerMode === 'countdown' && (
                 <NeuIconBtn name="add" dim={38} size={18} color={C.textDim}
                   onPress={() => { haptic(); setTargetMin((m) => m + 1); }} />
               )}
             </Row>
             <Text style={{ color: C.textDim, fontSize: 13, marginTop: 4 }}>
-              {mode === 'countdown' ? `${targetMin} min block` : 'stopwatch'}
+              {timerMode === 'countdown' ? `${targetMin} min block` : 'stopwatch'}
               {subject ? ` · ${subject}` : ''}
             </Text>
-            {mode === 'stopwatch' && (
+            {timerMode === 'stopwatch' && (
               <View style={{ marginTop: 10 }}>
                 <Chip
                   small
@@ -316,7 +320,7 @@ export default function Focus() {
                 />
               </View>
             )}
-            {mode === 'countdown' && (
+            {timerMode === 'countdown' && (
               <View style={{ alignSelf: 'stretch', marginTop: 12 }}>
                 <ProgressBar value={Math.min(1, Math.max(0, 1 - remaining / (targetMin * 60)))} />
               </View>
