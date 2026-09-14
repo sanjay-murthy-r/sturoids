@@ -108,7 +108,11 @@ export default function Settings() {
     setTimeout(rescheduleAllReminders, 200);
   };
 
-  const exportData = async () => {
+  const exportData = async (confirmed = false) => {
+    // a backup carries locked pages in full, so making one asks for the owner, like turning a lock off
+    const s = useStore.getState();
+    const carriesLocked = s.settings.journalLocked || s.notes.some((n) => n.locked);
+    if (carriesLocked && !confirmed && !(await confirmOwner('export'))) return;
     try {
       const snap = exportSnapshot();
       // journal text lives in files, so the backup carries it inline
@@ -218,7 +222,7 @@ export default function Settings() {
   const lockedNotes = useStore((s) => s.notes.filter((n) => n.locked).length);
   const [pinSet, setPinSet] = useState(false);
   const [deviceLock, setDeviceLock] = useState(false);
-  const [pinStep, setPinStep] = useState<null | { mode: 'enter' | 'set'; then: 'journal-on' | 'journal-off' | 'change' | 'remove' }>(null);
+  const [pinStep, setPinStep] = useState<null | { mode: 'enter' | 'set'; then: 'journal-on' | 'journal-off' | 'change' | 'remove' | 'export' }>(null);
   const refreshLockInfo = () => {
     hasPin().then(setPinSet);
     deviceAuthAvailable().then(setDeviceLock);
@@ -226,7 +230,7 @@ export default function Settings() {
   useEffect(refreshLockInfo, []);
 
   /** Asks for the owner before a lock is weakened. Resolves true when it is already confirmed. */
-  const confirmOwner = async (then: 'journal-off' | 'change' | 'remove'): Promise<boolean> => {
+  const confirmOwner = async (then: 'journal-off' | 'change' | 'remove' | 'export'): Promise<boolean> => {
     if (isUnlocked()) return true;
     const r = await unlockWithDevice('Confirm it is you');
     if (r === 'unlocked') return true;
@@ -274,6 +278,7 @@ export default function Settings() {
       if (step.then === 'journal-off') setSetting('journalLocked', false);
       else if (step.then === 'change') setTimeout(() => setPinStep({ mode: 'set', then: 'change' }), 350);
       else if (step.then === 'remove') { await removePin(); refreshLockInfo(); }
+      else if (step.then === 'export') exportData(true);
       return;
     }
     refreshLockInfo();
@@ -473,7 +478,7 @@ export default function Settings() {
           Data — you own it
         </SectionTitle>
         <Card>
-          <PillButton label="Export backup (JSON)" icon="download-outline" onPress={exportData} style={{ marginBottom: 10 }} />
+          <PillButton label="Export backup (JSON)" icon="download-outline" onPress={() => exportData()} style={{ marginBottom: 10 }} />
           <PillButton label="Import backup" icon="push-outline" color={C.amber} outline onPress={importData} />
           {recovery ? (
             <View style={st.recovery}>

@@ -439,6 +439,8 @@ export function migrateV5(p: any): any {
     .filter((n: any) => n && typeof n === 'object')
     .map((n: any) => ({ ...n, attachments: Array.isArray(n.attachments) ? n.attachments : [], locked: !!n.locked }));
   out.deepWork = p?.deepWork ?? null;
+  // entry text lives in files. No saved store ever held it inline; a backup's inline text is written back by
+  // restoreBodies right after an import, so only the index is built here
   out.journal = (Array.isArray(p?.journal) ? p.journal : [])
     .filter((e: any) => e && typeof e === 'object' && typeof e.id === 'string' && typeof e.dateKey === 'string')
     .map(({ body, ...e }: any) => ({

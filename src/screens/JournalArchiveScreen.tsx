@@ -69,7 +69,9 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   const [menu, setMenu] = React.useState<JournalEntry | null>(null);
   const [moveEntry, setMoveEntry] = React.useState<JournalEntry | null>(null);
 
-  const tokens = React.useMemo(() => searchTokens(q), [q]);
+  // typing stays immediate; the search over every entry runs on the settled text
+  const settledQ = React.useDeferredValue(q);
+  const tokens = React.useMemo(() => searchTokens(settledQ), [settledQ]);
 
   // full-text search reads every entry's text once, then stays in memory
   React.useEffect(() => {

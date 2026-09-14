@@ -169,6 +169,10 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       openDay(req.dateKey, req.entryId ?? undefined);
     } else if (!booted.current) {
       openDay(journalDayFor(new Date(), useStore.getState().settings.journalCutoffHour));
+    } else if (autoDay.current) {
+      // back from another tab: a page that follows the day moves along once the cutoff has passed
+      const day = journalDayFor(new Date(), useStore.getState().settings.journalCutoffHour);
+      if (day !== draft.current.dateKey) openDay(day);
     }
     booted.current = true;
     return () => { flush(); };
@@ -188,9 +192,18 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     };
   }, [flush, openDay]);
 
-  // an entry deleted elsewhere (the archive) leaves a blank page for its day
+  // an entry deleted elsewhere (the archive) leaves a blank page for its day; one moved to another day takes
+  // the page with it
   React.useEffect(() => {
-    if (entryId && !journal.some((e) => e.id === entryId) && !draft.current.dirty) loadEntry(draft.current.dateKey, null);
+    if (!entryId) return;
+    const e = journal.find((x) => x.id === entryId);
+    if (!e) {
+      if (!draft.current.dirty) loadEntry(draft.current.dateKey, null);
+    } else if (e.dateKey !== draft.current.dateKey) {
+      autoDay.current = false;
+      draft.current.dateKey = e.dateKey;
+      setDateKey(e.dateKey);
+    }
   }, [journal, entryId, loadEntry]);
 
   // ---- edits ----
@@ -252,9 +265,11 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
-          if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+          // join the save queue first: a save already under way finishes before the delete, never after it
+          await flush();
+          const id = draft.current.id ?? entryId;
           draft.current.dirty = false;
-          await deleteEntry(entryId);
+          await deleteEntry(id);
           const rest = useStore.getState().journal.filter((e) => e.dateKey === dateKey).sort((a, b) => a.createdAt - b.createdAt);
           loadEntry(dateKey, rest[0]?.id ?? null);
         },
@@ -356,8 +371,12 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           <IconBtn name={tags.length ? 'pricetag' : 'pricetag-outline'} size={19} pad={8} color={tags.length ? C.gold : C.textDim} onPress={() => setTagSheet(true)} />
         </Row>
         <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[st.words, saveFailed && { color: C.danger }]}>
-            {saveFailed ? 'Not saved' : words + (words === 1 ? ' word' : ' words')}
+          <Text
+            style={[st.words, saveFailed && { color: C.danger }]}
+            onPress={saveFailed ? () => { flush(); } : undefined}
+            suppressHighlighting
+          >
+            {saveFailed ? 'Not saved, tap to retry' : words + (words === 1 ? ' word' : ' words')}
           </Text>
           <Animated.View style={[st.tick, tickStyle]} />
         </View>

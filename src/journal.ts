@@ -78,7 +78,8 @@ export async function saveEntry(d: EntryDraft): Promise<string> {
   const now = Date.now();
   upsertJournalEntry({
     id,
-    dateKey: d.dateKey,
+    // an entry that already exists keeps the store's day, so a move made in the archive is never written back
+    dateKey: existing?.dateKey ?? d.dateKey,
     title: d.title.trim(),
     excerpt: excerptOf(d.body),
     wordCount: countWords(d.body),

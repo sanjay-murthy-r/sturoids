@@ -113,18 +113,26 @@ const toHex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).pad
 const digest = (pin: string, salt: string) =>
   Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, salt + ':' + pin);
 
-export async function hasPin(): Promise<boolean> {
+/** 'unreadable' when the keystore could not be read. It counts as set, so a read failure never opens a lock. */
+export async function pinState(): Promise<'set' | 'none' | 'unreadable'> {
   try {
-    return !!(await SecureStore.getItemAsync(PIN_KEY));
+    return (await SecureStore.getItemAsync(PIN_KEY)) ? 'set' : 'none';
   } catch {
-    return false;
+    return 'unreadable';
   }
+}
+
+export async function hasPin(): Promise<boolean> {
+  return (await pinState()) !== 'none';
 }
 
 /** Stores a salted SHA-256 of the PIN in the device keystore; the PIN itself is never stored. */
 export async function setPin(pin: string): Promise<void> {
   const salt = toHex(Crypto.getRandomBytes(16));
   await SecureStore.setItemAsync(PIN_KEY, JSON.stringify({ salt, hash: await digest(pin, salt) }));
+  failures = 0;
+  coolUntil = 0;
+  saveAttempts();
 }
 
 export async function removePin(): Promise<void> {
@@ -135,12 +143,37 @@ export async function removePin(): Promise<void> {
   }
 }
 
+// Wrong guesses and the cooldown live in the keystore too, so closing the app does not reset them.
+const ATTEMPTS_KEY = 'sturoids.pinAttempts.v1';
 let failures = 0;
 let coolUntil = 0;
+let attemptsLoaded: Promise<void> | null = null;
+
+function loadAttempts(): Promise<void> {
+  if (!attemptsLoaded) {
+    attemptsLoaded = SecureStore.getItemAsync(ATTEMPTS_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const a = JSON.parse(raw);
+        failures = Math.max(failures, Number(a?.failures) || 0);
+        coolUntil = Math.max(coolUntil, Number(a?.coolUntil) || 0);
+      })
+      .catch(() => {});
+  }
+  return attemptsLoaded;
+}
+
+function saveAttempts() {
+  SecureStore.setItemAsync(ATTEMPTS_KEY, JSON.stringify({ failures, coolUntil })).catch(() => {});
+}
+
+// read at launch, so a cooldown still running shows as soon as the PIN sheet opens
+void loadAttempts();
 
 export const pinCooldownMs = () => Math.max(0, coolUntil - Date.now());
 
 export async function verifyPin(pin: string): Promise<'ok' | 'wrong' | 'cooldown'> {
+  await loadAttempts();
   if (pinCooldownMs() > 0) return 'cooldown';
   try {
     const raw = await SecureStore.getItemAsync(PIN_KEY);
@@ -148,6 +181,8 @@ export async function verifyPin(pin: string): Promise<'ok' | 'wrong' | 'cooldown
       const { salt, hash } = JSON.parse(raw);
       if ((await digest(pin, salt)) === hash) {
         failures = 0;
+        coolUntil = 0;
+        saveAttempts();
         return 'ok';
       }
     }
@@ -158,7 +193,9 @@ export async function verifyPin(pin: string): Promise<'ok' | 'wrong' | 'cooldown
   if (failures >= MAX_TRIES) {
     failures = 0;
     coolUntil = Date.now() + COOLDOWN_MS;
+    saveAttempts();
     return 'cooldown';
   }
+  saveAttempts();
   return 'wrong';
 }

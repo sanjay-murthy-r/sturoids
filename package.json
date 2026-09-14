@@ -31,6 +31,7 @@
     "expo-navigation-bar": "~4.2.8",
     "expo-notifications": "~0.31.2",
     "expo-router": "~5.0.7",
+    "expo-screen-capture": "~7.2.0",
     "expo-secure-store": "~14.2.4",
     "expo-sharing": "~13.1.5",
     "expo-speech-recognition": "^2.0.0",

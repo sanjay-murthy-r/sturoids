@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { create, all } from 'mathjs';
 import * as Clipboard from 'expo-clipboard';
@@ -67,6 +67,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // "=" on an expression that cannot be evaluated says so where the answer would be, briefly
   const [evalError, setEvalError] = useState(false);
   const errTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (errTimer.current) clearTimeout(errTimer.current); }, []);
 
   const fmt = (v: any) =>
     math.format(v, sciNotation ? { notation: 'exponential', precision: 12 } : { precision: 14 });

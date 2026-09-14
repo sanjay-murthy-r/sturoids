@@ -21,6 +21,8 @@ type ReviewChoice = 'done' | 'pending' | 'drop';
 /** The finish-line heads-up has a fixed id, so it can be cancelled even after the app was killed. */
 const FINISH_NOTIF_ID = 'sturoids-finish-line';
 const HERO_SIZES = [48, 42, 38];
+/** a stopwatch left running with no finish line (a killed app, a forgotten session) logs at most this much */
+const STOPWATCH_CAP_SEC = 12 * 3600;
 
 interface TimerState {
   mode: 'stopwatch' | 'countdown'; targetMin: number; running: boolean; startTs: number | null; accumSec: number;
@@ -271,6 +273,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     else if (reachedFinish && finishAt != null && startedAtRef.current != null) {
       net = Math.min(net, Math.max(0, (finishAt - startedAtRef.current) / 1000));
     }
+    if (timerMode === 'stopwatch') net = Math.min(net, STOPWATCH_CAP_SEC);
     setRunning(false); setStartTs(null); setAccumSec(net); setAmbient(false);
     const unchecked = attached.filter((a) => !a.done);
     if (net < 5 && attached.length === 0) { reset(); return; }

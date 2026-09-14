@@ -1,13 +1,14 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
+import { allowScreenCaptureAsync, preventScreenCaptureAsync } from 'expo-screen-capture';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, MIN, NEU, T } from '../theme';
 import { PillButton, Sheet, useTheme } from './UI';
 import { Bouncy, useAnimLevel } from './Motion';
 import { tap, tick } from '../haptics';
-import { markUnlocked, pinCooldownMs, setPin, unlockWithDevice, useUnlocked, verifyPin } from '../lock';
+import { markUnlocked, pinCooldownMs, setPin, unlockWithDevice, useUnlocked, verifyPin, deviceAuthAvailable } from '../lock';
 
 const PIN_LEN = 6;
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'];
@@ -27,6 +28,14 @@ export function PinSheet({ visible, mode, onClose, onDone }: {
   const busy = React.useRef(false);
   const shake = useSharedValue(0);
   const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }));
+  // with no fingerprint, face or screen lock on the phone, the PIN is the only way back in: say so before it is set
+  const [pinOnly, setPinOnly] = React.useState(false);
+  React.useEffect(() => {
+    if (!visible || mode !== 'set') return undefined;
+    let live = true;
+    deviceAuthAvailable().then((ok) => { if (live) setPinOnly(!ok); });
+    return () => { live = false; };
+  }, [visible, mode]);
 
   React.useEffect(() => {
     if (!visible) return;
@@ -113,6 +122,11 @@ export function PinSheet({ visible, mode, onClose, onDone }: {
           </View>
         ))}
       </Animated.View>
+      {mode === 'set' && pinOnly ? (
+        <Text style={[T.caption, { textAlign: 'center', marginBottom: 6 }]}>
+          This phone has no screen lock, so this PIN is the only way in. If you forget it, locked pages stay locked.
+        </Text>
+      ) : null}
       <Text style={[T.caption, st.status, status ? { color: coolS > 0 ? C.textFaint : C.danger } : null]}>
         {status || ' '}
       </Text>
@@ -146,6 +160,19 @@ export function PinSheet({ visible, mode, onClose, onDone }: {
  * content underneath, so the app switcher shows nothing. Device authentication starts on its own once each time
  * the gate is focused; after a cancel it waits for Unlock.
  */
+/**
+ * While locked content is open and in front, Android keeps it out of screenshots and the recent apps preview.
+ * Each gate holds its own key, so closing one never lifts the shield another still needs.
+ */
+function Shielded({ children }: { children: React.ReactNode }) {
+  const key = 'sturoids-lock' + React.useId();
+  useFocusEffect(React.useCallback(() => {
+    preventScreenCaptureAsync(key).catch(() => {});
+    return () => { allowScreenCaptureAsync(key).catch(() => {}); };
+  }, [key]));
+  return <>{children}</>;
+}
+
 export function LockGate({ locked, title, children }: { locked: boolean; title: string; children: React.ReactNode }) {
   const theme = useTheme();
   const unlocked = useUnlocked();
@@ -168,7 +195,7 @@ export function LockGate({ locked, title, children }: { locked: boolean; title: 
     attempt();
   }, [open, attempt]));
 
-  if (open) return <>{children}</>;
+  if (open) return locked ? <Shielded>{children}</Shielded> : <>{children}</>;
 
   return (
     <View style={st.gate}>
