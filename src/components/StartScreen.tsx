@@ -1,194 +1,274 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
-  Easing, interpolate, useAnimatedStyle, useSharedValue,
-  withDelay, withSequence, withSpring, withTiming,
+  Easing, Extrapolation, cancelAnimation, interpolate, useAnimatedStyle, useSharedValue,
+  withDelay, withSequence, withTiming,
 } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
-import { LinearGradient } from 'expo-linear-gradient';
-import { C, F, bgFor } from '../theme';
+import { C, F, LX, LY, NEU, bgFor, darkSh, liteSh } from '../theme';
 import { useStore } from '../store';
-import { RISE_OUT, useAnimLevel } from './Motion';
+import { SIG, SIG_SIZE, SIG_SPEED } from '../signature';
+import { useAnimLevel } from './Motion';
+import { Signature, SignatureStill } from './Signature';
+
+/* ------------------------------------------------------------------ layout */
 
 const PLATE = 160;
 const R = 42;
+const GAP_WORD = 30;
+const WORD_H = 26;
+const GAP_CAPTION = 10;
+const CAPTION_H = 12;
+const GAP_SIG = 34;
+/** hero signature: width as a fraction of the screen width, centre as a fraction of its height */
+const HERO_W = 0.78;
+const HERO_Y = 0.46;
+const CAPTION_OPACITY = 0.8;
 
-// The icon's two seam grooves (viewBox = plate). Drawn as a dark carve with a
-// light lip offset toward the shadow side — same deboss as assets/icon.png.
-// They fade/settle in; there is deliberately NO stroke-draw animation.
+// The icon's two seam grooves (viewBox = plate), a dark carve over a light lip, as in
+// assets/icon.png. They fade and settle in; they are never stroke-drawn.
 const GROOVE_TOP = 'M 62 52 C 90 68 124 72 166 62';
 const GROOVE_BOT = 'M -6 98 C 40 86 78 90 104 112';
 
+/* ------------------------------------------------------------------ plate extrusion tiers */
+
+// NEU.raisedHigh is the kit pair: lite alpha .25 / blur 6, dark alpha .48 / blur 15, offsets LX/LY.
+// The plate rises through three static tiers of that pair scaled by extrusion h and crossfades
+// between them, so no shadow string is ever animated.
+const HIGH = { liteA: 0.25, liteBlur: 6, darkA: 0.48, darkBlur: 15 };
+const n2 = (v: number) => +v.toFixed(2);
+const n3 = (v: number) => +v.toFixed(3);
+function plateShadow(h: number): string {
+  return `${n2(LX * h)}px ${n2(LY * h)}px ${n2(HIGH.liteBlur * h)}px ${liteSh(n3(HIGH.liteA * h))}, `
+    + `${n2(-LX * h)}px ${n2(-LY * h)}px ${n2(HIGH.darkBlur * h)}px ${darkSh(n3(HIGH.darkA * h))}`;
+}
+if (__DEV__ && plateShadow(1) !== NEU.raisedHigh.boxShadow) {
+  console.warn('StartScreen: the plate tiers no longer match NEU.raisedHigh; update HIGH');
+}
+
+/* ------------------------------------------------------------------ timeline */
+
+// Model ms (the recording at 100%). Everything plays at 1 / SIG_SPEED, see real().
+const SIG_START = 160;
+const HOLD = 200;
+const T1 = SIG_START + SIG.total + HOLD;
+const TRAVEL = { at: T1, dur: 840 };
+const RISE = { at: T1 + 120, dur: 900, settle: 200 };
+const SINK = { at: T1 + 260, dur: 560 };
+const GLINT = { at: T1 + 520, dur: 700 };
+const GROOVES = { at: T1 + 740, dur: 380 };
+const WORD = { at: T1 + 780, dur: 560 };
+const CAPTION = { at: WORD.at + 200, dur: 350 };
+const REVEAL = T1 + 1140;
+const EXIT = { at: T1 + 1440, dur: 380 };
+const DONE = EXIT.at + EXIT.dur;
+const real = (modelMs: number) => modelMs / SIG_SPEED;
+
+// 'some': the composed end state fades in, the app mounts beneath it, then it dissolves (real ms)
+const SOME = { fade: 320, reveal: 700, dissolve: 760, done: 1000 };
+
 /**
- * "Focus" intro. Out-of-focus light converges while the logo plate is pulled
- * into focus and extrudes out of the material (soft/diffuse shadows crossfade
- * into the crisp kit pair — no view-blur needed). The seam grooves carve in,
- * one quick low-key sheen crosses the plate, the wordmark settles, then the
- * scene defocuses into the app. Runs on both themes; the plate keeps the
- * default material — a deliberate brand exception on 'minimal'.
+ * "Signed first" intro. The user's signature is written large in ink with the recorded pen
+ * timing, holds a beat, then travels under the wordmark and sinks from ink into a carve while
+ * the logo plate rises out of the material; one soft accent glint runs along the carve, the
+ * grooves settle, the wordmark and caption arrive, and the scene dissolves into the app.
  *
- * Contract with app/_layout.tsx: onReveal() mounts the app beneath the
- * overlay; onDone() unmounts the overlay. Timings per animLevel:
- *   full ≈ reveal 2250 / done 2860 · some ≈ 820 / 1220 · none ≈ 50 / 420.
+ * Contract with app/_layout.tsx: onReveal() mounts the app beneath the opaque overlay; onDone()
+ * unmounts the overlay. Real ms at SIG_SPEED 1.2: full = reveal ~3945 / done ~4512;
+ * some = reveal 700 / done 1000; none = no overlay, both callbacks in the first effect.
+ * The minimal theme keeps its own background; the plate keeps the default material (brand exception).
  */
 export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone: () => void }) {
-  const theme = useStore((s) => s.settings.theme);
-  const level = useAnimLevel();
+  const liveTheme = useStore((s) => s.settings.theme);
+  const liveLevel = useAnimLevel();
+  // _layout mounts the intro only after hydration, so these are the user's settings; the intro
+  // commits to them for its whole run
+  const [{ level, theme }] = useState(() => ({ level: liveLevel, theme: liveTheme }));
+  const { width: W, height: H } = useWindowDimensions();
   const [gone, setGone] = useState(false);
-  const staticStart = level === 'none';
+  const callbacks = useRef({ onReveal, onDone });
+  callbacks.current = { onReveal, onDone };
 
+  const full = level === 'full';
   const overlay = useSharedValue(1);
-  const focus = useSharedValue(staticStart ? 1 : 0);   // 0 = defocused, 1 = crisp
-  const scale = useSharedValue(staticStart ? 1 : 1.08);
-  const bloomO = useSharedValue(0);
-  const grooveO = useSharedValue(staticStart ? 1 : 0);
-  const sheenX = useSharedValue(-120);
-  const wordO = useSharedValue(staticStart ? 1 : 0);
-  const capO = useSharedValue(staticStart ? 0.8 : 0);
+  const content = useSharedValue(full ? 1 : 0);
+  const exitScale = useSharedValue(1);
+  const tau = useSharedValue(0);
+  const travel = useSharedValue(0);
+  const ink = useSharedValue(1);
+  const carve = useSharedValue(0);
+  const glint = useSharedValue(0);
+  const rise = useSharedValue(full ? 0 : 1);
+  const grooves = useSharedValue(full ? 0 : 1);
+  const word = useSharedValue(full ? 0 : 1);
+  const caption = useSharedValue(full ? 0 : CAPTION_OPACITY);
 
   useEffect(() => {
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const at = (ms: number, fn: () => void) => timers.push(setTimeout(fn, ms));
-
     if (level === 'none') {
-      overlay.value = withDelay(150, withTiming(0, { duration: 250 }));
-      at(50, onReveal);
-      at(420, () => { setGone(true); onDone(); });
-    } else if (level === 'some') {
-      focus.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.cubic) });
-      scale.value = withSpring(1, RISE_OUT);
-      grooveO.value = withDelay(250, withTiming(1, { duration: 300 }));
-      wordO.value = withDelay(450, withTiming(1, { duration: 300 }));
-      capO.value = withDelay(550, withTiming(0.8, { duration: 250 }));
-      at(820, () => { onReveal(); overlay.value = withTiming(0, { duration: 320 }); });
-      at(1220, () => { setGone(true); onDone(); });
-    } else {
-      // full — ≈2.9s total
-      bloomO.value = withSequence(
-        withTiming(0.5, { duration: 180 }),
-        withDelay(700, withTiming(0, { duration: 300 })),
-      );
-      focus.value = withDelay(120, withTiming(1, { duration: 720, easing: Easing.out(Easing.cubic) }));
-      scale.value = withDelay(120, withSequence(
-        withSpring(1, RISE_OUT),
-        withDelay(700, withSequence(               // micro-breath ≈1800ms
-          withTiming(1.012, { duration: 130 }),
-          withTiming(1, { duration: 130 }),
-        )),
-      ));
-      grooveO.value = withDelay(560, withTiming(1, { duration: 450 }));
-      sheenX.value = withDelay(1150, withTiming(220, { duration: 550, easing: Easing.inOut(Easing.cubic) }));
-      wordO.value = withDelay(1250, withTiming(1, { duration: 380 }));
-      capO.value = withDelay(1450, withTiming(0.8, { duration: 320 }));
-      at(2250, onReveal);
-      at(2420, () => {                             // exit: defocus + dissolve
-        focus.value = withTiming(0.4, { duration: 320 });
-        scale.value = withTiming(1.05, { duration: 360, easing: Easing.in(Easing.cubic) });
-        wordO.value = withTiming(0, { duration: 280 });
-        capO.value = withTiming(0, { duration: 240 });
-        overlay.value = withTiming(0, { duration: 380 });
-      });
-      at(2860, () => { setGone(true); onDone(); });
+      callbacks.current.onReveal();
+      callbacks.current.onDone();
+      return undefined;
     }
-    return () => timers.forEach(clearTimeout);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const at = (ms: number, fn: () => void) => { timers.push(setTimeout(fn, ms)); };
+    const finish = () => {
+      setGone(true);
+      callbacks.current.onDone();
+    };
+
+    if (level === 'some') {
+      content.value = withTiming(1, { duration: SOME.fade, easing: Easing.out(Easing.cubic) });
+      overlay.value = withDelay(SOME.dissolve, withTiming(0, {
+        duration: SOME.done - SOME.dissolve, easing: Easing.inOut(Easing.quad),
+      }));
+      at(SOME.reveal, () => callbacks.current.onReveal());
+      at(SOME.done, finish);
+    } else {
+      const cubicInOut = Easing.inOut(Easing.cubic);
+      const cubicOut = Easing.out(Easing.cubic);
+      tau.value = withDelay(real(SIG_START), withTiming(SIG.total, {
+        duration: real(SIG.total), easing: Easing.linear,
+      }));
+      travel.value = withDelay(real(TRAVEL.at), withTiming(1, { duration: real(TRAVEL.dur), easing: cubicInOut }));
+      // two-stage extrusion: the bulk of the rise, then the last 1% settles
+      rise.value = withDelay(real(RISE.at), withSequence(
+        withTiming(0.99, { duration: real(RISE.dur), easing: cubicOut }),
+        withTiming(1, { duration: real(RISE.settle), easing: Easing.inOut(Easing.quad) }),
+      ));
+      ink.value = withDelay(real(SINK.at), withTiming(0, { duration: real(SINK.dur), easing: cubicInOut }));
+      carve.value = withDelay(real(SINK.at), withTiming(1, { duration: real(SINK.dur), easing: cubicInOut }));
+      glint.value = withDelay(real(GLINT.at), withTiming(1, { duration: real(GLINT.dur), easing: cubicInOut }));
+      grooves.value = withDelay(real(GROOVES.at), withTiming(1, { duration: real(GROOVES.dur), easing: cubicOut }));
+      word.value = withDelay(real(WORD.at), withTiming(1, { duration: real(WORD.dur), easing: cubicOut }));
+      caption.value = withDelay(real(CAPTION.at), withTiming(CAPTION_OPACITY, {
+        duration: real(CAPTION.dur), easing: Easing.linear,
+      }));
+      overlay.value = withDelay(real(EXIT.at), withTiming(0, {
+        duration: real(EXIT.dur), easing: Easing.inOut(Easing.quad),
+      }));
+      exitScale.value = withDelay(real(EXIT.at), withTiming(1.02, {
+        duration: real(EXIT.dur), easing: Easing.out(Easing.quad),
+      }));
+      at(real(REVEAL), () => callbacks.current.onReveal());
+      at(real(DONE), finish);
+    }
+
+    const animated = [overlay, content, exitScale, tau, travel, ink, carve, glint, rise, grooves, word, caption];
+    return () => {
+      timers.forEach(clearTimeout);
+      animated.forEach(cancelAnimation);
+    };
   }, []);
 
   const overlayStyle = useAnimatedStyle(() => ({ opacity: overlay.value }));
-  const bloomStyle = useAnimatedStyle(() => ({
-    opacity: bloomO.value,
-    transform: [
-      { translateX: interpolate(focus.value, [0, 1], [44, 6]) },
-      { translateY: interpolate(focus.value, [0, 1], [-76, -12]) },
-      { scale: interpolate(focus.value, [0, 1], [1.5, 0.95]) },
-    ] as const,
+  const columnStyle = useAnimatedStyle(() => ({
+    opacity: content.value,
+    transform: [{ scale: exitScale.value }],
   }));
-  const wrapStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
-  // crisp sharpens late (focus²) while the soft ghost lingers — reads as a
-  // true rack-focus emergence rather than a plain crossfade
-  const softStyle = useAnimatedStyle(() => ({ opacity: (1 - focus.value) * 0.9 + 0.1 * (1 - focus.value * focus.value) }));
-  const crispStyle = useAnimatedStyle(() => ({ opacity: focus.value * focus.value }));
+  const plateStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: interpolate(rise.value, [0, 1], [0.985, 1], Extrapolation.CLAMP) }],
+  }));
+  const bodyStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(rise.value, [0, 0.35], [0, 1], Extrapolation.CLAMP),
+  }));
+  const tierLowStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(rise.value, [0, 0.35, 0.7], [0, 1, 0], Extrapolation.CLAMP),
+  }));
+  const tierMidStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(rise.value, [0.35, 0.7, 1], [0, 1, 0], Extrapolation.CLAMP),
+  }));
+  const tierHighStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(rise.value, [0.7, 1], [0, 1], Extrapolation.CLAMP),
+  }));
   const grooveStyle = useAnimatedStyle(() => ({
-    opacity: grooveO.value,
-    transform: [{ translateY: interpolate(grooveO.value, [0, 1], [3, 0]) }],
-  }));
-  const sheenStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(sheenX.value, [-120, -70, 170, 220], [0, 1, 1, 0]),
-    transform: [{ translateX: sheenX.value }, { rotate: '18deg' }] as const,
+    opacity: grooves.value,
+    transform: [{ translateY: 3 * (1 - grooves.value) }],
   }));
   const wordStyle = useAnimatedStyle(() => ({
-    opacity: wordO.value,
-    transform: [{ translateY: (1 - wordO.value) * 8 }],
-    letterSpacing: interpolate(wordO.value, [0, 1], [6, 3]),
-    paddingLeft: interpolate(wordO.value, [0, 1], [6, 3]),
+    opacity: word.value,
+    transform: [{ translateY: 8 * (1 - word.value) }],
+    // letter spacing trails each glyph, so the left padding keeps the word optically centred
+    letterSpacing: 6 - 3 * word.value,
+    paddingLeft: 6 - 3 * word.value,
   }));
-  const capStyle = useAnimatedStyle(() => ({ opacity: capO.value }));
+  const captionStyle = useAnimatedStyle(() => ({ opacity: caption.value }));
 
-  if (gone) return null;
+  if (level === 'none' || gone) return null;
+
+  const sigW = SIG_SIZE * W;
+  const sigH = (sigW * SIG.vh) / SIG.vw;
+  const columnH = PLATE + GAP_WORD + WORD_H + GAP_CAPTION + CAPTION_H + GAP_SIG + sigH;
+  // the column is centred, so the slot's centre sits (columnH - sigH) / 2 below the screen's
+  const heroY = HERO_Y * H - (H / 2 + (columnH - sigH) / 2);
+  // on a short window the hero never grows past 70% of the height
+  const heroScale = Math.max(1, Math.min(HERO_W / SIG_SIZE, (0.7 * H) / sigH));
 
   return (
     <Animated.View
       pointerEvents="none"
-      style={[StyleSheet.absoluteFill, { backgroundColor: bgFor(theme), zIndex: 100 }, st.center, overlayStyle]}
+      importantForAccessibility="no-hide-descendants"
+      accessibilityElementsHidden
+      style={[StyleSheet.absoluteFill, st.overlay, { backgroundColor: bgFor(theme) }, overlayStyle]}
     >
-      {/* out-of-focus light, converging toward the highlight side */}
-      <Animated.View style={[st.bloom, bloomStyle]} />
-
-      <Animated.View style={[st.plateWrap, wrapStyle]}>
-        {/* defocused plate: huge, diffuse, faint shadow pair */}
-        <Animated.View style={[st.plate, st.plateSoft, softStyle]} />
-        {/* crisp plate: the kit pair */}
-        <Animated.View style={[st.plate, st.plateCrisp, crispStyle]} />
-        {/* seam grooves — deboss (dark carve + light lip) */}
-        <Animated.View style={[StyleSheet.absoluteFill, st.clip, grooveStyle]}>
-          <Svg width={PLATE} height={PLATE} viewBox={`0 0 ${PLATE} ${PLATE}`}>
-            <Path d={GROOVE_TOP} stroke="rgba(128,139,159,0.55)" strokeWidth={1.6} strokeLinecap="round" fill="none" translateX={1.2} translateY={2} />
-            <Path d={GROOVE_BOT} stroke="rgba(128,139,159,0.55)" strokeWidth={1.6} strokeLinecap="round" fill="none" translateX={1.2} translateY={2} />
-            <Path d={GROOVE_TOP} stroke="rgba(24,26,30,0.85)" strokeWidth={3} strokeLinecap="round" fill="none" />
-            <Path d={GROOVE_BOT} stroke="rgba(24,26,30,0.85)" strokeWidth={3} strokeLinecap="round" fill="none" />
-          </Svg>
-        </Animated.View>
-        {/* one quick, low-key sheen pass */}
-        <View style={[StyleSheet.absoluteFill, st.clip]}>
-          <Animated.View style={[st.sheen, sheenStyle]}>
-            <LinearGradient
-              colors={['rgba(244,245,247,0)', 'rgba(244,245,247,0.16)', 'rgba(244,245,247,0)']}
-              start={{ x: 0, y: 0.5 }}
-              end={{ x: 1, y: 0.5 }}
-              style={{ flex: 1 }}
-            />
+      <Animated.View style={[st.column, { height: columnH }, columnStyle]}>
+        <Animated.View style={[st.plate, plateStyle]}>
+          <Animated.View style={[st.plateFace, st.tierLow, tierLowStyle]} />
+          <Animated.View style={[st.plateFace, st.tierMid, tierMidStyle]} />
+          <Animated.View style={[st.plateFace, NEU.raisedHigh, tierHighStyle]} />
+          <Animated.View style={[st.plateFace, st.plateBody, bodyStyle]} />
+          <Animated.View style={[st.plateFace, st.clip, grooveStyle]}>
+            <Svg width={PLATE} height={PLATE} viewBox={`0 0 ${PLATE} ${PLATE}`}>
+              <Path d={GROOVE_TOP} stroke={liteSh(0.55)} strokeWidth={1.6} strokeLinecap="round" fill="none" translateX={1.2} translateY={2} />
+              <Path d={GROOVE_BOT} stroke={liteSh(0.55)} strokeWidth={1.6} strokeLinecap="round" fill="none" translateX={1.2} translateY={2} />
+              <Path d={GROOVE_TOP} stroke={darkSh(0.85)} strokeWidth={3} strokeLinecap="round" fill="none" />
+              <Path d={GROOVE_BOT} stroke={darkSh(0.85)} strokeWidth={3} strokeLinecap="round" fill="none" />
+            </Svg>
           </Animated.View>
+        </Animated.View>
+
+        <Animated.Text style={[st.word, wordStyle]}>STUROIDS</Animated.Text>
+        <Animated.Text style={[st.caption, captionStyle]}>ALL-IN-ONE STUDENT APP</Animated.Text>
+
+        <View style={{ width: sigW, height: sigH, marginTop: GAP_SIG }}>
+          {full ? (
+            <Signature
+              width={sigW}
+              heroScale={heroScale}
+              heroX={0}
+              heroY={heroY}
+              tau={tau}
+              travel={travel}
+              ink={ink}
+              carve={carve}
+              glint={glint}
+            />
+          ) : (
+            <SignatureStill width={sigW} />
+          )}
         </View>
       </Animated.View>
-
-      <Animated.Text style={[st.word, wordStyle]}>STUROIDS</Animated.Text>
-      <Animated.Text style={[st.caption, capStyle]}>ALL-IN-ONE STUDENT APP</Animated.Text>
     </Animated.View>
   );
 }
 
 const st = StyleSheet.create({
-  center: { alignItems: 'center', justifyContent: 'center' },
-  bloom: {
-    position: 'absolute', width: 280, height: 280, borderRadius: 140,
-    backgroundColor: 'rgba(128,139,159,0.10)',
-    boxShadow: '0 0 90px 40px rgba(128,139,159,0.16)',
+  overlay: { zIndex: 100, alignItems: 'center', justifyContent: 'center' },
+  column: { alignSelf: 'stretch', alignItems: 'center' },
+  plate: { width: PLATE, height: PLATE, marginBottom: GAP_WORD },
+  plateFace: {
+    position: 'absolute', top: 0, left: 0, width: PLATE, height: PLATE, borderRadius: R,
   },
-  plateWrap: { width: PLATE, height: PLATE, marginBottom: 30 },
-  plate: {
-    position: 'absolute', top: 0, left: 0, width: PLATE, height: PLATE,
-    borderRadius: R, backgroundColor: C.card,
+  // shadow-only tiers: an outset box shadow never paints under its own box, so these stay clear
+  tierLow: { boxShadow: plateShadow(0.35) },
+  tierMid: { boxShadow: plateShadow(0.7) },
+  plateBody: { backgroundColor: C.card },
+  clip: { overflow: 'hidden' },
+  word: {
+    height: WORD_H, lineHeight: WORD_H, textAlign: 'center',
+    color: C.text, fontFamily: F.semi, fontSize: 22,
   },
-  plateSoft: {
-    boxShadow: '12px -20.8px 46px rgba(128,139,159,0.10), -12px 20.8px 54px rgba(24,26,30,0.20)',
-  },
-  plateCrisp: {
-    boxShadow: '3px -5.2px 6px rgba(128,139,159,0.25), -3px 5.2px 15px rgba(24,26,30,0.48)',
-  },
-  clip: { borderRadius: R, overflow: 'hidden' },
-  sheen: { position: 'absolute', top: -30, bottom: -30, left: 0, width: 70 },
-  word: { color: C.text, fontFamily: F.semi, fontSize: 22 },
   caption: {
-    color: C.textFaint, fontFamily: F.med, fontSize: 9,
-    letterSpacing: 2.6, paddingLeft: 2.6, marginTop: 10,
+    height: CAPTION_H, lineHeight: CAPTION_H, marginTop: GAP_CAPTION, textAlign: 'center',
+    color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: 2.2, paddingLeft: 2.2,
   },
 });

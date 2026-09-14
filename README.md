@@ -23,6 +23,16 @@ Double-click **`build-apk.bat`** (~10–20 min, installs over the old app, data 
 
 **Launcher fix.** The installed-apps picker now returns the *complete* launcher set (`MATCH_ALL` + no display cap) — previously it listed only the first 50.
 
+## Re-recording the signature
+
+The intro writes the signature from a real pen recording. To replace it, record a new one in the Intro Lab, press **Copy my data**, and paste the copied text into `scripts/signature.raw.json` (the bare `{"strokes":[...]}` recording works too; a lab copy also carries its size and speed picks). Then run:
+
+```
+node scripts/build-signature.js
+```
+
+It regenerates `src/signature.ts` (commit it) and prints a summary of the model. `node scripts/build-signature.js --check` exits 1 when `src/signature.ts` is out of date.
+
 ## Build note
 
 `npx tsc --noEmit` is clean. If `eas build` reports any error, paste the log — one-pass fix.
