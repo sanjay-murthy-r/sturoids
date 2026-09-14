@@ -1,48 +1,70 @@
-# Sturoids v1.3 — dark soft-UI (dual-shadow neumorphism)
+# Sturoids
 
-Local-first student hub. React Native + Expo SDK 53 · expo-router · zustand · reanimated.
+A local-first student hub for Android: tasks, Deep Work, a planner, notes, a journal, a calculator, Desmos, a lecture-video vault and AI links, on one dark neumorphic material. React Native 0.79 (new architecture), Expo SDK 53, expo-router, zustand, Reanimated.
 
-## Build the APK
+## Build
 
-Double-click **`build-apk.bat`** (~10–20 min, installs over the old app, data migrates automatically).
+Double-click **`build-apk.bat`** (about 10 to 20 minutes). It installs over the old app, and saved data migrates on first launch.
 
-## v1.3 — exact Figma-kit implementation
+Version 1.4 adds native modules (device unlock, secure storage, screen capture protection, keep awake, brightness, navigation bar, image cache, and the installed-apps list now answers off the JS thread). The first build after updating has to be a full native build.
 
-**Extracted, not guessed.** Palette from the kit's grey colour strip: `#F4F5F7 · #DDE3ED · #808B9F · #5B6577 · #39404E · #2C2D30`. Shadow system from the Neumorphism UI Kit (Community) board: dual drop-shadows per surface (dark side `rgb(174,174,192)` @ 0.2/0.4/0.6 tiers, light side white @ 0.7/1.0, blur ≈ 1.4 × offset) — recreated for the dark theme with the strip's own greys. The source SVGs were never checked in — `src/theme.ts` is the surviving record of both.
+## Checks
 
-**Overrides as requested:**
-- Shadow distance = **6px** on both sides.
-- Light angle = **60°** — one constant; highlight offset = (6·cos60°, −6·sin60°) = (3, −5.2), dark side derived automatically as the exact opposite (240°). Change `NEU_ANGLE` in `src/theme.ts` and everything follows.
-- Implemented with true dual `boxShadow`s (new-architecture RN — real light+dark shadows on Android, including `inset` for carved-in wells).
+```
+npx tsc --noEmit
+npm run lint:type
+node scripts/build-signature.js --check
+```
 
-**Toggle boundary rule.** The track has `overflow: hidden`; the knob's highlight/shadow rims exist only within the track's rounded bounds. When the knob sits at the "on" edge, the rim on that side simply runs out of room and vanishes — geometry, not a special-cased style.
+`lint:type` fails on `fontWeight`, fractional or sub-11 font sizes, and any size set without a font family.
 
-**Status bar, properly.** The old opaque strip painted over real content on screens that already have a native header (the visible bug). Now: headered screens rely on their header; only the five tab screens carry the guard zone, matched to the background.
+## How it fits together
 
-**Accent colour themes.** Settings → Accent colour: 6 swatches (Iris `#8B7CF8`, Aqua `#4FC4B8`, Sky `#5CA8F5`, Rose `#F07E98`, Amber `#EDAE49`, Mint `#66D28F`). Recolours highlights, links, FABs, controls app-wide instantly; background stays the grey material.
+**Navigation.** The bar always has five places: Today, three slots and More. Settings chooses the tool in each slot. A tool in a slot opens as a tab and keeps the bar; every other tool opens full screen from More, with a back button. `openTool()` in `src/toolNav.ts` goes to wherever a tool lives right now, so links from Today, the planner and quick access never open a second copy. Each tool screen takes `mode: 'tab' | 'stack'`.
 
-**Launcher fix.** The installed-apps picker now returns the *complete* launcher set (`MATCH_ALL` + no display cap) — previously it listed only the first 50.
+**Data.** One persisted zustand store (`src/store.ts`, version 5). A load that fails or answers late is never silent: the saved data is copied aside before anything can overwrite it, and Settings, under Data, can share or restore that copy. Journal text lives in files with a small index in the store, because Android cannot read a single storage row over about 2 MB. Backups carry everything, journal text included.
+
+**Journal.** Opens on the right page: before the cutoff hour (11:00 by default) the page is about yesterday. Saves run through one queue, so leaving, switching days or deleting never races a save. The archive searches titles, text and tags, filters by month, mood, tags and pins, and shows streaks and On this day.
+
+**Locks.** The journal and single notes can sit behind the phone's fingerprint, face or screen lock, or an app PIN (a salted SHA-256 in the keystore; five tries, then a cooldown that survives restarts). Locks hide content; they do not encrypt it. While locked content is open, Android keeps it out of screenshots and the recent apps preview, and making a backup that carries locked pages asks for the owner first.
+
+**Deep Work.** A running session survives the app being closed. Ambient mode is a dimmed, always-on clock that drifts a few points each minute; hold anywhere to leave it.
+
+**Intro.** The start screen writes the signature from a real pen recording, then settles it under the wordmark.
+
+## Design system
+
+Everything visual comes from `src/theme.ts`.
+
+- **One light.** `NEU_ANGLE` 60 and `NEU_DIST` 6 drive every raised and carved surface. Surfaces use `NEU`, `neuRaised()` and `neuInset()` only, never literal shadows; tracks under 20 points use the hairline carve.
+- **One accent.** Chosen in Settings from six swatches, Iris by default. No glows.
+- **Type.** Rubik through the `F` faces and the closed `T` scale (display 30, h1 22, title 17, body 15, label 13, caption 12, kicker 11), IBM Plex Mono for timers. Never `fontWeight`.
+- **Copy.** Sentence case, no emoji, no em dashes.
+- **Palette.** Three warm materials (Bark, Clay, Umber) are proposed in the Palette Lab; the app keeps its grey until one is picked.
 
 ## Re-recording the signature
 
-The intro writes the signature from a real pen recording. To replace it, record a new one in the Intro Lab, press **Copy my data**, and paste the copied text into `scripts/signature.raw.json` (the bare `{"strokes":[...]}` recording works too; a lab copy also carries its size and speed picks). Then run:
+Record a new signature in the Intro Lab, press **Copy my data**, and paste the copied text into `scripts/signature.raw.json` (a bare `{"strokes":[...]}` recording works too; a lab copy also carries its size and speed picks). Then run:
 
 ```
 node scripts/build-signature.js
 ```
 
-It regenerates `src/signature.ts` (commit it) and prints a summary of the model. `node scripts/build-signature.js --check` exits 1 when `src/signature.ts` is out of date.
-
-## Build note
-
-`npx tsc --noEmit` is clean. If `eas build` reports any error, paste the log — one-pass fix.
+It regenerates `src/signature.ts` (commit it) and prints a summary of the model.
 
 ## Layout
 
 ```
-src/theme.ts        strip palette · NEU_ANGLE/NEU_DIST · neuRaised()/neuInset() · ACCENT_CHOICES
-src/components/UI   soft-UI kit (Card, Inset, Toggle, Field, …)
-src/components/Motion  sink-press + soft-rise
-src/components/StartScreen  seam-light intro
-modules/app-list    native installed-apps module
+app/                  routes: (tabs) with slot1..3 stacks, full-screen tool pages, settings
+src/screens/          one body per tool, shared by its tab and full-screen routes
+src/tools.ts          the tool registry
+src/toolNav.ts        openTool, tab fling, slot context
+src/store.ts          persisted state, migrations, backups, load safety
+src/journal.ts        journal files, days, prompts, search, stats
+src/lock.ts           lock session, device unlock, app PIN
+src/deepWork.ts       session timing shared by Focus and ambient
+src/theme.ts          palette, NEU shadows, type scale
+src/components/       UI kit, tab bar, sheets, toasts, lock gate, ambient view, intro
+scripts/              signature builder, type lint
+modules/app-list/     native installed-apps module
 ```
