@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Directions, Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, SH, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
@@ -512,8 +512,10 @@ export function Sheet({
   const scrollMax = Math.min(540, Math.max(220, winH * 0.72 - 120));
   const [render, setRender] = React.useState(visible);
   const prog = useSharedValue(visible ? 1 : 0);
+  const drag = useSharedValue(0);
   React.useEffect(() => {
     if (visible) {
+      drag.value = 0;
       setRender(true);
       tap();
       if (level === 'none') { prog.value = 1; }
@@ -531,14 +533,27 @@ export function Sheet({
   // NOTE: the panel keeps full opacity — only the slide is animated. (An
   // animated panel opacity read as a "transparent popup" bug on device.)
   const panelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: (1 - prog.value) * 64 }],
+    transform: [{ translateY: (1 - prog.value) * 64 + drag.value }],
   }));
+  // a pull on the handle or the title follows the finger; far enough, or flicked, it closes the sheet
+  const closeRef = React.useRef(onClose);
+  closeRef.current = onClose;
+  const requestClose = React.useCallback(() => closeRef.current(), []);
+  const pull = React.useMemo(() => Gesture.Pan()
+    .activeOffsetY(8)
+    .onUpdate((e) => { drag.value = Math.max(0, e.translationY); })
+    .onEnd((e) => {
+      if (e.translationY > 90 || e.velocityY > 900) runOnJS(requestClose)();
+      else drag.value = withSpring(0, RISE_OUT);
+    }), [requestClose]);
   if (!render) return null;
   // statusBarTranslucent: app.json runs a translucent status bar, so the modal's
   // own window has to span it too — without it the dialog content view starts
   // below the bar and the backdrop leaves an undimmed strip across the top
   return (
     <Modal visible transparent statusBarTranslucent animationType="none" onRequestClose={onClose}>
+      {/* a modal is its own window: gestures inside it need their own root */}
+      <GestureHandlerRootView style={{ flex: 1 }}>
       <Animated.View style={[st.sheetOverlay, backdropStyle]}>
         <Pressable style={{ flex: 1 }} onPress={onClose} />
       </Animated.View>
@@ -546,8 +561,12 @@ export function Sheet({
         <Animated.View style={[st.sheet, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: undefined }, panelStyle]}>
           {/* minimal has no shadow to define the handle, so the FILL has to
               carry it — C.inset on MIN.card is all but invisible */}
-          <View style={[st.sheetHandle, theme === 'minimal' ? { backgroundColor: MIN.border } : neuInset('low')]} />
-          {title ? <Text style={st.sheetTitle}>{title}</Text> : null}
+          <GestureDetector gesture={pull}>
+            <View collapsable={false} style={st.grab}>
+              <View style={[st.sheetHandle, theme === 'minimal' ? { backgroundColor: MIN.border } : neuInset('hairline')]} />
+              {title ? <Text style={st.sheetTitle}>{title}</Text> : null}
+            </View>
+          </GestureDetector>
           {/* negative margin + matching padding: children's raised shadows get
               breathing room inside the ScrollView's clip bounds */}
           <ScrollView
@@ -559,6 +578,7 @@ export function Sheet({
           </ScrollView>
         </Animated.View>
       </KeyboardAvoidingView>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -649,6 +669,8 @@ const st = StyleSheet.create({
     color: C.textFaint, fontFamily: F.reg, fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 4, maxWidth: 300,
   },
   sheetOverlay: { flex: 1, backgroundColor: C.scrim },
+  /** the handle and title: a taller target for the pull that closes a sheet */
+  grab: { marginTop: -12, paddingTop: 12 },
   sheet: {
     backgroundColor: C.card, borderTopLeftRadius: 30, borderTopRightRadius: 30,
     padding: 22, paddingBottom: 36,

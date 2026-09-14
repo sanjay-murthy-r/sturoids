@@ -178,6 +178,20 @@ export default function Today() {
             </Card>
           </Enter>
         )}
+        {!nextBlock && !(planner[dayName(now)] || []).length ? (
+          <Pressable
+            onPress={() => openTool('planner')}
+            style={[
+              st.journalNudge,
+              { marginTop: 0, marginBottom: 12 },
+              theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
+            ]}
+          >
+            <Ionicons name="calendar-outline" size={17} color={C.textFaint} />
+            <Text style={st.journalNudgeText}>No blocks planned today</Text>
+            <Text style={[st.link, { color: C.accent }]}>Plan</Text>
+          </Pressable>
+        ) : null}
 
         <Enter index={2}>
           <Card pad={0}>
@@ -292,14 +306,14 @@ export default function Today() {
                 <WeekBar key={i} label={b.label} mins={b.mins} maxMins={maxMins} isToday={i === 6} />
               ))}
             </Row>
-            {weekTotal > 0 && (
-              <>
-                <Hairline />
-                <Text style={[T.caption, { textAlign: 'center', marginTop: 10 }]}>
+            <Hairline />
+            <Text style={[T.caption, { textAlign: 'center', marginTop: 10 }]}>
+              {weekTotal > 0 ? (
+                <>
                   <Text style={{ color: C.accent, fontFamily: F.semi }}>{weekTotal} min</Text> focused in the last 7 days
-                </Text>
-              </>
-            )}
+                </>
+              ) : 'No focus logged this week yet.'}
+            </Text>
           </Card>
         </Enter>
       </ScrollView>
@@ -501,7 +515,9 @@ function QuickGrid({ items, edit, onRun, onRemove, onReorder, onAdd }: {
   const { width: winW } = useWindowDimensions();
   const cell = Math.floor((winW - S.pad * 2 - QA_GAP * (QA_COLS - 1)) / QA_COLS);
   const [dragId, setDragId] = useState<string | null>(null);
-  const slotCount = items.length + (edit ? 1 : 0);
+  // an empty grid always offers Add, so quick access never looks like nothing
+  const showAdd = edit || items.length === 0;
+  const slotCount = items.length + (showAdd ? 1 : 0);
   const rows = Math.max(1, Math.ceil(slotCount / QA_COLS));
   const height = rows * QA_CELL_H + (rows - 1) * QA_GAP;
   const reorder = (id: string, idx: number) => {
@@ -525,7 +541,7 @@ function QuickGrid({ items, edit, onRun, onRemove, onReorder, onAdd }: {
           onRun={onRun} edit={edit} onRemove={onRemove}
         />
       ))}
-      {edit && (
+      {showAdd && (
         <Bouncy
           onPress={onAdd}
           radius={18}

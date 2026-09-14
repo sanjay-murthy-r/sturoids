@@ -1,9 +1,9 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { View, ActivityIndicator, BackHandler } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { C, MIN, bgFor, neuRaised } from '../theme';
-import { NeuHeader, ScreenBG, useTheme } from '../components/UI';
+import { NeuHeader, ScreenBG, useTheme, EmptyState } from '../components/UI';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
@@ -13,6 +13,8 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const bg = bgFor(theme);
   const webRef = useRef<WebView>(null);
   const canBack = useRef(false);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   // layered back: web history first, then the tool itself
   const goBack = useCallback(() => {
     if (canBack.current) { webRef.current?.goBack(); return true; }
@@ -32,8 +34,18 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
           compact
           onBack={() => { if (!goBack()) router.back(); }}
         />
+        {failed ? (
+          <View style={{ flex: 1, justifyContent: 'center' }}>
+            <EmptyState
+              icon="cloud-offline-outline" title="Desmos needs a connection." body="Check your internet, then try again."
+              actionLabel="Retry" onAction={() => { setFailed(false); setAttempt((a) => a + 1); }}
+            />
+          </View>
+        ) : (
         <WebView
+          key={attempt}
           ref={webRef}
+          onError={() => setFailed(true)}
           onNavigationStateChange={(s) => { canBack.current = s.canGoBack; }}
           source={{ uri: 'https://www.desmos.com/calculator' }}
           style={{ flex: 1, backgroundColor: bg }}
@@ -55,6 +67,7 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
             </View>
           )}
         />
+        )}
       </View>
     </ScreenBG>
   );

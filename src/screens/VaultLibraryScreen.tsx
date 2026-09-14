@@ -5,7 +5,7 @@ import {
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, S, T } from '../theme';
+import { C, F, S, T, NEU } from '../theme';
 import { useStore, VaultVideo, VaultFolder } from '../store';
 import { parseYouTubeId, fmtMediaTime } from '../utils';
 import {
@@ -16,6 +16,7 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { Enter } from '../components/Motion';
 import { useToolNav } from '../toolNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image as CachedImage } from 'expo-image';
 
 const thumb = (videoId: string) => 'https://img.youtube.com/vi/' + videoId + '/mqdefault.jpg';
 
@@ -31,6 +32,24 @@ async function fetchTitle(videoId: string): Promise<string> {
 }
 
 type ViewTab = 'library' | 'recent' | 'notes';
+
+/** A video's thumbnail, cached on the phone, with a carved play mark when it cannot load. */
+function Thumb({ videoId }: { videoId: string }) {
+  const [failed, setFailed] = React.useState(false);
+  if (failed) {
+    return (
+      <View style={[st.thumb, { backgroundColor: C.inset, alignItems: 'center', justifyContent: 'center', ...NEU.insetLow }]}>
+        <Ionicons name="play-outline" size={20} color={C.textFaint} />
+      </View>
+    );
+  }
+  return (
+    <CachedImage
+      source={{ uri: thumb(videoId) }} style={st.thumb} contentFit="cover" cachePolicy="memory-disk"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const nav = useToolNav();
@@ -150,7 +169,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     <Enter key={v.id} index={Math.min(i, 8)}>
       <Card pad={10} onPress={() => nav.openVideo(v.id)}>
         <Row>
-          <Image source={{ uri: thumb(v.videoId) }} style={st.thumb} />
+          <Thumb videoId={v.videoId} />
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Text style={[T.body, { fontFamily: F.semi, fontSize: 14, lineHeight: 19 }]} numberOfLines={2}>{v.title}</Text>
             <Text style={[T.caption, { marginTop: 3 }]} numberOfLines={1}>
@@ -181,10 +200,10 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
               <Field
                 value={url} onChangeText={setUrl} placeholder={cwdFolder ? 'Add to ' + cwdFolder.name + '…' : 'Paste a YouTube link…'}
                 autoCapitalize="none" style={{ flex: 1, marginBottom: 0 }}
-                onSubmitEditing={() => url.trim() && submit(url)}
+                onSubmitEditing={() => { if (!adding && url.trim()) submit(url); }}
               />
               <IconBtn name="clipboard-outline" color={C.pink} size={22} style={{ marginLeft: 4 }} onPress={paste} />
-              <NeuIconBtn name="add" color={C.pink} dim={40} onPress={() => url.trim() && submit(url)} />
+              <NeuIconBtn name="add" color={adding ? C.textFaint : C.pink} dim={40} onPress={() => { if (!adding && url.trim()) submit(url); }} />
             </Row>
             {adding && <Text style={[T.caption, { marginTop: 6 }]}>Fetching title…</Text>}
           </Card>
@@ -370,9 +389,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <Sheet visible={!!previewSheet} onClose={() => setPreviewSheet(null)}>
         {previewSheet && (
           <View>
-            <Image
-              source={{ uri: thumb(previewSheet.video.videoId) }}
-              style={{ width: '100%', aspectRatio: 16 / 9, borderRadius: 16 }}
+            <CachedImage
+              source={{ uri: thumb(previewSheet.video.videoId) }} contentFit="cover" cachePolicy="memory-disk"
+              style={{ width: '100%', aspectRatio: 16 / 9, borderRadius: 16, backgroundColor: C.inset }}
             />
             <Text style={[T.title, { marginTop: 12 }]}>{previewSheet.video.title}</Text>
             <Text style={[T.caption, { marginTop: 4 }]}>
@@ -390,7 +409,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 }
 
 const st = StyleSheet.create({
-  thumb: { width: 92, height: 52, borderRadius: 10, backgroundColor: '#000' },
+  thumb: { width: 92, height: 52, borderRadius: 10, backgroundColor: C.inset },
   timePill: {
     flexDirection: 'row', alignItems: 'center',
     borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4,

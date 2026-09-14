@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore, AiLink } from '../store';
 import { uid } from '../utils';
-import { ScreenBG, Card, Sheet, Field, PillButton, Row, IconBtn, InfoDot, NeuHeader, useTheme } from '../components/UI';
+import { ScreenBG, Card, Sheet, Field, PillButton, Row, IconBtn, InfoDot, NeuHeader, useTheme, EmptyState } from '../components/UI';
 import { toast } from '../components/Toast';
 import { Enter } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -109,7 +109,13 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
           ))}
         </View>
 
-        {edit && <PillButton label="Add link" icon="add" onPress={() => setAddSheet(true)} />}
+        {aiLinks.length === 0 ? (
+          <EmptyState
+            icon="sparkles-outline" title="Add your first tool" body="Keep the assistants you study with one tap away."
+            actionLabel="Add link" onAction={() => setAddSheet(true)}
+          />
+        ) : null}
+        {edit && aiLinks.length > 0 && <PillButton label="Add link" icon="add" onPress={() => setAddSheet(true)} />}
       </ScrollView>
 
       <Sheet visible={addSheet} onClose={() => setAddSheet(false)} title="Add AI tool">
