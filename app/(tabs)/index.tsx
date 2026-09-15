@@ -15,7 +15,7 @@ import {
 import { Enter, Bouncy, Pop, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { tap } from '../../src/haptics';
 import { ROUTE_CATALOG, launchExternal } from '../../src/quickAccess';
-import { ToolKey, colorOf } from '../../src/tools';
+import { ToolKey, colorOf, toolByKey } from '../../src/tools';
 import { openTool } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
 import { journalDayFor } from '../../src/journal';
@@ -235,7 +235,7 @@ export default function Today() {
               theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
             ]}
           >
-            <Ionicons name="book-outline" size={17} color={C.gold} />
+            <Ionicons name="journal-outline" size={17} color={C.gold} />
             <Text style={st.journalNudgeText}>{journalDay === today ? "Today's page is empty" : "Yesterday's page is empty"}</Text>
             <Text style={[st.link, { color: C.gold }]}>Write</Text>
           </Pressable>
@@ -495,7 +495,7 @@ function QuickTile({ q, index, count, cell, isDragging, onDragState, onCross, on
               : { backgroundColor: C.card, ...neuRaised('mid') },
           ]}
         >
-          <Ionicons name={q.icon as any} size={24} color={colorOf(q.color)} />
+          <Ionicons name={(q.kind === 'tool' ? toolByKey(q.target)?.icon || q.icon : q.icon) as any} size={24} color={colorOf(q.color)} />
           <Text style={[st.gridLabel, { maxWidth: cell - 10 }]} numberOfLines={1}>{q.label}</Text>
         </Bouncy>
         {edit && (

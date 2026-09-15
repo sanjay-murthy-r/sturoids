@@ -227,7 +227,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   );
 
   const empty = journal.length === 0 ? (
-    <EmptyState icon="book-outline" title="Your first page is waiting." action="Write today" onAction={() => open(journalDayFor(new Date(), cutoff))} />
+    <EmptyState icon="journal-outline" title="Your first page is waiting." action="Write today" onAction={() => open(journalDayFor(new Date(), cutoff))} />
   ) : (
     <EmptyState icon="search-outline" title="Nothing matches those filters." action="Clear filters" onAction={clearAll} />
   );
@@ -321,7 +321,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
         visible={!!menu}
         onClose={() => setMenu(null)}
         items={menu ? [
-          { label: 'Open', icon: 'book-outline', onPress: () => open(menu.dateKey, menu.id) },
+          { label: 'Open', icon: 'journal-outline', onPress: () => open(menu.dateKey, menu.id) },
           { label: menu.pinned ? 'Unpin' : 'Pin', icon: menu.pinned ? 'pin' : 'pin-outline', onPress: () => patchJournalEntry(menu.id, { pinned: !menu.pinned }) },
           { label: 'Change day', icon: 'calendar-outline', onPress: () => setMoveEntry(menu) },
           { label: 'Share as text', icon: 'share-outline', onPress: () => shareEntry(menu) },

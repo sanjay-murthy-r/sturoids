@@ -365,7 +365,7 @@ function normaliseQuick(items: any): QuickItem[] {
     if (q.kind === 'tool') {
       const t = toolByKey(q.target);
       if (!t) continue;
-      q = { ...q, color: t.colorKey }; // one colour per tool, everywhere
+      q = { ...q, color: t.colorKey, icon: t.icon }; // one colour and one icon per tool, everywhere
     } else if (q.kind === 'route' && q.target === '/settings') {
       q = { ...q, color: 'slate' };
     } else if (typeof q.color === 'string' && QUICK_COLOR_REMAP[q.color.toUpperCase()]) {

@@ -47,9 +47,9 @@ Everything visual comes from `src/theme.ts`.
 - **Copy.** Sentence case, no emoji, no em dashes.
 - **Palette.** Claude's dark greys. The material is Claude's raised surface `#30302E`, carved floors sit a step below it at `#2B2B29`, and text uses `#FAF9F5`, `#C2C0B6` and `#9C9A92`. The minimal theme is Claude's own flat layering: canvas `#262624` ground, surface cards, sidebar `#1F1E1D` wells.
 - **Spacing.** Generous by default: `S.section` 34 between sections, `S.gap` 14 between cards, and controls never sit flush against the card below them.
-- **Tab bar.** One carved trough with a raised key that slides to the current tab.
-- **Raised inside carved is clipped.** A raised part sitting in a carved well (a toggle knob, a segmented thumb, the tab key, a radio dot) is clipped by that well, so neither its light nor its shadow crosses the rim.
-- **Depth where it counts.** Cards, buttons, keys, toggles, fields, segmented controls and the tab bar are neumorphic. Rows of small choices are flat: chips, colour swatches, calendar days, moods, and the planner's day, which shows today first with its neighbours either side.
+- **Tab bar.** A quiet rail on the material under one hairline: outline icons, and only the current tab takes the accent, with its name and a small dot beneath. Every tool's glyph comes from `src/tools.ts`, so the bar, More, Settings and quick access always agree.
+- **Raised inside carved is clipped.** A raised part sitting in a carved well (a toggle knob, a segmented thumb, a radio dot) is clipped by that well, so neither its light nor its shadow crosses the rim.
+- **Depth where it counts.** Cards, buttons, keys, toggles, fields and segmented controls are neumorphic. The tab bar and rows of small choices are flat: chips, colour swatches, calendar days, moods, and the planner's day, which shows today first with its neighbours either side.
 
 ## Re-recording the signature
 
