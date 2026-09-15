@@ -3,8 +3,8 @@ import { TextStyle } from 'react-native';
 // ============================================================================
 // Sturoids v5 — dark soft-UI (dual-shadow neumorphism)
 //
-// Palette extracted from "Gray colour strip.svg" (exact, not guessed):
-//   #F4F5F7  #DDE3ED  #808B9F  #5B6577  #39404E  #2C2D30
+// Palette: Claude's dark theme greys, picked in the Palette Lab on 2026-09-15:
+//   canvas #262624 (the material)  sidebar #1F1E1D  deep #141413  text #FAF9F5 / #C2C0B6 / #9C9A92
 // Shadow system extracted from "Neumorphism UI Kit (Community).svg":
 //   dual drop-shadows per surface — dark side rgb(174,174,192) @ 0.2/0.4/0.6,
 //   light side rgb(255,255,255) @ 0.7/1.0, blur ≈ 1.4 × offset distance,
@@ -20,13 +20,13 @@ import { TextStyle } from 'react-native';
 export type ThemeMode = 'default' | 'minimal';
 export type AnimLevel = 'none' | 'some' | 'full';
 
-// ---- greys from the strip (g800 deepened one step per user request) ----
+// ---- Claude's dark greys: the material is Claude's canvas ----
 export const GREY = {
-  g50: '#F4F5F7',
-  g100: '#DDE3ED',
-  g400: '#808B9F',
-  g800: '#343A47',
-  g900: '#2C2D30',
+  g50: '#FAF9F5', // text
+  g100: '#C2C0B6', // secondary text
+  g400: '#9C9A92', // muted text
+  g800: '#262624', // canvas: the material
+  g900: '#1F1E1D', // sidebar: the minimal theme's ground
 };
 
 // ---- the one light angle everything derives from ----
@@ -39,8 +39,9 @@ export const LY = +(-NEU_DIST * Math.sin(rad)).toFixed(2); // -5.2
 // dark side is the exact opposite end of the same line: (-LX, -LY)
 
 // the two shadow sources — the ONLY colours the neumorphic recipe reads
-const DARK_RGB = '24, 26, 30'; // #2C2D30 deepened for contrast on g800
-const LITE_RGB = '128, 139, 159'; // GREY.g400, the strip's light grey
+// derived in CIELAB from the canvas with the recipe's own lightness offsets (highlight L* +34, shadow L* -14.7)
+const DARK_RGB = '2, 2, 0';
+const LITE_RGB = '117, 117, 113';
 export const darkSh = (a: number) => `rgba(${DARK_RGB}, ${a})`;
 export const liteSh = (a: number) => `rgba(${LITE_RGB}, ${a})`;
 
@@ -96,7 +97,7 @@ export const SH = Object.freeze({
 });
 
 // ---- accent themes (complementary colour, user-selectable) ----
-// six curated accents — distinct hues, saturated enough to strike on #343A47
+// seven curated accents, each distinct on the Claude canvas; Terracotta is Claude's own orange (4.86:1 there)
 export const ACCENT_CHOICES: { key: string; label: string; color: string }[] = [
   { key: 'iris', label: 'Iris', color: '#8B7CF8' },
   { key: 'aqua', label: 'Aqua', color: '#4FC4B8' },
@@ -104,21 +105,22 @@ export const ACCENT_CHOICES: { key: string; label: string; color: string }[] = [
   { key: 'rose', label: 'Rose', color: '#F07E98' },
   { key: 'amber', label: 'Amber', color: '#EDAE49' },
   { key: 'mint', label: 'Mint', color: '#66D28F' },
+  { key: 'terracotta', label: 'Terracotta', color: '#D97757' },
 ];
 export const DEFAULT_ACCENT = '#8B7CF8';
 
 // ---- tokens ----
 export const C = {
-  bg: GREY.g800,          // #343A47 — the material
+  bg: GREY.g800,          // #262624, the material
   card: GREY.g800,        // classic soft-UI: same colour, depth from shadows
-  inset: '#2F3541',       // g800 dimmed ~2% (kit's #EEEEEE-vs-#F0F0F3 ratio)
+  inset: '#1F1E1D',       // Claude's sidebar tone: the carved floor
   lite: liteSh(0.34),
   border: liteSh(0.16),
-  borderBright: 'rgba(221,227,237,0.28)',
+  borderBright: 'rgba(222,220,209,0.28)',
   hairline: liteSh(0.2),
-  text: GREY.g50,          // #F4F5F7
-  textDim: GREY.g100 + 'C9', // #DDE3ED at ~79%
-  textFaint: GREY.g400,    // #808B9F
+  text: GREY.g50,          // #FAF9F5
+  textDim: GREY.g100,      // #C2C0B6
+  textFaint: GREY.g400,    // #9C9A92, 5.38:1 on the canvas
   // functional palette (accent is runtime-mutable via setAccent) — kit pastel family
   accent: DEFAULT_ACCENT,
   green: '#9AD6B0',
@@ -131,11 +133,11 @@ export const C = {
   /** Deep Work ambient screen — a deliberate AOD-like near-black (user decision D-1) */
   ambient: '#05070F',
   /** toggle knob when off */
-  knob: '#454C59',
+  knob: '#373836',
   /** glyphs sitting ON an accent fill */
   onAccent: GREY.g900,
   /** sheet / dialog backdrop */
-  scrim: 'rgba(15,16,19,0.55)',
+  scrim: 'rgba(12,12,11,0.6)',
   /** the faint dim laid under a pressed carve */
   pressDim: darkSh(0.1),
 };
@@ -147,10 +149,10 @@ export function setAccent(hex: string) {
 
 // high-contrast minimal variant (from the strip's dark end)
 export const MIN = {
-  bg: GREY.g900,     // #2C2D30
-  card: GREY.g800,   // #343A47
-  inset: '#232427',
-  text: '#FFFFFF',
+  bg: GREY.g900,     // #1F1E1D, Claude's sidebar
+  card: GREY.g800,   // #262624, Claude's canvas
+  inset: '#141413',  // Claude's deepest grey
+  text: GREY.g50,
   textDim: C.textDim,
   textFaint: C.textFaint,
   hairline: liteSh(0.35),

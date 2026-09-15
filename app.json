@@ -6,20 +6,20 @@
     "scheme": "sturoids",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "backgroundColor": "#343A47",
+    "backgroundColor": "#262624",
     "newArchEnabled": true,
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#343A47"
+      "backgroundColor": "#262624"
     },
     "androidStatusBar": {
       "translucent": true,
       "barStyle": "light-content"
     },
     "androidNavigationBar": {
-      "backgroundColor": "#343A47",
+      "backgroundColor": "#262624",
       "barStyle": "light"
     },
     "android": {
@@ -28,7 +28,7 @@
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#2C2D30"
+        "backgroundColor": "#1F1E1D"
       },
       "permissions": [
         "android.permission.RECORD_AUDIO",
@@ -65,7 +65,7 @@
           "image": "./assets/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#343A47"
+          "backgroundColor": "#262624"
         }
       ]
     ],
