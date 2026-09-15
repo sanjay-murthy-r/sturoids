@@ -29,9 +29,14 @@ const DOT_POP = 130;
 const DASH = 1.02;
 /** an undrawn line parks its offset inside the gap, clear of the dash edge, so no cap dot shows early */
 const PARK = 1.03;
-/** accent glint: band length along the whole signature (units), stroke alpha */
-const BAND = 0.16 * LINE_LENGTH;
-const GLINT_ALPHA = 0.3;
+/**
+ * accent shine: a core band inside a longer, fainter one, so both ends fall off softly on a slow pass
+ * (band lengths along the whole signature in viewBox units, stroke alphas)
+ */
+const BAND = 0.2 * LINE_LENGTH;
+const SOFT_BAND = 1.8 * BAND;
+const SHINE_ALPHA = 0.26;
+const SOFT_ALPHA = 0.1;
 
 const CARVE_LIP = liteSh(0.55);
 const CARVE_DARK = darkSh(0.85);
@@ -183,23 +188,27 @@ function InkArt({ g, heroScale, tau }: { g: Geo; heroScale: number; tau: SharedV
   );
 }
 
-/* ------------------------------------------------------------------ accent glint */
+/* ------------------------------------------------------------------ accent shine */
 
-function GlintLine({ line, lineW, glint }: { line: SigLine; lineW: number; glint: SharedValue<number> }) {
+function GlintLine({ line, lineW, glint, band, alpha }: {
+  line: SigLine; lineW: number; glint: SharedValue<number>; band: number; alpha: number;
+}) {
   const { len, start } = line;
   const animatedProps = useAnimatedProps(() => {
-    // the band's head travels the whole signature once, in stroke order
-    const head = -BAND + glint.value * (LINE_LENGTH + 2 * BAND);
+    // the shine's centre travels the whole signature once, in stroke order, from fully before it to fully
+    // past it; every band is centred on it, so the soft band always surrounds the core
+    const centre = -SOFT_BAND / 2 + glint.value * (LINE_LENGTH + SOFT_BAND);
+    const head = centre + band / 2;
     // clamped per line: past both ends the band is fully off this line, and the dash pattern's
     // next repeat can never land on it while the head is crossing another line
-    const h = Math.min(Math.max(head - start, -1.5 * BAND), len + 1.5 * BAND);
-    return { strokeDashoffset: BAND - h };
+    const h = Math.min(Math.max(head - start, -1.5 * band), len + 1.5 * band);
+    return { strokeDashoffset: band - h };
   });
   return (
     <AnimatedPath
-      d={line.d} fill="none" stroke={C.accent} strokeOpacity={GLINT_ALPHA} strokeWidth={lineW}
+      d={line.d} fill="none" stroke={C.accent} strokeOpacity={alpha} strokeWidth={lineW}
       strokeLinecap="round" strokeLinejoin="round"
-      strokeDasharray={[BAND, len + 2 * BAND]}
+      strokeDasharray={[band, len + 2 * band]}
       animatedProps={animatedProps}
     />
   );
@@ -246,7 +255,7 @@ export function Signature({ width, heroScale, heroX, heroY, tau, travel, ink, ca
   const carveStyle = useAnimatedStyle(() => ({ opacity: carve.value }));
   const inkStyle = useAnimatedStyle(() => ({ opacity: ink.value }));
   const glintStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(glint.value, [0, 0.12, 0.75, 1], [0, 1, 1, 0], Extrapolation.CLAMP),
+    opacity: interpolate(glint.value, [0, 0.1, 0.85, 1], [0, 1, 1, 0], Extrapolation.CLAMP),
   }));
 
   return (
@@ -262,7 +271,12 @@ export function Signature({ width, heroScale, heroX, heroY, tau, travel, ink, ca
           width={g.boxW} height={g.boxH} viewBox={g.viewBox}
           style={{ position: 'absolute', left: -g.padPx, top: -g.padPx }}
         >
-          {LINES.map((l, i) => <GlintLine key={i} line={l} lineW={g.lineW} glint={glint} />)}
+          {LINES.map((l, i) => (
+            <GlintLine key={'soft' + i} line={l} lineW={g.lineW} glint={glint} band={SOFT_BAND} alpha={SOFT_ALPHA} />
+          ))}
+          {LINES.map((l, i) => (
+            <GlintLine key={'core' + i} line={l} lineW={g.lineW} glint={glint} band={BAND} alpha={SHINE_ALPHA} />
+          ))}
         </Svg>
       </Animated.View>
     </Animated.View>

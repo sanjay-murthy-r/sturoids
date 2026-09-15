@@ -5,7 +5,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
-import { C, F, MIN, NEU, S, T } from '../theme';
+import { C, F, S, T } from '../theme';
 import { useStore, JournalEntry } from '../store';
 import { todayKey } from '../utils';
 import {
@@ -51,7 +51,7 @@ export function JournalScreen({ mode }: { mode: 'tab' | 'stack' }) {
 function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const theme = useTheme();
+  useTheme(); // repaints on a new accent
   const level = useAnimLevel();
   const nav = useToolNav();
   const settings = useStore((s) => s.settings);
@@ -295,9 +295,6 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     setTimeout(rescheduleAllReminders, 150);
   };
 
-  const well = theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...NEU.insetLow };
-  const raised = theme === 'minimal' ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.gold } : { backgroundColor: C.card, ...NEU.raisedLow };
-
   return (
     <ScreenBG guard={tabMode}>
       <Animated.View style={[st.head, { paddingTop: insets.top + (tabMode ? 14 : 8) }, headStyle]}>
@@ -362,7 +359,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
                 onPress={() => pickMood(m.value)}
                 scaleTo={0.9}
                 radius={17}
-                style={[st.moodWell, active ? raised : well]}
+                style={[st.moodWell, active && { backgroundColor: C.gold + '24' }]}
               >
                 <Ionicons name={m.icon as any} size={17} color={active ? C.gold : C.textFaint} accessibilityLabel={m.label} />
               </Bouncy>

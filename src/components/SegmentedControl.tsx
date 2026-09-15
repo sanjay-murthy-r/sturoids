@@ -63,6 +63,8 @@ export function SegmentedControl<K extends string>({
         {
           flexDirection: 'row', padding: 4, borderRadius: 999,
           alignSelf: stretch ? 'stretch' : 'flex-start',
+          // the thumb is raised inside the carved trough, so the trough clips its light and shadow at the rim
+          overflow: 'hidden',
         },
         theme === 'minimal'
           ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }

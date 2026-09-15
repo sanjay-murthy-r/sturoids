@@ -33,7 +33,9 @@ node scripts/build-signature.js --check
 
 **Deep Work.** A running session survives the app being closed. Ambient mode is a dimmed, always-on clock that drifts a few points each minute; hold anywhere to leave it.
 
-**Intro.** The start screen writes the signature from a real pen recording, then settles it under the wordmark.
+**Intro.** Four unhurried beats, each finishing before the next: the signature is written from a real pen recording; it shifts into place as the logo rises; the wordmark and caption arrive with a slow accent shine along the signature; the scene rests and dissolves into the app.
+
+**Planner.** The day control puts the chosen day first, large, with its neighbours faded either side. Tap a neighbour or swipe to move a day; away from today, a Today link comes back.
 
 ## Design system
 
@@ -43,9 +45,11 @@ Everything visual comes from `src/theme.ts`.
 - **One accent.** Chosen in Settings from seven swatches, Iris by default; Terracotta is Claude's own orange. No glows.
 - **Type.** Rubik through the `F` faces and the closed `T` scale (display 30, h1 22, title 17, body 15, label 13, caption 12, kicker 11), IBM Plex Mono for timers. Never `fontWeight`.
 - **Copy.** Sentence case, no emoji, no em dashes.
-- **Palette.** Claude's dark greys. The material is Claude's canvas `#262624`, carved floors use its sidebar tone `#1F1E1D`, and text uses `#FAF9F5`, `#C2C0B6` and `#9C9A92`. The minimal theme is Claude's own flat layering.
+- **Palette.** Claude's dark greys. The material is Claude's raised surface `#30302E`, carved floors sit a step below it at `#2B2B29`, and text uses `#FAF9F5`, `#C2C0B6` and `#9C9A92`. The minimal theme is Claude's own flat layering: canvas `#262624` ground, surface cards, sidebar `#1F1E1D` wells.
 - **Spacing.** Generous by default: `S.section` 34 between sections, `S.gap` 14 between cards, and controls never sit flush against the card below them.
 - **Tab bar.** One carved trough with a raised key that slides to the current tab.
+- **Raised inside carved is clipped.** A raised part sitting in a carved well (a toggle knob, a segmented thumb, the tab key, a radio dot) is clipped by that well, so neither its light nor its shadow crosses the rim.
+- **Depth where it counts.** Cards, buttons, keys, toggles, fields, segmented controls and the tab bar are neumorphic. Rows of small choices are flat: chips, colour swatches, calendar days, moods, and the planner's day, which shows today first with its neighbours either side.
 
 ## Re-recording the signature
 

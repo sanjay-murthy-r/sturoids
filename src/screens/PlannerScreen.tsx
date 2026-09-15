@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { C, F, MIN, S, T, BLOCK_COLORS, neuInset, neuRaised } from '../theme';
+import { C, F, S, T, BLOCK_COLORS } from '../theme';
 import { useStore, PlannerBlock, Habit } from '../store';
 import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks } from '../utils';
 import { useNow } from '../hooks/useNow';
@@ -9,7 +9,7 @@ import {
   ScreenBG, GlassCard, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, CheckCircle, useTheme, NeuHeader,
 } from '../components/UI';
 import { Ionicons } from '@expo/vector-icons';
-import { SegmentedControl } from '../components/SegmentedControl';
+import { DayScrubber } from '../components/DayScrubber';
 import { Bouncy, Enter, useFocusKey } from '../components/Motion';
 import { tick } from '../haptics';
 import { rescheduleAllReminders, ensurePermission } from '../notifications';
@@ -18,7 +18,7 @@ import { openTool } from '../toolNav';
 export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const fk = useFocusKey();
-  const theme = useTheme();
+  useTheme(); // repaints on a new accent: the day and the NOW badge read it
 
   const planner = useStore((s) => s.planner);
   const addBlock = useStore((s) => s.addBlock);
@@ -125,17 +125,9 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
           </Row>
         )}
 
-        {/* day selector */}
+        {/* the day, today first: its neighbours sit either side, and a swipe or a tap moves it */}
         <Enter index={0}>
-          {/* all seven days always in view: the chosen one never scrolls away */}
-          <SegmentedControl
-            size="sm"
-            stretch
-            options={DAY_NAMES.map((d) => ({ key: d, label: d.slice(0, 2) }))}
-            value={day}
-            onChange={(d) => setDay(d)}
-            style={{ marginTop: 8, marginBottom: 12 }}
-          />
+          <DayScrubber value={day} today={dayName(now)} onChange={setDay} />
         </Enter>
 
         {/* blocks */}
@@ -238,16 +230,9 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
               <Bouncy
                 key={c} radius={20} scaleTo={0.88}
                 onPress={() => { tick(); setColor(c); }}
-                style={[
-                  st.swatchWell,
-                  theme === 'minimal'
-                    ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: active ? c : MIN.border }
-                    : active
-                      ? { backgroundColor: C.inset, ...neuInset('low') }
-                      : { backgroundColor: C.card, ...neuRaised('low') },
-                ]}
+                style={[st.swatchWell, { borderColor: active ? c : 'transparent' }]}
               >
-                <View style={[st.swatchDisc, { backgroundColor: c }, active && st.swatchDiscActive]} />
+                <View style={[st.swatchDisc, { backgroundColor: c }]} />
               </Bouncy>
             );
           })}
@@ -314,10 +299,10 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 const st = StyleSheet.create({
   colorBar: { width: 4, height: 36, borderRadius: 2, marginRight: 12 },
+  // flat: a ring in the block's own colour marks the chosen one
   swatchWell: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 40, height: 40, borderRadius: 20, borderWidth: 2,
     alignItems: 'center', justifyContent: 'center',
   },
-  swatchDisc: { width: 22, height: 22, borderRadius: 11 },
-  swatchDiscActive: { borderWidth: 2, borderColor: C.text },
+  swatchDisc: { width: 24, height: 24, borderRadius: 12 },
 });

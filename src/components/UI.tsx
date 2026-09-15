@@ -208,45 +208,14 @@ export function SectionTitle({ children, right }: { children: React.ReactNode; r
 }
 
 /**
- * Chips: resting = gently raised; active = pressed INTO the material.
- * The active state MORPHS in — an inset panel springs over the raised surface
- * (the kit's pressed recipe: raised silhouette + carved inner).
+ * Chips are flat: an outline at rest, a quiet tint of their colour when on. They come in rows, and a row of
+ * raised pills reads as clutter, so the depth stays on the surfaces around them.
  */
 export function Chip({
   label, active, color, onPress, small, icon,
 }: { label: string; active?: boolean; color?: string; onPress?: () => void; small?: boolean; icon?: any }) {
   const theme = useTheme();
-  const level = useAnimLevel();
   const c = color || C.accent;
-  const a = useSharedValue(active ? 1 : 0);
-  React.useEffect(() => {
-    a.value = level === 'none' ? (active ? 1 : 0) : withSpring(active ? 1 : 0, RISE_OUT);
-  }, [active, level]);
-  const insetStyle = useAnimatedStyle(() => ({ opacity: a.value }));
-  const content = (
-    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-      {icon ? (
-        <Ionicons name={icon} size={small ? 13 : 15} color={active ? c : C.textFaint} style={{ marginRight: 6 }} />
-      ) : null}
-      <Text style={[st.chipText, small && { fontSize: 12 }, active && { color: c, fontFamily: F.semi }]}>{label}</Text>
-    </View>
-  );
-  if (theme === 'minimal') {
-    return (
-      <Bouncy
-        onPress={onPress}
-        scaleTo={0.94}
-        radius={999}
-        style={[
-          st.chip,
-          small && { paddingVertical: 5, paddingHorizontal: 11 },
-          { backgroundColor: active ? MIN.inset : MIN.card, borderWidth: 1, borderColor: active ? c : MIN.border },
-        ]}
-      >
-        {content}
-      </Bouncy>
-    );
-  }
   return (
     <Bouncy
       onPress={onPress}
@@ -254,12 +223,18 @@ export function Chip({
       radius={999}
       style={[
         st.chip,
-        small && { paddingVertical: 5, paddingHorizontal: 11 },
-        { backgroundColor: C.card, ...neuRaised('low') },
+        small && { paddingVertical: 4, paddingHorizontal: 10 },
+        active
+          ? { backgroundColor: c + '1F', borderColor: c + '66' }
+          : { borderColor: theme === 'minimal' ? MIN.border : C.outline },
       ]}
     >
-      <Animated.View pointerEvents="none" style={[st.chipInset, insetStyle]} />
-      {content}
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        {icon ? (
+          <Ionicons name={icon} size={small ? 13 : 15} color={active ? c : C.textFaint} style={{ marginRight: 6 }} />
+        ) : null}
+        <Text style={[st.chipText, small && { fontSize: 12 }, active && { color: c, fontFamily: F.semi }]}>{label}</Text>
+      </View>
     </Bouncy>
   );
 }
@@ -357,9 +332,9 @@ export function CheckCircle({ done, onPress, color = C.green, size = 26 }: {
 
 /**
  * Kit switch. Raised outer ring (the kit's pill border) → carved inner track
- * (overflow hidden — the knob's shine/shadow rims are CLIPPED to the track
- * boundary; this clipping is required and applies only to toggles) → raised
- * knob carrying a tiny accent dot that pops in when on (kit's active state).
+ * (overflow hidden — the knob's light and shadow are CLIPPED at the track's
+ * rim, the rule for every raised part inside a carved well) → raised knob,
+ * filled with the accent when on.
  */
 const RING_W = 56;
 const RING_H = 32;
@@ -643,14 +618,9 @@ const st = StyleSheet.create({
     marginTop: S.section, marginBottom: 14, paddingHorizontal: 2,
   },
   chip: {
-    paddingVertical: 8, paddingHorizontal: 14, borderRadius: 999,
+    paddingVertical: 7, paddingHorizontal: 13, borderRadius: 999, borderWidth: 1,
     marginRight: 10, marginBottom: 10,
     overflow: 'hidden',
-  },
-  chipInset: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    borderRadius: 999, backgroundColor: C.inset,
-    ...neuInset('low'),
   },
   chipText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: 0.1 },
   pill: {

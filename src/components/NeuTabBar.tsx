@@ -193,7 +193,8 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
 const st = StyleSheet.create({
   bar: { paddingTop: 10, paddingHorizontal: 14 },
   lifted: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-  row: { flexDirection: 'row', height: TROUGH_H, borderRadius: TROUGH_R },
+  // the key is raised inside the carved trough, so the trough clips its light and shadow at the rim
+  row: { flexDirection: 'row', height: TROUGH_H, borderRadius: TROUGH_R, overflow: 'hidden' },
   key: { position: 'absolute', top: KEY_INSET, left: 0, height: KEY_H, borderRadius: KEY_R },
   item: { flex: 1, height: TROUGH_H, alignItems: 'center', justifyContent: 'center' },
   itemInner: { alignItems: 'center' },

@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { C, F, MIN, NEU, T } from '../theme';
+import { C, F, T } from '../theme';
 import { NeuIconBtn, useTheme } from './UI';
 import { Bouncy } from './Motion';
 import { tick } from '../haptics';
@@ -11,13 +11,13 @@ const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 const CELL = 40;
 
 /**
- * A month of days. Days with an entry are raised with a small dot, the picked day is carved with an accent
- * ring, and days after `maxKey` cannot be picked.
+ * A month of days, kept flat: a day with an entry carries a small dot, the picked day wears an accent ring, and
+ * days after `maxKey` cannot be picked. Only the month arrows are raised.
  */
 export function JournalCalendar({ value, onPick, marked, maxKey }: {
   value: string; onPick: (key: string) => void; marked: Set<string>; maxKey: string;
 }) {
-  const theme = useTheme();
+  useTheme(); // repaints on a new accent: the ring and the picked day read it
   const start = keyToDate(value);
   const [ym, setYm] = React.useState({ y: start.getFullYear(), m: start.getMonth() });
   React.useEffect(() => {
@@ -42,9 +42,6 @@ export function JournalCalendar({ value, onPick, marked, maxKey }: {
   const today = todayKey();
   const cells: (number | null)[] = [...Array(lead).fill(null), ...Array.from({ length: days }, (_, i) => i + 1)];
   while (cells.length % 7) cells.push(null);
-
-  const raised = theme === 'minimal' ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.card, ...NEU.raisedLow };
-  const carved = theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...NEU.insetLow };
 
   return (
     <View>
@@ -83,11 +80,7 @@ export function JournalCalendar({ value, onPick, marked, maxKey }: {
                 onPress={() => { tick(); onPick(key); }}
                 scaleTo={0.9}
                 radius={CELL / 2}
-                style={[
-                  st.cell,
-                  selected ? [carved, { borderWidth: 1.5, borderColor: C.accent }] : hasEntry ? raised : null,
-                  future ? { opacity: 0.35 } : null,
-                ]}
+                style={[st.cell, selected ? { borderColor: C.accent } : null, future ? { opacity: 0.35 } : null]}
               >
                 <Text
                   style={[
@@ -113,7 +106,10 @@ const st = StyleSheet.create({
   row: { flexDirection: 'row' },
   cellBox: { width: `${100 / 7}%`, alignItems: 'center', justifyContent: 'center', paddingVertical: 4 },
   weekday: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: 0.6 },
-  cell: { width: CELL, height: CELL, borderRadius: CELL / 2, alignItems: 'center', justifyContent: 'center' },
+  cell: {
+    width: CELL, height: CELL, borderRadius: CELL / 2, borderWidth: 1.5, borderColor: 'transparent',
+    alignItems: 'center', justifyContent: 'center',
+  },
   day: { color: C.textDim, fontFamily: F.med, fontSize: 14, fontVariant: ['tabular-nums'] },
   mark: { position: 'absolute', bottom: 6, width: 4, height: 4, borderRadius: 2, backgroundColor: C.gold },
 });

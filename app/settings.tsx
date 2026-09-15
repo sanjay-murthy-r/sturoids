@@ -22,7 +22,7 @@ import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
 import { TOOLS, ToolKey, colorOf, normaliseSlots, toolByKey } from '../src/tools';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
-const APP_VERSION = Constants.expoConfig?.version || '1.4.0';
+const APP_VERSION = Constants.expoConfig?.version || '1.4.1';
 
 const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
   { key: 'default', label: 'Default', desc: 'Soft grey neumorphism, one continuous material' },
@@ -339,14 +339,7 @@ export default function Settings() {
                   onPress={() => { tick(); setSetting('accent', a.color); }}
                   scaleTo={0.85}
                   radius={22}
-                  style={[
-                    st.swatchWell,
-                    theme === 'minimal'
-                      ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: active ? a.color : MIN.border }
-                      : active
-                        ? { backgroundColor: C.inset, ...neuInset('mid') }
-                        : { backgroundColor: C.card, ...neuRaised('low') },
-                  ]}
+                  style={[st.swatchWell, { borderColor: active ? a.color : 'transparent' }]}
                 >
                   <View style={[st.swatchDisc, { backgroundColor: a.color }]}>
                     {active && <Ionicons name="checkmark" size={14} color={C.onAccent} />}
@@ -525,13 +518,15 @@ const st = StyleSheet.create({
   label: { color: C.textDim, fontFamily: F.med, fontSize: 13, marginBottom: 8 },
   hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, marginTop: 10, lineHeight: 17 },
   optRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 6 },
+  // the dot is raised inside a carved well, so the well clips its light and shadow at the rim
   radioWell: {
-    width: 22, height: 22, borderRadius: 11,
+    width: 22, height: 22, borderRadius: 11, overflow: 'hidden',
     alignItems: 'center', justifyContent: 'center',
   },
   radioDot: { width: 10, height: 10, borderRadius: 5 },
+  // flat: a ring in the swatch's own colour marks the chosen one
   swatchWell: {
-    width: 44, height: 44, borderRadius: 22,
+    width: 44, height: 44, borderRadius: 22, borderWidth: 2,
     alignItems: 'center', justifyContent: 'center',
   },
   swatchDisc: {

@@ -48,33 +48,42 @@ if (__DEV__ && plateShadow(1) !== NEU.raisedHigh.boxShadow) {
 
 /* ------------------------------------------------------------------ timeline */
 
-// Model ms (the recording at 100%). Everything plays at 1 / SIG_SPEED, see real().
+// Four beats, each finishing before the next begins: the signature is written; it shifts into its slot
+// as the logo rises; the wordmark and caption arrive with a slow accent shine along the signature; the
+// scene rests and dissolves. The pen keeps the recording's timing at SIG_SPEED; the beats are real ms.
 const SIG_START = 160;
-const HOLD = 200;
-const T1 = SIG_START + SIG.total + HOLD;
-const TRAVEL = { at: T1, dur: 840 };
-const RISE = { at: T1 + 120, dur: 900, settle: 200 };
-const SINK = { at: T1 + 260, dur: 560 };
-const GLINT = { at: T1 + 520, dur: 700 };
-const GROOVES = { at: T1 + 740, dur: 380 };
-const WORD = { at: T1 + 780, dur: 560 };
-const CAPTION = { at: WORD.at + 200, dur: 350 };
-const REVEAL = T1 + 1140;
-const EXIT = { at: T1 + 1440, dur: 380 };
-const DONE = EXIT.at + EXIT.dur;
 const real = (modelMs: number) => modelMs / SIG_SPEED;
+const SIGNED = real(SIG_START + SIG.total);
+/** beat 1 ends on the finished signature, held still */
+const HOLD = 500;
+/** beat 2: the signature travels into its slot and sinks into a carve while the plate rises */
+const SHIFT = { at: SIGNED + HOLD, dur: 920 };
+const RISE = { at: SHIFT.at + 200, dur: 900, settle: 220 };
+const SINK = { at: SHIFT.at + 480, dur: 600 };
+const GROOVES = { at: RISE.at + 760, dur: 400 };
+/** beat 3 waits for the plate to settle */
+const TEXT = RISE.at + RISE.dur + RISE.settle + 100;
+const WORD = { at: TEXT, dur: 680 };
+const CAPTION = { at: TEXT + 260, dur: 440 };
+const SHINE = { at: TEXT + 40, dur: 1600 };
+/** the app mounts under the opaque overlay once the wordmark has landed, well before the dissolve */
+const REVEAL = WORD.at + WORD.dur;
+/** beat 4: a short rest on the finished scene, then the dissolve */
+const EXIT = { at: SHINE.at + SHINE.dur + 280, dur: 480 };
+const DONE = EXIT.at + EXIT.dur;
 
 // 'some': the composed end state fades in, the app mounts beneath it, then it dissolves (real ms)
 const SOME = { fade: 320, reveal: 700, dissolve: 760, done: 1000 };
 
 /**
  * "Signed first" intro. The user's signature is written large in ink with the recorded pen
- * timing, holds a beat, then travels under the wordmark and sinks from ink into a carve while
- * the logo plate rises out of the material; one soft accent glint runs along the carve, the
- * grooves settle, the wordmark and caption arrive, and the scene dissolves into the app.
+ * timing and held; then it travels under the wordmark and sinks from ink into a carve while the
+ * logo plate rises out of the material and its grooves settle; then the wordmark and caption
+ * arrive while one slow, faint accent shine runs along the carved signature; then the scene
+ * rests and dissolves into the app.
  *
  * Contract with app/_layout.tsx: onReveal() mounts the app beneath the opaque overlay; onDone()
- * unmounts the overlay. Real ms at SIG_SPEED 1.2: full = reveal ~3945 / done ~4512;
+ * unmounts the overlay. Real ms at SIG_SPEED 1.2: full = reveal ~5430 / done ~7150;
  * some = reveal 700 / done 1000; none = no overlay, both callbacks in the first effect.
  * The minimal theme keeps its own background; the plate keeps the default material (brand exception).
  */
@@ -126,31 +135,35 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
     } else {
       const cubicInOut = Easing.inOut(Easing.cubic);
       const cubicOut = Easing.out(Easing.cubic);
+      // beat 1: the pen
       tau.value = withDelay(real(SIG_START), withTiming(SIG.total, {
         duration: real(SIG.total), easing: Easing.linear,
       }));
-      travel.value = withDelay(real(TRAVEL.at), withTiming(1, { duration: real(TRAVEL.dur), easing: cubicInOut }));
+      // beat 2: the shift, the sink into a carve, the rise
+      travel.value = withDelay(SHIFT.at, withTiming(1, { duration: SHIFT.dur, easing: cubicInOut }));
+      ink.value = withDelay(SINK.at, withTiming(0, { duration: SINK.dur, easing: cubicInOut }));
+      carve.value = withDelay(SINK.at, withTiming(1, { duration: SINK.dur, easing: cubicInOut }));
       // two-stage extrusion: the bulk of the rise, then the last 1% settles
-      rise.value = withDelay(real(RISE.at), withSequence(
-        withTiming(0.99, { duration: real(RISE.dur), easing: cubicOut }),
-        withTiming(1, { duration: real(RISE.settle), easing: Easing.inOut(Easing.quad) }),
+      rise.value = withDelay(RISE.at, withSequence(
+        withTiming(0.99, { duration: RISE.dur, easing: cubicOut }),
+        withTiming(1, { duration: RISE.settle, easing: Easing.inOut(Easing.quad) }),
       ));
-      ink.value = withDelay(real(SINK.at), withTiming(0, { duration: real(SINK.dur), easing: cubicInOut }));
-      carve.value = withDelay(real(SINK.at), withTiming(1, { duration: real(SINK.dur), easing: cubicInOut }));
-      glint.value = withDelay(real(GLINT.at), withTiming(1, { duration: real(GLINT.dur), easing: cubicInOut }));
-      grooves.value = withDelay(real(GROOVES.at), withTiming(1, { duration: real(GROOVES.dur), easing: cubicOut }));
-      word.value = withDelay(real(WORD.at), withTiming(1, { duration: real(WORD.dur), easing: cubicOut }));
-      caption.value = withDelay(real(CAPTION.at), withTiming(CAPTION_OPACITY, {
-        duration: real(CAPTION.dur), easing: Easing.linear,
+      grooves.value = withDelay(GROOVES.at, withTiming(1, { duration: GROOVES.dur, easing: cubicOut }));
+      // beat 3: the words, and the shine at an even, unhurried pace
+      word.value = withDelay(WORD.at, withTiming(1, { duration: WORD.dur, easing: cubicOut }));
+      caption.value = withDelay(CAPTION.at, withTiming(CAPTION_OPACITY, {
+        duration: CAPTION.dur, easing: Easing.linear,
       }));
-      overlay.value = withDelay(real(EXIT.at), withTiming(0, {
-        duration: real(EXIT.dur), easing: Easing.inOut(Easing.quad),
+      glint.value = withDelay(SHINE.at, withTiming(1, { duration: SHINE.dur, easing: Easing.inOut(Easing.sin) }));
+      // beat 4: the dissolve
+      overlay.value = withDelay(EXIT.at, withTiming(0, {
+        duration: EXIT.dur, easing: Easing.inOut(Easing.quad),
       }));
-      exitScale.value = withDelay(real(EXIT.at), withTiming(1.02, {
-        duration: real(EXIT.dur), easing: Easing.out(Easing.quad),
+      exitScale.value = withDelay(EXIT.at, withTiming(1.02, {
+        duration: EXIT.dur, easing: Easing.out(Easing.quad),
       }));
-      at(real(REVEAL), () => callbacks.current.onReveal());
-      at(real(DONE), finish);
+      at(REVEAL, () => callbacks.current.onReveal());
+      at(DONE, finish);
     }
 
     const animated = [overlay, content, exitScale, tau, travel, ink, carve, glint, rise, grooves, word, caption];

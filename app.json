@@ -2,33 +2,33 @@
   "expo": {
     "name": "Sturoids",
     "slug": "all-in-one-student-app",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "scheme": "sturoids",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "backgroundColor": "#262624",
+    "backgroundColor": "#30302E",
     "newArchEnabled": true,
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#262624"
+      "backgroundColor": "#30302E"
     },
     "androidStatusBar": {
       "translucent": true,
       "barStyle": "light-content"
     },
     "androidNavigationBar": {
-      "backgroundColor": "#262624",
+      "backgroundColor": "#30302E",
       "barStyle": "light"
     },
     "android": {
       "package": "com.sanjay.studenthub",
-      "versionCode": 5,
+      "versionCode": 6,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1F1E1D"
+        "backgroundColor": "#262624"
       },
       "permissions": [
         "android.permission.RECORD_AUDIO",
@@ -65,7 +65,7 @@
           "image": "./assets/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#262624"
+          "backgroundColor": "#30302E"
         }
       ]
     ],

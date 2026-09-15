@@ -203,7 +203,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
                     key={d.key}
                     style={[
                       st.heatCell,
-                      d.words < 0 ? { opacity: 0 } : d.words === 0 ? well
+                      d.words < 0 ? { opacity: 0 } : d.words === 0 ? { backgroundColor: theme === 'minimal' ? MIN.hairline : C.hairline }
                         : { backgroundColor: C.gold, opacity: d.words < 150 ? 0.3 : d.words < 400 ? 0.6 : 1 },
                     ]}
                   />
