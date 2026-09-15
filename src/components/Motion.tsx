@@ -9,19 +9,11 @@ import { useStore } from '../store';
 import { C, neuPressedInner } from '../theme';
 
 /**
- * Bumps on every screen focus. Use as a `key` on a screen's content container
- * so Enter animations replay each time the tab is reached.
+ * The key for a screen's content container. Entrances play once, when a screen first mounts: every tab is
+ * built after the intro, and coming back to a tab shows it as it was instead of replaying its entrance.
  */
 export function useFocusKey() {
-  const [k, setK] = React.useState(0);
-  const first = React.useRef(true);
-  useFocusEffect(React.useCallback(() => {
-    // tab screens mount lazily ON their first focus — bumping here too would
-    // remount the fresh tree and double-play every entry animation
-    if (first.current) { first.current = false; return; }
-    setK((x) => x + 1);
-  }, []));
-  return k;
+  return 0;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
