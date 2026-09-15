@@ -18,9 +18,10 @@ const SWIPE_DIST = 44;
 const SWIPE_VEL = 600;
 /** the row follows the finger at this fraction of its travel, so the day feels held rather than loose */
 const DRAG = 0.3;
-/** a new day slides in from this far out on the side it came from, points */
-const ENTER_X = 22;
-const ENTER = { duration: 260, easing: Easing.out(Easing.cubic) };
+/** how far the old day leaves, and the new day arrives from, to the side, points */
+const SLIDE_X = 22;
+const EXIT = { duration: 120, easing: Easing.in(Easing.quad) };
+const ENTER = { duration: 240, easing: Easing.out(Easing.cubic) };
 const HIT = { top: 16, bottom: 16, left: 10, right: 10 };
 
 const around = (d: DayName, by: number) => DAY_NAMES[(DAY_NAMES.indexOf(d) + by + 7) % 7];
@@ -29,6 +30,9 @@ const around = (d: DayName, by: number) => DAY_NAMES[(DAY_NAMES.indexOf(d) + by 
  * The planner's day, today first: the chosen day large in the accent, its neighbours small and faded either side.
  * Tap a neighbour or swipe to move a day, and the week wraps; away from today a Today link comes back. Flat on
  * purpose: one control, with no raised or carved parts.
+ *
+ * A change carries the row on the way it is going and fades it out; the day swaps while nothing can be seen, and the
+ * new day slides in from the other side. A released swipe continues its own motion, so the row never jumps.
  */
 export function DayScrubber({ value, today, onChange }: {
   value: DayName; today: DayName; onChange: (d: DayName) => void;
@@ -38,15 +42,33 @@ export function DayScrubber({ value, today, onChange }: {
   const drag = useSharedValue(0);
   const shift = useSharedValue(0);
   const fade = useSharedValue(1);
-  /** the side the next day arrives from: 1 after moving forward, -1 back, 0 for a jump */
+  /** the side the new day arrives from: 1 after moving forward, -1 back, 0 for a jump to today */
   const from = React.useRef(0);
   const mounted = React.useRef(false);
+  // the swap runs when the exit animation ends, so it reads the props live
+  const live = React.useRef({ value, today, onChange });
+  live.current = { value, today, onChange };
 
-  const move = React.useCallback((by: number) => {
+  const commit = React.useCallback((by: number) => {
+    const { value: v, today: t, onChange: set } = live.current;
     from.current = by;
+    set(by === 0 ? t : around(v, by));
+  }, []);
+
+  /** `by` steps a day forward (1) or back (-1); 0 goes to today */
+  const go = React.useCallback((by: number) => {
     tick();
-    onChange(around(value, by));
-  }, [value, onChange]);
+    if (level === 'none') {
+      drag.value = 0;
+      commit(by);
+      return;
+    }
+    fade.value = withTiming(0, EXIT);
+    drag.value = withTiming(-by * SLIDE_X, EXIT, (done) => {
+      'worklet';
+      if (done) runOnJS(commit)(by);
+    });
+  }, [level, commit]);
 
   React.useEffect(() => {
     if (!mounted.current) {
@@ -55,10 +77,16 @@ export function DayScrubber({ value, today, onChange }: {
     }
     const by = from.current;
     from.current = 0;
+    if (level === 'none') {
+      drag.value = 0;
+      shift.value = 0;
+      fade.value = 1;
+      return;
+    }
+    // the old day has faded out, so moving the row to the side the new day comes from never shows
     drag.value = 0;
-    if (level === 'none') return;
-    shift.value = withSequence(withTiming(by * ENTER_X, { duration: 0 }), withTiming(0, ENTER));
-    fade.value = withSequence(withTiming(0.35, { duration: 0 }), withTiming(1, ENTER));
+    shift.value = withSequence(withTiming(by * SLIDE_X, { duration: 0 }), withTiming(0, ENTER));
+    fade.value = withTiming(1, ENTER);
   }, [value]);
 
   // horizontal only, and it claims the touch early, so a deliberate swipe here moves the day rather than the tab
@@ -70,8 +98,8 @@ export function DayScrubber({ value, today, onChange }: {
       const by = e.translationX < -SWIPE_DIST || e.velocityX < -SWIPE_VEL ? 1
         : e.translationX > SWIPE_DIST || e.velocityX > SWIPE_VEL ? -1 : 0;
       if (by === 0) drag.value = withSpring(0, RISE_OUT);
-      else runOnJS(move)(by);
-    }), [move]);
+      else runOnJS(go)(by);
+    }), [go]);
 
   const rowStyle = useAnimatedStyle(() => ({
     opacity: fade.value,
@@ -89,19 +117,19 @@ export function DayScrubber({ value, today, onChange }: {
           accessibilityLabel="Day"
           accessibilityValue={{ text: FULL[value] + (away ? '' : ', today') }}
           accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
-          onAccessibilityAction={(e) => move(e.nativeEvent.actionName === 'increment' ? 1 : -1)}
+          onAccessibilityAction={(e) => go(e.nativeEvent.actionName === 'increment' ? 1 : -1)}
         >
-          <Pressable onPress={() => move(-1)} hitSlop={HIT}>
+          <Pressable onPress={() => go(-1)} hitSlop={HIT}>
             <Text style={st.side}>{around(value, -1)}</Text>
           </Pressable>
           <Text style={[T.h1, { color: C.accent }]} numberOfLines={1}>{FULL[value]}</Text>
-          <Pressable onPress={() => move(1)} hitSlop={HIT}>
+          <Pressable onPress={() => go(1)} hitSlop={HIT}>
             <Text style={st.side}>{around(value, 1)}</Text>
           </Pressable>
         </Animated.View>
       </GestureDetector>
       {away ? (
-        <Pressable onPress={() => { from.current = 0; tick(); onChange(today); }} hitSlop={12}>
+        <Pressable onPress={() => go(0)} hitSlop={12}>
           <Text style={[st.today, { color: C.accent }]}>Today</Text>
         </Pressable>
       ) : null}
