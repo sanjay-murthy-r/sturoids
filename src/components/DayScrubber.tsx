@@ -89,16 +89,23 @@ export function DayScrubber({ value, today, onChange }: {
     fade.value = withTiming(1, ENTER);
   }, [value]);
 
-  // horizontal only, and it claims the touch early, so a deliberate swipe here moves the day rather than the tab
+  // horizontal only, and it claims the touch early, so a deliberate swipe here moves the day rather than the tab.
+  // A swipe that starts during an exit cancels that exit's swap, so it brings the fading row back first: the day can
+  // never be left invisible.
   const pan = React.useMemo(() => Gesture.Pan()
     .activeOffsetX([-8, 8])
     .failOffsetY([-14, 14])
+    .onStart(() => { fade.value = withTiming(1, ENTER); })
     .onUpdate((e) => { drag.value = e.translationX * DRAG; })
     .onEnd((e) => {
       const by = e.translationX < -SWIPE_DIST || e.velocityX < -SWIPE_VEL ? 1
         : e.translationX > SWIPE_DIST || e.velocityX > SWIPE_VEL ? -1 : 0;
-      if (by === 0) drag.value = withSpring(0, RISE_OUT);
-      else runOnJS(go)(by);
+      if (by !== 0) {
+        runOnJS(go)(by);
+        return;
+      }
+      drag.value = withSpring(0, RISE_OUT);
+      fade.value = withTiming(1, ENTER);
     }), [go]);
 
   const rowStyle = useAnimatedStyle(() => ({
