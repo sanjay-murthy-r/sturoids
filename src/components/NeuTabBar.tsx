@@ -24,8 +24,12 @@ interface ItemMeta {
 const TODAY: ItemMeta = { label: 'Today', shortLabel: 'Today', icon: 'sunny-outline' };
 const MORE: ItemMeta = { label: 'More', shortLabel: 'More', icon: 'grid-outline' };
 
-const PILL_H = 54;
-const PILL_R = 18;
+/** the carved trough the bar is made of, and the raised key that marks the current tab inside it */
+const TROUGH_H = 58;
+const TROUGH_R = 20;
+const KEY_INSET = 4;
+const KEY_H = TROUGH_H - KEY_INSET * 2;
+const KEY_R = 16;
 
 /** The bar steps aside while the keyboard is up, so a text field never sits under a row of tabs. */
 function useKeyboardOpen() {
@@ -71,8 +75,8 @@ function TabItem({ meta, focused, onPress }: { meta: ItemMeta; focused: boolean;
 }
 
 /**
- * The neumorphic tab bar: a raised plate with one carved pill sliding between five fixed routes
- * (Today, three slots, More). A slot's icon and name follow whichever tool Settings put in it, so a
+ * The neumorphic tab bar: one carved trough holding five fixed routes (Today, three slots, More), with a raised
+ * key that slides to the current one. A slot's icon and name follow whichever tool Settings put in it, so a
  * swap can never add, drop or reflow a tab.
  */
 export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
@@ -89,9 +93,9 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
   const focusedName = state.routes[state.index]?.name;
   const focusedAt = Math.max(0, routeNames.indexOf(focusedName));
   const slotW = rowW / TAB_ROUTES.length;
-  // one constant width, never wider than its slot: only the pill's position ever animates
-  const pillW = Math.max(Math.min(slotW - 14, 84), Math.min(58, slotW - 6));
-  const targetX = slotW * focusedAt + (slotW - pillW) / 2;
+  // the key fills its slot less a small inset on each side; only its position ever animates
+  const keyW = Math.max(0, slotW - KEY_INSET * 2);
+  const targetX = slotW * focusedAt + KEY_INSET;
 
   const px = useSharedValue(targetX);
   const placed = React.useRef(false);
@@ -134,21 +138,29 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
       onLayout={(e) => { barH.value = e.nativeEvent.layout.height; }}
       style={[
         st.bar,
-        { paddingBottom: Math.max(insets.bottom, 10), backgroundColor: bgFor(theme) },
-        theme === 'minimal' ? { borderTopWidth: 1, borderTopColor: MIN.hairline } : NEU.raisedMid,
+        { paddingBottom: Math.max(insets.bottom, 12), backgroundColor: bgFor(theme) },
+        theme === 'minimal' ? { borderTopWidth: 1, borderTopColor: MIN.hairline } : null,
         keyboardOpen && st.lifted,
         slideStyle,
       ]}
     >
-      <View style={st.row} onLayout={(e) => setRowW(e.nativeEvent.layout.width)}>
+      <View
+        style={[
+          st.row,
+          theme === 'minimal'
+            ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
+            : { backgroundColor: C.inset, ...NEU.insetLow },
+        ]}
+        onLayout={(e) => setRowW(e.nativeEvent.layout.width)}
+      >
         <Animated.View
           pointerEvents="none"
           style={[
-            st.pill,
-            { width: pillW },
+            st.key,
+            { width: keyW },
             theme === 'minimal'
-              ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: C.accent }
-              : { backgroundColor: C.inset, ...NEU.insetLow },
+              ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
+              : { backgroundColor: C.card, ...NEU.raisedLow },
             pillStyle,
           ]}
         />
@@ -179,11 +191,11 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
 }
 
 const st = StyleSheet.create({
-  bar: { paddingTop: 10 },
+  bar: { paddingTop: 10, paddingHorizontal: 14 },
   lifted: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-  row: { flexDirection: 'row' },
-  pill: { position: 'absolute', top: 0, left: 0, height: PILL_H, borderRadius: PILL_R },
-  item: { flex: 1, height: PILL_H, alignItems: 'center', justifyContent: 'center' },
+  row: { flexDirection: 'row', height: TROUGH_H, borderRadius: TROUGH_R },
+  key: { position: 'absolute', top: KEY_INSET, left: 0, height: KEY_H, borderRadius: KEY_R },
+  item: { flex: 1, height: TROUGH_H, alignItems: 'center', justifyContent: 'center' },
   itemInner: { alignItems: 'center' },
   label: {
     marginTop: 4, color: C.textFaint, fontFamily: F.med, fontSize: 11, lineHeight: 13, letterSpacing: 0.2,
