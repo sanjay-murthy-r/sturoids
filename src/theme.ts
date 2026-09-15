@@ -161,12 +161,12 @@ export const MIN = {
 
 export const bgFor = (theme: ThemeMode) => (theme === 'minimal' ? MIN.bg : C.bg);
 
-// spacing rhythm: 4pt grid
+// spacing rhythm on a 2pt grid, set generously: sections breathe and stacked controls never touch
 export const S = {
   pad: 20,
-  cardPad: 16,
-  gap: 12,
-  section: 28,
+  cardPad: 18,
+  gap: 14,
+  section: 34,
   radius: 22,
   radiusSm: 14,
 };

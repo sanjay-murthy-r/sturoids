@@ -145,7 +145,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
           blocks.map((b, i) => (
             <Enter key={b.id} index={Math.min(1 + i, 8)}>
               <GlassCard
-                pad={14}
+                pad={16}
                 onPress={() => openTool('focus', { subject: b.subject })}
               >
                 <Row>
@@ -189,7 +189,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
             const done = h.doneDates.includes(today);
             return (
               <Enter key={h.id} index={Math.min(1 + i, 8)}>
-              <GlassCard pad={13}>
+              <GlassCard pad={15}>
                 <Row>
                   <CheckCircle done={done} onPress={() => toggleHabitToday(h.id)} />
                   <View style={{ flex: 1, marginLeft: 12 }}>

@@ -97,7 +97,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const itemRow = (item: TimedNote | Bookmark, isBookmark: boolean, i: number) => (
     <Enter key={item.id} index={Math.min(i, 6)}>
-      <Card pad={10} onPress={() => seek(item.time)}>
+      <Card pad={12} onPress={() => seek(item.time)}>
         <Row>
           <View style={[st.timePill, { borderColor: (isBookmark ? C.pink : C.green) + '66', backgroundColor: (isBookmark ? C.pink : C.green) + '14' }]}>
             <Text style={{ color: isBookmark ? C.pink : C.green, fontSize: 11, fontFamily: F.semi, fontVariant: ['tabular-nums'] }}>

@@ -44,7 +44,7 @@ export default function More() {
           const count = counts[t.key];
           return (
             <Enter key={t.key} index={i}>
-              <Card pad={14} onPress={() => openTool(t.key)}>
+              <Card pad={16} onPress={() => openTool(t.key)}>
                 <Row>
                   <View style={[st.iconWell, well]}>
                     <Ionicons name={t.icon as any} size={22} color={colorOf(t.colorKey)} />
@@ -67,7 +67,7 @@ export default function More() {
         {/* system, deliberately separated: settings is not a tool */}
         <SectionTitle>System</SectionTitle>
         <Enter index={tools.length}>
-          <Card pad={14} onPress={() => router.push('/settings')}>
+          <Card pad={16} onPress={() => router.push('/settings')}>
             <Row>
               <View style={[st.iconWell, well]}>
                 <Ionicons name="settings-outline" size={21} color={C.accent} />

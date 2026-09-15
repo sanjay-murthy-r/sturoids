@@ -327,11 +327,11 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       >
         {mode === 'tab' && <Text style={st.h1}>Deep Work</Text>}
         {todayFocusMin > 0 ? (
-          <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginBottom: 14 }}>
+          <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginBottom: 22 }}>
             {todayFocusMin} focused minutes today
           </Text>
         ) : (
-          <View style={{ height: 14 }} />
+          <View style={{ height: 22 }} />
         )}
 
         {/* timer mode + presets */}
@@ -345,7 +345,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               ]}
               value={timerMode}
               onChange={(k) => { setTimerMode(k); if (k === 'countdown') clearFinishLine(); }}
-              style={{ marginBottom: 10 }}
+              style={{ marginBottom: timerMode === 'countdown' ? 14 : 24 }}
             />
             {timerMode === 'countdown' && (
               <SegmentedControl
@@ -358,7 +358,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 value={[25, 50, 90, 120].includes(targetMin) ? String(targetMin) : 'custom'}
                 onChange={(k) => { if (k === 'custom') { setCustomMin(''); setCustomSheet(true); } else setTargetMin(Number(k)); }}
                 onPressActive={(k) => { if (k === 'custom') { setCustomMin(String(targetMin)); setCustomSheet(true); } }}
-                style={{ marginBottom: 12 }}
+                style={{ marginBottom: 24 }}
               />
             )}
           </>
@@ -366,7 +366,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
         {/* timer hero */}
         <Enter index={0}>
-          <GlassCard hero style={{ alignItems: 'center', paddingVertical: 30 }}>
+          <GlassCard hero style={{ alignItems: 'center', paddingVertical: 34 }}>
             <View style={{ alignSelf: 'stretch' }} onLayout={(e) => setHeroW(e.nativeEvent.layout.width)} />
             <Row style={{ alignItems: 'center', gap: 12 }}>
               {!started && timerMode === 'countdown' && (
@@ -420,7 +420,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           Session tasks
         </SectionTitle>
         <Enter index={2}>
-          <GlassCard pad={10}>
+          <GlassCard pad={12}>
             {attached.length === 0 ? (
               <EmptyState compact icon="link-outline" title="No tasks attached" body="Attach tasks before or during the session, then check them off as you go." />
             ) : (
@@ -442,7 +442,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         ) : (
           [...sessions].reverse().slice(0, 6).map((s, i) => (
             <Enter key={s.id} index={3 + i}>
-              <GlassCard pad={12}>
+              <GlassCard pad={14}>
                 <Row style={{ justifyContent: 'space-between' }}>
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14 }}>
@@ -612,7 +612,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 }
 
 const st = StyleSheet.create({
-  h1: { ...(T.display as object), marginBottom: 2 } as any,
+  h1: { ...(T.display as object), marginBottom: 6 } as any,
   time: { ...T.mono48, letterSpacing: 0 },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 10, flex: 1 },
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },

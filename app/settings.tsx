@@ -324,7 +324,7 @@ export default function Settings() {
         </Card>
 
         <SectionTitle>Appearance</SectionTitle>
-        <Card pad={10}>
+        <Card pad={12}>
           <OptionPicker options={THEMES} value={settings.theme} onPick={(k) => setSetting('theme', k)} />
         </Card>
 
@@ -410,7 +410,7 @@ export default function Settings() {
         </Sheet>
 
         <SectionTitle>Animations</SectionTitle>
-        <Card pad={10}>
+        <Card pad={12}>
           <OptionPicker options={ANIMS} value={settings.animLevel} onPick={(k) => setSetting('animLevel', k)} />
         </Card>
 

@@ -187,7 +187,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
         </Row>
       ) : null}
       {stats && journal.length ? (
-        <Card pad={14}>
+        <Card pad={16}>
           <Row>
             <Glance value={s.entries} label="entries" />
             <View style={st.vDivider} />
@@ -252,7 +252,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
           const moodIcon = MOODS.find((m) => m.value === e.mood)?.icon;
           return (
             <Enter index={Math.min(index, 8)}>
-              <Card pad={14} onPress={() => open(e.dateKey, e.id)} onLongPress={() => { tick(); setMenu(e); }}>
+              <Card pad={16} onPress={() => open(e.dateKey, e.id)} onLongPress={() => { tick(); setMenu(e); }}>
                 <Row style={{ alignItems: 'flex-start' }}>
                   <View style={[st.dayWell, well]}>
                     <Text style={st.dayName}>{d.toLocaleDateString('en-IN', { weekday: 'short' })}</Text>

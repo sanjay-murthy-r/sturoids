@@ -151,18 +151,18 @@ export default function Today() {
         <Enter index={0}>
           <Pressable onPress={() => { setNameDraft(settings.name); setNameSheet(true); }}>
             <Text style={T.kicker}>{fmtDate(now)}</Text>
-            <Text style={[T.display, { marginTop: 6, marginBottom: greeting.sub ? 4 : 18 }]}>
+            <Text style={[T.display, { marginTop: 8, marginBottom: greeting.sub ? 6 : 24 }]}>
               {greeting.parts.map((part, i) => (
                 <Text key={i} style={part.name ? { color: C.accent } : undefined}>{part.text}</Text>
               ))}
             </Text>
-            {greeting.sub ? <Text style={[T.label, { marginBottom: 18 }]}>{greeting.sub}</Text> : null}
+            {greeting.sub ? <Text style={[T.label, { marginBottom: 24 }]}>{greeting.sub}</Text> : null}
           </Pressable>
         </Enter>
 
         {nextBlock && (
           <Enter index={1}>
-            <Card hero pad={14} onPress={() => openTool('planner')}>
+            <Card hero pad={16} onPress={() => openTool('planner')}>
               <Row style={{ justifyContent: 'space-between' }}>
                 <Row style={{ flex: 1 }}>
                   <View style={[st.blockBar, { backgroundColor: nextBlock.block.color }]} />
@@ -185,7 +185,7 @@ export default function Today() {
             onPress={() => openTool('planner')}
             style={[
               st.journalNudge,
-              { marginTop: 0, marginBottom: 12 },
+              { marginTop: 0, marginBottom: S.gap },
               theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
             ]}
           >
@@ -250,7 +250,7 @@ export default function Today() {
         >
           Today {todayList.length > 0 ? '· ' + doneCount + '/' + todayList.length : ''}
         </SectionTitle>
-        <View style={{ marginVertical: 8 }}>
+        <View style={{ marginTop: 2, marginBottom: 16 }}>
           <ProgressBar value={doneCount / Math.max(1, todayList.length)} />
         </View>
         <Enter index={4}>
@@ -261,7 +261,7 @@ export default function Today() {
               todayList.map((t, i) => (
                 <View key={t.kind + t.id}>
                   {i > 0 && <Hairline />}
-                  <Row style={{ paddingVertical: 11, paddingHorizontal: 10 }}>
+                  <Row style={{ paddingVertical: 13, paddingHorizontal: 12 }}>
                     <CheckCircle
                       done={t.done}
                       color={t.kind === 'mission' ? C.amber : C.green}
@@ -619,7 +619,7 @@ const st = StyleSheet.create({
   link: { fontFamily: F.semi, fontSize: 13 },
   journalNudge: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 12, paddingHorizontal: 14, borderRadius: S.radiusSm, marginTop: 6, marginBottom: 4,
+    paddingVertical: 14, paddingHorizontal: 16, borderRadius: S.radiusSm, marginTop: 18, marginBottom: 4,
   },
   journalNudgeText: { flex: 1, color: C.textDim, fontFamily: F.med, fontSize: 14 },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 12, flex: 1, letterSpacing: 0.1 },

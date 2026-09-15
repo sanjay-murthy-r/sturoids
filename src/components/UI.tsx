@@ -74,7 +74,7 @@ export function NeuHeader({ title, right, onBack, variant = 'page', compact = fa
     return (
       <View
         style={{
-          paddingTop: insets.top + 20, paddingBottom: 10, paddingHorizontal: S.pad,
+          paddingTop: insets.top + 22, paddingBottom: 16, paddingHorizontal: S.pad,
           flexDirection: 'row', alignItems: 'center', backgroundColor: bgFor(theme),
         }}
       >
@@ -87,7 +87,7 @@ export function NeuHeader({ title, right, onBack, variant = 'page', compact = fa
   return (
     <View
       style={{
-        paddingTop: insets.top + 8, paddingBottom: 10, paddingHorizontal: page ? 14 : S.pad,
+        paddingTop: insets.top + 8, paddingBottom: 14, paddingHorizontal: page ? 14 : S.pad,
         minHeight: insets.top + 56, flexDirection: 'row', alignItems: 'center', backgroundColor: bgFor(theme),
       }}
     >
@@ -640,11 +640,11 @@ const st = StyleSheet.create({
   },
   sectionRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginTop: S.section, marginBottom: 12, paddingHorizontal: 2,
+    marginTop: S.section, marginBottom: 14, paddingHorizontal: 2,
   },
   chip: {
-    paddingVertical: 7, paddingHorizontal: 13, borderRadius: 999,
-    marginRight: 8, marginBottom: 8,
+    paddingVertical: 8, paddingHorizontal: 14, borderRadius: 999,
+    marginRight: 10, marginBottom: 10,
     overflow: 'hidden',
   },
   chipInset: {
@@ -655,7 +655,7 @@ const st = StyleSheet.create({
   chipText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: 0.1 },
   pill: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 12, paddingHorizontal: 18, borderRadius: 999,
+    paddingVertical: 13, paddingHorizontal: 20, borderRadius: 999,
     overflow: 'hidden',
   },
   ring: {
@@ -678,7 +678,7 @@ const st = StyleSheet.create({
     overflow: 'hidden',
   },
   fieldInner: {
-    color: C.text, fontFamily: F.reg, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15,
+    color: C.text, fontFamily: F.reg, paddingHorizontal: 16, paddingVertical: 13, fontSize: 15,
     marginBottom: 0,
   },
   emptyWrap: { alignItems: 'center', marginVertical: 24, paddingHorizontal: 16 },
@@ -692,18 +692,18 @@ const st = StyleSheet.create({
   grab: { marginTop: -12, paddingTop: 12 },
   sheet: {
     backgroundColor: C.card, borderTopLeftRadius: 30, borderTopRightRadius: 30,
-    padding: 22, paddingBottom: 36,
+    padding: 24, paddingBottom: 40,
     borderTopWidth: 1.5, borderColor: C.lite,
     boxShadow: SH.sheetLift,
   },
   sheetHandle: {
     alignSelf: 'center', width: 44, height: 5, borderRadius: 3,
-    backgroundColor: C.inset, marginBottom: 16,
+    backgroundColor: C.inset, marginBottom: 18,
     ...neuInset('hairline'),
   },
-  sheetTitle: { color: C.text, fontFamily: F.bold, fontSize: 22, letterSpacing: -0.3, marginBottom: 14 },
+  sheetTitle: { color: C.text, fontFamily: F.bold, fontSize: 22, letterSpacing: -0.3, marginBottom: 18 },
   menuRow: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 4,
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 15, paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.hairline,
   },
 });

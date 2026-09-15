@@ -143,7 +143,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
         {tab === 'daily' && leftovers.length > 0 && (
           <Enter index={0}>
-            <Card pad={14}>
+            <Card pad={16}>
               <Text style={st.triageTitle}>Yesterday's leftovers</Text>
               {leftovers.map((t) => (
                 <Row key={t.id} style={{ paddingVertical: 6 }}>
@@ -167,7 +167,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
               const done = t.doneOn === today;
               return (
                 <Enter key={t.id} index={i}>
-                  <Card pad={13}>
+                  <Card pad={15}>
                     <Row>
                       <CheckCircle done={done} onPress={() => toggleDaily(t.id)} />
                       <Text style={[st.taskText, done && st.taskDone]}>{t.title}</Text>
@@ -191,7 +191,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
               const subDone = m.subtasks.filter((x) => x.done).length;
               return (
                 <Enter key={m.id} index={idx}>
-                  <Card pad={13}>
+                  <Card pad={15}>
                     <Row>
                       <CheckCircle done={m.done} color={C.amber} onPress={() => toggleMission(m.id)} />
                       {/* one subDraft serves every mission's step field, so it has to be

@@ -166,7 +166,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const videoRow = (v: VaultVideo, i: number, showFolder = false) => (
     <Enter key={v.id} index={Math.min(i, 8)}>
-      <Card pad={10} onPress={() => nav.openVideo(v.id)}>
+      <Card pad={12} onPress={() => nav.openVideo(v.id)}>
         <Row>
           <Thumb videoId={v.videoId} />
           <View style={{ flex: 1, marginLeft: 12 }}>
@@ -195,7 +195,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
       />
       <View style={{ flex: 1 }}>
         <View style={{ padding: S.pad, paddingBottom: 0 }}>
-          <Card pad={12}>
+          <Card pad={14}>
             <Row>
               <Field
                 value={url} onChangeText={setUrl} placeholder={cwdFolder ? 'Add to ' + cwdFolder.name + '…' : 'Paste a YouTube link…'}
@@ -246,7 +246,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
               const count = videos.filter((v) => v.folderId === f.id).length + folders.filter((x) => x.parentId === f.id).length;
               return (
                 <Enter key={f.id} index={i}>
-                  <Card pad={12} onPress={() => setCwd(f.id)} onLongPress={() => setFolderMenu(f)}>
+                  <Card pad={14} onPress={() => setCwd(f.id)} onLongPress={() => setFolderMenu(f)}>
                     <Row>
                       <Ionicons name="folder" size={22} color={C.amber} />
                       <Text style={[T.title, { flex: 1, marginLeft: 12, fontSize: 15 }]} numberOfLines={1}>{f.name}</Text>
@@ -288,7 +288,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
             windowSize={7}
             renderItem={({ item: x, index: i }) => {
               const card = (
-                <Card pad={11} onPress={() => openAt(x.video.id, x.item.time)}>
+                <Card pad={13} onPress={() => openAt(x.video.id, x.item.time)}>
                   <Row>
                     <View style={[st.timePill, { borderColor: (x.isBookmark ? C.pink : C.green) + '66', backgroundColor: (x.isBookmark ? C.pink : C.green) + '14' }]}>
                       <Ionicons name={x.isBookmark ? 'bookmark' : 'create-outline'} size={11} color={x.isBookmark ? C.pink : C.green} />

@@ -72,7 +72,7 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
         keyExtractor={(n) => n.id}
         renderItem={({ item: n, index: i }) => {
           const card = (
-            <GlassCard pad={14} onPress={() => nav.openNote(n.id)} onLongPress={() => { tap(); setMenuNote(n); }}>
+            <GlassCard pad={16} onPress={() => nav.openNote(n.id)} onLongPress={() => { tap(); setMenuNote(n); }}>
               <Row style={{ justifyContent: 'space-between' }}>
                 <Text style={{ color: C.text, fontSize: 16, fontFamily: F.semi, flex: 1 }} numberOfLines={1}>
                   {n.title || 'Untitled'}
