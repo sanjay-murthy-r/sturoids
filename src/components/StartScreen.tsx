@@ -55,21 +55,21 @@ const SIG_START = 160;
 const real = (modelMs: number) => modelMs / SIG_SPEED;
 const SIGNED = real(SIG_START + SIG.total);
 /** beat 1 ends on the finished signature, held still */
-const HOLD = 500;
+const HOLD = 520;
 /** beat 2: the signature travels into its slot and sinks into a carve while the plate rises */
-const SHIFT = { at: SIGNED + HOLD, dur: 920 };
-const RISE = { at: SHIFT.at + 200, dur: 900, settle: 220 };
-const SINK = { at: SHIFT.at + 480, dur: 600 };
-const GROOVES = { at: RISE.at + 760, dur: 400 };
+const SHIFT = { at: SIGNED + HOLD, dur: 1060 };
+const RISE = { at: SHIFT.at + 240, dur: 1020, settle: 250 };
+const SINK = { at: SHIFT.at + 560, dur: 700 };
+const GROOVES = { at: RISE.at + 860, dur: 460 };
 /** beat 3 waits for the plate to settle */
-const TEXT = RISE.at + RISE.dur + RISE.settle + 100;
-const WORD = { at: TEXT, dur: 680 };
-const CAPTION = { at: TEXT + 260, dur: 440 };
-const SHINE = { at: TEXT + 40, dur: 1600 };
+const TEXT = RISE.at + RISE.dur + RISE.settle + 160;
+const WORD = { at: TEXT, dur: 780 };
+const CAPTION = { at: TEXT + 300, dur: 520 };
+const SHINE = { at: TEXT + 100, dur: 2000 };
 /** the app mounts under the opaque overlay once the wordmark has landed, well before the dissolve */
 const REVEAL = WORD.at + WORD.dur;
 /** beat 4: a short rest on the finished scene, then the dissolve */
-const EXIT = { at: SHINE.at + SHINE.dur + 280, dur: 480 };
+const EXIT = { at: SHINE.at + SHINE.dur + 380, dur: 560 };
 const DONE = EXIT.at + EXIT.dur;
 
 // 'some': the composed end state fades in, the app mounts beneath it, then it dissolves (real ms)
@@ -83,7 +83,7 @@ const SOME = { fade: 320, reveal: 700, dissolve: 760, done: 1000 };
  * rests and dissolves into the app.
  *
  * Contract with app/_layout.tsx: onReveal() mounts the app beneath the opaque overlay; onDone()
- * unmounts the overlay. Real ms at SIG_SPEED 1.2: full = reveal ~5430 / done ~7150;
+ * unmounts the overlay. Real ms at SIG_SPEED 1.2: full = reveal ~5800 / done ~8060;
  * some = reveal 700 / done 1000; none = no overlay, both callbacks in the first effect.
  * The minimal theme keeps its own background; the plate keeps the default material (brand exception).
  */

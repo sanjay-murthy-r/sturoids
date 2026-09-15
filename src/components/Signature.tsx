@@ -4,16 +4,16 @@ import Animated, {
   Extrapolation, interpolate, useAnimatedProps, useAnimatedStyle,
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Circle, Defs, G, LinearGradient, Mask, Path, Rect, Stop } from 'react-native-svg';
 import { C, darkSh, liteSh } from '../theme';
 import { SIG } from '../signature';
 import type { SigDot, SigLine } from '../signature';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
+const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
 const LINES = SIG.strokes.filter((s): s is SigLine => s.type === 'line');
 const DOTS = SIG.strokes.filter((s): s is SigDot => s.type === 'dot');
-const LINE_LENGTH = SIG.lineLength;
 
 /** on-screen line width in the final slot, px (the hero draws it heroScale times wider) */
 const LINE_PX = 1.7;
@@ -30,13 +30,14 @@ const DASH = 1.02;
 /** an undrawn line parks its offset inside the gap, clear of the dash edge, so no cap dot shows early */
 const PARK = 1.03;
 /**
- * accent shine: a core band inside a longer, fainter one, so both ends fall off softly on a slow pass
- * (band lengths along the whole signature in viewBox units, stroke alphas)
+ * accent shine: one soft band of light, gradual at both edges like the old sheen on the logo, swept once across the
+ * carved signature at the sheen's angle (band width in the final slot, px; peak alpha at its centre; degrees)
  */
-const BAND = 0.2 * LINE_LENGTH;
-const SOFT_BAND = 1.8 * BAND;
-const SHINE_ALPHA = 0.26;
-const SOFT_ALPHA = 0.1;
+const SHINE_W = 58;
+const SHINE_ALPHA = 0.3;
+const SHINE_SKEW = -18;
+/** how far the skew moves the band's foot sideways, viewBox units: the sweep runs this much further to clear it */
+const SHINE_SLANT = Math.tan((-SHINE_SKEW * Math.PI) / 180) * SIG.vh;
 
 const CARVE_LIP = liteSh(0.55);
 const CARVE_DARK = darkSh(0.85);
@@ -190,27 +191,45 @@ function InkArt({ g, heroScale, tau }: { g: Geo; heroScale: number; tau: SharedV
 
 /* ------------------------------------------------------------------ accent shine */
 
-function GlintLine({ line, lineW, glint, band, alpha }: {
-  line: SigLine; lineW: number; glint: SharedValue<number>; band: number; alpha: number;
-}) {
-  const { len, start } = line;
-  const animatedProps = useAnimatedProps(() => {
-    // the shine's centre travels the whole signature once, in stroke order, from fully before it to fully
-    // past it; every band is centred on it, so the soft band always surrounds the core
-    const centre = -SOFT_BAND / 2 + glint.value * (LINE_LENGTH + SOFT_BAND);
-    const head = centre + band / 2;
-    // clamped per line: past both ends the band is fully off this line, and the dash pattern's
-    // next repeat can never land on it while the head is crossing another line
-    const h = Math.min(Math.max(head - start, -1.5 * band), len + 1.5 * band);
-    return { strokeDashoffset: band - h };
-  });
+/**
+ * One soft band of accent light, swept once across the carved signature. The band is a gradient, clear at both
+ * edges and brightest in the middle, and it is masked to the signature's own strokes, so only the carve catches it.
+ */
+function Shine({ g, glint }: { g: Geo; glint: SharedValue<number> }) {
+  const padU = g.padPx / g.k;
+  const band = SHINE_W / g.k;
+  const tall = SIG.vh + 2 * padU;
+  const animatedProps = useAnimatedProps(() => ({
+    x: -band + glint.value * (SIG.vw + band + SHINE_SLANT),
+  }));
   return (
-    <AnimatedPath
-      d={line.d} fill="none" stroke={C.accent} strokeOpacity={alpha} strokeWidth={lineW}
-      strokeLinecap="round" strokeLinejoin="round"
-      strokeDasharray={[band, len + 2 * band]}
-      animatedProps={animatedProps}
-    />
+    <Svg
+      width={g.boxW} height={g.boxH} viewBox={g.viewBox}
+      style={{ position: 'absolute', left: -g.padPx, top: -g.padPx }}
+    >
+      <Defs>
+        <LinearGradient id="sigShineBand" x1="0" y1="0" x2="1" y2="0">
+          <Stop offset="0" stopColor={C.accent} stopOpacity={0} />
+          <Stop offset="0.5" stopColor={C.accent} stopOpacity={SHINE_ALPHA} />
+          <Stop offset="1" stopColor={C.accent} stopOpacity={0} />
+        </LinearGradient>
+        <Mask id="sigShineMask" maskUnits="userSpaceOnUse" x={-padU} y={-padU} width={SIG.vw + 2 * padU} height={tall}>
+          {LINES.map((l, i) => (
+            <Path
+              key={i} d={l.d} fill="none" stroke="#fff" strokeWidth={g.lineW * 1.3}
+              strokeLinecap="round" strokeLinejoin="round"
+            />
+          ))}
+          {DOTS.map((d, i) => <Circle key={'dot' + i} cx={d.cx} cy={d.cy} r={g.lineW * 0.9} fill="#fff" />)}
+        </Mask>
+      </Defs>
+      <G mask="url(#sigShineMask)">
+        <AnimatedRect
+          y={-padU} width={band} height={tall} fill="url(#sigShineBand)" skewX={SHINE_SKEW}
+          animatedProps={animatedProps}
+        />
+      </G>
+    </Svg>
   );
 }
 
@@ -267,17 +286,7 @@ export function Signature({ width, heroScale, heroX, heroY, tau, travel, ink, ca
         <InkArt g={g} heroScale={heroScale} tau={tau} />
       </Animated.View>
       <Animated.View style={[StyleSheet.absoluteFill, glintStyle]}>
-        <Svg
-          width={g.boxW} height={g.boxH} viewBox={g.viewBox}
-          style={{ position: 'absolute', left: -g.padPx, top: -g.padPx }}
-        >
-          {LINES.map((l, i) => (
-            <GlintLine key={'soft' + i} line={l} lineW={g.lineW} glint={glint} band={SOFT_BAND} alpha={SOFT_ALPHA} />
-          ))}
-          {LINES.map((l, i) => (
-            <GlintLine key={'core' + i} line={l} lineW={g.lineW} glint={glint} band={BAND} alpha={SHINE_ALPHA} />
-          ))}
-        </Svg>
+        <Shine g={g} glint={glint} />
       </Animated.View>
     </Animated.View>
   );
