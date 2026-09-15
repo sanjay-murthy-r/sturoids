@@ -1,6 +1,5 @@
 import React from 'react';
 import { Pressable, View, ViewStyle } from 'react-native';
-import { useFocusEffect } from 'expo-router';
 import Animated, {
   FadeIn, FadeInDown, LinearTransition,
   useAnimatedStyle, useReducedMotion, useSharedValue, withSpring, withTiming, Easing,
@@ -60,20 +59,22 @@ export function Enter({
  * Name kept as "Bouncy" so every screen keeps working.
  */
 export function Bouncy({
-  onPress, onLongPress, children, style, disabled, scaleTo = 0.975, radius = 22, hitSlop,
+  onPress, onLongPress, children, style, disabled, scaleTo = 0.975, radius = 22, hitSlop, sink = true,
 }: {
   onPress?: () => void; onLongPress?: () => void; children: React.ReactNode;
   style?: any; disabled?: boolean; scaleTo?: number;
   /** border radius of the pressed-inset overlay (999 chips, 22 cards, 16 keys) */
   radius?: number;
   hitSlop?: number;
+  /** false keeps the element in place while pressed (a row inside a card): only the carve shows */
+  sink?: boolean;
 }) {
   const level = useAnimLevel();
   const p = useSharedValue(0); // 0 = rest, 1 = pressed
   const aStyle = useAnimatedStyle(() => ({
     transform: [
       { scale: 1 - (1 - scaleTo) * p.value },
-      { translateY: p.value * 1.5 },
+      { translateY: sink ? p.value * 1.5 : 0 },
     ] as const,
   }));
   const dimStyle = useAnimatedStyle(() => ({ opacity: p.value }));

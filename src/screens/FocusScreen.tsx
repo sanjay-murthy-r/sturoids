@@ -4,14 +4,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
+import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T } from '../theme';
 import { useStore } from '../store';
 import { todayKey, fmtDuration, uid, toMinutes, fmtClockTime } from '../utils';
 import {
-  ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, NeuIconBtn, ProgressBar, NeuHeader,
+  ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, ProgressBar, NeuHeader,
+  ListCard, ListRow,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Enter, useFocusKey } from '../components/Motion';
+import { Enter, useAnimLevel, useFocusKey } from '../components/Motion';
+import { Wheel } from '../components/Wheel';
 import { tick as haptic } from '../haptics';
 import { NOTIF_CHANNEL_ID, ensurePermission } from '../notifications';
 import { TimerState, displayOf, elapsedOf, useSessionTick } from '../deepWork';
@@ -26,18 +29,56 @@ const HERO_SIZES = [48, 42, 38];
 /** a stopwatch left running with no finish line (a killed app, a forgotten session) logs at most this much */
 const STOPWATCH_CAP_SEC = 12 * 3600;
 
-/** The live time. Only this re-renders each second; the screen around it does not. */
-function LiveClock({ timer, style, availW = 0, reserve = 0 }: {
-  timer: TimerState; style: any; availW?: number; reserve?: number;
-}) {
+/** the countdown lengths the wheel offers, in minutes; a custom length joins them */
+const LENGTHS = Array.from({ length: 48 }, (_, i) => 5 + 5 * i);
+const ROLL = { duration: 420, easing: Easing.out(Easing.cubic) };
+
+/** a digit arriving from above, and the one it replaces dropping away */
+const rollIn = (h: number) => () => {
+  'worklet';
+  return {
+    initialValues: { opacity: 0, transform: [{ translateY: -h * 0.6 }] },
+    animations: { opacity: withTiming(1, ROLL), transform: [{ translateY: withTiming(0, ROLL) }] },
+  };
+};
+const rollOut = (h: number) => () => {
+  'worklet';
+  return {
+    initialValues: { opacity: 1, transform: [{ translateY: 0 }] },
+    animations: { opacity: withTiming(0, ROLL), transform: [{ translateY: withTiming(h * 0.6, ROLL) }] },
+  };
+};
+
+/** The live time. Only this re-renders each second, and each digit that changes rolls over instead of blinking. */
+function LiveClock({ timer, availW = 0, reserve = 0 }: { timer: TimerState; availW?: number; reserve?: number }) {
   useSessionTick(timer);
+  const level = useAnimLevel();
   const text = fmtDuration(displayOf(timer));
   // m:ss always keeps the hero size; h:mm:ss steps down only when it would not fit the card
-  let size: number | undefined;
+  let size = HERO_SIZES[0];
   if (availW > 0 && text.length >= 7) {
     size = HERO_SIZES.find((px) => text.length * 0.6 * px + reserve <= availW - 24) ?? HERO_SIZES[HERO_SIZES.length - 1];
   }
-  return <Text style={[style, size ? { fontSize: size } : null]}>{text}</Text>;
+  const h = Math.round(size * 1.25);
+  return (
+    <View style={[st.clockRow, { height: h }]} accessible accessibilityLabel={text}>
+      {text.split('').map((ch, i) => (ch === ':' ? (
+        <Text key={'sep' + (text.length - i)} style={[st.time, { fontSize: size, lineHeight: h }]}>:</Text>
+      ) : (
+        // cells are keyed from the right, so the seconds keep their place when the hours appear
+        <View key={'cell' + (text.length - i)} style={{ width: size * 0.6, height: h, overflow: 'hidden' }}>
+          <Animated.Text
+            key={ch}
+            entering={level === 'none' ? undefined : rollIn(h)}
+            exiting={level === 'none' ? undefined : rollOut(h)}
+            style={[st.time, st.digit, { fontSize: size, lineHeight: h }]}
+          >
+            {ch}
+          </Animated.Text>
+        </View>
+      )))}
+    </View>
+  );
 }
 
 function LiveProgress({ timer }: { timer: TimerState }) {
@@ -101,6 +142,11 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const subjectRef = useRef(subject);
   subjectRef.current = subject;
   const timer: TimerState = { mode: timerMode, targetMin, running, startTs, accumSec };
+  // the wheel's lengths; a custom length joins them in order
+  const lengths = React.useMemo(
+    () => (LENGTHS.includes(targetMin) ? LENGTHS : [...LENGTHS, targetMin].sort((a, b) => a - b)),
+    [targetMin],
+  );
 
   // planner deep link: a subject (or a length) seeds only a session that has not started, and the params
   // are cleared after, so the same link works again and can never rewrite a session in progress
@@ -133,17 +179,30 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, [subject]);
 
   // countdown auto-finish: one timeout for the moment it runs out, which fires at once for a resumed
-  // session that ran out while the app was closed
+  // session that ran out while the app was closed. Live, the clock gives one soft pulse as the bar fills, then
+  // the session wraps up.
+  const level = useAnimLevel();
+  const pulse = useSharedValue(1);
+  const pulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulse.value }] }));
   useEffect(() => {
     if (timerMode !== 'countdown' || !running || !startTs) return undefined;
     const left = targetMin * 60 - (accumSec + (Date.now() - startTs) / 1000);
     const t = setTimeout(() => {
       if (endedRef.current) return;
       endedRef.current = true;
-      endSessionRef.current();
+      if (level === 'none' || left < -1) {
+        endSessionRef.current();
+        return;
+      }
+      pulse.value = withSequence(
+        withTiming(1.06, { duration: 220, easing: Easing.out(Easing.quad) }),
+        withTiming(1, { duration: 380, easing: Easing.inOut(Easing.quad) }),
+      );
+      // not cleared with the effect: once the pulse has begun, the session must still wrap up
+      setTimeout(() => endSessionRef.current(), 650);
     }, Math.max(0, left * 1000));
     return () => clearTimeout(t);
-  }, [timerMode, running, startTs, accumSec, targetMin]);
+  }, [timerMode, running, startTs, accumSec, targetMin, level]);
 
   const start = () => {
     endedRef.current = false;
@@ -334,53 +393,49 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <View style={{ height: 22 }} />
         )}
 
-        {/* timer mode + presets */}
+        {/* timer mode */}
         {!started && (
-          <>
-            <SegmentedControl
-              size="sm"
-              options={[
-                { key: 'countdown', label: 'Countdown' },
-                { key: 'stopwatch', label: 'Stopwatch' },
-              ]}
-              value={timerMode}
-              onChange={(k) => { setTimerMode(k); if (k === 'countdown') clearFinishLine(); }}
-              style={{ marginBottom: timerMode === 'countdown' ? 14 : 24 }}
-            />
-            {timerMode === 'countdown' && (
-              <SegmentedControl
-                size="sm"
-                stretch
-                options={[
-                  { key: '25', label: '25' }, { key: '50', label: '50' }, { key: '90', label: '90' },
-                  { key: '120', label: '120' }, { key: 'custom', label: 'Custom' },
-                ]}
-                value={[25, 50, 90, 120].includes(targetMin) ? String(targetMin) : 'custom'}
-                onChange={(k) => { if (k === 'custom') { setCustomMin(''); setCustomSheet(true); } else setTargetMin(Number(k)); }}
-                onPressActive={(k) => { if (k === 'custom') { setCustomMin(String(targetMin)); setCustomSheet(true); } }}
-                style={{ marginBottom: 24 }}
-              />
-            )}
-          </>
+          <SegmentedControl
+            size="sm"
+            options={[
+              { key: 'countdown', label: 'Countdown' },
+              { key: 'stopwatch', label: 'Stopwatch' },
+            ]}
+            value={timerMode}
+            onChange={(k) => { setTimerMode(k); if (k === 'countdown') clearFinishLine(); }}
+            style={{ marginBottom: 24 }}
+          />
         )}
 
         {/* timer hero */}
         <Enter index={0}>
           <GlassCard hero style={{ alignItems: 'center', paddingVertical: 34 }}>
             <View style={{ alignSelf: 'stretch' }} onLayout={(e) => setHeroW(e.nativeEvent.layout.width)} />
-            <Row style={{ alignItems: 'center', gap: 12 }}>
-              {!started && timerMode === 'countdown' && (
-                <NeuIconBtn name="remove" dim={38} size={18} color={C.textDim}
-                  onPress={() => { haptic(); setTargetMin((m) => Math.max(1, m - 1)); }} />
-              )}
-              <LiveClock timer={timer} style={st.time} availW={heroW} reserve={!started && timerMode === 'countdown' ? 100 : 0} />
-              {!started && timerMode === 'countdown' && (
-                <NeuIconBtn name="add" dim={38} size={18} color={C.textDim}
-                  onPress={() => { haptic(); setTargetMin((m) => m + 1); }} />
-              )}
-            </Row>
+            {!started && timerMode === 'countdown' ? (
+              // the length: drag it or tap a length beside it; tap the number for an exact length or a clock time
+              <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(260)} style={st.wheelBox}>
+                <Wheel
+                  count={lengths.length}
+                  index={Math.max(0, lengths.indexOf(targetMin))}
+                  onChange={(i) => setTargetMin(lengths[i])}
+                  label={(i) => ({ full: String(lengths[i]) })}
+                  spacing={92}
+                  minScale={0.42}
+                  colorOn={C.text}
+                  colorOff={C.textFaint}
+                  height={72}
+                  textStyle={st.wheelText}
+                  accessibilityLabel="Countdown length in minutes"
+                  onPressCenter={() => { setCustomMin(String(targetMin)); setCustomSheet(true); }}
+                />
+              </Animated.View>
+            ) : (
+              <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(260)} style={pulseStyle}>
+                <LiveClock timer={timer} availW={heroW} />
+              </Animated.View>
+            )}
             <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginTop: 4 }}>
-              {timerMode === 'countdown' ? `${targetMin} min block` : 'stopwatch'}
+              {timerMode === 'countdown' ? (started ? `${targetMin} min block` : 'minutes, or tap the number to type one') : 'stopwatch'}
               {subject ? ` · ${subject}` : ''}
             </Text>
             {timerMode === 'stopwatch' && (
@@ -440,10 +495,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {sessions.length === 0 ? (
           <EmptyState compact icon="time-outline" title="No sessions yet" body="Finished sessions land here." />
         ) : (
-          [...sessions].reverse().slice(0, 6).map((s, i) => (
-            <Enter key={s.id} index={3 + i}>
-              <GlassCard pad={14}>
-                <Row style={{ justifyContent: 'space-between' }}>
+          <Enter index={3}>
+            <ListCard>
+              {[...sessions].reverse().slice(0, 6).map((s) => (
+                <ListRow key={s.id} style={{ paddingVertical: 12 }}>
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14 }}>
                       {Math.round(s.netSeconds / 60)} min{s.subject ? ` · ${s.subject}` : ''}
@@ -453,10 +508,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
                     </Text>
                   </View>
                   <Ionicons name="flash" size={18} color={C.accent} />
-                </Row>
-              </GlassCard>
-            </Enter>
-          ))
+                </ListRow>
+              ))}
+            </ListCard>
+          </Enter>
         )}
       </ScrollView>
 
@@ -614,6 +669,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 const st = StyleSheet.create({
   h1: { ...(T.display as object), marginBottom: 6 } as any,
   time: { ...T.mono48, letterSpacing: 0 },
+  clockRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  digit: { position: 'absolute', left: 0, right: 0, textAlign: 'center' },
+  wheelBox: { alignSelf: 'stretch' },
+  wheelText: { color: C.text, fontFamily: F.mono, fontSize: 52, lineHeight: 64 },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 10, flex: 1 },
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   sheetSection: { color: C.textFaint, fontSize: 12, fontFamily: F.semi, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10, marginBottom: 6 },

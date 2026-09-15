@@ -6,7 +6,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, {
+  Easing, FadeIn, FadeOut, LinearTransition, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
+} from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, SH, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
 import { useStore } from '../store';
@@ -380,9 +382,19 @@ export function Toggle({ value, onChange, color }: {
   );
 }
 
-/** Text input carved into the material. Layout props go to the wrapper. */
-export function Field(props: React.ComponentProps<typeof TextInput> & { style?: any }) {
+/**
+ * A text field drawn as a line: an optional label above, the text, and a hairline underneath. While you type, an
+ * accent line grows over the hairline from the left. Layout props go to the wrapper.
+ */
+export function Field({ label, ...props }: React.ComponentProps<typeof TextInput> & { style?: any; label?: string }) {
   const theme = useTheme();
+  const level = useAnimLevel();
+  const [focused, setFocused] = React.useState(false);
+  const on = useSharedValue(0);
+  React.useEffect(() => {
+    on.value = level === 'none' ? (focused ? 1 : 0) : withTiming(focused ? 1 : 0, { duration: focused ? 220 : 160 });
+  }, [focused, level]);
+  const lineStyle = useAnimatedStyle(() => ({ opacity: on.value, transform: [{ scaleX: on.value }] }));
   const flat = StyleSheet.flatten(props.style) || {};
   const {
     flex, width, minWidth, maxWidth, alignSelf,
@@ -391,24 +403,22 @@ export function Field(props: React.ComponentProps<typeof TextInput> & { style?: 
   } = flat as any;
   const wrapStyle: any = {
     flex, width, minWidth, maxWidth, alignSelf, margin, marginTop, marginLeft, marginRight, marginHorizontal, marginVertical,
-    marginBottom: marginBottom !== undefined ? marginBottom : 10,
+    marginBottom: marginBottom !== undefined ? marginBottom : 14,
   };
   return (
-    <View
-      style={[
-        st.fieldWrap,
-        theme === 'minimal'
-          ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
-          : { backgroundColor: C.inset, ...neuInset('low') },
-        wrapStyle,
-      ]}
-    >
+    <View style={wrapStyle}>
+      {label ? <Text style={st.fieldLabel}>{label}</Text> : null}
       <TextInput
         placeholderTextColor={C.textFaint}
         selectionColor={C.accent}
         {...props}
+        onFocus={(e) => { setFocused(true); props.onFocus?.(e); }}
+        onBlur={(e) => { setFocused(false); props.onBlur?.(e); }}
         style={[st.fieldInner, innerStyle]}
       />
+      <View style={[st.fieldLine, { backgroundColor: theme === 'minimal' ? MIN.border : C.borderBright }]}>
+        <Animated.View pointerEvents="none" style={[st.fieldLineOn, { backgroundColor: C.accent }, lineStyle]} />
+      </View>
     </View>
   );
 }
@@ -603,6 +613,139 @@ export function Row({ children, style }: { children: React.ReactNode; style?: Vi
   return <View style={[{ flexDirection: 'row', alignItems: 'center' }, style]}>{children}</View>;
 }
 
+/* ---------------------------------------------------------------- lists: one card per list */
+
+/** room a list card's slices leave for its light (top) and shadow (bottom), and how far a slice runs past a seam */
+const SLICE_TOP = 12;
+const SLICE_BOTTOM = 20;
+const SLICE_OVERLAP = 40;
+
+/**
+ * One raised card that holds a whole list, with hairlines between its rows, so a list reads as one object instead of
+ * a stack of cards. Rows fold in and out, and the card follows their height.
+ */
+export function ListCard({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
+  const theme = useTheme();
+  const level = useAnimLevel();
+  const rows = React.Children.toArray(children);
+  const layout = level === 'full' ? LinearTransition.springify().damping(22) : undefined;
+  return (
+    <Animated.View
+      layout={layout}
+      style={[
+        st.cardBase, lst.card,
+        theme === 'minimal'
+          ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
+          : { backgroundColor: C.card, ...neuRaised('mid') },
+        style,
+      ]}
+    >
+      {rows.map((row, i) => (
+        <Animated.View
+          key={(row as React.ReactElement).key ?? i}
+          entering={level === 'none' ? undefined : FadeIn.duration(220)}
+          exiting={level === 'none' ? undefined : FadeOut.duration(150)}
+          layout={layout}
+        >
+          {i > 0 ? <View style={lst.hair} /> : null}
+          {row}
+        </Animated.View>
+      ))}
+    </Animated.View>
+  );
+}
+
+/**
+ * A row's slice of one list card, for lists that virtualise and so cannot wrap their rows in a card. The first slice
+ * owns the top corners and the last the bottom ones; each slice clips its shadow where it meets the next, so the list
+ * still reads as one card with no seams. The list's content keeps its usual side padding.
+ */
+export function ListSlice({ first, last, children }: { first: boolean; last: boolean; children: React.ReactNode }) {
+  const theme = useTheme();
+  const r = S.radius;
+  return (
+    <View style={[lst.clip, { paddingTop: first ? SLICE_TOP : 0, paddingBottom: last ? SLICE_BOTTOM : 0 }]}>
+      <View
+        pointerEvents="none"
+        style={[
+          lst.surface,
+          {
+            top: first ? SLICE_TOP : -SLICE_OVERLAP,
+            bottom: last ? SLICE_BOTTOM : -SLICE_OVERLAP,
+            borderTopLeftRadius: first ? r : 0, borderTopRightRadius: first ? r : 0,
+            borderBottomLeftRadius: last ? r : 0, borderBottomRightRadius: last ? r : 0,
+          },
+          theme === 'minimal'
+            ? {
+              backgroundColor: MIN.card, borderColor: MIN.border, borderLeftWidth: 1, borderRightWidth: 1,
+              borderTopWidth: first ? 1 : 0, borderBottomWidth: last ? 1 : 0,
+            }
+            : { backgroundColor: C.card, ...neuRaised('mid') },
+        ]}
+      />
+      {first ? null : <View style={lst.hair} />}
+      <View style={{ paddingTop: first ? 4 : 0, paddingBottom: last ? 4 : 0 }}>{children}</View>
+    </View>
+  );
+}
+
+/** A pressable row inside a list card: it stays in place and carves in while pressed. */
+export function ListRow({ children, onPress, onLongPress, style }: {
+  children: React.ReactNode; onPress?: () => void; onLongPress?: () => void; style?: ViewStyle | ViewStyle[];
+}) {
+  if (!onPress && !onLongPress) return <View style={[lst.row, style]}>{children}</View>;
+  return (
+    <Bouncy onPress={onPress} onLongPress={onLongPress} scaleTo={1} sink={false} radius={14} style={[lst.row, style]}>
+      {children}
+    </Bouncy>
+  );
+}
+
+/** Text whose strike-through draws across it, line by line, when `done` turns on, and lifts away when it turns off. */
+export function StrikeText({ done, style, wrapStyle, numberOfLines, children }: {
+  done: boolean; style?: any; wrapStyle?: ViewStyle; numberOfLines?: number; children: React.ReactNode;
+}) {
+  const level = useAnimLevel();
+  const [lines, setLines] = React.useState<{ x: number; y: number; width: number; height: number }[]>([]);
+  const p = useSharedValue(done ? 1 : 0);
+  React.useEffect(() => {
+    p.value = level === 'none'
+      ? (done ? 1 : 0)
+      : withTiming(done ? 1 : 0, { duration: done ? 340 : 180, easing: Easing.out(Easing.cubic) });
+  }, [done, level]);
+  const drawn = useAnimatedStyle(() => ({ opacity: p.value > 0.001 ? 1 : 0, transform: [{ scaleX: p.value }] }));
+  return (
+    <View style={wrapStyle}>
+      <Text
+        style={[style, done && { color: C.textFaint }]}
+        numberOfLines={numberOfLines}
+        onTextLayout={(e) => {
+          const next = e.nativeEvent.lines.map((l) => ({ x: l.x, y: l.y, width: l.width, height: l.height }));
+          setLines((prev) => (prev.length === next.length && prev.every((l, i) => l.width === next[i].width && l.y === next[i].y) ? prev : next));
+        }}
+      >
+        {children}
+      </Text>
+      {lines.map((l, i) => (
+        <Animated.View
+          key={i}
+          pointerEvents="none"
+          style={[lst.strike, { left: l.x, top: l.y + l.height * 0.54, width: l.width }, drawn]}
+        />
+      ))}
+    </View>
+  );
+}
+
+const lst = StyleSheet.create({
+  card: { paddingVertical: 4 },
+  hair: { height: StyleSheet.hairlineWidth, backgroundColor: C.hairline, marginHorizontal: 12 },
+  clip: { overflow: 'hidden', marginHorizontal: -S.pad, paddingHorizontal: S.pad },
+  surface: { position: 'absolute', left: S.pad, right: S.pad },
+  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 12, borderRadius: 14 },
+  strike: { position: 'absolute', height: 1.5, borderRadius: 1, backgroundColor: C.textFaint, transformOrigin: 'left' },
+});
+
 const st = StyleSheet.create({
   cardBase: {
     borderRadius: S.radius,
@@ -643,14 +786,13 @@ const st = StyleSheet.create({
     width: KNOB, height: KNOB, borderRadius: KNOB / 2, marginLeft: 3,
     ...neuRaised('low'),
   },
-  fieldWrap: {
-    borderRadius: S.radiusSm,
-    overflow: 'hidden',
-  },
+  fieldLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2, marginLeft: 2, marginBottom: 2 },
   fieldInner: {
-    color: C.text, fontFamily: F.reg, paddingHorizontal: 16, paddingVertical: 13, fontSize: 15,
+    color: C.text, fontFamily: F.reg, paddingHorizontal: 2, paddingVertical: 10, fontSize: 15,
     marginBottom: 0,
   },
+  fieldLine: { height: 1 },
+  fieldLineOn: { position: 'absolute', left: 0, right: 0, top: -0.5, height: 2, transformOrigin: 'left' },
   emptyWrap: { alignItems: 'center', marginVertical: 24, paddingHorizontal: 16 },
   emptyWell: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   emptyTitle: { color: C.text, fontFamily: F.semi, fontSize: 15, textAlign: 'center' },

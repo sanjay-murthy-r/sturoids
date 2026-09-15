@@ -2,14 +2,16 @@ import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore } from '../store';
 import { todayKey, yesterdayKey, daysUntil, fmtShortDate, toMinutes } from '../utils';
 import {
   ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Chip, Toggle, NeuHeader, useTheme,
+  ListCard, ListRow, StrikeText,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Enter, Bouncy, useFocusKey } from '../components/Motion';
+import { Enter, Bouncy, useAnimLevel, useFocusKey } from '../components/Motion';
 import { tap } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
 
@@ -17,6 +19,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const fk = useFocusKey();
   const theme = useTheme();
+  const level = useAnimLevel();
   const [tab, setTab] = useState<'daily' | 'missions'>('daily');
 
   const dailyTasks = useStore((s) => s.dailyTasks);
@@ -163,80 +166,85 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
           (dailyTasks.length === 0 ? (
             <EmptyState icon="sunny-outline" title="Your daily list resets each morning" body='Tap the bell for a daily "plan your day" nudge.' />
           ) : (
-            dailyTasks.map((t, i) => {
-              const done = t.doneOn === today;
-              return (
-                <Enter key={t.id} index={i}>
-                  <Card pad={15}>
-                    <Row>
+            <Enter index={0}>
+              <ListCard>
+                {dailyTasks.map((t) => {
+                  const done = t.doneOn === today;
+                  return (
+                    <ListRow key={t.id} style={{ paddingVertical: 10 }}>
                       <CheckCircle done={done} onPress={() => toggleDaily(t.id)} />
-                      <Text style={[st.taskText, done && st.taskDone]}>{t.title}</Text>
+                      <StrikeText done={done} style={st.taskText} wrapStyle={st.taskWrap}>{t.title}</StrikeText>
                       <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(t.title, () => removeDaily(t.id))} />
-                    </Row>
-                  </Card>
-                </Enter>
-              );
-            })
+                    </ListRow>
+                  );
+                })}
+              </ListCard>
+            </Enter>
           ))}
 
         {tab === 'missions' &&
           (sortedMissions.length === 0 ? (
             <EmptyState icon="flag-outline" title="Deadline-bound work lives here" body="Mock tests, revision targets, projects." />
           ) : (
-            sortedMissions.map((m, idx) => {
-              const d = daysUntil(m.deadline);
-              const pillText = m.done ? 'DONE' : d < 0 ? -d + 'D OVER' : d === 0 ? 'TODAY' : 'D-' + d;
-              const pillColor = m.done ? C.green : d < 0 ? C.danger : d <= 2 ? C.amber : C.accent;
-              const open = expanded === m.id;
-              const subDone = m.subtasks.filter((x) => x.done).length;
-              return (
-                <Enter key={m.id} index={idx}>
-                  <Card pad={15}>
-                    <Row>
-                      <CheckCircle done={m.done} color={C.amber} onPress={() => toggleMission(m.id)} />
-                      {/* one subDraft serves every mission's step field, so it has to be
-                          dropped here or a half-typed step follows you to the next mission */}
-                      <Pressable style={{ flex: 1, marginLeft: 12 }} onPress={() => { setSubDraft(''); setExpanded(open ? null : m.id); }}>
-                        <Text style={[st.taskText, { marginLeft: 0 }, m.done && st.taskDone]}>{m.title}</Text>
-                        <Text style={[T.caption, { marginTop: 2 }]}>
-                          {fmtShortDate(m.deadline)}
-                          {m.subtasks.length > 0 ? '  ·  ' + subDone + '/' + m.subtasks.length + ' steps' : '  ·  tap for steps'}
-                        </Text>
-                      </Pressable>
-                      <View style={[st.pill, { borderColor: pillColor + '55', backgroundColor: pillColor + '18' }]}>
-                        <Text style={{ color: pillColor, fontSize: 11, fontFamily: F.semi, letterSpacing: 0.8 }}>{pillText}</Text>
-                      </View>
-                      <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(m.title, () => removeMission(m.id))} />
-                    </Row>
+            <Enter index={0}>
+              <ListCard>
+                {sortedMissions.map((m) => {
+                  const d = daysUntil(m.deadline);
+                  const pillText = m.done ? 'DONE' : d < 0 ? -d + 'D OVER' : d === 0 ? 'TODAY' : 'D-' + d;
+                  const pillColor = m.done ? C.green : d < 0 ? C.danger : d <= 2 ? C.amber : C.accent;
+                  const open = expanded === m.id;
+                  const subDone = m.subtasks.filter((x) => x.done).length;
+                  return (
+                    <View key={m.id} style={st.missionRow}>
+                      <Row>
+                        <CheckCircle done={m.done} color={C.amber} onPress={() => toggleMission(m.id)} />
+                        {/* one subDraft serves every mission's step field, so it has to be
+                            dropped here or a half-typed step follows you to the next mission */}
+                        <Pressable style={st.taskWrap} onPress={() => { setSubDraft(''); setExpanded(open ? null : m.id); }}>
+                          <StrikeText done={m.done} style={st.taskText}>{m.title}</StrikeText>
+                          <Text style={[T.caption, { marginTop: 2 }]}>
+                            {fmtShortDate(m.deadline)}
+                            {m.subtasks.length > 0 ? ', ' + subDone + '/' + m.subtasks.length + ' steps' : ', tap for steps'}
+                          </Text>
+                        </Pressable>
+                        <View style={[st.pill, { borderColor: pillColor + '55', backgroundColor: pillColor + '18' }]}>
+                          <Text style={{ color: pillColor, fontSize: 11, fontFamily: F.semi, letterSpacing: 0.8 }}>{pillText}</Text>
+                        </View>
+                        <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(m.title, () => removeMission(m.id))} />
+                      </Row>
 
-                    {open && (
-                      <View style={{ marginTop: 10, paddingLeft: 4 }}>
-                        {m.subtasks.map((sub) => (
-                          <Row key={sub.id} style={{ paddingVertical: 5 }}>
-                            <CheckCircle done={sub.done} size={20} onPress={() => toggleSubtask(m.id, sub.id)} />
-                            <Text style={[{ color: C.textDim, fontFamily: F.reg, fontSize: 14, marginLeft: 10, flex: 1 }, sub.done && st.taskDone]}>
-                              {sub.title}
-                            </Text>
-                            <IconBtn name="close" size={16} onPress={() => removeSubtask(m.id, sub.id)} />
+                      {/* the steps unfold, and the card grows around them */}
+                      {open && (
+                        <Animated.View
+                          entering={level === 'none' ? undefined : FadeIn.duration(220)}
+                          exiting={level === 'none' ? undefined : FadeOut.duration(140)}
+                          style={st.steps}
+                        >
+                          {m.subtasks.map((sub) => (
+                            <Row key={sub.id} style={{ paddingVertical: 5 }}>
+                              <CheckCircle done={sub.done} size={20} onPress={() => toggleSubtask(m.id, sub.id)} />
+                              <StrikeText done={sub.done} style={st.stepText} wrapStyle={st.stepWrap}>{sub.title}</StrikeText>
+                              <IconBtn name="close" size={16} onPress={() => removeSubtask(m.id, sub.id)} />
+                            </Row>
+                          ))}
+                          <Row style={{ marginTop: 2 }}>
+                            <Field
+                              value={subDraft} onChangeText={setSubDraft} placeholder="Add a step"
+                              style={{ flex: 1, marginBottom: 0 }}
+                              onSubmitEditing={() => { if (subDraft.trim()) { addSubtask(m.id, subDraft.trim()); setSubDraft(''); } }}
+                            />
+                            <IconBtn
+                              name="add-circle" color={C.accent} size={28} style={{ marginLeft: 6 }}
+                              onPress={() => { if (subDraft.trim()) { addSubtask(m.id, subDraft.trim()); setSubDraft(''); } }}
+                            />
                           </Row>
-                        ))}
-                        <Row style={{ marginTop: 6 }}>
-                          <Field
-                            value={subDraft} onChangeText={setSubDraft} placeholder="Add a step…"
-                            style={{ flex: 1, marginBottom: 0, paddingVertical: 8 }}
-                            onSubmitEditing={() => { if (subDraft.trim()) { addSubtask(m.id, subDraft.trim()); setSubDraft(''); } }}
-                          />
-                          <IconBtn
-                            name="add-circle" color={C.accent} size={28} style={{ marginLeft: 6 }}
-                            onPress={() => { if (subDraft.trim()) { addSubtask(m.id, subDraft.trim()); setSubDraft(''); } }}
-                          />
-                        </Row>
-                      </View>
-                    )}
-                  </Card>
-                </Enter>
-              );
-            })
+                        </Animated.View>
+                      )}
+                    </View>
+                  );
+                })}
+              </ListCard>
+            </Enter>
           ))}
       </ScrollView>
 
@@ -260,10 +268,13 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         onClose={() => setAddSheet(false)}
         title={tab === 'daily' ? 'New ToDo (daily)' : 'New long-term task'}
       >
-        <Field value={title} onChangeText={setTitle} placeholder={tab === 'daily' ? 'e.g. 50 PYQs' : 'e.g. Full mock test + analysis'} autoFocus />
+        <Field
+          label={tab === 'daily' ? undefined : 'Task'}
+          value={title} onChangeText={setTitle} placeholder={tab === 'daily' ? 'e.g. 50 PYQs' : 'e.g. Full mock test + analysis'} autoFocus
+        />
         {tab === 'missions' && (
           <>
-            <Field value={deadline} onChangeText={setDeadline} placeholder={'Deadline (YYYY-MM-DD), e.g. ' + today} />
+            <Field label="Deadline" value={deadline} onChangeText={setDeadline} placeholder={'YYYY-MM-DD, e.g. ' + today} />
             <Row style={{ flexWrap: 'wrap', marginBottom: 6 }}>
               {[0, 1, 3, 7, 14].map((n) => {
                 const d = new Date(); d.setDate(d.getDate() + n);
@@ -336,8 +347,12 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 const st = StyleSheet.create({
   triageTitle: { color: C.amber, fontFamily: F.semi, fontSize: 13, marginBottom: 10, letterSpacing: 0.2 },
-  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 12, flex: 1, letterSpacing: 0.1 },
-  taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
+  taskWrap: { flex: 1, marginLeft: 12 },
+  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21, letterSpacing: 0.1 },
+  missionRow: { paddingVertical: 12, paddingHorizontal: 12 },
+  steps: { marginTop: 10, paddingLeft: 4 },
+  stepWrap: { flex: 1, marginLeft: 10 },
+  stepText: { color: C.textDim, fontFamily: F.reg, fontSize: 14, lineHeight: 20 },
   pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginHorizontal: 6 },
   fab: {
     position: 'absolute', right: 20, bottom: 24, width: 58, height: 58, borderRadius: 29,

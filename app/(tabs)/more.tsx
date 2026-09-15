@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, neuInset } from '../../src/theme';
-import { ScreenBG, Card, Row, SectionTitle, useTheme } from '../../src/components/UI';
+import { ScreenBG, ListCard, ListRow, SectionTitle, useTheme } from '../../src/components/UI';
 import { Enter, useFocusKey } from '../../src/components/Motion';
 import { useStore } from '../../src/store';
 import { TOOLS, ToolKey, colorOf, normaliseSlots } from '../../src/tools';
@@ -40,12 +40,12 @@ export default function More() {
         <Text style={T.kicker}>Toolbox</Text>
         <Text style={[T.display, { marginTop: 4, marginBottom: 16 }]}>More</Text>
 
-        {tools.map((t, i) => {
-          const count = counts[t.key];
-          return (
-            <Enter key={t.key} index={i}>
-              <Card pad={16} onPress={() => openTool(t.key)}>
-                <Row>
+        <Enter index={0}>
+          <ListCard>
+            {tools.map((t) => {
+              const count = counts[t.key];
+              return (
+                <ListRow key={t.key} onPress={() => openTool(t.key)} style={{ paddingVertical: 12 }}>
                   <View style={[st.iconWell, well]}>
                     <Ionicons name={t.icon as any} size={22} color={colorOf(t.colorKey)} />
                   </View>
@@ -58,17 +58,17 @@ export default function More() {
                   ) : null}
                   {count ? <Text style={st.count}>{count}</Text> : null}
                   <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
-                </Row>
-              </Card>
-            </Enter>
-          );
-        })}
+                </ListRow>
+              );
+            })}
+          </ListCard>
+        </Enter>
 
         {/* system, deliberately separated: settings is not a tool */}
         <SectionTitle>System</SectionTitle>
-        <Enter index={tools.length}>
-          <Card pad={16} onPress={() => router.push('/settings')}>
-            <Row>
+        <Enter index={1}>
+          <ListCard>
+            <ListRow key="settings" onPress={() => router.push('/settings')} style={{ paddingVertical: 12 }}>
               <View style={[st.iconWell, well]}>
                 <Ionicons name="settings-outline" size={21} color={C.accent} />
               </View>
@@ -77,8 +77,8 @@ export default function More() {
                 <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>Theme, tab bar, reminders and backup</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
-            </Row>
-          </Card>
+            </ListRow>
+          </ListCard>
         </Enter>
       </ScrollView>
     </ScreenBG>
