@@ -40,10 +40,12 @@ node scripts/build-signature.js --check
 Everything visual comes from `src/theme.ts`.
 
 - **One light.** `NEU_ANGLE` 60 and `NEU_DIST` 6 drive every raised and carved surface. Surfaces use `NEU`, `neuRaised()` and `neuInset()` only, never literal shadows; tracks under 20 points use the hairline carve.
-- **One accent.** Chosen in Settings from six swatches, Iris by default. No glows.
+- **One accent.** Chosen in Settings from seven swatches, Iris by default; Terracotta is Claude's own orange. No glows.
 - **Type.** Rubik through the `F` faces and the closed `T` scale (display 30, h1 22, title 17, body 15, label 13, caption 12, kicker 11), IBM Plex Mono for timers. Never `fontWeight`.
 - **Copy.** Sentence case, no emoji, no em dashes.
-- **Palette.** Three warm materials (Bark, Clay, Umber) are proposed in the Palette Lab; the app keeps its grey until one is picked.
+- **Palette.** Claude's dark greys. The material is Claude's canvas `#262624`, carved floors use its sidebar tone `#1F1E1D`, and text uses `#FAF9F5`, `#C2C0B6` and `#9C9A92`. The minimal theme is Claude's own flat layering.
+- **Spacing.** Generous by default: `S.section` 34 between sections, `S.gap` 14 between cards, and controls never sit flush against the card below them.
+- **Tab bar.** One carved trough with a raised key that slides to the current tab.
 
 ## Re-recording the signature
 
