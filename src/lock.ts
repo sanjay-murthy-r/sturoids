@@ -9,10 +9,15 @@ import { useStore } from './store';
 // and single locked notes. The journal and Notes can also open with the phone's own screen lock, each only if the
 // owner turns that on in Settings; a single locked note always asks for the PIN. There is no lock on the whole app.
 // Nothing here encrypts. An unlock opens a session that closes after `settings.lockGraceSec` in the background, or
-// when the app is killed.
+// when the app is killed. Each locked note has its own session, so opening one never opens another.
 
-/** the journal, the Notes tool, and single locked notes */
-export type LockScope = 'journal' | 'notes' | 'note';
+/** the journal, the Notes tool, one locked note (`note:<id>`), or every locked note at once (`note:*`) */
+export type LockScope = 'journal' | 'notes' | `note:${string}`;
+
+/** The session of one locked note. */
+export const noteScope = (id: string): LockScope => `note:${id}`;
+/** Opened only by the PIN given at the Notes tool's own lock: that owner has just proved they know it. */
+export const ALL_NOTES: LockScope = 'note:*';
 
 export const PIN_LEN = 4;
 /** codes from before the PIN became four digits: a 4 to 8 digit journal passcode, or a 6 digit PIN */
@@ -56,32 +61,36 @@ function session() {
   };
 }
 
-const sessions: Record<LockScope, ReturnType<typeof session>> = {
-  journal: session(),
-  notes: session(),
-  note: session(),
-};
+const sessions = new Map<LockScope, ReturnType<typeof session>>();
+/** A scope's session, made the first time anything asks about it. */
+function sessionOf(scope: LockScope) {
+  let s = sessions.get(scope);
+  if (!s) {
+    s = session();
+    sessions.set(scope, s);
+  }
+  return s;
+}
 let authInFlight = false;
 
 AppState.addEventListener('change', (next) => {
   // the phone's own lock screen backgrounds the app; that is not the owner leaving
   if (authInFlight) return;
-  const all = Object.values(sessions);
   if (next === 'active') {
     const graceMs = useStore.getState().settings.lockGraceSec * 1000;
-    all.forEach((s) => s.back(graceMs));
+    sessions.forEach((s) => s.back(graceMs));
   } else {
-    all.forEach((s) => s.away());
+    sessions.forEach((s) => s.away());
   }
 });
 
-export const markOpen = (scope: LockScope) => sessions[scope].mark();
-export const isOpen = (scope: LockScope) => sessions[scope].isOpen();
-export const closeLock = (scope: LockScope) => sessions[scope].close();
+export const markOpen = (scope: LockScope) => sessionOf(scope).mark();
+export const isOpen = (scope: LockScope) => sessionOf(scope).isOpen();
+export const closeLock = (scope: LockScope) => sessionOf(scope).close();
 
 /** Re-renders when the scope's session opens or closes. */
 export function useOpen(scope: LockScope): boolean {
-  const s = sessions[scope];
+  const s = sessionOf(scope);
   const [, bump] = React.useReducer((x: number) => x + 1, 0);
   React.useEffect(() => s.subscribe(bump), [s]);
   return s.isOpen();

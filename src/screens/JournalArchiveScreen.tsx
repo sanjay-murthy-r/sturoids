@@ -7,7 +7,7 @@ import { C, F, MIN, NEU, S, T, bgFor } from '../theme';
 import { useStore, JournalEntry } from '../store';
 import { todayKey } from '../utils';
 import {
-  Card, Chip, DotMenu, Field, Hairline, IconBtn, ListRow, ListSlice, NeuHeader, PillButton, Row, ScreenBG, Sheet, useTheme,
+  Card, Chip, DotMenu, EmptyState, Field, Hairline, IconBtn, ListRow, ListSlice, NeuHeader, PillButton, Row, ScreenBG, Sheet, useTheme,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { ToolGate } from '../components/LockGate';
@@ -225,9 +225,9 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   );
 
   const empty = journal.length === 0 ? (
-    <EmptyState icon="journal-outline" title="Your first page is waiting." action="Write today" onAction={() => open(journalDayFor(new Date(), cutoff))} />
+    <EmptyState icon="journal-outline" title="Your first page is waiting" actionLabel="Write today" onAction={() => open(journalDayFor(new Date(), cutoff))} />
   ) : (
-    <EmptyState icon="search-outline" title="Nothing matches those filters." action="Clear filters" onAction={clearAll} />
+    <EmptyState icon="search-outline" title="Nothing matches those filters" actionLabel="Clear filters" onAction={clearAll} />
   );
 
   return (
@@ -348,19 +348,6 @@ function Glance({ value, label }: { value: number; label: string }) {
   );
 }
 
-function EmptyState({ icon, title, action, onAction }: { icon: string; title: string; action: string; onAction: () => void }) {
-  const theme = useTheme();
-  return (
-    <View style={st.empty}>
-      <View style={[st.emptyWell, theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...NEU.insetLow }]}>
-        <Ionicons name={icon as any} size={26} color={C.gold} />
-      </View>
-      <Text style={[T.title, { marginTop: 16, textAlign: 'center' }]}>{title}</Text>
-      <PillButton label={action} color={C.gold} onPress={onAction} style={{ marginTop: 18, minWidth: 180 }} />
-    </View>
-  );
-}
-
 const st = StyleSheet.create({
   link: { color: C.accent, fontFamily: F.semi, fontSize: 13, marginLeft: 12 },
   // a sticky month spans the whole width, so the card's side shadows pass under it instead of beside it
@@ -379,6 +366,4 @@ const st = StyleSheet.create({
   heatCell: { width: 12, height: 12, borderRadius: 3 },
   echo: { color: C.textDim, fontFamily: F.reg, fontSize: 13, marginTop: 6 },
   sheetLabel: { ...T.label, marginTop: 10, marginBottom: 8 },
-  empty: { alignItems: 'center', paddingTop: 48, paddingHorizontal: 24 },
-  emptyWell: { width: 72, height: 72, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
 });

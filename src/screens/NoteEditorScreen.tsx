@@ -19,7 +19,7 @@ import { todayKey, uid } from '../utils';
 import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuHeader, NeuIconBtn, PillButton, DotMenu, useTheme } from '../components/UI';
 import { toast } from '../components/Toast';
 import { NoteGate, PinSheet, ToolGate } from '../components/LockGate';
-import { markOpen, pinStatus } from '../lock';
+import { markOpen, noteScope, pinStatus } from '../lock';
 import { Bouncy } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -95,7 +95,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const header = <NeuHeader title={folder} />;
   return (
     <ToolGate tool="notes" guard={false} header={header}>
-      <NoteGate locked={locked} header={header}>
+      <NoteGate id={id ?? ''} locked={locked} header={header}>
         <NoteEditor mode={mode} />
       </NoteGate>
     </ToolGate>
@@ -123,6 +123,9 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const [listening, setListening] = useState(false);
   const [liveText, setLiveText] = useState('');
   const voiceRef = useRef<VoiceSession | null>(null);
+  /** set from the first tap until dictation has started, so a second quick tap never starts it twice */
+  const voiceStarting = useRef(false);
+  const alive = useRef(true);
   const selRef = useRef({ start: 0, end: 0 });
   const undoStack = useRef<string[]>([]);
   const redoStack = useRef<string[]>([]);
@@ -132,7 +135,10 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const [toolMenu, setToolMenu] = useState(false);
 
   // a dictation still running when the note closes is stopped, never left listening
-  React.useEffect(() => () => { voiceRef.current?.stop(); }, []);
+  React.useEffect(() => () => {
+    alive.current = false;
+    voiceRef.current?.stop();
+  }, []);
 
   const lines = useMemo(
     () => (note?.body || '').split('\n').map((l) => l.trim()).filter((l) => l.length > 2),
@@ -206,6 +212,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   };
 
   const toggleVoice = async () => {
+    if (voiceStarting.current) return;
     if (listening) {
       voiceRef.current?.stop();
       setListening(false);
@@ -216,18 +223,27 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       Alert.alert('Voice input', 'Speech recognition ships with the installed APK build (it cannot run inside Expo Go).');
       return;
     }
-    const session = await startVoice(
-      (finalText) => {
-        setLiveText('');
-        const b = liveBody(); // NOT the closed-over note.body — see liveBody()
-        insertAtCursor((b && !b.endsWith(' ') && !b.endsWith('\n') ? ' ' : '') + finalText);
-        setTimeout(autoScroll, 60);
-      },
-      (interim) => setLiveText(interim),
-      () => { setListening(false); setLiveText(''); },
-      (msg) => { setListening(false); setLiveText(''); Alert.alert('Voice input', msg); }
-    );
-    if (session) { voiceRef.current = session; setListening(true); }
+    voiceStarting.current = true;
+    try {
+      const session = await startVoice(
+        (finalText) => {
+          setLiveText('');
+          const b = liveBody(); // NOT the closed-over note.body — see liveBody()
+          insertAtCursor((b && !b.endsWith(' ') && !b.endsWith('\n') ? ' ' : '') + finalText);
+          setTimeout(autoScroll, 60);
+        },
+        (interim) => setLiveText(interim),
+        () => { setListening(false); setLiveText(''); },
+        (msg) => { setListening(false); setLiveText(''); Alert.alert('Voice input', msg); }
+      );
+      if (!session) return;
+      // the note closed while the microphone was being set up: stop at once instead of listening unseen
+      if (!alive.current) { session.stop(); return; }
+      voiceRef.current = session;
+      setListening(true);
+    } finally {
+      voiceStarting.current = false;
+    }
   };
 
   const pickMedia = async () => {
@@ -285,7 +301,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     }
     if ((await pinStatus()) === 'set') {
       updateNote(note.id, { locked: true });
-      markOpen('note');
+      markOpen(noteScope(note.id));
       toast('Note locked. Your PIN opens it.');
       return;
     }
@@ -456,7 +472,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         onDone={() => {
           setLockPin(false);
           updateNote(note.id, { locked: true });
-          markOpen('note');
+          markOpen(noteScope(note.id));
           toast('Note locked. Your PIN opens it.');
         }}
       />
@@ -469,7 +485,7 @@ function InlineVideo({ uri, width }: { uri: string; width: number }) {
   return (
     <VideoView
       player={player}
-      style={{ width, height: width * 0.62, borderRadius: 14, backgroundColor: '#000' }}
+      style={{ width, height: width * 0.62, borderRadius: 14, backgroundColor: C.inset }}
       allowsFullscreen
       nativeControls
     />

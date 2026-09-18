@@ -12,8 +12,8 @@ import { Bouncy, useAnimLevel } from './Motion';
 import { useStore } from '../store';
 import { tap, tick } from '../haptics';
 import {
-  LEGACY_MAX, LEGACY_MIN, PIN_LEN, deviceAuthAvailable, markOpen, pinCooldownMs, pinStatus, setPin,
-  unlockWithScreenLock, useOpen, verifyPin,
+  ALL_NOTES, LEGACY_MAX, LEGACY_MIN, PIN_LEN, deviceAuthAvailable, markOpen, noteScope, pinCooldownMs, pinStatus,
+  setPin, unlockWithScreenLock, useOpen, verifyPin,
 } from '../lock';
 import type { LockScope } from '../lock';
 
@@ -250,14 +250,15 @@ function Shielded({ children }: { children: React.ReactNode }) {
  * underneath, so the app switcher shows nothing. When the owner allowed it, the phone's screen lock is offered
  * once each time the page comes into view. Unlocking turns the lock open and the gate dissolves into the page.
  */
-function LockPage({ scope, locked, screenLock, title, reason, tint, header, guard, children }: {
-  scope: LockScope; locked: boolean; screenLock: boolean; title: string; reason: string; tint: string;
-  header: React.ReactNode; guard: boolean; children: React.ReactNode;
+function LockPage({ scope, alsoOpenedBy, locked, screenLock, title, reason, tint, header, guard, children }: {
+  scope: LockScope; alsoOpenedBy?: LockScope; locked: boolean; screenLock: boolean; title: string; reason: string;
+  tint: string; header: React.ReactNode; guard: boolean; children: React.ReactNode;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
   const sessionOpen = useOpen(scope);
-  const open = !locked || sessionOpen;
+  const openedAbove = useOpen(alsoOpenedBy ?? scope);
+  const open = !locked || sessionOpen || openedAbove;
   const [shown, setShown] = React.useState(open);
   const [deviceOk, setDeviceOk] = React.useState(false);
   const asked = React.useRef(false);
@@ -316,7 +317,7 @@ function LockPage({ scope, locked, screenLock, title, reason, tint, header, guar
   // a PIN given for the Notes tool also opens its locked notes: the same owner has just proved it
   const unlockWithPin = () => {
     markOpen(scope);
-    if (scope === 'notes') markOpen('note');
+    if (scope === 'notes') markOpen(ALL_NOTES);
   };
 
   return (
@@ -364,12 +365,17 @@ export function ToolGate({ tool, header, guard, children }: {
   );
 }
 
-/** A single locked note: the app PIN only, never the screen lock. */
-export function NoteGate({ locked, header, children }: { locked: boolean; header: React.ReactNode; children: React.ReactNode }) {
+/**
+ * A single locked note: the app PIN only, never the screen lock. Each note opens on its own, so giving the PIN for
+ * one leaves the others locked; only the PIN given at the Notes tool's lock opens them all.
+ */
+export function NoteGate({ id, locked, header, children }: {
+  id: string; locked: boolean; header: React.ReactNode; children: React.ReactNode;
+}) {
   return (
     <LockPage
-      scope="note" locked={locked} screenLock={false} title="This note is locked" reason="Open the note"
-      tint={C.green} header={header} guard={false}
+      scope={noteScope(id)} alsoOpenedBy={ALL_NOTES} locked={locked} screenLock={false} title="This note is locked"
+      reason="Open the note" tint={C.green} header={header} guard={false}
     >
       {children}
     </LockPage>

@@ -123,6 +123,21 @@ export function formatJournalDate(key: string, now = new Date()): string {
   return d.toLocaleDateString('en-IN', opts);
 }
 
+/**
+ * The page's date for a header too narrow for the whole line: `day` ('17 September', with the year when it is not
+ * this year) is the large line, `weekday` ('Wednesday') sits under it.
+ */
+export function journalDateParts(key: string, now = new Date()): { day: string; weekday: string } {
+  const d = keyToDate(key);
+  if (isNaN(d.getTime())) return { day: key, weekday: '' };
+  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long' };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+  return {
+    day: d.toLocaleDateString('en-IN', opts),
+    weekday: d.toLocaleDateString('en-IN', { weekday: 'long' }),
+  };
+}
+
 export function relativeDay(key: string, now = new Date()): string {
   if (key === todayKey(now)) return 'Today';
   if (key === shiftKey(todayKey(now), -1)) return 'Yesterday';

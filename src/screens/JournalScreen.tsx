@@ -16,7 +16,7 @@ import { Bouncy, useAnimLevel } from '../components/Motion';
 import { PinSheet, ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
-  MOODS, countWords, deleteEntry, formatJournalDate, journalDayFor, promptFor, readBody, relativeDay, saveEntry,
+  MOODS, countWords, deleteEntry, formatJournalDate, journalDateParts, journalDayFor, promptFor, readBody, relativeDay, saveEntry,
   shiftKey, takeJournalOpenRequest,
 } from '../journal';
 import { useToolNav } from '../toolNav';
@@ -252,9 +252,12 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const at = entryId ? dayEntries.findIndex((e) => e.id === entryId) : -1;
   const words = countWords(body);
   const goal = settings.journalWordGoal;
+  // the whole date never fits one line beside the buttons, so the day leads and the weekday sits under it
+  const parts = journalDateParts(dateKey);
   const hint = dayEntries.length > 1 && at >= 0
     ? 'Entry ' + (at + 1) + ' of ' + dayEntries.length
-    : relativeDay(dateKey) || (dateKey > today ? '' : ' ');
+    : relativeDay(dateKey);
+  const sub = parts.weekday + (hint ? ' · ' + hint : '');
   const marked = React.useMemo(() => new Set(journal.map((e) => e.dateKey)), [journal]);
   const current = entryId ? journal.find((e) => e.id === entryId) : undefined;
 
@@ -314,8 +317,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           {tabMode ? null : <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={() => router.back()} />}
         </View>
         <Bouncy onPress={() => { tick(); setDateSheet(true); }} scaleTo={0.97} radius={14} style={st.dateBtn}>
-          <Text style={st.date} numberOfLines={1}>{formatJournalDate(dateKey)}</Text>
-          <Text style={[T.caption, { marginTop: 1 }]}>{hint}</Text>
+          <Text style={st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
+          <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
         </Bouncy>
         <View style={[st.side, { justifyContent: 'flex-end' }]}>
           <NeuIconBtn name="albums-outline" dim={38} size={18} color={C.textDim} onPress={openArchive} />
