@@ -16,7 +16,8 @@ import { SegmentedControl } from '../src/components/SegmentedControl';
 import { PinSheet } from '../src/components/LockGate';
 import { journalForBackup, restoreBodies } from '../src/journal';
 import {
-  deviceAuthAvailable, hasPin, isUnlocked, lockProtectionAvailable, markUnlocked, removePin, unlockWithDevice,
+  deviceAuthAvailable, hasJournalPass, hasPin, isJournalUnlocked, isUnlocked, markJournalUnlocked, markUnlocked,
+  removeJournalPass, removePin, unlockWithDevice,
 } from '../src/lock';
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
 import { TOOLS, ToolKey, colorOf, normaliseSlots, toolByKey } from '../src/tools';
@@ -112,8 +113,12 @@ export default function Settings() {
   const exportData = async (confirmed = false) => {
     // a backup carries locked pages in full, so making one asks for the owner, like turning a lock off
     const s = useStore.getState();
-    const carriesLocked = s.settings.journalLocked || s.notes.some((n) => n.locked);
-    if (carriesLocked && !confirmed && !(await confirmOwner('export'))) return;
+    // a locked note answers to the device or the app PIN; a locked journal answers to its own passcode
+    const carriesNotes = s.notes.some((n) => n.locked);
+    if (!confirmed && (carriesNotes || s.settings.journalLocked)) {
+      const ok = carriesNotes ? await confirmOwner('export') : await confirmJournal('export');
+      if (!ok) return;
+    }
     try {
       const snap = exportSnapshot();
       // journal text lives in files, so the backup carries it inline
@@ -219,19 +224,22 @@ export default function Settings() {
     ]);
   };
 
-  // ---- privacy: the journal lock, the app PIN, and how soon an open session closes ----
+  // ---- privacy: the journal's passcode, the app PIN, and how soon an open session closes ----
   const lockedNotes = useStore((s) => s.notes.filter((n) => n.locked).length);
   const [pinSet, setPinSet] = useState(false);
+  const [passSet, setPassSet] = useState(false);
   const [deviceLock, setDeviceLock] = useState(false);
-  const [pinStep, setPinStep] = useState<null | { mode: 'enter' | 'set'; then: 'journal-on' | 'journal-off' | 'change' | 'remove' | 'export' }>(null);
+  const [pinStep, setPinStep] = useState<null | { mode: 'enter' | 'set'; then: 'journal-off' | 'journal-pass' | 'change' | 'remove' | 'export' }>(null);
+  const [passStep, setPassStep] = useState<null | { mode: 'enter' | 'set'; then: 'journal-on' | 'journal-off' | 'change' | 'export' }>(null);
   const refreshLockInfo = () => {
     hasPin().then(setPinSet);
+    hasJournalPass().then(setPassSet);
     deviceAuthAvailable().then(setDeviceLock);
   };
   useEffect(refreshLockInfo, []);
 
   /** Asks for the owner before a lock is weakened. Resolves true when it is already confirmed. */
-  const confirmOwner = async (then: 'journal-off' | 'change' | 'remove' | 'export'): Promise<boolean> => {
+  const confirmOwner = async (then: 'journal-off' | 'journal-pass' | 'change' | 'remove' | 'export'): Promise<boolean> => {
     if (isUnlocked()) return true;
     const r = await unlockWithDevice('Confirm it is you');
     if (r === 'unlocked') return true;
@@ -239,13 +247,50 @@ export default function Settings() {
     return false;
   };
 
+  /** The journal answers to its own passcode. One locked before passcodes falls back to the owner check. */
+  const confirmJournal = async (then: 'journal-off' | 'change' | 'export'): Promise<boolean> => {
+    if (isJournalUnlocked()) return true;
+    if (await hasJournalPass()) {
+      setPassStep({ mode: 'enter', then });
+      return false;
+    }
+    // locked before passcodes: the phone's own lock still speaks for it
+    return confirmOwner(then === 'change' ? 'journal-pass' : then);
+  };
+
   const setJournalLock = async (on: boolean) => {
     if (!on) {
-      if (await confirmOwner('journal-off')) setSetting('journalLocked', false);
+      if (await confirmJournal('journal-off')) {
+        setSetting('journalLocked', false);
+        await removeJournalPass();
+        setPassSet(false);
+      }
       return;
     }
-    if (await lockProtectionAvailable()) setSetting('journalLocked', true);
-    else setPinStep({ mode: 'set', then: 'journal-on' });
+    setPassStep({ mode: 'set', then: 'journal-on' });
+  };
+
+  const changePass = async () => {
+    if (passSet && !(await confirmJournal('change'))) return;
+    setPassStep({ mode: 'set', then: 'change' });
+  };
+
+  const passDone = async () => {
+    const step = passStep;
+    setPassStep(null);
+    if (!step) return;
+    markJournalUnlocked();
+    if (step.mode === 'set') {
+      setPassSet(true);
+      if (step.then === 'journal-on') setSetting('journalLocked', true);
+      return;
+    }
+    if (step.then === 'journal-off') {
+      setSetting('journalLocked', false);
+      await removeJournalPass();
+      setPassSet(false);
+    } else if (step.then === 'change') setTimeout(() => setPassStep({ mode: 'set', then: 'change' }), 350);
+    else if (step.then === 'export') exportData(true);
   };
 
   const changePin = async () => {
@@ -259,10 +304,10 @@ export default function Settings() {
       await removePin();
       refreshLockInfo();
     };
-    if (!deviceLock && (settings.journalLocked || lockedNotes > 0)) {
+    if (!deviceLock && lockedNotes > 0) {
       Alert.alert(
         'Remove the PIN?',
-        'This phone has no screen lock, so locked content will open without asking.',
+        'This phone has no screen lock, so locked notes will open without asking.',
         [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: remove }],
       );
     } else {
@@ -277,13 +322,13 @@ export default function Settings() {
     if (step.mode === 'enter') {
       markUnlocked();
       if (step.then === 'journal-off') setSetting('journalLocked', false);
+      else if (step.then === 'journal-pass') setTimeout(() => setPassStep({ mode: 'set', then: 'change' }), 350);
       else if (step.then === 'change') setTimeout(() => setPinStep({ mode: 'set', then: 'change' }), 350);
       else if (step.then === 'remove') { await removePin(); refreshLockInfo(); }
       else if (step.then === 'export') exportData(true);
       return;
     }
     refreshLockInfo();
-    if (step.then === 'journal-on') setSetting('journalLocked', true);
   };
 
   const checkUpdate = async () => {
@@ -429,13 +474,23 @@ export default function Settings() {
             <View style={{ flex: 1, paddingRight: 12 }}>
               <Text style={[T.body, { fontFamily: F.med }]}>Lock journal</Text>
               <Text style={[T.caption, { marginTop: 2 }]}>
-                {lockedNotes > 0
-                  ? lockedNotes + (lockedNotes === 1 ? ' note is locked too.' : ' notes are locked too.')
-                  : 'Single notes lock from their menu.'}
+                {!settings.journalLocked
+                  ? 'A passcode of four to eight digits opens it, and nothing else does.'
+                  : passSet
+                    ? 'Its passcode is the only way in, and only this phone can check it.'
+                    : "It still opens with this phone's own lock."}
               </Text>
             </View>
             <Toggle value={settings.journalLocked} onChange={setJournalLock} color={C.gold} />
           </Row>
+          {settings.journalLocked ? (
+            <PillButton
+              small outline color={C.gold}
+              label={passSet ? 'Change passcode' : 'Set a passcode'}
+              onPress={changePass}
+              style={{ marginTop: 10, alignSelf: 'flex-end' }}
+            />
+          ) : null}
           <Hairline />
           <Text style={[st.label, { marginTop: 10, marginBottom: 8 }]}>Re-lock after</Text>
           <SegmentedControl
@@ -450,11 +505,14 @@ export default function Settings() {
             <View style={{ flex: 1, paddingRight: 12 }}>
               <Text style={[T.body, { fontFamily: F.med }]}>App PIN</Text>
               <Text style={[T.caption, { marginTop: 2 }]}>
+                {lockedNotes > 0
+                  ? lockedNotes + (lockedNotes === 1 ? ' note is locked. ' : ' notes are locked. ')
+                  : 'Single notes lock from their menu. '}
                 {pinSet
-                  ? 'Asked for when fingerprint or face is not available.'
+                  ? 'The PIN opens them when fingerprint or face is not available.'
                   : deviceLock
-                    ? 'Optional. Your screen lock already protects locked content.'
-                    : 'Needed for locks, because this phone has no screen lock.'}
+                    ? 'Optional: your screen lock already opens them.'
+                    : 'A PIN is needed for note locks, because this phone has no screen lock.'}
               </Text>
             </View>
             <PillButton small outline label={pinSet ? 'Change PIN' : 'Set PIN'} onPress={changePin} />
@@ -463,10 +521,11 @@ export default function Settings() {
             <PillButton small outline color={C.danger} label="Remove PIN" onPress={dropPin} style={{ marginTop: 10, alignSelf: 'flex-end' }} />
           ) : null}
           <Text style={[T.caption, { marginTop: 14 }]}>
-            Locks hide content behind your fingerprint, face or PIN. Backups still include everything, so keep them somewhere safe.
+            Locks hide pages, they do not encrypt them. Backups still include everything, so keep them somewhere safe.
           </Text>
         </Card>
         <PinSheet visible={!!pinStep} mode={pinStep?.mode ?? 'enter'} onClose={() => setPinStep(null)} onDone={pinDone} />
+        <PinSheet visible={!!passStep} mode={passStep?.mode ?? 'enter'} kind="journal" onClose={() => setPassStep(null)} onDone={passDone} />
 
         <SectionTitle right={<InfoDot text="Everything is stored locally on this phone, with no accounts. Export a JSON backup before changing phones; importing replaces all current data." />}>
           Data

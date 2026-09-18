@@ -13,7 +13,7 @@ import {
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Bouncy, useAnimLevel } from '../components/Motion';
-import { LockGate, PinSheet } from '../components/LockGate';
+import { JournalGate, PinSheet } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, countWords, deleteEntry, formatJournalDate, journalDayFor, promptFor, readBody, relativeDay, saveEntry,
@@ -22,7 +22,7 @@ import {
 import { useToolNav } from '../toolNav';
 import { tap, tick } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
-import { lockProtectionAvailable, markUnlocked, useUnlocked } from '../lock';
+import { hasJournalPass, markJournalUnlocked, removeJournalPass } from '../lock';
 
 type Mood = JournalEntry['mood'];
 interface Draft {
@@ -34,18 +34,12 @@ const SAVE_DEBOUNCE_MS = 400;
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export function JournalScreen({ mode }: { mode: 'tab' | 'stack' }) {
-  const settings = useStore((s) => s.settings);
-  const unlocked = useUnlocked();
   const tabMode = mode === 'tab';
-  if (settings.journalLocked && !unlocked) {
-    return (
-      <ScreenBG guard={tabMode}>
-        <NeuHeader title="Journal" variant={tabMode ? 'tab' : 'page'} />
-        <LockGate locked title="Journal is locked"><View /></LockGate>
-      </ScreenBG>
-    );
-  }
-  return <WritingSpace tabMode={tabMode} />;
+  return (
+    <JournalGate guard={tabMode} header={<NeuHeader title="Journal" variant={tabMode ? 'tab' : 'page'} />}>
+      <WritingSpace tabMode={tabMode} />
+    </JournalGate>
+  );
 }
 
 function WritingSpace({ tabMode }: { tabMode: boolean }) {
@@ -75,7 +69,9 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const [tagDraft, setTagDraft] = React.useState('');
   const [prefs, setPrefs] = React.useState(false);
   const [remindDraft, setRemindDraft] = React.useState(settings.journalReminderTime || '21:30');
-  const [pinSetup, setPinSetup] = React.useState(false);
+  const [passSheet, setPassSheet] = React.useState<null | 'set' | 'change'>(null);
+  const [hasPass, setHasPass] = React.useState(false);
+  React.useEffect(() => { hasJournalPass().then(setHasPass); }, [settings.journalLocked, passSheet]);
 
   const draft = React.useRef<Draft>({ id: null, dateKey, title: '', body: '', mood: undefined, tags: [], dirty: false });
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -278,13 +274,14 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   };
 
   const setLock = async (on: boolean) => {
-    if (!on) { setSetting('journalLocked', false); return; }
-    if (await lockProtectionAvailable()) {
-      // the lock takes effect at once: the gate asks for the device's own lock before the page returns
-      setSetting('journalLocked', true);
-    } else {
-      setPinSetup(true);
+    // the page is open, so the passcode has already been given: turning the lock off here asks nothing more
+    if (!on) {
+      setSetting('journalLocked', false);
+      await removeJournalPass();
+      setHasPass(false);
+      return;
     }
+    setPassSheet('set');
   };
   const saveReminder = async (on: boolean) => {
     if (on) {
@@ -452,13 +449,30 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           <Text style={[T.body, { flex: 1 }]}>Lock journal</Text>
           <Toggle value={settings.journalLocked} onChange={setLock} color={C.gold} />
         </Row>
+        {!settings.journalLocked ? (
+          <Text style={T.caption}>A passcode of four to eight digits opens the journal, and nothing else does.</Text>
+        ) : hasPass ? (
+          <Text style={st.passLink} onPress={() => setPassSheet('change')}>Change passcode</Text>
+        ) : (
+          <>
+            <Text style={T.caption}>This journal still opens with the phone's own lock.</Text>
+            <Text style={st.passLink} onPress={() => setPassSheet('set')}>Set a passcode</Text>
+          </>
+        )}
       </Sheet>
 
       <PinSheet
-        visible={pinSetup}
+        visible={!!passSheet}
         mode="set"
-        onClose={() => setPinSetup(false)}
-        onDone={() => { setPinSetup(false); setSetting('journalLocked', true); markUnlocked(); }}
+        kind="journal"
+        onClose={() => setPassSheet(null)}
+        onDone={() => {
+          const step = passSheet;
+          setPassSheet(null);
+          setHasPass(true);
+          markJournalUnlocked();
+          if (step === 'set') setSetting('journalLocked', true);
+        }}
       />
     </ScreenBG>
   );
@@ -481,5 +495,6 @@ const st = StyleSheet.create({
   words: { color: C.textFaint, fontFamily: F.med, fontSize: 12, fontVariant: ['tabular-nums'] },
   tick: { width: 16, height: 2, borderRadius: 1, backgroundColor: C.accent, marginTop: 4 },
   prefLabel: { ...T.label, marginTop: 10, marginBottom: 8 },
+  passLink: { color: C.gold, fontFamily: F.semi, fontSize: 13, paddingVertical: 8 },
   prefRow: { paddingVertical: 10 },
 });

@@ -10,31 +10,24 @@ import {
   Card, Chip, DotMenu, Field, Hairline, IconBtn, ListRow, ListSlice, NeuHeader, PillButton, Row, ScreenBG, Sheet, useTheme,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { LockGate } from '../components/LockGate';
+import { JournalGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, deleteEntry, entryMatches, formatJournalDate, journalDayFor, journalStats, keyToDate, loadBodies, onThisDay,
   readBody, requestJournalOpen, searchTokens, shiftKey,
 } from '../journal';
 import { openTool } from '../toolNav';
-import { useUnlocked } from '../lock';
 import { tick } from '../haptics';
 
 type Sort = 'newest' | 'oldest' | 'longest';
 const HEAT_WEEKS = 12;
 
 export function JournalArchiveScreen({ mode }: { mode: 'tab' | 'stack' }) {
-  const locked = useStore((s) => s.settings.journalLocked);
-  const unlocked = useUnlocked();
-  if (locked && !unlocked) {
-    return (
-      <ScreenBG>
-        <NeuHeader title="Journal" />
-        <LockGate locked title="Journal is locked"><View /></LockGate>
-      </ScreenBG>
-    );
-  }
-  return <Archive tabMode={mode === 'tab'} />;
+  return (
+    <JournalGate guard={mode === 'tab'} header={<NeuHeader title="Journal" />}>
+      <Archive tabMode={mode === 'tab'} />
+    </JournalGate>
+  );
 }
 
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
