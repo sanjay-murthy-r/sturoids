@@ -38,6 +38,7 @@ function LinkIcon({ link }: { link: AiLink }) {
       source={{ uri: 'https://www.google.com/s2/favicons?domain=' + domain + '&sz=128' }}
       style={{ width: 40, height: 40, borderRadius: 10 }}
       cachePolicy="memory-disk"
+      transition={220}
       onError={() => setFailed(true)}
     />
   );

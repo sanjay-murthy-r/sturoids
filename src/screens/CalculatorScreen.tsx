@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { create, all } from 'mathjs';
 import * as Clipboard from 'expo-clipboard';
 import { C, F, MIN, NEU, S, neuRaised } from '../theme';
 import { useStore } from '../store';
 import { ScreenBG, Sheet, Row, PillButton, Inset, Chip, IconBtn, NeuHeader, useTheme } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Bouncy } from '../components/Motion';
+import { Bouncy, useAnimLevel } from '../components/Motion';
 import { tick } from '../haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -69,6 +70,14 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const errTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (errTimer.current) clearTimeout(errTimer.current); }, []);
 
+  // on equals, the answer lifts from the preview line into the main one
+  const level = useAnimLevel();
+  const rise = useSharedValue(0);
+  const riseStyle = useAnimatedStyle(() => ({
+    opacity: 1 - 0.4 * rise.value,
+    transform: [{ translateY: 24 * rise.value }],
+  }));
+
   const fmt = (v: any) =>
     math.format(v, sciNotation ? { notation: 'exponential', precision: 12 } : { precision: 14 });
 
@@ -115,6 +124,10 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       pushCalc(expr, out);
       setExpr(out);
       setJustEvaluated(true);
+      if (level !== 'none') {
+        rise.value = 1;
+        rise.value = withTiming(0, { duration: 320, easing: Easing.out(Easing.cubic) });
+      }
     } catch {
       // no "Error" row in the history: the expression stays, and the preview line explains
       setJustEvaluated(false);
@@ -131,7 +144,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {/* display — carved into the material */}
         <Inset pad={16} style={{ borderRadius: S.radius, marginBottom: 12, overflow: 'visible' }}>
           <ScrollView style={{ maxHeight: 90 }} contentContainerStyle={{ justifyContent: 'flex-end' }}>
-            <Text style={st.expr} selectable>{expr || '0'}</Text>
+            <Animated.Text style={[st.expr, riseStyle]} selectable>{expr || '0'}</Animated.Text>
           </ScrollView>
           <Text style={[st.preview, { color: evalError ? C.danger : C.accent }]} numberOfLines={1}>{evalError ? "Can't evaluate" : justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
         </Inset>

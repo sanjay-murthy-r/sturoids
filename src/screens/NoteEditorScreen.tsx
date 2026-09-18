@@ -329,7 +329,7 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
             {note.attachments.map((a) => (
               <View key={a.id}>
                 {a.kind === 'image' && (
-                  <CachedImage source={{ uri: a.uri }} style={{ width: mediaW, height: mediaW * 0.75, borderRadius: 14 }} contentFit="cover" cachePolicy="memory" />
+                  <CachedImage source={{ uri: a.uri }} style={{ width: mediaW, height: mediaW * 0.75, borderRadius: 14 }} contentFit="cover" cachePolicy="memory" transition={180} />
                 )}
                 {a.kind === 'video' && <InlineVideo uri={a.uri} width={mediaW} />}
                 {a.kind === 'file' && (

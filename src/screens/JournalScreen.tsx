@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T } from '../theme';
 import { useStore, JournalEntry } from '../store';
 import { todayKey } from '../utils';
@@ -94,6 +94,17 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     idle.current = setTimeout(() => { dim.value = withTiming(0, { duration: 420 }); }, 1400);
   };
 
+  // ---- the page turns the way time runs: a later day arrives from the right, an earlier one from the left ----
+  const pageX = useSharedValue(0);
+  const pageFade = useSharedValue(1);
+  const pageStyle = useAnimatedStyle(() => ({ opacity: pageFade.value, transform: [{ translateX: pageX.value * 22 }] }));
+  const turnPage = React.useCallback((dir: 1 | -1) => {
+    if (level === 'none') return;
+    const enter = { duration: 300, easing: Easing.out(Easing.cubic) };
+    pageX.value = withSequence(withTiming(dir, { duration: 0 }), withTiming(0, enter));
+    pageFade.value = withSequence(withTiming(0.2, { duration: 0 }), withTiming(1, enter));
+  }, [level]);
+
   // ---- saving: serialised, so two flushes can never create the same entry twice ----
   const runFlush = React.useCallback(async () => {
     const d = draft.current;
@@ -154,9 +165,11 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
 
   const openDay = React.useCallback(async (key: string, id?: string | null) => {
     await flush();
+    const from = draft.current.dateKey;
     const day = useStore.getState().journal.filter((e) => e.dateKey === key).sort((a, b) => a.createdAt - b.createdAt);
     await loadEntry(key, id === undefined ? day[0]?.id ?? null : id);
-  }, [flush, loadEntry]);
+    if (key !== from) turnPage(key > from ? 1 : -1);
+  }, [flush, loadEntry, turnPage]);
 
   useFocusEffect(React.useCallback(() => {
     const req = takeJournalOpenRequest();
@@ -313,7 +326,11 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         </View>
       ) : null}
 
-      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: S.pad + 4, paddingTop: 8, paddingBottom: 40 }}>
+      <Animated.ScrollView
+        style={pageStyle}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ paddingHorizontal: S.pad + 4, paddingTop: 8, paddingBottom: 40 }}
+      >
         <TextInput
           value={title}
           onChangeText={onTitle}
@@ -344,7 +361,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           textAlignVertical="top"
           style={st.body}
         />
-      </ScrollView>
+      </Animated.ScrollView>
 
       <Animated.View style={[st.foot, { paddingBottom: 10 + (tabMode ? 0 : insets.bottom) }, footStyle]}>
         <Row style={{ flex: 1 }}>

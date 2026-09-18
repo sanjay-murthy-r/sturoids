@@ -46,6 +46,7 @@ function Thumb({ videoId }: { videoId: string }) {
   return (
     <CachedImage
       source={{ uri: thumb(videoId) }} style={st.thumb} contentFit="cover" cachePolicy="memory-disk"
+      transition={220}
       onError={() => setFailed(true)}
     />
   );
@@ -403,6 +404,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <View>
             <CachedImage
               source={{ uri: thumb(previewSheet.video.videoId) }} contentFit="cover" cachePolicy="memory-disk"
+              transition={220}
               style={{ width: '100%', aspectRatio: 16 / 9, borderRadius: 16, backgroundColor: C.inset }}
             />
             <Text style={[T.title, { marginTop: 12 }]}>{previewSheet.video.title}</Text>
