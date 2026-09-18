@@ -10,6 +10,7 @@ import { C, F, LX, LY, NEU, bgFor, darkSh, liteSh } from '../theme';
 import { useStore } from '../store';
 import { setIntroPhase } from '../intro';
 import { SIG, SIG_SIZE, SIG_SPEED } from '../signature';
+import { DATE_PLACE } from '../handDate';
 import { useAnimLevel } from './Motion';
 import { DATE_SPEED, SHINE_SKEW, Signature, SignatureStill, layoutDate } from './Signature';
 
@@ -71,13 +72,19 @@ const SIGNED = real(SIG_START + SIG.total);
 const DATE_LIFT = 160;
 /** beat 1 ends on the finished signature and date, held still */
 const HOLD = 520;
+/** the date is cut in at the end, just before the hand-over, instead of written after the signature */
+const DATE_LATE = DATE_PLACE.when === 'outro';
 
-/** Every beat after the pen, from how long today's date takes to write (real ms). */
-function beats(dateMs: number) {
-  const dateStart = SIGNED + DATE_LIFT;
-  const written = dateStart + dateMs;
+/**
+ * Every beat after the pen, from how long today's date takes to write (real ms). The Handwriting Lab places the date
+ * in time too: 'signature' writes it straight after the signature, in beat 1; 'outro' holds the signature alone and
+ * cuts the date into the carve after the shine, just before the hand-over.
+ */
+function beats(dateMs: number, late: boolean) {
+  /** the pen's last mark in beat 1: the signature's, or the date's after it */
+  const penDone = late ? SIGNED : SIGNED + DATE_LIFT + dateMs;
   /** beat 2: the signature travels into its slot and sinks into a carve while the plate rises */
-  const SHIFT = { at: written + HOLD, dur: 1060 };
+  const SHIFT = { at: penDone + HOLD, dur: 1060 };
   const RISE = { at: SHIFT.at + 240, dur: 1020, settle: 250 };
   const SINK = { at: SHIFT.at + 560, dur: 700 };
   const GROOVES = { at: RISE.at + 860, dur: 460 };
@@ -91,15 +98,17 @@ function beats(dateMs: number) {
    * plate, then the signature. As it goes, the overlay's material gives way to the app's identical material and the
    * app makes its own entrance in the scene's place (intro phase `leaving`): the day rises, then the tab bar.
    */
-  const LEAVE = SHINE.at + SHINE.dur + 320;
+  const shineEnd = SHINE.at + SHINE.dur;
+  const dateStart = late ? shineEnd + DATE_LIFT : SIGNED + DATE_LIFT;
+  const LEAVE = late ? dateStart + dateMs + HOLD : shineEnd + 320;
   const HANDOFF = LEAVE + 300;
   return {
     dateStart,
     /**
-     * The app is built under the opaque overlay in the still beat after the date, while nothing on screen moves,
+     * The app is built under the opaque overlay in the still beat after the pen, while nothing on screen moves,
      * so building it never shows as a stutter in the shift, the rise or the shine.
      */
-    REVEAL: written + 80,
+    REVEAL: penDone + 80,
     SHIFT, RISE, SINK, GROOVES, WORD, CAPTION, SHINE, LEAVE, HANDOFF,
     CLEAR: { at: HANDOFF, dur: 260 },
     DONE: HANDOFF + 560,
@@ -169,7 +178,7 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
   const [gone, setGone] = useState(false);
   const [date, setDate] = useState(todayDigits);
   const dateRef = useRef(date);
-  const B = useMemo(() => beats(layoutDate(date).total / DATE_SPEED), []);
+  const B = useMemo(() => beats(layoutDate(date).total / DATE_SPEED, DATE_LATE), []);
   const callbacks = useRef({ onReveal, onDone });
   callbacks.current = { onReveal, onDone };
 
@@ -365,6 +374,7 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
               tau={tau}
               date={date}
               dateTau={dateTau}
+              dateLate={DATE_LATE}
               travel={travel}
               ink={ink}
               carve={carve}

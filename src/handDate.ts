@@ -41,7 +41,7 @@ export interface HandPoint {
 
 /** Where the date sits on the signature, in its viewBox units. */
 export interface HandDatePlace {
-  /** 'signature': written straight after the signature */
+  /** 'signature': written straight after the signature; 'outro': cut into the carve after the shine, before the hand-over */
   readonly when: 'signature' | 'outro';
   /** a digit's height */
   readonly size: number;

@@ -196,8 +196,11 @@ function DateStrokes({ date, lineW, color }: { date: string; lineW: number; colo
 
 /* ------------------------------------------------------------------ carve (static) */
 
-/** The signature, and the date when there is one, debossed into the material: a light lip under a dark carve. */
-function CarveArt({ g, date }: { g: Geo; date?: string }) {
+/**
+ * The signature, and the date when there is one, debossed into the material: a light lip under a dark carve. With
+ * `engrave`, the date is not there yet: its own pen cuts it in as `engrave` runs, for a date written at the end.
+ */
+function CarveArt({ g, date, engrave }: { g: Geo; date?: string; engrave?: SharedValue<number> }) {
   const lipX = LIP_DX / g.k;
   const lipY = LIP_DY / g.k;
   return (
@@ -214,7 +217,9 @@ function CarveArt({ g, date }: { g: Geo; date?: string }) {
         ))}
         {date ? (
           <G transform={`translate(${lipX.toFixed(3)} ${lipY.toFixed(3)})`}>
-            <DateStrokes date={date} lineW={g.lineW} color={CARVE_LIP} />
+            {engrave
+              ? <DateInk date={date} lineW={g.lineW} dateTau={engrave} color={CARVE_LIP} dotScale={1} />
+              : <DateStrokes date={date} lineW={g.lineW} color={CARVE_LIP} />}
           </G>
         ) : null}
         {LINES.map((l, i) => (
@@ -223,7 +228,9 @@ function CarveArt({ g, date }: { g: Geo; date?: string }) {
             strokeLinecap="round" strokeLinejoin="round"
           />
         ))}
-        {date ? <DateStrokes date={date} lineW={g.lineW} color={CARVE_DARK} /> : null}
+        {date ? (engrave
+          ? <DateInk date={date} lineW={g.lineW} dateTau={engrave} color={CARVE_DARK} dotScale={1} />
+          : <DateStrokes date={date} lineW={g.lineW} color={CARVE_DARK} />) : null}
       </Svg>
       {DOTS.map((d, i) => (
         <React.Fragment key={i}>
@@ -265,8 +272,8 @@ function InkDot({ dot, k, tau }: { dot: SigDot; k: number; tau: SharedValue<numb
 }
 
 /** A stroke of the date, written by `dateTau` (model ms from the date's first pen-down) from its digit's start. */
-function DateInkLine({ line, width, dateTau, t0 }: {
-  line: HandLine; width: number; dateTau: SharedValue<number>; t0: number;
+function DateInkLine({ line, width, dateTau, t0, color }: {
+  line: HandLine; width: number; dateTau: SharedValue<number>; t0: number; color: string;
 }) {
   const { s, ts, len } = line;
   const park = len * PARK;
@@ -275,24 +282,29 @@ function DateInkLine({ line, width, dateTau, t0 }: {
   }));
   return (
     <AnimatedPath
-      d={line.d} fill="none" stroke={C.text} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round"
+      d={line.d} fill="none" stroke={color} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round"
       strokeDasharray={[len * DASH, len * DASH]}
       animatedProps={animatedProps}
     />
   );
 }
 
-function DateInkDot({ dot, r, dateTau, t0 }: { dot: HandDot; r: number; dateTau: SharedValue<number>; t0: number }) {
+function DateInkDot({ dot, r, dateTau, t0, color }: {
+  dot: HandDot; r: number; dateTau: SharedValue<number>; t0: number; color: string;
+}) {
   const start = t0 + dot.t0;
   const animatedProps = useAnimatedProps(() => {
     const p = Math.min(Math.max((dateTau.value - start) / DOT_POP, 0), 1);
     const q = 1 - (1 - p) * (1 - p) * (1 - p);
     return { r: p > 0 ? r * (0.4 + 0.6 * q) : 0 };
   });
-  return <AnimatedCircle cx={dot.cx} cy={dot.cy} fill={C.text} animatedProps={animatedProps} />;
+  return <AnimatedCircle cx={dot.cx} cy={dot.cy} fill={color} animatedProps={animatedProps} />;
 }
 
-function DateInk({ date, lineW, dateTau }: { date: string; lineW: number; dateTau: SharedValue<number> }) {
+/** The date written stroke by stroke in one colour: ink over the page, or the lip or the cut of an engraving. */
+function DateInk({ date, lineW, dateTau, color = C.text, dotScale = 1.1 }: {
+  date: string; lineW: number; dateTau: SharedValue<number>; color?: string; dotScale?: number;
+}) {
   const { digits } = useMemo(() => layoutDate(date), [date]);
   const w = lineW / DATE_SCALE;
   return (
@@ -300,9 +312,9 @@ function DateInk({ date, lineW, dateTau }: { date: string; lineW: number; dateTa
       {digits.map((p) => (
         <G key={p.key + p.ch} transform={p.transform}>
           {DIGITS[p.ch].strokes.map((st, i) => (st.type === 'line' ? (
-            <DateInkLine key={i} line={st} width={w} dateTau={dateTau} t0={p.t0} />
+            <DateInkLine key={i} line={st} width={w} dateTau={dateTau} t0={p.t0} color={color} />
           ) : (
-            <DateInkDot key={i} dot={st} r={w * 1.1} dateTau={dateTau} t0={p.t0} />
+            <DateInkDot key={i} dot={st} r={w * dotScale} dateTau={dateTau} t0={p.t0} color={color} />
           )))}
         </G>
       ))}
@@ -400,6 +412,11 @@ export interface SignatureProps {
   date?: string;
   /** model ms (100% speed, from the date's first pen-down) driving the date's pen */
   dateTau?: SharedValue<number>;
+  /**
+   * The date is written at the end, just before the hand-over, instead of straight after the signature: it is never
+   * inked or shone on, its pen cuts it straight into the carve.
+   */
+  dateLate?: boolean;
   /** 0 = hero, 1 = resting in the slot */
   travel: SharedValue<number>;
   /** ink and carve layer opacities (the sink from ink into the material) */
@@ -414,7 +431,7 @@ export interface SignatureProps {
  * (transforms only), sinking into a carve, with one soft accent catch of light along the carve.
  */
 export function Signature({
-  width, heroScale, heroX, heroY, tau, date, dateTau, travel, ink, carve, glint,
+  width, heroScale, heroX, heroY, tau, date, dateTau, dateLate, travel, ink, carve, glint,
 }: SignatureProps) {
   const g = useMemo(() => geometry(width), [width]);
 
@@ -437,13 +454,13 @@ export function Signature({
   return (
     <Animated.View style={[{ width: g.width, height: g.height }, travelStyle]}>
       <Animated.View style={[StyleSheet.absoluteFill, carveStyle]}>
-        <CarveArt g={g} date={date} />
+        <CarveArt g={g} date={date} engrave={dateLate ? dateTau : undefined} />
       </Animated.View>
       <Animated.View style={[StyleSheet.absoluteFill, inkStyle]}>
-        <InkArt g={g} heroScale={heroScale} tau={tau} date={date} dateTau={dateTau} />
+        <InkArt g={g} heroScale={heroScale} tau={tau} date={dateLate ? undefined : date} dateTau={dateTau} />
       </Animated.View>
       <Animated.View style={[StyleSheet.absoluteFill, glintStyle]}>
-        <Shine g={g} glint={glint} date={date} />
+        <Shine g={g} glint={glint} date={dateLate ? undefined : date} />
       </Animated.View>
     </Animated.View>
   );
