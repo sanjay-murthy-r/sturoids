@@ -3,16 +3,19 @@ import { View, Text, ScrollView, StyleSheet, Pressable, useWindowDimensions } fr
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, {
+  FadeIn, FadeOut, ZoomIn, ZoomOut, runOnJS, useAnimatedStyle, useSharedValue, withSpring,
+} from 'react-native-reanimated';
+import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { C, F, MIN, S, T, neuRaised, neuInset } from '../../src/theme';
+import { C, F, MIN, S, T, neuInset } from '../../src/theme';
 import { useStore, QuickItem } from '../../src/store';
 import { uid, fmtDate, todayKey, dayName, DAY_NAMES, toMinutes, fmtClockTime, daysUntil } from '../../src/utils';
 import {
   ScreenBG, Card, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Hairline, Chip, IconBtn,
-  ProgressBar, useTheme,
+  ListCard, ListRow, ProgressBar, StrikeText, useTheme,
 } from '../../src/components/UI';
-import { Enter, Bouncy, Pop, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
+import { CountUp, Enter, Bouncy, Pop, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { tap } from '../../src/haptics';
 import { ROUTE_CATALOG, launchExternal } from '../../src/quickAccess';
 import { ToolKey, colorOf, toolByKey } from '../../src/tools';
@@ -39,6 +42,9 @@ export default function Today() {
   const sessions = useStore((s) => s.sessions);
   const quickAccess = useStore((s) => s.quickAccess);
   const journal = useStore((s) => s.journal);
+  const noteCount = useStore((s) => s.notes.length);
+  const videoCount = useStore((s) => s.vaultVideos.length);
+  const deepWork = useStore((s) => s.deepWork);
   const setQuickAccess = useStore((s) => s.setQuickAccess);
 
   const [nameSheet, setNameSheet] = useState(false);
@@ -110,6 +116,54 @@ export default function Today() {
   // a quiet reminder of the Journal's page for today, never shown while the journal is locked
   const journalDay = journalDayFor(now, settings.journalCutoffHour);
   const journalNudge = !settings.journalLocked && !journal.some((e) => e.dateKey === journalDay);
+
+  // what a shortcut's wide tile says: a live fact about its tool. A shortcut with nothing to say stays a small tile,
+  // and every tool always says the same kind of thing, so live changes never reshuffle the grid.
+  const quickMetas = useMemo(() => {
+    const count = (n: number, one: string, many: string) => n + ' ' + (n === 1 ? one : many);
+    const dayEntries = journal.filter((e) => e.dateKey === journalDay);
+    const out: Record<string, string | null> = {};
+    for (const q of quickAccess) {
+      let meta: string | null = null;
+      if (q.kind === 'tool') {
+        switch (q.target as ToolKey) {
+          case 'tasks':
+            meta = todayList.length === 0 ? 'Nothing on the list' : tasksLeft ? count(tasksLeft, 'task left', 'tasks left') : 'All clear';
+            break;
+          case 'focus':
+            meta = deepWork ? (deepWork.running ? 'Session running' : 'Session paused')
+              : focusToday ? focusToday + ' min today' : 'No focus yet today';
+            break;
+          case 'planner':
+            meta = !nextBlock ? 'Nothing planned'
+              : nextBlock.tag === 'NOW' ? nextBlock.block.subject + ' now'
+                : nextBlock.tag === 'TOMORROW' ? 'Tomorrow, ' + nextBlock.block.subject
+                  : nextBlock.block.subject + ' at ' + fmtClockTime(toMinutes(nextBlock.block.start), settings.hour24);
+            break;
+          case 'notes':
+            meta = noteCount ? count(noteCount, 'note', 'notes') : 'No notes yet';
+            break;
+          case 'journal':
+            // a locked journal says nothing about its pages
+            meta = settings.journalLocked ? 'Locked'
+              : dayEntries.length ? count(dayEntries.reduce((a, e) => a + e.wordCount, 0), 'word', 'words')
+                : journalDay === today ? "Today's page is empty" : "Yesterday's page is empty";
+            break;
+          case 'vault':
+            meta = videoCount ? count(videoCount, 'lecture saved', 'lectures saved') : 'No lectures yet';
+            break;
+        }
+      } else if (q.kind === 'app') {
+        // a long app name needs the wide tile to be readable
+        meta = q.label.length > 9 ? 'App on this phone' : null;
+      } else if (q.kind === 'url') {
+        meta = q.target.replace(/^https?:\/\//, '').split('/')[0] || null;
+      }
+      out[q.id] = meta;
+    }
+    return out;
+  }, [quickAccess, todayList.length, tasksLeft, deepWork, focusToday, nextBlock, noteCount, videoCount, journal, journalDay, today,
+    settings.journalLocked, settings.hour24]);
 
   const runQuick = (q: QuickItem) => {
     if (qaEdit) return;
@@ -198,11 +252,11 @@ export default function Today() {
         <Enter index={2}>
           <Card pad={0}>
             <Row>
-              <Glance value={String(tasksLeft)} label="tasks left" color={C.accent} />
+              <Glance value={tasksLeft} label="tasks left" color={C.accent} />
               <View style={st.vDivider} />
-              <Glance value={habits.length ? habitsDone + '/' + habits.length : '–'} label="habits" color={C.green} />
+              <Glance value={habitsDone} total={habits.length} label="habits" color={C.green} />
               <View style={st.vDivider} />
-              <Glance value={String(focusToday)} suffix=" min" label="focused" color={C.accent} />
+              <Glance value={focusToday} suffix=" min" label="focused" color={C.accent} />
             </Row>
           </Card>
         </Enter>
@@ -219,6 +273,7 @@ export default function Today() {
         <Enter index={3}>
           <QuickGrid
             items={quickAccess}
+            metas={quickMetas}
             edit={qaEdit}
             onRun={runQuick}
             onRemove={removeQuick}
@@ -254,28 +309,27 @@ export default function Today() {
           <ProgressBar value={doneCount / Math.max(1, todayList.length)} />
         </View>
         <Enter index={4}>
-          <Card pad={6}>
-            {todayList.length === 0 ? (
+          {todayList.length === 0 ? (
+            <Card pad={6}>
               <EmptyState compact icon="checkbox-outline" title="Nothing on the list yet" body="Add ToDos from Tasks." actionLabel="Open Tasks" onAction={() => openTool('tasks')} />
-            ) : (
-              todayList.map((t, i) => (
-                <View key={t.kind + t.id}>
-                  {i > 0 && <Hairline />}
-                  <Row style={{ paddingVertical: 13, paddingHorizontal: 12 }}>
-                    <CheckCircle
-                      done={t.done}
-                      color={t.kind === 'mission' ? C.amber : C.green}
-                      onPress={() => (t.kind === 'daily' ? toggleDaily(t.id) : toggleMission(t.id))}
-                    />
-                    <Text style={[st.taskText, t.done && st.taskDone]} numberOfLines={1}>{t.title}</Text>
-                    {t.kind === 'mission' && (
-                      <View style={st.missionPill}><Text style={st.missionPillText}>DUE</Text></View>
-                    )}
-                  </Row>
-                </View>
-              ))
-            )}
-          </Card>
+            </Card>
+          ) : (
+            <ListCard>
+              {todayList.map((t) => (
+                <ListRow key={t.kind + t.id}>
+                  <CheckCircle
+                    done={t.done}
+                    color={t.kind === 'mission' ? C.amber : C.green}
+                    onPress={() => (t.kind === 'daily' ? toggleDaily(t.id) : toggleMission(t.id))}
+                  />
+                  <StrikeText done={t.done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{t.title}</StrikeText>
+                  {t.kind === 'mission' && (
+                    <View style={st.missionPill}><Text style={st.missionPillText}>DUE</Text></View>
+                  )}
+                </ListRow>
+              ))}
+            </ListCard>
+          )}
         </Enter>
 
         {habits.length > 0 && (
@@ -312,7 +366,7 @@ export default function Today() {
             <Text style={[T.caption, { textAlign: 'center', marginTop: 10 }]}>
               {weekTotal > 0 ? (
                 <>
-                  <Text style={{ color: C.accent, fontFamily: F.semi }}>{weekTotal} min</Text> focused in the last 7 days
+                  <CountUp value={weekTotal} style={{ color: C.accent, fontFamily: F.semi }}> min</CountUp> focused in the last 7 days
                 </>
               ) : 'No focus logged this week yet.'}
             </Text>
@@ -364,15 +418,15 @@ export default function Today() {
             </View>
           </>
         )}
-        <Text style={st.sheetSection}>Custom app (package name)</Text>
-        <Field value={customLabel} onChangeText={setCustomLabel} placeholder="Label, e.g. BYJU'S" />
-        <Row>
+        <Text style={st.sheetSection}>Custom app</Text>
+        <Field label="Name" value={customLabel} onChangeText={setCustomLabel} placeholder="BYJU'S" />
+        <Row style={{ alignItems: 'flex-end' }}>
           <Field
-            value={customPkg} onChangeText={setCustomPkg} autoCapitalize="none"
+            label="Package name" value={customPkg} onChangeText={setCustomPkg} autoCapitalize="none"
             placeholder="com.example.app" style={{ flex: 1, marginBottom: 0 }}
           />
           <PillButton
-            small label="Add" style={{ marginLeft: 8 }}
+            small label="Add" style={{ marginLeft: 12 }}
             onPress={() => {
               const p = customPkg.trim();
               if (!p.includes('.')) return;
@@ -389,15 +443,17 @@ export default function Today() {
   );
 }
 
-function Glance({ value, label, color, suffix }: { value: string; label: string; color: string; suffix?: string }) {
+function Glance({ value, total, label, color, suffix }: { value: number; total?: number; label: string; color: string; suffix?: string }) {
   return (
     <View style={{ flex: 1, alignItems: 'center', paddingVertical: 16 }}>
-      <Pop dep={value}>
-        <Text style={[st.glanceValue, { color }]}>
-          {value}
+      {total === 0 ? (
+        <Text style={[st.glanceValue, { color }]}>–</Text>
+      ) : (
+        <CountUp value={value} style={[st.glanceValue, { color }]}>
+          {total != null ? '/' + total : null}
           {suffix ? <Text style={{ fontSize: 13, fontFamily: F.semi }}>{suffix}</Text> : null}
-        </Text>
-      </Pop>
+        </CountUp>
+      )}
       <Text style={st.glanceLabel}>{label}</Text>
     </View>
   );
@@ -406,29 +462,69 @@ function Glance({ value, label, color, suffix }: { value: string; label: string;
 /** Carved vertical trough with a sprung fill rising from the bottom. */
 const BAR_SPRING = { damping: 20, stiffness: 240, mass: 0.8 };
 
-/* ---------------- quick access: exact 4-column grid + hold-to-drag ---------------- */
+/* ---------------- quick access: a bento of wide and small tiles, hold to drag ---------------- */
 const QA_COLS = 4;
-const QA_GAP = 10;
-const QA_CELL_H = 96;
+const QA_GAP = 8;
+const QA_ROW_H = 80;
+const QA_ADD_H = 52;
 
-const slotPos = (i: number, cell: number) => ({
-  x: (i % QA_COLS) * (cell + QA_GAP),
-  y: Math.floor(i / QA_COLS) * (QA_CELL_H + QA_GAP),
-});
+interface QaRect { x: number; y: number; w: number }
 
-function QuickTile({ q, index, count, cell, isDragging, onDragState, onCross, onDrop, onRun, edit, onRemove }: {
-  q: QuickItem; index: number; count: number; cell: number; isDragging: boolean;
-  onDragState: (id: string) => void; onCross: (id: string, idx: number) => void; onDrop: () => void;
-  onRun: (q: QuickItem) => void; edit: boolean; onRemove: (id: string) => void;
+/**
+ * Packs tiles into rows of four columns, in their order: a shortcut with something to say spans two columns, the rest
+ * one. A row that cannot take the next tile, and the last row, widen their own small tiles into the gap, and a tile
+ * alone on the last row spans it, so no row ends with a hole.
+ */
+function packTiles(spans: number[], colW: number): QaRect[] {
+  const cells: { col: number; row: number; span: number }[] = [];
+  let row = 0;
+  let used = 0;
+  let start = 0;
+  const close = () => {
+    const line = cells.slice(start);
+    let gap = QA_COLS - used;
+    if (line.length === 1) {
+      line[0].span = QA_COLS;
+      gap = 0;
+    }
+    for (let i = line.length - 1; i >= 0 && gap > 0; i--) {
+      if (line[i].span === 1) { line[i].span = 2; gap--; }
+    }
+    let col = 0;
+    for (const c of line) { c.col = col; col += c.span; }
+  };
+  spans.forEach((span) => {
+    if (used + span > QA_COLS) {
+      close();
+      row++;
+      used = 0;
+      start = cells.length;
+    }
+    cells.push({ col: used, row, span });
+    used += span;
+  });
+  if (cells.length) close();
+  return cells.map((c) => ({
+    x: c.col * (colW + QA_GAP),
+    y: c.row * (QA_ROW_H + QA_GAP),
+    w: c.span * colW + (c.span - 1) * QA_GAP,
+  }));
+}
+
+function QuickTile({ q, meta, index, rect, wide, rects, isDragging, onDragState, onCross, onDrop, onRun, edit, onRemove, fadeIn }: {
+  q: QuickItem; meta: string | null; index: number; rect: QaRect; wide: boolean; rects: SharedValue<QaRect[]>;
+  isDragging: boolean; onDragState: (id: string) => void; onCross: (id: string, idx: number) => void; onDrop: () => void;
+  onRun: (q: QuickItem) => void; edit: boolean; onRemove: (id: string) => void; fadeIn: boolean;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
-  const pos = slotPos(index, cell);
-  const x = useSharedValue(pos.x);
-  const y = useSharedValue(pos.y);
+  const x = useSharedValue(rect.x);
+  const y = useSharedValue(rect.y);
+  const w = useSharedValue(rect.w);
   const sx = useSharedValue(0);
   const sy = useSharedValue(0);
   const lift = useSharedValue(0);
+  const over = useSharedValue(-1);
 
   // live refs — the pan worklet is memoized, so JS callbacks go through here
   const idxRef = React.useRef(index); idxRef.current = index;
@@ -442,10 +538,12 @@ function QuickTile({ q, index, count, cell, isDragging, onDragState, onCross, on
   const dragStable = React.useCallback((id: string) => dragStateRef.current(id), []);
 
   React.useEffect(() => {
-    if (isDragging) return; // the finger owns the position
-    if (level === 'none') { x.value = pos.x; y.value = pos.y; }
-    else { x.value = withSpring(pos.x, RISE_OUT); y.value = withSpring(pos.y, RISE_OUT); }
-  }, [pos.x, pos.y, isDragging, level]);
+    // a tile whose span changes grows or narrows on its way; while dragging, the finger owns the position
+    w.value = level === 'none' ? rect.w : withSpring(rect.w, RISE_OUT);
+    if (isDragging) return;
+    if (level === 'none') { x.value = rect.x; y.value = rect.y; }
+    else { x.value = withSpring(rect.x, RISE_OUT); y.value = withSpring(rect.y, RISE_OUT); }
+  }, [rect.x, rect.y, rect.w, isDragging, level]);
 
   // 420ms: long enough that a lingering tap never rearranges by accident,
   // short enough to still feel like a standard launcher hold-to-drag
@@ -454,108 +552,150 @@ function QuickTile({ q, index, count, cell, isDragging, onDragState, onCross, on
     .onStart(() => {
       lift.value = withSpring(1, RISE_OUT);
       sx.value = x.value; sy.value = y.value;
+      over.value = -1;
       runOnJS(tap)();
       runOnJS(dragStable)(q.id);
     })
     .onUpdate((e) => {
       x.value = sx.value + e.translationX;
       y.value = sy.value + e.translationY;
-      const col = Math.min(QA_COLS - 1, Math.max(0, Math.floor((x.value + cell / 2) / (cell + QA_GAP))));
-      const row = Math.max(0, Math.floor((y.value + QA_CELL_H / 2) / (QA_CELL_H + QA_GAP)));
-      runOnJS(crossStable)(q.id, Math.min(count - 1, row * QA_COLS + col));
+      // the slot under the tile's centre, away from that slot's edges, so a tile that changes span on the move
+      // never lands on a spot that sends it straight back
+      const cx = x.value + w.value / 2;
+      const cy = y.value + QA_ROW_H / 2;
+      const rs = rects.value;
+      let hit = -1;
+      for (let i = 0; i < rs.length; i++) {
+        const r = rs[i];
+        const mx = r.w * 0.2;
+        if (cx > r.x + mx && cx < r.x + r.w - mx && cy > r.y + QA_ROW_H * 0.2 && cy < r.y + QA_ROW_H * 0.8) {
+          hit = i;
+          break;
+        }
+      }
+      if (hit !== over.value) {
+        over.value = hit;
+        if (hit >= 0) runOnJS(crossStable)(q.id, hit);
+      }
     })
     .onFinalize(() => {
       lift.value = withSpring(0, RISE_OUT);
       runOnJS(dropStable)();
-    }), [cell, count, q.id]);
+    }), [q.id]);
 
   const aStyle = useAnimatedStyle(() => ({
+    width: w.value,
     transform: [
       { translateX: x.value },
       { translateY: y.value },
-      { scale: 1 + lift.value * 0.07 },
+      { scale: 1 + lift.value * 0.05 },
     ] as const,
   }));
 
+  const icon = (q.kind === 'tool' ? toolByKey(q.target)?.icon || q.icon : q.icon) as any;
+  // neutral tiles: the colour lives only in the icon
+  const surface = theme === 'minimal'
+    ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
+    : { backgroundColor: C.inset };
+
   return (
     <GestureDetector gesture={pan}>
-      <Animated.View
-        style={[
-          { position: 'absolute', width: cell, height: QA_CELL_H, zIndex: isDragging ? 10 : 0, elevation: isDragging ? 10 : 0 },
-          aStyle,
-        ]}
-      >
-        <Bouncy
-          onPress={() => onRun(q)}
-          radius={18}
-          style={[
-            { flex: 1, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-            theme === 'minimal'
-              ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
-              : { backgroundColor: C.card, ...neuRaised('mid') },
-          ]}
+      <Animated.View style={[st.qaTile, { zIndex: isDragging ? 10 : 0, elevation: isDragging ? 10 : 0 }, aStyle]}>
+        <Animated.View
+          style={st.qaFill}
+          entering={fadeIn && level !== 'none' ? FadeIn.duration(220) : undefined}
+          // a removed shortcut shrinks away while the others slide into its place
+          exiting={level === 'none' ? undefined : ZoomOut.duration(180)}
         >
-          <Ionicons name={(q.kind === 'tool' ? toolByKey(q.target)?.icon || q.icon : q.icon) as any} size={24} color={colorOf(q.color)} />
-          <Text style={[st.gridLabel, { maxWidth: cell - 10 }]} numberOfLines={1}>{q.label}</Text>
-        </Bouncy>
-        {edit && (
-          <IconBtn
-            name="close-circle" size={18} color={C.danger} pad={4}
-            style={{ position: 'absolute', top: -8, right: -8 }}
-            onPress={() => onRemove(q.id)}
-          />
-        )}
+          <Bouncy
+            onPress={() => onRun(q)}
+            radius={18}
+            scaleTo={0.97}
+            style={[st.qaFace, wide ? st.qaWide : st.qaSmall, wide && !meta && { justifyContent: 'center' }, wide && edit && { paddingRight: 26 }, surface]}
+          >
+            {wide ? (
+              <>
+                <Row>
+                  <Ionicons name={icon} size={20} color={colorOf(q.color)} />
+                  <Text style={st.qaLabel} numberOfLines={1}>{q.label}</Text>
+                </Row>
+                {meta ? <Text style={st.qaMeta} numberOfLines={2}>{meta}</Text> : null}
+              </>
+            ) : (
+              <>
+                <Ionicons name={icon} size={22} color={colorOf(q.color)} />
+                <Text style={st.qaSmallLabel} numberOfLines={1}>{q.label}</Text>
+              </>
+            )}
+          </Bouncy>
+          {edit ? (
+            <Animated.View
+              entering={level === 'none' ? undefined : ZoomIn.duration(200)}
+              exiting={level === 'none' ? undefined : ZoomOut.duration(140)}
+              style={st.qaX}
+            >
+              <IconBtn name="close-circle" size={18} color={C.danger} pad={4} onPress={() => onRemove(q.id)} />
+            </Animated.View>
+          ) : null}
+        </Animated.View>
       </Animated.View>
     </GestureDetector>
   );
 }
 
-function QuickGrid({ items, edit, onRun, onRemove, onReorder, onAdd }: {
-  items: QuickItem[]; edit: boolean; onRun: (q: QuickItem) => void;
+function QuickGrid({ items, metas, edit, onRun, onRemove, onReorder, onAdd }: {
+  items: QuickItem[]; metas: Record<string, string | null>; edit: boolean; onRun: (q: QuickItem) => void;
   onRemove: (id: string) => void; onReorder: (items: QuickItem[]) => void; onAdd: () => void;
 }) {
   const { width: winW } = useWindowDimensions();
-  const cell = Math.floor((winW - S.pad * 2 - QA_GAP * (QA_COLS - 1)) / QA_COLS);
+  const level = useAnimLevel();
+  const colW = (winW - S.pad * 2 - QA_GAP * (QA_COLS - 1)) / QA_COLS;
   const [dragId, setDragId] = useState<string | null>(null);
+  const spanKey = items.map((q) => (metas[q.id] ? 2 : 1)).join('');
+  const layout = useMemo(() => packTiles(spanKey.split('').map(Number), colW), [spanKey, colW]);
+  // the drag worklets read the packed slots from here, so a reorder never rebuilds a gesture mid-drag
+  const rects = useSharedValue<QaRect[]>(layout);
+  useEffect(() => { rects.value = layout; }, [layout]);
+  // shortcuts added after the first paint fade in; the grid's own entrance covers the first paint
+  const painted = React.useRef(false);
+  useEffect(() => { painted.current = true; }, []);
+
   // an empty grid always offers Add, so quick access never looks like nothing
   const showAdd = edit || items.length === 0;
-  const slotCount = items.length + (showAdd ? 1 : 0);
-  const rows = Math.max(1, Math.ceil(slotCount / QA_COLS));
-  const height = rows * QA_CELL_H + (rows - 1) * QA_GAP;
+  const tilesH = layout.length ? Math.max(...layout.map((r) => r.y)) + QA_ROW_H : 0;
+  const addY = tilesH ? tilesH + QA_GAP : 0;
+  const height = showAdd ? addY + QA_ADD_H : tilesH;
   const reorder = (id: string, idx: number) => {
     const from = items.findIndex((it) => it.id === id);
-    if (from < 0 || idx === from) return;
+    if (from < 0 || idx === from || idx >= items.length) return;
     const next = [...items];
     const [moved] = next.splice(from, 1);
     next.splice(idx, 0, moved);
     onReorder(next);
   };
-  const addPos = slotPos(items.length, cell);
   return (
     <View style={{ height, marginBottom: 6 }}>
       {items.map((q, i) => (
         <QuickTile
-          key={q.id} q={q} index={i} count={items.length} cell={cell}
+          key={q.id} q={q} meta={metas[q.id] ?? null} index={i} rect={layout[i]} wide={layout[i].w > colW + 1} rects={rects}
           isDragging={dragId === q.id}
           onDragState={setDragId}
           onCross={reorder}
           onDrop={() => setDragId(null)}
-          onRun={onRun} edit={edit} onRemove={onRemove}
+          onRun={onRun} edit={edit} onRemove={onRemove} fadeIn={painted.current}
         />
       ))}
       {showAdd && (
-        <Bouncy
-          onPress={onAdd}
-          radius={18}
-          style={{
-            position: 'absolute', left: addPos.x, top: addPos.y, width: cell, height: QA_CELL_H,
-            borderRadius: 18, alignItems: 'center', justifyContent: 'center',
-            borderWidth: 1, borderStyle: 'dashed', borderColor: C.borderBright,
-          }}
+        <Animated.View
+          entering={level === 'none' ? undefined : FadeIn.duration(200)}
+          exiting={level === 'none' ? undefined : FadeOut.duration(140)}
+          style={[st.qaAddWrap, { top: addY }]}
         >
-          <Ionicons name="add" size={24} color={C.textDim} />
-          <Text style={st.gridLabel}>Add</Text>
-        </Bouncy>
+          <Bouncy onPress={onAdd} radius={18} scaleTo={0.985} style={[st.qaAdd, { borderColor: C.borderBright }]}>
+            <Ionicons name="add" size={18} color={C.textDim} />
+            <Text style={st.qaAddText}>Add shortcut</Text>
+          </Bouncy>
+        </Animated.View>
       )}
     </View>
   );
@@ -615,15 +755,29 @@ const st = StyleSheet.create({
   vDivider: { width: StyleSheet.hairlineWidth, backgroundColor: C.hairline, alignSelf: 'stretch', marginVertical: 12 },
   glanceValue: { fontFamily: F.bold, fontSize: 22, fontVariant: ['tabular-nums'], letterSpacing: -0.3 },
   glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: 0.4 },
-  gridLabel: { color: C.text, fontFamily: F.med, fontSize: 12, marginTop: 7, letterSpacing: 0.1 },
+  qaTile: { position: 'absolute', left: 0, top: 0, height: QA_ROW_H },
+  qaFill: { flex: 1 },
+  qaFace: { flex: 1, borderRadius: 18 },
+  qaWide: { padding: 12, justifyContent: 'space-between' },
+  qaSmall: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  qaLabel: { flex: 1, marginLeft: 8, color: C.text, fontFamily: F.med, fontSize: 13 },
+  qaSmallLabel: { maxWidth: '100%', marginTop: 6, color: C.textDim, fontFamily: F.med, fontSize: 11 },
+  qaMeta: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 15 },
+  qaX: { position: 'absolute', top: 1, right: 1 },
+  qaAddWrap: { position: 'absolute', left: 0, right: 0, height: QA_ADD_H },
+  qaAdd: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    borderRadius: 18, borderWidth: 1, borderStyle: 'dashed',
+  },
+  qaAddText: { color: C.textDim, fontFamily: F.med, fontSize: 13 },
   link: { fontFamily: F.semi, fontSize: 13 },
   journalNudge: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingVertical: 14, paddingHorizontal: 16, borderRadius: S.radiusSm, marginTop: 18, marginBottom: 4,
   },
   journalNudgeText: { flex: 1, color: C.textDim, fontFamily: F.med, fontSize: 14 },
-  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 12, flex: 1, letterSpacing: 0.1 },
-  taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
+  taskWrap: { flex: 1, marginLeft: 12 },
+  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: 0.1 },
   missionPill: {
     backgroundColor: C.amber + '1C', borderColor: C.amber + '55', borderWidth: 1,
     borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8,

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, View, ViewStyle } from 'react-native';
+import { Pressable, Text, View, ViewStyle } from 'react-native';
 import Animated, {
   FadeIn, FadeInDown, LinearTransition,
   useAnimatedStyle, useReducedMotion, useSharedValue, withSpring, withTiming, Easing,
@@ -124,4 +124,38 @@ export function Pop({ children, dep }: { children: React.ReactNode; dep: any }) 
   }, [dep]);
   const aStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
   return <Animated.View style={aStyle}>{children}</Animated.View>;
+}
+
+/**
+ * A whole number that counts to its new value instead of changing in place: quick for a step of one, longer for a
+ * big jump, and instant with animations off. Anything after the number (a unit, a total) goes in as children.
+ */
+export function CountUp({ value, style, children }: { value: number; style?: any; children?: React.ReactNode }) {
+  const level = useAnimLevel();
+  const [shown, setShown] = React.useState(value);
+  const shownRef = React.useRef(value);
+  React.useEffect(() => {
+    const from = shownRef.current;
+    if (from === value) return;
+    if (level === 'none') {
+      shownRef.current = value;
+      setShown(value);
+      return;
+    }
+    const start = Date.now();
+    const duration = Math.min(700, 260 + Math.abs(value - from) * 30);
+    let frame = 0;
+    const step = () => {
+      const t = Math.min(1, (Date.now() - start) / duration);
+      const n = Math.round(from + (value - from) * (1 - Math.pow(1 - t, 3)));
+      if (n !== shownRef.current) {
+        shownRef.current = n;
+        setShown(n);
+      }
+      if (t < 1) frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [value, level]);
+  return <Text style={style}>{shown}{children}</Text>;
 }
