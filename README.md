@@ -76,7 +76,7 @@ Write the ten digits and place the day, month and year on the signature in the H
 node scripts/build-handwriting.js
 ```
 
-It regenerates `src/handDate.ts` (commit it) and prints each digit's width and length. Placements are in the signature's own units, so re-recording the signature means placing the date again. The lab's timing choice carries over: with the signature, the date is written straight after it; before the outro, the signature is held alone and the date is cut into the carve after the shine, just before the hand-over.
+It regenerates `src/handDate.ts` (commit it) and prints each digit's width and length. Placements are in the signature's own units, so re-recording the signature means placing the date again. The generator also checks every day, month and year against the signature's strokes: where a pair would run into them, the pen makes room the way a hand would, tightening the space inside that pair and, only if that is not enough, writing it a little smaller, and the summary lists each pair it fitted. The lab's timing choice carries over: with the signature, the date is written straight after it; before the outro, the signature is held alone and the date is cut into the carve after the shine, just before the hand-over.
 
 ## Layout
 

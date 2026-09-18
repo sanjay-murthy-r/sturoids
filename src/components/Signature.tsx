@@ -8,7 +8,7 @@ import Svg, { Circle, Defs, G, LinearGradient, Mask, Path, Rect, Stop } from 're
 import { C, darkSh, liteSh } from '../theme';
 import { SIG } from '../signature';
 import type { SigDot, SigLine } from '../signature';
-import { DATE_PLACE, DIGITS, DIGIT_H } from '../handDate';
+import { DATE_FIT, DATE_PLACE, DIGITS, DIGIT_H } from '../handDate';
 import type { HandDot, HandLine } from '../handDate';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
@@ -60,6 +60,8 @@ interface PlacedDigit {
   ch: string;
   /** from the digit's own units into the signature's */
   transform: string;
+  /** the digit's scale into the signature's units, so its ink keeps the same weight at any size */
+  scale: number;
   /** model ms, from the date's first pen-down, when this digit begins */
   t0: number;
 }
@@ -74,6 +76,10 @@ export function layoutDate(date: string): { digits: PlacedDigit[]; total: number
   GROUPS.forEach((group, gi) => {
     const P = DATE_PLACE.groups[group];
     if (gi) t += GROUP_GAP_MS;
+    // a pair that would run into the signature makes room: tighter, and smaller only when it has to be
+    const fit = DATE_FIT[group][date.slice(gi * 2, gi * 2 + 2)];
+    const scale = DATE_SCALE * (fit?.scale ?? 1);
+    const gap = fit?.gap ?? DATE_PLACE.gap;
     let x = 0;
     for (let i = 0; i < 2; i++) {
       const ch = date[gi * 2 + i];
@@ -83,12 +89,13 @@ export function layoutDate(date: string): { digits: PlacedDigit[]; total: number
       digits.push({
         key: group + i,
         ch,
-        transform: `translate(${P.x} ${P.y}) rotate(${DATE_PLACE.tilt}) scale(${DATE_SCALE.toFixed(4)}) `
+        transform: `translate(${P.x} ${P.y}) rotate(${DATE_PLACE.tilt}) scale(${scale.toFixed(4)}) `
           + `translate(${(x - m.x0).toFixed(2)} ${-DIGIT_H})`,
+        scale,
         t0: t,
       });
       t += m.total;
-      x += Math.max(14, m.x1 - m.x0) + (i === 0 ? DATE_PLACE.gap * DIGIT_H : 0);
+      x += Math.max(14, m.x1 - m.x0) + (i === 0 ? gap * DIGIT_H : 0);
     }
   });
   return { digits, total: t };
@@ -176,20 +183,22 @@ const disc = (cx: number, cy: number, r: number, color: string) => ({
 /** A date's digits drawn whole in one colour: the carve's lip or its dark cut, or the shine's mask. */
 function DateStrokes({ date, lineW, color }: { date: string; lineW: number; color: string }) {
   const { digits } = useMemo(() => layoutDate(date), [date]);
-  const w = lineW / DATE_SCALE;
   return (
     <>
-      {digits.map((p) => (
-        <G key={p.key} transform={p.transform}>
-          {DIGITS[p.ch].strokes.map((st, i) => (st.type === 'line' ? (
-            <Path
-              key={i} d={st.d} fill="none" stroke={color} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round"
-            />
-          ) : (
-            <Circle key={i} cx={st.cx} cy={st.cy} r={w} fill={color} />
-          )))}
-        </G>
-      ))}
+      {digits.map((p) => {
+        const w = lineW / p.scale;
+        return (
+          <G key={p.key} transform={p.transform}>
+            {DIGITS[p.ch].strokes.map((st, i) => (st.type === 'line' ? (
+              <Path
+                key={i} d={st.d} fill="none" stroke={color} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round"
+              />
+            ) : (
+              <Circle key={i} cx={st.cx} cy={st.cy} r={w} fill={color} />
+            )))}
+          </G>
+        );
+      })}
     </>
   );
 }
@@ -306,18 +315,20 @@ function DateInk({ date, lineW, dateTau, color = C.text, dotScale = 1.1 }: {
   date: string; lineW: number; dateTau: SharedValue<number>; color?: string; dotScale?: number;
 }) {
   const { digits } = useMemo(() => layoutDate(date), [date]);
-  const w = lineW / DATE_SCALE;
   return (
     <>
-      {digits.map((p) => (
-        <G key={p.key + p.ch} transform={p.transform}>
-          {DIGITS[p.ch].strokes.map((st, i) => (st.type === 'line' ? (
-            <DateInkLine key={i} line={st} width={w} dateTau={dateTau} t0={p.t0} color={color} />
-          ) : (
-            <DateInkDot key={i} dot={st} r={w * dotScale} dateTau={dateTau} t0={p.t0} color={color} />
-          )))}
-        </G>
-      ))}
+      {digits.map((p) => {
+        const w = lineW / p.scale;
+        return (
+          <G key={p.key + p.ch} transform={p.transform}>
+            {DIGITS[p.ch].strokes.map((st, i) => (st.type === 'line' ? (
+              <DateInkLine key={i} line={st} width={w} dateTau={dateTau} t0={p.t0} color={color} />
+            ) : (
+              <DateInkDot key={i} dot={st} r={w * dotScale} dateTau={dateTau} t0={p.t0} color={color} />
+            )))}
+          </G>
+        );
+      })}
     </>
   );
 }

@@ -39,6 +39,17 @@ export interface HandPoint {
   readonly y: number;
 }
 
+/** How a pair makes room where it would run into the signature. */
+export interface HandFit {
+  /** the space inside the pair, as a fraction of a digit's height, in place of the chosen gap */
+  readonly gap: number;
+  /** the pair's size, as a share of the chosen size */
+  readonly scale: number;
+}
+
+/** fits by the pair they apply to, such as '22' */
+export type HandFits = Readonly<Record<string, HandFit>>;
+
 /** Where the date sits on the signature, in its viewBox units. */
 export interface HandDatePlace {
   /** 'signature': written straight after the signature; 'outro': cut into the carve after the shine, before the hand-over */
@@ -287,4 +298,31 @@ export const DATE_PLACE: HandDatePlace = {
     mm: { x: 536, y: 410 },
     yy: { x: 676, y: 376 },
   },
+};
+
+/**
+ * The pairs that would run into the signature as placed, by group, with the room each makes: a tighter gap, and a
+ * smaller size only where that is not enough. Every other pair is written exactly as placed.
+ */
+export const DATE_FIT: { readonly dd: HandFits; readonly mm: HandFits; readonly yy: HandFits } = {
+  dd: {
+    '02': { gap: 0.26, scale: 1 },
+    '20': { gap: 0.28, scale: 1 },
+    '22': { gap: 0.2, scale: 0.84 },
+    '23': { gap: 0.2, scale: 0.97 },
+    '24': { gap: 0.2, scale: 0.99 },
+    '25': { gap: 0.2, scale: 0.97 },
+    '26': { gap: 0.3, scale: 1 },
+    '27': { gap: 0.2, scale: 0.99 },
+    '28': { gap: 0.32, scale: 1 },
+    '29': { gap: 0.31, scale: 1 },
+  },
+  mm: {
+    '02': { gap: 0.2, scale: 0.92 },
+    '03': { gap: 0.33, scale: 1 },
+    '04': { gap: 0.32, scale: 1 },
+    '05': { gap: 0.33, scale: 1 },
+    '07': { gap: 0.34, scale: 1 },
+  },
+  yy: {},
 };
