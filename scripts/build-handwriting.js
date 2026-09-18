@@ -31,6 +31,7 @@ const LIFT_MAX = 300;       // longest pen lift kept, ms
 const STEP_MAX = 220;       // longest gap kept between two samples of one stroke, ms
 const MIN_STROKE_MS = 60;   // shortest line duration, ms
 const DOT_LEN = 6;          // marks shorter than this many digit units become dots
+const REST_EPS = 0.6;       // samples closer than this at a stroke's end are the pen resting, not writing
 const CUBIC_SEGMENTS = 24;  // flattening per cubic when measuring a path
 const DIGITS = '0123456789'.split('');
 const GROUPS = ['dd', 'mm', 'yy'];
@@ -89,6 +90,15 @@ function buildDigit(raw) {
     .map((s) => s.pts.map((p) => [+p[0] * DH, +p[1] * DH, +p[2]]))
     .filter((s) => s.every((p) => isFinite(p[0]) && isFinite(p[1]) && isFinite(p[2])))
     .sort((a, b) => a[0][2] - b[0][2]);
+  // a pen resting at the end of a stroke is not writing: its last still samples go, so the next stroke, or the next
+  // digit, follows on instead of waiting out the rest
+  for (const s of strokes) {
+    while (s.length > 2) {
+      const a = s[s.length - 1], b = s[s.length - 2];
+      if (Math.hypot(a[0] - b[0], a[1] - b[1]) >= REST_EPS) break;
+      s.pop();
+    }
+  }
   const out = [];
   let cursor = 0;
   let prevEnd = null;
