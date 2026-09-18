@@ -20,7 +20,7 @@ import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
 import { TOOLS, ToolKey, colorOf, normaliseSlots, toolByKey } from '../src/tools';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
-const APP_VERSION = Constants.expoConfig?.version || '1.4.2';
+const APP_VERSION = Constants.expoConfig?.version || '1.4.3';
 
 const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
   { key: 'default', label: 'Default', desc: 'Soft grey neumorphism, one continuous material' },

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sturoids",
     "slug": "all-in-one-student-app",
-    "version": "1.4.2",
+    "version": "1.4.3",
     "scheme": "sturoids",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -24,7 +24,7 @@
     },
     "android": {
       "package": "com.sanjay.studenthub",
-      "versionCode": 7,
+      "versionCode": 8,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -56,7 +56,7 @@
       [
         "expo-local-authentication",
         {
-          "faceIDPermission": "Sturoids uses Face ID to unlock your locked notes."
+          "faceIDPermission": "Sturoids uses Face ID to open your journal and Notes, when you allow it."
         }
       ],
       [

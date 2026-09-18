@@ -15,6 +15,7 @@ npx tsc --noEmit
 npm run lint:type
 npm run test:store
 node scripts/build-signature.js --check
+node scripts/build-handwriting.js --check
 ```
 
 `lint:type` fails on `fontWeight`, fractional or sub-11 font sizes, and any size set without a font family.
@@ -23,17 +24,17 @@ node scripts/build-signature.js --check
 
 ## How it fits together
 
-**Navigation.** The bar always has five places: Today, three slots and More. Settings chooses the tool in each slot. A tool in a slot opens as a tab and keeps the bar; every other tool opens full screen from More, with a back button. `openTool()` in `src/toolNav.ts` goes to wherever a tool lives right now, so links from Today, the planner and quick access never open a second copy. Each tool screen takes `mode: 'tab' | 'stack'`. Tabs are built once after the intro and switch with a short shift from the side the new tab sits on, and a screen plays its entrance once per launch instead of on every visit.
+**Navigation.** The bar always has five places: Today, three slots and More. Settings chooses the tool in each slot. A tool in a slot opens as a tab and keeps the bar; every other tool opens full screen from More, with a back button. `openTool()` in `src/toolNav.ts` goes to wherever a tool lives right now, so links from Today, the planner and quick access never open a second copy. Each tool screen takes `mode: 'tab' | 'stack'`. Only Today is built with the app; once the intro has gone and the screen is still, Today prepares the other tabs one at a time, so a first visit never waits and nothing is built out of sight during the intro. Tabs are never frozen, and a switch is a short shift from the side the new tab sits on. A screen makes its entrance the first time it is really in view, once.
 
-**Data.** One persisted zustand store (`src/store.ts`, version 5). A load that fails or answers late is never silent: the saved data is copied aside before anything can overwrite it, and Settings, under Data, can share or restore that copy. Journal text lives in files with a small index in the store, because Android cannot read a single storage row over about 2 MB. Backups carry everything, journal text included.
+**Data.** One persisted zustand store (`src/store.ts`, version 5). A load that fails or answers late is never silent: the saved data is copied aside before anything can overwrite it, and Settings, under Data, can share or restore that copy. Journal text lives in files with a small index in the store, because Android cannot read a single storage row over about 2 MB. Backups carry everything, journal text included. Because the store is one row, a save waits for a 350 ms pause instead of following every keystroke, and the app going to the background writes whatever is waiting.
 
 **Journal.** Opens on the right page: before the cutoff hour (11:00 by default) the page is about yesterday. Saves run through one queue, so leaving, switching days or deleting never races a save. The archive searches titles, text and tags, filters by month, mood, tags and pins, and shows streaks and On this day. Moving to another day slides the page the way time runs, and the calendar glides between months.
 
-**Locks.** The journal has its own passcode, four to eight digits, and nothing else opens it: not the phone's fingerprint, face or screen lock. Single notes use the phone's own lock instead, with an app PIN as the fallback. Either code is kept only as a salted SHA-256 in the keystore, with five tries and then a cooldown that survives restarts, so a forgotten one cannot be brought back. Locks hide content; they do not encrypt it. While locked content is open, Android keeps it out of screenshots and the recent apps preview, and making a backup that carries locked pages asks for the code first.
+**Locks.** One app PIN of four digits opens everything that locks: the journal, the Notes tool as a whole, and single notes, which lock from inside the note. The journal and Notes can also open with the phone's own screen lock, each only if that is turned on in Settings, under Privacy; a single locked note always asks for the PIN. There is no lock on the whole app. The PIN is kept only as a salted SHA-256 in the keystore, with five tries and then a cooldown that survives restarts, so a forgotten PIN cannot be brought back; a PIN or passcode from before four digits works once more, then a new one is chosen. Locks hide content; they do not encrypt it. While locked content is open, Android keeps it out of screenshots and the recent apps preview, and making a backup while anything is locked asks for the PIN first.
 
 **Deep Work.** A running session survives the app being closed. Its length is a wheel in five minute steps, with the number itself open for typing an exact one, and a running countdown rolls each second over. Ambient mode is a dimmed, always-on clock that drifts a few points each minute; hold anywhere to leave it.
 
-**Intro.** Four unhurried beats, each finishing before the next: the signature is written from a real pen recording; it shifts into place as the logo rises; the wordmark and caption arrive with a slow accent shine along the signature; the scene rests and dissolves into the app.
+**Intro.** Four unhurried beats, each finishing before the next: the signature is written from a real pen recording, and today's date after it in the owner's own handwritten digits, a little quicker; both shift into place as the logo rises; the wordmark and caption arrive while one slow light crosses the plate and the signature together; then the scene settles back into the material and Home rises in its place, the tab bar last. The date is the phone's own, read again just before it is written, and the app is built in the still moment after it, so building never shows as a stutter.
 
 **Planner.** The day is a wheel: drag it and every day keeps its place in one size gradient, large and bright at the centre and smaller outward, or tap a day beside it. There is one tick per day passed, the blocks arrive from the side the new day came from, and away from today a Today link comes back.
 
@@ -64,6 +65,16 @@ node scripts/build-signature.js
 
 It regenerates `src/signature.ts` (commit it) and prints a summary of the model.
 
+## Re-recording the handwritten date
+
+Write the ten digits and place the day, month and year on the signature in the Handwriting Lab, press **Copy my data**, and paste the copied text into `scripts/handwriting.raw.json`. Then run:
+
+```
+node scripts/build-handwriting.js
+```
+
+It regenerates `src/handDate.ts` (commit it) and prints each digit's width and length. Placements are in the signature's own units, so re-recording the signature means placing the date again.
+
 ## Layout
 
 ```
@@ -73,10 +84,12 @@ src/tools.ts          the tool registry
 src/toolNav.ts        openTool, tab fling, slot context
 src/store.ts          persisted state, migrations, backups, load safety
 src/journal.ts        journal files, days, prompts, search, stats
-src/lock.ts           lock sessions, device unlock, app PIN, journal passcode
+src/lock.ts           lock sessions, the app PIN, the optional screen lock
+src/intro.ts          the intro's phase, which the app's own entrance follows
+src/handDate.ts       generated: the handwritten digits and where the date sits
 src/deepWork.ts       session timing shared by Focus and ambient
 src/theme.ts          palette, NEU shadows, type scale
 src/components/       UI kit, tab bar, sheets, toasts, lock gate, ambient view, intro
-scripts/              signature builder, type lint
+scripts/              signature and handwriting builders, type lint, store tests
 modules/app-list/     native installed-apps module
 ```
