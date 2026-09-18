@@ -2,7 +2,7 @@ import React from 'react';
 import { Keyboard, Pressable, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withSpring, withTiming } from 'react-native-reanimated';
 import { StackActions } from '@react-navigation/native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { C, F, MIN, bgFor } from '../theme';
@@ -11,6 +11,7 @@ import { RISE_OUT, SINK_IN, useAnimLevel } from './Motion';
 import { useStore } from '../store';
 import { normaliseSlots, toolByKey } from '../tools';
 import { TAB_ROUTES } from '../toolNav';
+import { useIntro } from '../intro';
 import { tick } from '../haptics';
 
 interface ItemMeta {
@@ -121,7 +122,17 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
         ? { duration: 180, easing: Easing.in(Easing.quad) }
         : { duration: 240, easing: Easing.out(Easing.cubic) });
   }, [keyboardOpen, level]);
-  const slideStyle = useAnimatedStyle(() => ({ transform: [{ translateY: hide.value * (barH.value + 2) }] }));
+  // the bar arrives last, once the intro has left and the day has begun to rise into its place
+  const introOver = useIntro((s) => s.phase !== 'playing');
+  const arrive = useSharedValue(introOver || level === 'none' ? 1 : 0);
+  React.useEffect(() => {
+    if (!introOver) return;
+    arrive.value = level === 'none' ? 1 : withDelay(320, withTiming(1, { duration: 520, easing: Easing.out(Easing.cubic) }));
+  }, [introOver, level]);
+  const slideStyle = useAnimatedStyle(() => ({
+    opacity: arrive.value,
+    transform: [{ translateY: hide.value * (barH.value + 2) + 18 * (1 - arrive.value) }],
+  }));
 
   const metaFor = (name: string): ItemMeta => {
     if (name === 'index') return TODAY;

@@ -23,10 +23,10 @@ export default function TabLayout() {
         sceneStyle: { backgroundColor: bgFor(theme) },
         // a tab slides a short way in from its side of the bar
         animation: level === 'none' ? 'none' : 'shift',
-        // every tab is built once, under the intro, so a switch never waits for a screen to mount; a tab out of
-        // view stops re-rendering until it comes back
-        lazy: false,
-        freezeOnBlur: true,
+        // only Today is built with the app; Today prepares the other tabs one by one once the intro has gone and
+        // the screen is still, so a first visit never waits and nothing is built out of sight during the intro.
+        // Tabs are never frozen: catching up a frozen tab's missed updates is what made a switch stutter.
+        lazy: true,
       }}
     >
       <Tabs.Screen name="index" options={{ title: 'Today' }} />

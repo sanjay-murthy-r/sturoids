@@ -105,6 +105,7 @@ const scenarios = {
     assert.deepEqual(s.journal, []);
     assert.equal(s.settings.name, 'Sam');
     await sleep(10);
+    app.store.flushSaves(); // saves wait for a pause; the test does not
     assert.equal(JSON.parse(app.storage.get(KEY)).version, 5, 'written back as v5');
     assert.deepEqual(app.notices, []);
   },
@@ -191,6 +192,7 @@ const scenarios = {
     assert.equal(app.store.savingPaused(), false);
     app.state().setSetting('name', 'After');
     await sleep(20);
+    app.store.flushSaves();
     assert.equal(JSON.parse(app.storage.get(KEY)).state.settings.name, 'After', 'saving resumed');
   },
 };

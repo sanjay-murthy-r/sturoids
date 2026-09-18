@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState as AppLifecycle } from 'react-native';
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist, createJSONStorage, PersistStorage, StorageValue } from 'zustand/middleware';
 import { uid, todayKey, DayName, DAY_NAMES } from './utils';
 import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
 import { ToolKey, DEFAULT_SLOTS, ROUTE_TO_TOOL, TOOLS, normaliseSlots, toolByKey } from './tools';
@@ -460,7 +461,54 @@ export function migrateV5(p: any): any {
 const STORE_KEY = 'student-hub-v1';
 /** Set once a load has applied saved state, so a failure after that point is never taken for a failed load. */
 let mergedFromStorage = false;
-const jsonStorage = createJSONStorage<any>(() => AsyncStorage);
+const rawJsonStorage = createJSONStorage<any>(() => AsyncStorage)!;
+
+/**
+ * The whole store is saved as one row, so a burst of changes (a note being typed) used to serialise and write all of
+ * it on every keystroke, holding up the JS thread each time. A save now waits for a short pause, and the app going
+ * to the background writes whatever is waiting at once.
+ */
+const SAVE_PAUSE_MS = 350;
+let pendingSave: { name: string; value: StorageValue<any> } | null = null;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Writes a save that is still waiting for its pause. */
+export function flushSaves(): void {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  const next = pendingSave;
+  pendingSave = null;
+  if (next) Promise.resolve(rawJsonStorage.setItem(next.name, next.value)).catch(() => {});
+}
+
+/** Forgets a save that is still waiting: saving is pausing to protect data that could not be read. */
+function dropPendingSave(): void {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  pendingSave = null;
+}
+
+const jsonStorage: PersistStorage<any> = {
+  getItem: (name) => rawJsonStorage.getItem(name),
+  setItem: (name, value) => {
+    pendingSave = { name, value };
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushSaves, SAVE_PAUSE_MS);
+  },
+  removeItem: (name) => {
+    dropPendingSave();
+    return rawJsonStorage.removeItem(name);
+  },
+};
+
+// leaving the app, or closing it from the background, writes whatever is still waiting
+AppLifecycle?.addEventListener?.('change', (next) => {
+  if (next !== 'active') flushSaves();
+});
 
 /** Every persisted-shape migration, oldest first. Also restores the app's own saved blob on import. */
 function migratePersisted(persisted: any, version: number): any {
@@ -806,6 +854,7 @@ function settleHydration() {
 function pausePersistence() {
   if (persistPaused) return;
   persistPaused = true;
+  dropPendingSave();
   useStore.persist.setOptions({ storage: noopStorage as any });
 }
 

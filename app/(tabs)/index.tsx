@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Pressable, useWindowDimensions } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Pressable, InteractionManager, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useNavigation, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   FadeIn, FadeOut, ZoomIn, ZoomOut, runOnJS, useAnimatedStyle, useSharedValue, withSpring,
@@ -21,6 +21,7 @@ import { ROUTE_CATALOG, launchExternal } from '../../src/quickAccess';
 import { ToolKey, colorOf, toolByKey } from '../../src/tools';
 import { openTool } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
+import { useIntro } from '../../src/intro';
 import { journalDayFor } from '../../src/journal';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
 import { useNow } from '../../src/hooks/useNow';
@@ -195,6 +196,34 @@ export default function Today() {
     setQuickAccess([...quickAccess, { ...item, id: uid() }]);
   };
 
+  // once the intro has gone and the screen is still, the other tabs are built one at a time, so a first visit
+  // never waits for a screen to be made and nothing is built out of sight while the intro plays
+  const navigation = useNavigation();
+  const introDone = useIntro((s) => s.phase === 'done');
+  useEffect(() => {
+    if (!introDone) return undefined;
+    const names = ['slot1', 'slot2', 'slot3', 'more'];
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const next = (i: number) => {
+      if (!live || i >= names.length) return;
+      InteractionManager.runAfterInteractions(() => {
+        if (!live) return;
+        try {
+          (navigation as any).preload?.(names[i]);
+        } catch {
+          // a navigator that cannot preload builds the tab on its first visit instead
+        }
+        timer = setTimeout(() => next(i + 1), 700);
+      });
+    };
+    timer = setTimeout(() => next(0), 1000);
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [introDone]);
+
   return (
     <ScreenBG guard>
       <ScrollView
@@ -235,18 +264,20 @@ export default function Today() {
           </Enter>
         )}
         {!nextBlock && !(planner[dayName(now)] || []).length ? (
-          <Pressable
-            onPress={() => openTool('planner')}
-            style={[
-              st.journalNudge,
-              { marginTop: 0, marginBottom: S.gap },
-              theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
-            ]}
-          >
-            <Ionicons name="calendar-outline" size={17} color={C.textFaint} />
-            <Text style={st.journalNudgeText}>No blocks planned today</Text>
-            <Text style={[st.link, { color: C.accent }]}>Plan</Text>
-          </Pressable>
+          <Enter index={1}>
+            <Pressable
+              onPress={() => openTool('planner')}
+              style={[
+                st.journalNudge,
+                { marginTop: 0, marginBottom: S.gap },
+                theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
+              ]}
+            >
+              <Ionicons name="calendar-outline" size={17} color={C.textFaint} />
+              <Text style={st.journalNudgeText}>No blocks planned today</Text>
+              <Text style={[st.link, { color: C.accent }]}>Plan</Text>
+            </Pressable>
+          </Enter>
         ) : null}
 
         <Enter index={2}>
@@ -261,15 +292,17 @@ export default function Today() {
           </Card>
         </Enter>
 
-        <SectionTitle
-          right={
-            <Pressable onPress={() => setQaEdit(!qaEdit)} hitSlop={8}>
-              <Text style={[st.link, { color: C.accent }]}>{qaEdit ? 'Done' : 'Edit'}</Text>
-            </Pressable>
-          }
-        >
-          Quick access
-        </SectionTitle>
+        <Enter index={3}>
+          <SectionTitle
+            right={
+              <Pressable onPress={() => setQaEdit(!qaEdit)} hitSlop={8}>
+                <Text style={[st.link, { color: C.accent }]}>{qaEdit ? 'Done' : 'Edit'}</Text>
+              </Pressable>
+            }
+          >
+            Quick access
+          </SectionTitle>
+        </Enter>
         <Enter index={3}>
           <QuickGrid
             items={quickAccess}
@@ -282,32 +315,33 @@ export default function Today() {
           />
         </Enter>
 
-        {journalNudge ? (
-          <Pressable
-            onPress={() => openTool('journal')}
-            style={[
-              st.journalNudge,
-              theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
-            ]}
-          >
-            <Ionicons name="journal-outline" size={17} color={C.gold} />
-            <Text style={st.journalNudgeText}>{journalDay === today ? "Today's page is empty" : "Yesterday's page is empty"}</Text>
-            <Text style={[st.link, { color: C.gold }]}>Write</Text>
-          </Pressable>
-        ) : null}
-
-        <SectionTitle
-          right={
-            <Pressable onPress={() => openTool('tasks')} hitSlop={8}>
-              <Text style={[st.link, { color: C.accent }]}>All tasks →</Text>
+        <Enter index={4}>
+          {journalNudge ? (
+            <Pressable
+              onPress={() => openTool('journal')}
+              style={[
+                st.journalNudge,
+                theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
+              ]}
+            >
+              <Ionicons name="journal-outline" size={17} color={C.gold} />
+              <Text style={st.journalNudgeText}>{journalDay === today ? "Today's page is empty" : "Yesterday's page is empty"}</Text>
+              <Text style={[st.link, { color: C.gold }]}>Write</Text>
             </Pressable>
-          }
-        >
-          Today {todayList.length > 0 ? '· ' + doneCount + '/' + todayList.length : ''}
-        </SectionTitle>
-        <View style={{ marginTop: 2, marginBottom: 16 }}>
-          <ProgressBar value={doneCount / Math.max(1, todayList.length)} />
-        </View>
+          ) : null}
+          <SectionTitle
+            right={
+              <Pressable onPress={() => openTool('tasks')} hitSlop={8}>
+                <Text style={[st.link, { color: C.accent }]}>All tasks →</Text>
+              </Pressable>
+            }
+          >
+            Today {todayList.length > 0 ? '· ' + doneCount + '/' + todayList.length : ''}
+          </SectionTitle>
+          <View style={{ marginTop: 2, marginBottom: 16 }}>
+            <ProgressBar value={doneCount / Math.max(1, todayList.length)} />
+          </View>
+        </Enter>
         <Enter index={4}>
           {todayList.length === 0 ? (
             <Card pad={6}>
@@ -333,7 +367,7 @@ export default function Today() {
         </Enter>
 
         {habits.length > 0 && (
-          <>
+          <Enter index={5}>
             <SectionTitle>Habits</SectionTitle>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
               {habits.map((h) => {
@@ -351,11 +385,13 @@ export default function Today() {
                 );
               })}
             </View>
-          </>
+          </Enter>
         )}
 
-        <SectionTitle>Focus this week</SectionTitle>
-        <Enter index={5}>
+        <Enter index={6}>
+          <SectionTitle>Focus this week</SectionTitle>
+        </Enter>
+        <Enter index={6}>
           <Card>
             <Row style={{ alignItems: 'flex-end', justifyContent: 'space-between', paddingHorizontal: 4 }}>
               {weekBars.map((b, i) => (

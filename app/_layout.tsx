@@ -12,6 +12,7 @@ import { IBMPlexMono_600SemiBold } from '@expo-google-fonts/ibm-plex-mono';
 import { bgFor } from '../src/theme';
 import { useStore, subscribeLoadNotices } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
+import { setIntroPhase } from '../src/intro';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ToastHost } from '../src/components/Toast';
@@ -68,6 +69,11 @@ export default function RootLayout() {
         );
       }
     });
+  }, [introDone]);
+
+  // however the intro ended, the app's entrance never waits on it
+  useEffect(() => {
+    if (introDone) setIntroPhase('done');
   }, [introDone]);
 
   // the system navigation bar follows the theme's material (app.json only sets the launch colour)

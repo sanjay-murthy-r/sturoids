@@ -1,10 +1,11 @@
 import React from 'react';
-import { Pressable, Text, View, ViewStyle } from 'react-native';
+import { Pressable, Text, ViewStyle } from 'react-native';
 import Animated, {
-  FadeIn, FadeInDown, LinearTransition,
-  useAnimatedStyle, useReducedMotion, useSharedValue, withSpring, withTiming, Easing,
+  useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming, Easing,
 } from 'react-native-reanimated';
+import { useIsFocused } from '@react-navigation/native';
 import { useStore } from '../store';
+import { useIntro } from '../intro';
 import { C, neuPressedInner } from '../theme';
 
 /**
@@ -31,25 +32,40 @@ export const useAnimLevel = () => {
 export const SINK_IN = { duration: 90, easing: Easing.out(Easing.quad) };
 export const RISE_OUT = { damping: 20, stiffness: 240, mass: 0.8 };
 
-/** Soft entrance — surfaces rise out of the material, no overshoot. */
+const ENTER = { duration: 540, easing: Easing.out(Easing.cubic) };
+
+/**
+ * A surface's entrance: it rises a short way out of the material and comes up to full strength, once, the first time
+ * its screen is really in view. That is after the intro has left, and for a tab the first time it is opened, not
+ * while it is being built out of sight. Returns the style to put on the surface.
+ */
+export function useEntrance(index = 0, enabled = true) {
+  const level = useAnimLevel();
+  const focused = useIsFocused();
+  const introOver = useIntro((s) => s.phase !== 'playing');
+  const still = level === 'none' || !enabled;
+  const shown = useSharedValue(still ? 1 : 0);
+  const played = React.useRef(still);
+  React.useEffect(() => {
+    if (played.current || !focused || !introOver) return;
+    played.current = true;
+    shown.value = level === 'full'
+      ? withDelay(Math.min(index * 60, 360), withTiming(1, ENTER))
+      : withDelay(Math.min(index * 30, 150), withTiming(1, { duration: 200 }));
+  }, [focused, introOver, level]);
+  const rise = level === 'full' ? 14 : 0;
+  return useAnimatedStyle(() => ({
+    opacity: shown.value,
+    transform: [{ translateY: rise * (1 - shown.value) }],
+  }));
+}
+
+/** Soft entrance: the surface rises out of the material, no overshoot, the first time its screen is in view. */
 export function Enter({
   index = 0, children, style,
 }: { index?: number; children: React.ReactNode; style?: ViewStyle | ViewStyle[] }) {
-  const level = useAnimLevel();
-  if (level === 'none') return <View style={style}>{children}</View>;
-  const entering =
-    level === 'full'
-      ? FadeInDown.duration(360).delay(Math.min(index * 50, 350)).springify().damping(22).stiffness(180)
-      : FadeIn.duration(140);
-  return (
-    <Animated.View
-      entering={entering}
-      layout={level === 'full' ? LinearTransition.springify().damping(22) : undefined}
-      style={style}
-    >
-      {children}
-    </Animated.View>
-  );
+  const entrance = useEntrance(index);
+  return <Animated.View style={[style, entrance]}>{children}</Animated.View>;
 }
 
 /**

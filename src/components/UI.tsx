@@ -7,12 +7,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
-  Easing, FadeIn, FadeInDown, FadeOut, LinearTransition, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
+  Easing, FadeIn, FadeOut, LinearTransition, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, SH, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
 import { useStore } from '../store';
-import { Bouncy, Pop, RISE_OUT, useAnimLevel } from './Motion';
+import { Bouncy, Pop, RISE_OUT, useAnimLevel, useEntrance } from './Motion';
 import { tap, tick } from '../haptics';
 import { stepTab } from '../toolNav';
 
@@ -628,7 +628,11 @@ export function ListCard({ children, style }: { children: React.ReactNode; style
   const theme = useTheme();
   const level = useAnimLevel();
   const rows = React.Children.toArray(children);
-  const layout = level === 'full' ? LinearTransition.springify().damping(22) : undefined;
+  // rows added or removed later fold in and out; the rows the card is built with are simply there
+  const built = React.useRef(false);
+  React.useEffect(() => { built.current = true; }, []);
+  // an eased glide, not a spring: nested springs overshoot against each other and read as a wobble
+  const layout = level === 'full' ? LinearTransition.duration(260).easing(Easing.out(Easing.cubic)) : undefined;
   return (
     <Animated.View
       layout={layout}
@@ -643,7 +647,7 @@ export function ListCard({ children, style }: { children: React.ReactNode; style
       {rows.map((row, i) => (
         <Animated.View
           key={(row as React.ReactElement).key ?? i}
-          entering={level === 'none' ? undefined : FadeIn.duration(220)}
+          entering={level === 'none' || !built.current ? undefined : FadeIn.duration(220)}
           exiting={level === 'none' ? undefined : FadeOut.duration(150)}
           layout={layout}
         >
@@ -667,14 +671,12 @@ export function ListSlice({ first, last, enter = false, children }: {
   children: React.ReactNode;
 }) {
   const theme = useTheme();
-  const level = useAnimLevel();
   const r = S.radius;
-  // one entrance for every slice, started in the same frame: the slices move together and no seam opens
-  const entering = !enter || level === 'none'
-    ? undefined
-    : level === 'full' ? FadeInDown.duration(360).springify().damping(22).stiffness(180) : FadeIn.duration(140);
+  // every slice of the first screenful rises on the same cue and the same curve, so the card arrives whole and no
+  // seam opens between its slices
+  const entrance = useEntrance(0, enter);
   return (
-    <Animated.View entering={entering} style={[lst.clip, { paddingTop: first ? SLICE_TOP : 0, paddingBottom: last ? SLICE_BOTTOM : 0 }]}>
+    <Animated.View style={[lst.clip, { paddingTop: first ? SLICE_TOP : 0, paddingBottom: last ? SLICE_BOTTOM : 0 }, entrance]}>
       <View
         pointerEvents="none"
         style={[
