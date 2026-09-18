@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, InteractionManager, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRouter } from 'expo-router';
@@ -61,9 +61,10 @@ export default function Today() {
 
   const today = todayKey();
 
+  // a deadline falls due as the day turns, so today is part of the answer
   const dueMissions = useMemo(
     () => missions.filter((m) => !m.done && daysUntil(m.deadline) <= 0),
-    [missions]
+    [missions, today]
   );
   const tasksLeft = dailyTasks.filter((t) => t.doneOn !== today).length + dueMissions.length;
   const habitsDone = habits.filter((h) => h.doneDates.includes(today)).length;
@@ -71,7 +72,9 @@ export default function Today() {
     sessions.filter((s) => s.dateKey === today).reduce((a, s) => a + s.netSeconds, 0) / 60
   );
 
-  const nextBlock = useMemo(() => {
+  // Worked out each minute, but the result keeps its identity while it is the same block with the same tag, so a new
+  // minute re-renders only the text that shows the time, never the shortcuts that read the next block.
+  const nextBlockNow = useMemo(() => {
     const nowMin = now.getHours() * 60 + now.getMinutes();
     const lateNight = now.getHours() >= 21;
     const dToday = dayName(now);
@@ -89,6 +92,8 @@ export default function Today() {
     if (first) return { block: first, tag: 'TOMORROW' };
     return null;
   }, [planner, now]);
+  const nextBlockKey = nextBlockNow ? nextBlockNow.block.id + ':' + nextBlockNow.tag : '';
+  const nextBlock = useMemo(() => nextBlockNow, [nextBlockKey, planner]);
 
   const weekBars = useMemo(() => {
     const out: { label: string; mins: number }[] = [];
@@ -103,10 +108,10 @@ export default function Today() {
   const maxMins = Math.max(30, ...weekBars.map((b) => b.mins));
   const weekTotal = weekBars.reduce((a, b) => a + b.mins, 0);
 
-  const todayList = [
+  const todayList = useMemo(() => [
     ...dailyTasks.map((t) => ({ kind: 'daily' as const, id: t.id, title: t.title, done: t.doneOn === today })),
     ...dueMissions.map((m) => ({ kind: 'mission' as const, id: m.id, title: m.title, done: m.done })),
-  ];
+  ], [dailyTasks, dueMissions, today]);
   const doneCount = todayList.filter((t) => t.done).length;
 
   const greeting = useGreeting({
@@ -167,20 +172,23 @@ export default function Today() {
   }, [quickAccess, todayList.length, tasksLeft, deepWork, focusToday, nextBlock, noteCount, videoCount, journal, journalDay, today,
     settings.journalLocked, settings.notesLocked, settings.hour24]);
 
-  const runQuick = (q: QuickItem) => {
+  // the grid's callbacks keep their identity, so the grid (and its drag gestures) re-renders only for its own changes
+  const runQuick = useCallback((q: QuickItem) => {
     if (qaEdit) return;
     if (q.kind === 'tool') openTool(q.target as ToolKey);
     else if (q.kind === 'route') router.push(q.target as any);
     else launchExternal(q);
-  };
-  const removeQuick = (id: string) => setQuickAccess(quickAccess.filter((q) => q.id !== id));
+  }, [qaEdit, router]);
+  const removeQuick = useCallback((id: string) => {
+    setQuickAccess(useStore.getState().quickAccess.filter((q) => q.id !== id));
+  }, [setQuickAccess]);
   // open instantly; enumerate installed apps only after the sheet is up
-  const openQaAdd = () => {
+  const openQaAdd = useCallback(() => {
     setInstalled([]);
     setAppsLoaded(false);
     setAppQuery('');
     setQaAddSheet(true);
-  };
+  }, []);
   useEffect(() => {
     if (!qaAddSheet) return;
     // the native lookup runs off the JS thread, so the sheet opens and settles while the list loads
@@ -349,21 +357,7 @@ export default function Today() {
               <EmptyState compact icon="checkbox-outline" title="Nothing on the list yet" body="Add ToDos from Tasks." actionLabel="Open Tasks" onAction={() => openTool('tasks')} />
             </Card>
           ) : (
-            <ListCard>
-              {todayList.map((t) => (
-                <ListRow key={t.kind + t.id}>
-                  <CheckCircle
-                    done={t.done}
-                    color={t.kind === 'mission' ? C.amber : C.green}
-                    onPress={() => (t.kind === 'daily' ? toggleDaily(t.id) : toggleMission(t.id))}
-                  />
-                  <StrikeText done={t.done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{t.title}</StrikeText>
-                  {t.kind === 'mission' && (
-                    <View style={st.missionPill}><Text style={st.missionPillText}>DUE</Text></View>
-                  )}
-                </ListRow>
-              ))}
-            </ListCard>
+            <TodayList items={todayList} onToggleDaily={toggleDaily} onToggleMission={toggleMission} />
           )}
         </Enter>
 
@@ -685,7 +679,32 @@ function QuickTile({ q, meta, index, rect, wide, rects, isDragging, onDragState,
   );
 }
 
-function QuickGrid({ items, metas, edit, onRun, onRemove, onReorder, onAdd }: {
+type TodayItem = { kind: 'daily' | 'mission'; id: string; title: string; done: boolean };
+
+/** Today's list. Its own component, so the minute changing on Today leaves the rows alone. */
+const TodayList = React.memo(function TodayList({ items, onToggleDaily, onToggleMission }: {
+  items: TodayItem[]; onToggleDaily: (id: string) => void; onToggleMission: (id: string) => void;
+}) {
+  return (
+    <ListCard>
+      {items.map((t) => (
+        <ListRow key={t.kind + t.id}>
+          <CheckCircle
+            done={t.done}
+            color={t.kind === 'mission' ? C.amber : C.green}
+            onPress={() => (t.kind === 'daily' ? onToggleDaily(t.id) : onToggleMission(t.id))}
+          />
+          <StrikeText done={t.done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{t.title}</StrikeText>
+          {t.kind === 'mission' && (
+            <View style={st.missionPill}><Text style={st.missionPillText}>DUE</Text></View>
+          )}
+        </ListRow>
+      ))}
+    </ListCard>
+  );
+});
+
+const QuickGrid = React.memo(function QuickGrid({ items, metas, edit, onRun, onRemove, onReorder, onAdd }: {
   items: QuickItem[]; metas: Record<string, string | null>; edit: boolean; onRun: (q: QuickItem) => void;
   onRemove: (id: string) => void; onReorder: (items: QuickItem[]) => void; onAdd: () => void;
 }) {
@@ -741,7 +760,7 @@ function QuickGrid({ items, metas, edit, onRun, onRemove, onReorder, onAdd }: {
       )}
     </View>
   );
-}
+});
 
 function WeekBar({ label, mins, maxMins, isToday }: {
   label: string; mins: number; maxMins: number; isToday: boolean;

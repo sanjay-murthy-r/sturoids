@@ -14,6 +14,8 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { Enter, Bouncy, useAnimLevel, useFocusKey } from '../components/Motion';
 import { tap } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
+import { toast } from '../components/Toast';
+import { useToday } from '../hooks/useNow';
 
 export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
@@ -26,6 +28,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const addDaily = useStore((s) => s.addDaily);
   const toggleDaily = useStore((s) => s.toggleDaily);
   const removeDaily = useStore((s) => s.removeDaily);
+  const restoreDaily = useStore((s) => s.restoreDaily);
   const lastTriage = useStore((s) => s.lastTriage);
   const setLastTriage = useStore((s) => s.setLastTriage);
 
@@ -54,7 +57,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [remTime, setRemTime] = useState('');
   const [remLabel, setRemLabel] = useState('');
 
-  const today = todayKey();
+  const today = useToday();
   // the triage is a DAILY ritual — lastTriage expires with the date, so this
   // session's "keep" list has to expire with it or kept leftovers never return
   React.useEffect(() => { setTriaged((x) => (x.length ? [] : x)); }, [today]);
@@ -73,9 +76,24 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setTriaged((x) => [...x, id]);
     if (leftovers.length <= 1) setLastTriage(today);
   };
+  // dropping is the triage's answer, so it asks nothing first; for a slip of the finger, the toast offers Undo
   const dropOne = (id: string) => {
+    const list = useStore.getState().dailyTasks;
+    const index = list.findIndex((t) => t.id === id);
+    if (index < 0) return;
+    const task = list[index];
+    const wasLast = leftovers.length <= 1;
+    const triageBefore = useStore.getState().lastTriage;
     removeDaily(id);
-    if (leftovers.length <= 1) setLastTriage(today);
+    if (wasLast) setLastTriage(today);
+    toast('Dropped "' + task.title + '"', {
+      label: 'Undo',
+      onPress: () => {
+        restoreDaily(task, index);
+        // the leftover comes back undecided
+        if (wasLast) setLastTriage(triageBefore);
+      },
+    });
   };
 
   const sortedMissions = useMemo(

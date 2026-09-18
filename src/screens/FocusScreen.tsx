@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Pressable, Modal, Alert } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Pressable, Modal, Alert, AppState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
-import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T } from '../theme';
 import { useStore } from '../store';
 import { todayKey, fmtDuration, uid, toMinutes, fmtClockTime } from '../utils';
@@ -26,6 +26,8 @@ type ReviewChoice = 'done' | 'pending' | 'drop';
 /** The finish-line heads-up has a fixed id, so it can be cancelled even after the app was killed. */
 const FINISH_NOTIF_ID = 'sturoids-finish-line';
 const HERO_SIZES = [48, 42, 38];
+/** the clock's slot keeps the hero height at every size, so a smaller clock never moves what sits below it */
+const CLOCK_SLOT_H = Math.round(HERO_SIZES[0] * 1.25);
 /** a stopwatch left running with no finish line (a killed app, a forgotten session) logs at most this much */
 const STOPWATCH_CAP_SEC = 12 * 3600;
 
@@ -60,23 +62,37 @@ function LiveClock({ timer, availW = 0, reserve = 0 }: { timer: TimerState; avai
     size = HERO_SIZES.find((px) => text.length * 0.6 * px + reserve <= availW - 24) ?? HERO_SIZES[HERO_SIZES.length - 1];
   }
   const h = Math.round(size * 1.25);
+  // When the hours arrive and the clock has to step down a size, the smaller clock fades in over the larger one in
+  // the same slot, instead of every digit and colon snapping smaller in one frame. The clock's first size needs no
+  // fade: the card it sits in brings it in.
+  const firstSize = React.useRef(size);
+  const resized = level !== 'none' && size !== firstSize.current;
   return (
-    <View style={[st.clockRow, { height: h }]} accessible accessibilityLabel={text}>
-      {text.split('').map((ch, i) => (ch === ':' ? (
-        <Text key={'sep' + (text.length - i)} style={[st.time, { fontSize: size, lineHeight: h }]}>:</Text>
-      ) : (
-        // cells are keyed from the right, so the seconds keep their place when the hours appear
-        <View key={'cell' + (text.length - i)} style={{ width: size * 0.6, height: h, overflow: 'hidden' }}>
-          <Animated.Text
-            key={ch}
-            entering={level === 'none' ? undefined : rollIn(h)}
-            exiting={level === 'none' ? undefined : rollOut(h)}
-            style={[st.time, st.digit, { fontSize: size, lineHeight: h }]}
-          >
-            {ch}
-          </Animated.Text>
-        </View>
-      )))}
+    <View style={st.clockSlot}>
+      <Animated.View
+        key={size}
+        entering={resized ? FadeIn.duration(280) : undefined}
+        exiting={level === 'none' ? undefined : FadeOut.duration(200)}
+        style={[st.clockRow, { height: h }]}
+        accessible
+        accessibilityLabel={text}
+      >
+        {text.split('').map((ch, i) => (ch === ':' ? (
+          <Text key={'sep' + (text.length - i)} style={[st.time, { fontSize: size, lineHeight: h }]}>:</Text>
+        ) : (
+          // cells are keyed from the right, so the seconds keep their place when the hours appear
+          <View key={'cell' + (text.length - i)} style={{ width: size * 0.6, height: h, overflow: 'hidden' }}>
+            <Animated.Text
+              key={ch}
+              entering={level === 'none' ? undefined : rollIn(h)}
+              exiting={level === 'none' ? undefined : rollOut(h)}
+              style={[st.time, st.digit, { fontSize: size, lineHeight: h }]}
+            >
+              {ch}
+            </Animated.Text>
+          </View>
+        )))}
+      </Animated.View>
     </View>
   );
 }
@@ -201,12 +217,15 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         withTiming(1, { duration: 380, easing: Easing.inOut(Easing.quad) }),
       );
       // not cleared with the effect: once the pulse has begun, the session must still wrap up
+      if (wrapTimer.current) clearTimeout(wrapTimer.current);
       wrapTimer.current = setTimeout(() => { wrapTimer.current = null; endSessionRef.current(); }, 650);
     }, Math.max(0, left * 1000));
     return () => clearTimeout(t);
   }, [timerMode, running, startTs, accumSec, targetMin, level]);
 
   const start = () => {
+    // the block has run out and is wrapping up: there is nothing left to resume
+    if (wrapTimer.current) return;
     endedRef.current = false;
     if (startedAtRef.current == null) startedAtRef.current = Date.now();
     setStartTs(Date.now());
@@ -217,7 +236,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setRunning(false); setStartTs(null);
   };
 
-  // live refs so the finish-line interval never acts on stale closures
+  // live refs so the finish-line timer never acts on stale closures
   const runningRef = useRef(running); runningRef.current = running;
   const startedLiveRef = useRef(started); startedLiveRef.current = started;
   const endSessionRef = useRef<() => void>(() => {});
@@ -299,9 +318,14 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         clearFinishLine();
       }
     };
-    const iv = setInterval(check, 1000);
+    // one timer for the moment itself, and a look whenever the app comes back, in case the phone slept through it
+    const t = setTimeout(check, Math.max(0, finishAt - Date.now()) + 50);
+    const sub = AppState.addEventListener('change', (next) => { if (next === 'active') check(); });
     check();
-    return () => clearInterval(iv);
+    return () => {
+      clearTimeout(t);
+      sub.remove();
+    };
   }, [finishAt]);
 
   function endSession() {
@@ -674,6 +698,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 const st = StyleSheet.create({
   h1: { ...(T.display as object), marginBottom: 6 } as any,
   time: { ...T.mono48, letterSpacing: 0 },
+  clockSlot: { height: CLOCK_SLOT_H, alignItems: 'center', justifyContent: 'center' },
   clockRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   digit: { position: 'absolute', left: 0, right: 0, textAlign: 'center' },
   wheelBox: { alignSelf: 'stretch' },
