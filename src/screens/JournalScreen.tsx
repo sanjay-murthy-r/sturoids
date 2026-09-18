@@ -13,7 +13,7 @@ import {
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Bouncy, useAnimLevel } from '../components/Motion';
-import { JournalGate, PinSheet } from '../components/LockGate';
+import { PinSheet, ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, countWords, deleteEntry, formatJournalDate, journalDayFor, promptFor, readBody, relativeDay, saveEntry,
@@ -22,7 +22,7 @@ import {
 import { useToolNav } from '../toolNav';
 import { tap, tick } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
-import { hasJournalPass, markJournalUnlocked, removeJournalPass } from '../lock';
+import { markOpen, pinStatus } from '../lock';
 
 type Mood = JournalEntry['mood'];
 interface Draft {
@@ -36,9 +36,9 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 export function JournalScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const tabMode = mode === 'tab';
   return (
-    <JournalGate guard={tabMode} header={<NeuHeader title="Journal" variant={tabMode ? 'tab' : 'page'} />}>
+    <ToolGate tool="journal" guard={tabMode} header={<NeuHeader title="Journal" variant={tabMode ? 'tab' : 'page'} />}>
       <WritingSpace tabMode={tabMode} />
-    </JournalGate>
+    </ToolGate>
   );
 }
 
@@ -69,9 +69,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const [tagDraft, setTagDraft] = React.useState('');
   const [prefs, setPrefs] = React.useState(false);
   const [remindDraft, setRemindDraft] = React.useState(settings.journalReminderTime || '21:30');
-  const [passSheet, setPassSheet] = React.useState<null | 'set' | 'change'>(null);
-  const [hasPass, setHasPass] = React.useState(false);
-  React.useEffect(() => { hasJournalPass().then(setHasPass); }, [settings.journalLocked, passSheet]);
+  const [pinFlow, setPinFlow] = React.useState(false);
 
   const draft = React.useRef<Draft>({ id: null, dateKey, title: '', body: '', mood: undefined, tags: [], dirty: false });
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -287,14 +285,18 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   };
 
   const setLock = async (on: boolean) => {
-    // the page is open, so the passcode has already been given: turning the lock off here asks nothing more
+    // the page is open, so the PIN has already been given: turning the lock off here asks nothing more
     if (!on) {
       setSetting('journalLocked', false);
-      await removeJournalPass();
-      setHasPass(false);
       return;
     }
-    setPassSheet('set');
+    if ((await pinStatus()) === 'set') {
+      setSetting('journalLocked', true);
+      markOpen('journal');
+      return;
+    }
+    // no PIN on this phone yet, or only an older code: one is chosen first
+    setPinFlow(true);
   };
   const saveReminder = async (on: boolean) => {
     if (on) {
@@ -466,29 +468,23 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           <Text style={[T.body, { flex: 1 }]}>Lock journal</Text>
           <Toggle value={settings.journalLocked} onChange={setLock} color={C.gold} />
         </Row>
-        {!settings.journalLocked ? (
-          <Text style={T.caption}>A passcode of four to eight digits opens the journal, and nothing else does.</Text>
-        ) : hasPass ? (
-          <Text style={st.passLink} onPress={() => setPassSheet('change')}>Change passcode</Text>
-        ) : (
-          <>
-            <Text style={T.caption}>This journal still opens with the phone's own lock.</Text>
-            <Text style={st.passLink} onPress={() => setPassSheet('set')}>Set a passcode</Text>
-          </>
-        )}
+        <Text style={[T.caption, { marginBottom: 6 }]}>
+          {settings.journalLocked
+            ? settings.journalScreenLock ? 'Your app PIN opens it, and so does your screen lock.' : 'Your app PIN opens it.'
+            : 'Your 4-digit app PIN will open it.'}
+          {' '}Settings, under Privacy, changes the PIN and whether your screen lock can open the journal.
+        </Text>
       </Sheet>
 
       <PinSheet
-        visible={!!passSheet}
+        visible={pinFlow}
         mode="set"
-        kind="journal"
-        onClose={() => setPassSheet(null)}
+        tint={C.gold}
+        onClose={() => setPinFlow(false)}
         onDone={() => {
-          const step = passSheet;
-          setPassSheet(null);
-          setHasPass(true);
-          markJournalUnlocked();
-          if (step === 'set') setSetting('journalLocked', true);
+          setPinFlow(false);
+          setSetting('journalLocked', true);
+          markOpen('journal');
         }}
       />
     </ScreenBG>
@@ -512,6 +508,5 @@ const st = StyleSheet.create({
   words: { color: C.textFaint, fontFamily: F.med, fontSize: 12, fontVariant: ['tabular-nums'] },
   tick: { width: 16, height: 2, borderRadius: 1, backgroundColor: C.accent, marginTop: 4 },
   prefLabel: { ...T.label, marginTop: 10, marginBottom: 8 },
-  passLink: { color: C.gold, fontFamily: F.semi, fontSize: 13, paddingVertical: 8 },
   prefRow: { paddingVertical: 10 },
 });

@@ -5,20 +5,25 @@ import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
 import { useStore } from './store';
 
-// What guards what: a locked note hides behind the device's own lock (fingerprint, face, screen lock) with an app
-// PIN as the fallback; the Journal has its own passcode and never opens with the phone's lock. Neither encrypts.
-// An unlock opens a session that closes after `settings.lockGraceSec` in the background, or when the app is killed.
+// What locks, and what opens it. One app PIN of four digits opens everything that locks: the journal, the Notes tool
+// and single locked notes. The journal and Notes can also open with the phone's own screen lock, each only if the
+// owner turns that on in Settings; a single locked note always asks for the PIN. There is no lock on the whole app.
+// Nothing here encrypts. An unlock opens a session that closes after `settings.lockGraceSec` in the background, or
+// when the app is killed.
 
-const PIN_KEY = 'sturoids.pin.v1';
-const PIN_ATTEMPTS_KEY = 'sturoids.pinAttempts.v1';
-const JOURNAL_KEY = 'sturoids.journalPass.v1';
-const JOURNAL_ATTEMPTS_KEY = 'sturoids.journalAttempts.v1';
+/** the journal, the Notes tool, and single locked notes */
+export type LockScope = 'journal' | 'notes' | 'note';
+
+export const PIN_LEN = 4;
+/** codes from before the PIN became four digits: a 4 to 8 digit journal passcode, or a 6 digit PIN */
+export const LEGACY_MIN = 4;
+export const LEGACY_MAX = 8;
+
+const PIN_KEY = 'sturoids.pin.v2';
+const LEGACY_KEYS = ['sturoids.pin.v1', 'sturoids.journalPass.v1'];
+const ATTEMPTS_KEY = 'sturoids.pinAttempts.v2';
 const MAX_TRIES = 5;
 const COOLDOWN_MS = 30_000;
-
-/** A journal passcode is four to eight digits. */
-export const PASS_MIN = 4;
-export const PASS_MAX = 8;
 
 // ---------- sessions ----------
 
@@ -51,41 +56,38 @@ function session() {
   };
 }
 
-const app = session();
-const journal = session();
+const sessions: Record<LockScope, ReturnType<typeof session>> = {
+  journal: session(),
+  notes: session(),
+  note: session(),
+};
 let authInFlight = false;
 
 AppState.addEventListener('change', (next) => {
-  // the device's credential screen backgrounds the app; that is not the user leaving
+  // the phone's own lock screen backgrounds the app; that is not the owner leaving
   if (authInFlight) return;
+  const all = Object.values(sessions);
   if (next === 'active') {
     const graceMs = useStore.getState().settings.lockGraceSec * 1000;
-    app.back(graceMs);
-    journal.back(graceMs);
+    all.forEach((s) => s.back(graceMs));
   } else {
-    app.away();
-    journal.away();
+    all.forEach((s) => s.away());
   }
 });
 
-function useSession(s: ReturnType<typeof session>): boolean {
+export const markOpen = (scope: LockScope) => sessions[scope].mark();
+export const isOpen = (scope: LockScope) => sessions[scope].isOpen();
+export const closeLock = (scope: LockScope) => sessions[scope].close();
+
+/** Re-renders when the scope's session opens or closes. */
+export function useOpen(scope: LockScope): boolean {
+  const s = sessions[scope];
   const [, bump] = React.useReducer((x: number) => x + 1, 0);
   React.useEffect(() => s.subscribe(bump), [s]);
   return s.isOpen();
 }
 
-export const markUnlocked = () => app.mark();
-export const lockNow = () => app.close();
-export const isUnlocked = () => app.isOpen();
-/** Re-renders when the session opens or closes. */
-export const useUnlocked = () => useSession(app);
-
-export const markJournalUnlocked = () => journal.mark();
-export const lockJournalNow = () => journal.close();
-export const isJournalUnlocked = () => journal.isOpen();
-export const useJournalUnlocked = () => useSession(journal);
-
-// ---------- device ----------
+// ---------- the phone's own lock ----------
 
 export async function deviceAuthAvailable(): Promise<boolean> {
   try {
@@ -95,144 +97,124 @@ export async function deviceAuthAvailable(): Promise<boolean> {
   }
 }
 
-export type UnlockResult = 'unlocked' | 'needs-pin' | 'cancelled';
-
-/**
- * Tries the device's own lock first. When the device has none, the caller asks for the app PIN. With neither,
- * there is nothing to check against, so the content opens (Settings asks for a PIN before a lock is turned on).
- */
-export async function unlockWithDevice(reason = 'Unlock Sturoids'): Promise<UnlockResult> {
-  if (await deviceAuthAvailable()) {
-    authInFlight = true;
-    try {
-      const r = await LocalAuthentication.authenticateAsync({
-        promptMessage: reason, cancelLabel: 'Cancel', disableDeviceFallback: false,
-      });
-      if (r.success) {
-        markUnlocked();
-        return 'unlocked';
-      }
-      const error = String((r as { error?: string }).error || '');
-      if (error !== 'not_enrolled' && error !== 'passcode_not_set' && error !== 'not_available') return 'cancelled';
-    } finally {
-      authInFlight = false;
-    }
+/** The phone's fingerprint, face or screen lock, for a tool whose owner allowed it. True when it opened. */
+export async function unlockWithScreenLock(reason: string): Promise<boolean> {
+  if (!(await deviceAuthAvailable())) return false;
+  authInFlight = true;
+  try {
+    const r = await LocalAuthentication.authenticateAsync({
+      promptMessage: reason, cancelLabel: 'Use PIN', disableDeviceFallback: false,
+    });
+    return r.success;
+  } catch {
+    return false;
+  } finally {
+    authInFlight = false;
   }
-  if (await hasPin()) return 'needs-pin';
-  markUnlocked();
-  return 'unlocked';
 }
 
-/** A note lock can be turned on only when something can check it: the device's own lock or an app PIN. */
-export async function lockProtectionAvailable(): Promise<boolean> {
-  return (await deviceAuthAvailable()) || (await hasPin());
-}
-
-// ---------- stored codes ----------
+// ---------- the app PIN ----------
 
 const toHex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 const digest = (code: string, salt: string) =>
   Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, salt + ':' + code);
 
-/**
- * A code kept as a salted SHA-256 in the device keystore, never as itself, with its own wrong-guess count and
- * cooldown kept there too, so closing the app does not reset them.
- */
-function stored(key: string, attemptsKey: string) {
-  let failures = 0;
-  let coolUntil = 0;
-  let loaded: Promise<void> | null = null;
-
-  const load = () => {
-    if (!loaded) {
-      loaded = SecureStore.getItemAsync(attemptsKey)
-        .then((raw) => {
-          if (!raw) return;
-          const a = JSON.parse(raw);
-          failures = Math.max(failures, Number(a?.failures) || 0);
-          coolUntil = Math.max(coolUntil, Number(a?.coolUntil) || 0);
-        })
-        .catch(() => {});
-    }
-    return loaded;
-  };
-  const save = () => { SecureStore.setItemAsync(attemptsKey, JSON.stringify({ failures, coolUntil })).catch(() => {}); };
-  // read at launch, so a cooldown still running shows as soon as the keypad opens
-  void load();
-
-  /** 'unreadable' when the keystore could not be read. It counts as set, so a read failure never opens a lock. */
-  const state = async (): Promise<'set' | 'none' | 'unreadable'> => {
-    try {
-      return (await SecureStore.getItemAsync(key)) ? 'set' : 'none';
-    } catch {
-      return 'unreadable';
-    }
-  };
-  const cooldownMs = () => Math.max(0, coolUntil - Date.now());
-
-  return {
-    state,
-    cooldownMs,
-    has: async () => (await state()) !== 'none',
-    set: async (code: string) => {
-      const salt = toHex(Crypto.getRandomBytes(16));
-      await SecureStore.setItemAsync(key, JSON.stringify({ salt, hash: await digest(code, salt) }));
-      failures = 0;
-      coolUntil = 0;
-      save();
-    },
-    remove: async () => {
-      try {
-        await SecureStore.deleteItemAsync(key);
-      } catch {
-        // nothing stored
-      }
-      failures = 0;
-      coolUntil = 0;
-      save();
-    },
-    verify: async (code: string): Promise<'ok' | 'wrong' | 'cooldown'> => {
-      await load();
-      if (cooldownMs() > 0) return 'cooldown';
-      try {
-        const raw = await SecureStore.getItemAsync(key);
-        if (raw) {
-          const { salt, hash } = JSON.parse(raw);
-          if ((await digest(code, salt)) === hash) {
-            failures = 0;
-            coolUntil = 0;
-            save();
-            return 'ok';
-          }
-        }
-      } catch {
-        // unreadable keystore entry counts as a miss
-      }
-      failures += 1;
-      if (failures >= MAX_TRIES) {
-        failures = 0;
-        coolUntil = Date.now() + COOLDOWN_MS;
-        save();
-        return 'cooldown';
-      }
-      save();
-      return 'wrong';
-    },
-  };
+type Stored = { salt: string; hash: string };
+/** A stored code, null when there is none, 'unreadable' when the keystore could not be read. */
+async function read(key: string): Promise<Stored | null | 'unreadable'> {
+  try {
+    const raw = await SecureStore.getItemAsync(key);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    return v && typeof v.salt === 'string' && typeof v.hash === 'string' ? v : 'unreadable';
+  } catch {
+    return 'unreadable';
+  }
 }
 
-const pin = stored(PIN_KEY, PIN_ATTEMPTS_KEY);
-const journalPass = stored(JOURNAL_KEY, JOURNAL_ATTEMPTS_KEY);
+/**
+ * 'set': a four digit PIN exists (an unreadable keystore counts as set, so a read failure never opens a lock).
+ * 'legacy': only a code from before four digits exists; it is asked for once, then a new PIN is chosen.
+ * 'none': nothing to check against.
+ */
+export async function pinStatus(): Promise<'set' | 'legacy' | 'none'> {
+  if (await read(PIN_KEY)) return 'set';
+  for (const k of LEGACY_KEYS) if (await read(k)) return 'legacy';
+  return 'none';
+}
 
-export const pinState = pin.state;
-export const hasPin = pin.has;
-export const setPin = pin.set;
-export const removePin = pin.remove;
-export const pinCooldownMs = pin.cooldownMs;
-export const verifyPin = pin.verify;
+// Wrong guesses and the cooldown live in the keystore too, so closing the app does not reset them.
+let failures = 0;
+let coolUntil = 0;
+let attemptsLoaded: Promise<void> | null = null;
+function loadAttempts(): Promise<void> {
+  if (!attemptsLoaded) {
+    attemptsLoaded = SecureStore.getItemAsync(ATTEMPTS_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const a = JSON.parse(raw);
+        failures = Math.max(failures, Number(a?.failures) || 0);
+        coolUntil = Math.max(coolUntil, Number(a?.coolUntil) || 0);
+      })
+      .catch(() => {});
+  }
+  return attemptsLoaded;
+}
+function saveAttempts() {
+  SecureStore.setItemAsync(ATTEMPTS_KEY, JSON.stringify({ failures, coolUntil })).catch(() => {});
+}
+// read at launch, so a cooldown still running shows as soon as the keypad appears
+void loadAttempts();
 
-export const hasJournalPass = journalPass.has;
-export const setJournalPass = journalPass.set;
-export const removeJournalPass = journalPass.remove;
-export const journalPassCooldownMs = journalPass.cooldownMs;
-export const verifyJournalPass = journalPass.verify;
+export const pinCooldownMs = () => Math.max(0, coolUntil - Date.now());
+
+/** Checks a code against the PIN, or, before one exists, against the codes it replaces. */
+export async function verifyPin(code: string): Promise<'ok' | 'wrong' | 'cooldown'> {
+  await loadAttempts();
+  if (pinCooldownMs() > 0) return 'cooldown';
+  let ok = false;
+  const current = await read(PIN_KEY);
+  if (current && current !== 'unreadable') {
+    ok = (await digest(code, current.salt)) === current.hash;
+  } else if (!current) {
+    for (const k of LEGACY_KEYS) {
+      const old = await read(k);
+      if (old && old !== 'unreadable' && (await digest(code, old.salt)) === old.hash) {
+        ok = true;
+        break;
+      }
+    }
+  }
+  if (ok) {
+    failures = 0;
+    coolUntil = 0;
+    saveAttempts();
+    return 'ok';
+  }
+  failures += 1;
+  if (failures >= MAX_TRIES) {
+    failures = 0;
+    coolUntil = Date.now() + COOLDOWN_MS;
+    saveAttempts();
+    return 'cooldown';
+  }
+  saveAttempts();
+  return 'wrong';
+}
+
+/** Stores a salted SHA-256 of the PIN in the keystore (never the PIN itself) and retires any older code. */
+export async function setPin(code: string): Promise<void> {
+  const salt = toHex(Crypto.getRandomBytes(16));
+  await SecureStore.setItemAsync(PIN_KEY, JSON.stringify({ salt, hash: await digest(code, salt) }));
+  await Promise.all(LEGACY_KEYS.map((k) => SecureStore.deleteItemAsync(k).catch(() => {})));
+  failures = 0;
+  coolUntil = 0;
+  saveAttempts();
+}
+
+export async function removePin(): Promise<void> {
+  await Promise.all([PIN_KEY, ...LEGACY_KEYS].map((k) => SecureStore.deleteItemAsync(k).catch(() => {})));
+  failures = 0;
+  coolUntil = 0;
+  saveAttempts();
+}

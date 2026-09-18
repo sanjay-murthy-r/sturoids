@@ -142,7 +142,8 @@ export default function Today() {
                   : nextBlock.block.subject + ' at ' + fmtClockTime(toMinutes(nextBlock.block.start), settings.hour24);
             break;
           case 'notes':
-            meta = noteCount ? count(noteCount, 'note', 'notes') : 'No notes yet';
+            // locked Notes say nothing about what they hold
+            meta = settings.notesLocked ? 'Locked' : noteCount ? count(noteCount, 'note', 'notes') : 'No notes yet';
             break;
           case 'journal':
             // a locked journal says nothing about its pages
@@ -164,7 +165,7 @@ export default function Today() {
     }
     return out;
   }, [quickAccess, todayList.length, tasksLeft, deepWork, focusToday, nextBlock, noteCount, videoCount, journal, journalDay, today,
-    settings.journalLocked, settings.hour24]);
+    settings.journalLocked, settings.notesLocked, settings.hour24]);
 
   const runQuick = (q: QuickItem) => {
     if (qaEdit) return;

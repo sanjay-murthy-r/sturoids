@@ -90,8 +90,13 @@ export interface Settings {
   firstOpenedAt?: number;
   /** the most recent time the app came to the foreground */
   lastOpenedAt?: number;
-  /** Journal: hidden behind the app lock */
+  /** Journal: hidden behind the app PIN */
   journalLocked: boolean;
+  /** the whole Notes tool hidden behind the app PIN (single notes lock from inside the note) */
+  notesLocked: boolean;
+  /** the phone's own screen lock may open the journal, and Notes, as well as the app PIN */
+  journalScreenLock: boolean;
+  notesScreenLock: boolean;
   /** seconds in the background before any unlocked content re-locks (0 = immediately) */
   lockGraceSec: number;
   /** before this hour, opening the Journal writes about yesterday */
@@ -148,6 +153,9 @@ export const DEFAULT_SETTINGS: Settings = {
   todoReminderTime: '07:00',
   tabSlots: [...DEFAULT_SLOTS],
   journalLocked: false,
+  notesLocked: false,
+  journalScreenLock: false,
+  notesScreenLock: false,
   lockGraceSec: 90,
   journalCutoffHour: 11,
   journalPromptsOn: true,
@@ -785,10 +793,13 @@ export const useStore = create<AppState>()(
       storage: jsonStorage,
       version: 5,
       migrate: (persisted: any, version) => migratePersisted(persisted, version),
-      // zustand's own shallow merge, plus the one fact the failure handler needs
+      // zustand's own shallow merge, plus the one fact the failure handler needs; a setting added since the data was
+      // saved takes its default instead of arriving undefined
       merge: (persisted: any, current) => {
         if (persisted) mergedFromStorage = true;
-        return { ...current, ...(persisted || {}) };
+        const merged = { ...current, ...(persisted || {}) };
+        if (persisted?.settings) merged.settings = { ...current.settings, ...persisted.settings };
+        return merged;
       },
       // zustand reports a load that throws only here and never marks the store hydrated
       onRehydrateStorage: () => (_state, error) => {

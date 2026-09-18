@@ -10,7 +10,7 @@ import {
   Card, Chip, DotMenu, Field, Hairline, IconBtn, ListRow, ListSlice, NeuHeader, PillButton, Row, ScreenBG, Sheet, useTheme,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { JournalGate } from '../components/LockGate';
+import { ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, deleteEntry, entryMatches, formatJournalDate, journalDayFor, journalStats, keyToDate, loadBodies, onThisDay,
@@ -24,9 +24,9 @@ const HEAT_WEEKS = 12;
 
 export function JournalArchiveScreen({ mode }: { mode: 'tab' | 'stack' }) {
   return (
-    <JournalGate guard={mode === 'tab'} header={<NeuHeader title="Journal" />}>
+    <ToolGate tool="journal" guard={mode === 'tab'} header={<NeuHeader title="Journal" />}>
       <Archive tabMode={mode === 'tab'} />
-    </JournalGate>
+    </ToolGate>
   );
 }
 

@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TextInput, Alert, Share, Image, useWindowDimensions,
+  View, Text, ScrollView, StyleSheet, TextInput, Alert, Share, Image, Keyboard, useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,8 +18,8 @@ import { useStore, Attachment } from '../store';
 import { todayKey, uid } from '../utils';
 import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuHeader, NeuIconBtn, PillButton, DotMenu, useTheme } from '../components/UI';
 import { toast } from '../components/Toast';
-import { LockGate, PinSheet } from '../components/LockGate';
-import { lockProtectionAvailable, markUnlocked, useUnlocked } from '../lock';
+import { NoteGate, PinSheet, ToolGate } from '../components/LockGate';
+import { markOpen, pinStatus } from '../lock';
 import { Bouncy } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -87,9 +87,23 @@ function MicButton({ listening, onPress }: { listening: boolean; onPress: () => 
   );
 }
 
+/** A note: behind the Notes lock when that is on, and behind its own lock when the note is locked. */
 export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const locked = useStore((s) => s.notes.find((n) => n.id === id)?.locked === true);
+  const folder = useStore((s) => s.notes.find((n) => n.id === id)?.folder ?? 'Note');
+  const header = <NeuHeader title={folder} />;
+  return (
+    <ToolGate tool="notes" guard={false} header={header}>
+      <NoteGate locked={locked} header={header}>
+        <NoteEditor mode={mode} />
+      </NoteGate>
+    </ToolGate>
+  );
+}
+
+function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
-  const unlocked = useUnlocked();
   const [lockPin, setLockPin] = useState(false);
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -261,20 +275,22 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setLineSheet(false);
   };
 
-  if (note.locked && !unlocked) {
-    return (
-      <ScreenBG>
-        <NeuHeader title={note.folder} />
-        <LockGate locked title="This note is locked"><View /></LockGate>
-      </ScreenBG>
-    );
-  }
-
   const toggleLock = async () => {
-    // an open note means the session is unlocked, so the lock can come off without asking again
-    if (note.locked) { updateNote(note.id, { locked: false }); return; }
-    if (await lockProtectionAvailable()) updateNote(note.id, { locked: true });
-    else setLockPin(true);
+    Keyboard.dismiss();
+    // the note is open, so its PIN has been given (or it was never locked): the lock comes off without asking again
+    if (note.locked) {
+      updateNote(note.id, { locked: false });
+      toast('The note is no longer locked.');
+      return;
+    }
+    if ((await pinStatus()) === 'set') {
+      updateNote(note.id, { locked: true });
+      markOpen('note');
+      toast('Note locked. Your PIN opens it.');
+      return;
+    }
+    // no PIN on this phone yet, or only an older code: one is chosen first, then the note locks
+    setLockPin(true);
   };
 
   const words = note.body.trim() ? note.body.trim().split(/\s+/).length : 0;
@@ -435,8 +451,14 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <PinSheet
         visible={lockPin}
         mode="set"
+        tint={C.green}
         onClose={() => setLockPin(false)}
-        onDone={() => { setLockPin(false); updateNote(note.id, { locked: true }); markUnlocked(); }}
+        onDone={() => {
+          setLockPin(false);
+          updateNote(note.id, { locked: true });
+          markOpen('note');
+          toast('Note locked. Your PIN opens it.');
+        }}
       />
     </ScreenBG>
   );
