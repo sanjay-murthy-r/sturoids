@@ -220,6 +220,8 @@ export interface AppState {
   addDaily: (title: string) => void;
   toggleDaily: (id: string) => void;
   removeDaily: (id: string) => void;
+  /** puts a removed task back at its old place in the list (an undo) */
+  restoreDaily: (task: DailyTask, index: number) => void;
   setLastTriage: (dateKey: string) => void;
 
   addMission: (title: string, deadline: string) => void;
@@ -254,6 +256,8 @@ export interface AppState {
   addAttachment: (noteId: string, a: Omit<Attachment, 'id'>) => void;
   /** returns the removed attachment so the caller can delete its file */
   removeAttachment: (noteId: string, attId: string) => Attachment | undefined;
+  /** points restored attachments at their files, by attachment id */
+  relinkAttachments: (uris: Record<string, string>) => void;
 
   addVideo: (v: { url: string; videoId: string; title: string; folderId?: string | null }) => string;
   updateVideo: (id: string, v: Partial<VaultVideo>) => void;
@@ -554,6 +558,13 @@ export const useStore = create<AppState>()(
           ),
         })),
       removeDaily: (id) => set((s) => ({ dailyTasks: s.dailyTasks.filter((t) => t.id !== id) })),
+      restoreDaily: (task, index) =>
+        set((s) => {
+          if (s.dailyTasks.some((t) => t.id === task.id)) return {};
+          const list = [...s.dailyTasks];
+          list.splice(Math.max(0, Math.min(index, list.length)), 0, task);
+          return { dailyTasks: list };
+        }),
       setLastTriage: (dateKey) => set({ lastTriage: dateKey }),
 
       addMission: (title, deadline) =>
@@ -678,6 +689,12 @@ export const useStore = create<AppState>()(
         }));
         return orphaned;
       },
+      relinkAttachments: (uris) =>
+        set((s) => ({
+          notes: s.notes.map((n) => (n.attachments.some((a) => uris[a.id])
+            ? { ...n, attachments: n.attachments.map((a) => (uris[a.id] ? { ...a, uri: uris[a.id] } : a)) }
+            : n)),
+        })),
 
       addVideo: (v) => {
         const id = uid();

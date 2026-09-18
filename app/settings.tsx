@@ -15,6 +15,7 @@ import { tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
 import { PinSheet } from '../src/components/LockGate';
 import { journalForBackup, restoreBodies } from '../src/journal';
+import { estimateBackupBytes, openBackup, restoredPath, writeBackup } from '../src/backup';
 import { deviceAuthAvailable, isOpen, markOpen, pinStatus, removePin } from '../src/lock';
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
 import { TOOLS, ToolKey, colorOf, normaliseSlots, toolByKey } from '../src/tools';
@@ -110,7 +111,16 @@ export default function Settings() {
   // the PIN, given for this one backup: it authorises the export without opening anything
   const exportAllowed = useRef(false);
 
+  // a backup with long videos takes a while to write or restore: its button shows how far along it is
+  const [busy, setBusy] = useState<null | { kind: 'export' | 'import'; pct: number }>(null);
+  const busyRef = useRef(false);
+  const progressOf = (kind: 'export' | 'import') => (share: number) => {
+    const pct = Math.round(share * 100);
+    setBusy((b) => (b && b.kind === kind && b.pct === pct ? b : { kind, pct }));
+  };
+
   const exportData = async () => {
+    if (busyRef.current) return;
     // a backup carries locked pages in full, so it asks for the PIN whenever anything is locked
     const s = useStore.getState();
     const anyLock = s.settings.journalLocked || s.settings.notesLocked || s.notes.some((n) => n.locked);
@@ -119,24 +129,47 @@ export default function Settings() {
       return;
     }
     exportAllowed.current = false;
+    busyRef.current = true;
     try {
       const snap = exportSnapshot();
-      // journal text lives in files, so the backup carries it inline
+      // journal text lives in files, so the backup carries it inline; the notes' attachments follow the data
       const json = JSON.stringify({ ...snap, journal: await journalForBackup(snap.journal) }, null, 2);
+      const need = await estimateBackupBytes(json, snap.notes);
+      const free = await FileSystem.getFreeDiskStorageAsync().catch(() => Number.MAX_SAFE_INTEGER);
+      // the backup is written to this phone before it is shared, so it needs the room, with a little to spare
+      if (need + 10 * 1024 * 1024 > free) {
+        Alert.alert('Not enough space', 'This backup needs about ' + Math.ceil(need / (1024 * 1024)) + ' MB free, with its attachments.');
+        return;
+      }
+      // an earlier backup left in the cache can be large now: only the newest is kept
+      const cached = await FileSystem.readDirectoryAsync(FileSystem.cacheDirectory || '').catch(() => [] as string[]);
+      await Promise.all(cached.filter((n) => n.startsWith('sturoids-backup-'))
+        .map((n) => FileSystem.deleteAsync(FileSystem.cacheDirectory + n, { idempotent: true }).catch(() => {})));
       const uri = FileSystem.cacheDirectory + 'sturoids-backup-' + todayKey() + '.json';
-      await FileSystem.writeAsStringAsync(uri, json);
+      setBusy({ kind: 'export', pct: 0 });
+      const written = await writeBackup(uri, json, snap.notes, progressOf('export'));
+      setBusy(null);
       if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json' });
       else Alert.alert('Saved', 'Backup written to:\n' + uri);
+      if (written.missing) {
+        toast(written.missing === 1
+          ? 'One attachment was no longer on this phone, so it is not in the backup.'
+          : written.missing + ' attachments were no longer on this phone, so they are not in the backup.');
+      }
     } catch (e: any) {
       Alert.alert('Export failed', String(e?.message || e));
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
     }
   };
 
   const importData = async () => {
+    if (busyRef.current) return;
     try {
       const res = await DocumentPicker.getDocumentAsync({ type: 'application/json', copyToCacheDirectory: true });
       if (res.canceled || !res.assets?.[0]) return;
-      const json = await FileSystem.readAsStringAsync(res.assets[0].uri);
+      const backup = await openBackup(res.assets[0].uri);
       Alert.alert(
         'Replace everything?',
         'This replaces all current data with the backup. Calculator history is cleared and any running Deep Work session ends.',
@@ -145,18 +178,42 @@ export default function Settings() {
           {
             text: 'Replace', style: 'destructive',
             onPress: async () => {
-              const ok = importSnapshot(json);
-              if (ok) {
-                try {
-                  await restoreBodies(JSON.parse(json)?.journal);
-                } catch {
-                  // the index is restored either way; text that fails to write stays in the backup file
+              if (busyRef.current) return;
+              busyRef.current = true;
+              const ok = importSnapshot(backup.json);
+              let carried = 0;
+              let complete = true;
+              try {
+                if (ok) {
+                  try {
+                    await restoreBodies(JSON.parse(backup.json)?.journal);
+                  } catch {
+                    // the index is restored either way; text that fails to write stays in the backup file
+                  }
+                  if (backup.hasFiles) {
+                    // each note's attachments come back into the app's own folder, and the notes point at them
+                    const byId = new Map(useStore.getState().notes.flatMap((n) => n.attachments).map((a) => [a.id, a]));
+                    setBusy({ kind: 'import', pct: 0 });
+                    const restored = await backup.restoreFiles((id) => {
+                      const a = byId.get(id);
+                      return a ? restoredPath(a) : null;
+                    }, progressOf('import'));
+                    useStore.getState().relinkAttachments(restored.files);
+                    carried = Object.keys(restored.files).length;
+                    complete = restored.complete;
+                  }
+                  rescheduleAllReminders();
                 }
-                rescheduleAllReminders();
+              } finally {
+                busyRef.current = false;
+                setBusy(null);
               }
               Alert.alert(
                 ok ? 'Imported' : 'Not a Sturoids backup',
-                ok ? 'Your data is restored.' : 'That file could not be read as a backup.'
+                !ok ? 'That file could not be read as a backup.'
+                  : !complete ? 'Your data is restored, but the backup file ends early, so some attachments could not be restored.'
+                    : carried ? 'Your data is restored, with ' + carried + (carried === 1 ? ' attachment.' : ' attachments.')
+                      : 'Your data is restored.'
               );
             },
           },
@@ -499,12 +556,18 @@ export default function Settings() {
           onClose={() => setPinStep(null)} onDone={pinDone}
         />
 
-        <SectionTitle right={<InfoDot text="Everything is stored locally on this phone, with no accounts. Export a JSON backup before changing phones; importing replaces all current data." />}>
+        <SectionTitle right={<InfoDot text="Everything is stored locally on this phone, with no accounts. Export a backup before changing phones: it carries your notes' attachments too. Importing replaces all current data." />}>
           Data
         </SectionTitle>
         <Card>
-          <PillButton label="Export backup (JSON)" icon="download-outline" onPress={() => exportData()} style={{ marginBottom: 10 }} />
-          <PillButton label="Import backup" icon="push-outline" color={C.amber} outline onPress={importData} />
+          <PillButton
+            label={busy?.kind === 'export' ? 'Writing backup, ' + busy.pct + '%' : 'Export backup (JSON)'}
+            icon="download-outline" onPress={() => exportData()} style={{ marginBottom: 10 }}
+          />
+          <PillButton
+            label={busy?.kind === 'import' ? 'Restoring attachments, ' + busy.pct + '%' : 'Import backup'}
+            icon="push-outline" color={C.amber} outline onPress={importData}
+          />
           {recovery ? (
             <View style={st.recovery}>
               <Text style={st.recoveryTitle}>A copy of data that could not be opened</Text>
