@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
-  Easing, FadeIn, FadeOut, LinearTransition, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
+  Easing, FadeIn, FadeInDown, FadeOut, LinearTransition, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, SH, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
@@ -660,11 +660,21 @@ export function ListCard({ children, style }: { children: React.ReactNode; style
  * owns the top corners and the last the bottom ones; each slice clips its shadow where it meets the next, so the list
  * still reads as one card with no seams. The list's content keeps its usual side padding.
  */
-export function ListSlice({ first, last, children }: { first: boolean; last: boolean; children: React.ReactNode }) {
+export function ListSlice({ first, last, enter = false, children }: {
+  first: boolean; last: boolean;
+  /** rows of the first screenful rise together, so the card arrives as one object */
+  enter?: boolean;
+  children: React.ReactNode;
+}) {
   const theme = useTheme();
+  const level = useAnimLevel();
   const r = S.radius;
+  // one entrance for every slice, started in the same frame: the slices move together and no seam opens
+  const entering = !enter || level === 'none'
+    ? undefined
+    : level === 'full' ? FadeInDown.duration(360).springify().damping(22).stiffness(180) : FadeIn.duration(140);
   return (
-    <View style={[lst.clip, { paddingTop: first ? SLICE_TOP : 0, paddingBottom: last ? SLICE_BOTTOM : 0 }]}>
+    <Animated.View entering={entering} style={[lst.clip, { paddingTop: first ? SLICE_TOP : 0, paddingBottom: last ? SLICE_BOTTOM : 0 }]}>
       <View
         pointerEvents="none"
         style={[
@@ -685,7 +695,7 @@ export function ListSlice({ first, last, children }: { first: boolean; last: boo
       />
       {first ? null : <View style={lst.hair} />}
       <View style={{ paddingTop: first ? 4 : 0, paddingBottom: last ? 4 : 0 }}>{children}</View>
-    </View>
+    </Animated.View>
   );
 }
 

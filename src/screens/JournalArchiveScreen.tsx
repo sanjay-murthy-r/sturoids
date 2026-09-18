@@ -3,12 +3,13 @@ import { Alert, ScrollView, SectionList, Share, StyleSheet, Text, View } from 'r
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, NEU, S, T } from '../theme';
+import { C, F, MIN, NEU, S, T, bgFor } from '../theme';
 import { useStore, JournalEntry } from '../store';
 import { todayKey } from '../utils';
-import { Card, Chip, DotMenu, Field, Hairline, IconBtn, NeuHeader, PillButton, Row, ScreenBG, Sheet, useTheme } from '../components/UI';
+import {
+  Card, Chip, DotMenu, Field, Hairline, IconBtn, ListRow, ListSlice, NeuHeader, PillButton, Row, ScreenBG, Sheet, useTheme,
+} from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Enter } from '../components/Motion';
 import { LockGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
@@ -68,6 +69,10 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   const [filters, setFilters] = React.useState(false);
   const [menu, setMenu] = React.useState<JournalEntry | null>(null);
   const [moveEntry, setMoveEntry] = React.useState<JournalEntry | null>(null);
+
+  // the first screenful rises as one card; rows that mount later (scrolling, filtering) appear at once
+  const firstPaint = React.useRef(true);
+  React.useEffect(() => { firstPaint.current = false; }, []);
 
   // typing stays immediate; the search over every entry runs on the settled text
   const settledQ = React.useDeferredValue(q);
@@ -246,32 +251,30 @@ function Archive({ tabMode }: { tabMode: boolean }) {
         ListHeaderComponent={header}
         ListEmptyComponent={empty}
         contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 40 + (tabMode ? 0 : insets.bottom) }}
-        renderSectionHeader={({ section }) => <Text style={st.section}>{section.title}</Text>}
-        renderItem={({ item: e, index }) => {
+        renderSectionHeader={({ section }) => <Text style={[st.section, { backgroundColor: bgFor(theme) }]}>{section.title}</Text>}
+        renderItem={({ item: e, index, section }) => {
           const d = keyToDate(e.dateKey);
           const moodIcon = MOODS.find((m) => m.value === e.mood)?.icon;
           return (
-            <Enter index={Math.min(index, 8)}>
-              <Card pad={16} onPress={() => open(e.dateKey, e.id)} onLongPress={() => { tick(); setMenu(e); }}>
-                <Row style={{ alignItems: 'flex-start' }}>
-                  <View style={[st.dayWell, well]}>
-                    <Text style={st.dayName}>{d.toLocaleDateString('en-IN', { weekday: 'short' })}</Text>
-                    <Text style={st.dayNum}>{d.getDate()}</Text>
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Row>
-                      <Highlighted text={e.title || e.excerpt.split(/[.!?\n]/)[0] || 'Untitled'} tokens={tokens} style={[T.title, { flex: 1 }]} lines={1} />
-                      {e.pinned ? <Ionicons name="pin" size={14} color={C.gold} style={{ marginLeft: 6 }} /> : null}
-                      {moodIcon ? <Ionicons name={moodIcon as any} size={15} color={C.gold} style={{ marginLeft: 6 }} /> : null}
-                    </Row>
-                    {e.excerpt ? <Highlighted text={snippet(e)} tokens={tokens} style={st.excerpt} lines={2} /> : null}
-                    <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>
-                      {e.wordCount} {e.wordCount === 1 ? 'word' : 'words'}{e.tags.length ? ', ' + e.tags.map((t) => '#' + t).join(' ') : ''}
-                    </Text>
-                  </View>
-                </Row>
-              </Card>
-            </Enter>
+            <ListSlice first={index === 0} last={index === section.data.length - 1} enter={firstPaint.current}>
+              <ListRow onPress={() => open(e.dateKey, e.id)} onLongPress={() => { tick(); setMenu(e); }} style={st.entry}>
+                <View style={[st.dayWell, well]}>
+                  <Text style={st.dayName}>{d.toLocaleDateString('en-IN', { weekday: 'short' })}</Text>
+                  <Text style={st.dayNum}>{d.getDate()}</Text>
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Row>
+                    <Highlighted text={e.title || e.excerpt.split(/[.!?\n]/)[0] || 'Untitled'} tokens={tokens} style={[T.title, { flex: 1 }]} lines={1} />
+                    {e.pinned ? <Ionicons name="pin" size={14} color={C.gold} style={{ marginLeft: 6 }} /> : null}
+                    {moodIcon ? <Ionicons name={moodIcon as any} size={15} color={C.gold} style={{ marginLeft: 6 }} /> : null}
+                  </Row>
+                  {e.excerpt ? <Highlighted text={snippet(e)} tokens={tokens} style={st.excerpt} lines={2} /> : null}
+                  <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>
+                    {e.wordCount} {e.wordCount === 1 ? 'word' : 'words'}{e.tags.length ? ', ' + e.tags.map((t) => '#' + t).join(' ') : ''}
+                  </Text>
+                </View>
+              </ListRow>
+            </ListSlice>
           );
         }}
       />
@@ -367,9 +370,11 @@ function EmptyState({ icon, title, action, onAction }: { icon: string; title: st
 
 const st = StyleSheet.create({
   link: { color: C.accent, fontFamily: F.semi, fontSize: 13, marginLeft: 12 },
+  // a sticky month spans the whole width, so the card's side shadows pass under it instead of beside it
   section: {
-    ...T.kicker, backgroundColor: C.bg, paddingTop: 14, paddingBottom: 8,
+    ...T.kicker, marginHorizontal: -S.pad, paddingHorizontal: S.pad, paddingTop: 14, paddingBottom: 8,
   },
+  entry: { alignItems: 'flex-start', paddingVertical: 14 },
   dayWell: { width: 46, paddingVertical: 7, borderRadius: 14, alignItems: 'center' },
   dayName: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: 0.6 },
   dayNum: { color: C.text, fontFamily: F.bold, fontSize: 18, fontVariant: ['tabular-nums'], marginTop: 1 },

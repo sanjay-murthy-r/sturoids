@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Text, ScrollView, StyleSheet, FlatList } from 'react-native';
+import { Alert, Text, ScrollView, StyleSheet, FlatList, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useToolNav } from '../toolNav';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, neuRaised } from '../theme';
 import { useStore, Note } from '../store';
-import { ScreenBG, GlassCard, Field, EmptyState, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
-import { Bouncy, Enter } from '../components/Motion';
+import { ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
+import { Bouncy } from '../components/Motion';
 import { tap } from '../haptics';
 import { deleteAttachmentFiles } from '../attachments';
 import { PinSheet } from '../components/LockGate';
@@ -55,7 +55,7 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
   }, [notes, q, folder]);
 
-  // rows present on the first paint play the entrance; rows that mount later (scrolling, searching) appear at once
+  // the first screenful rises as one card; rows that mount later (scrolling, searching) appear at once
   const firstPaint = React.useRef(true);
   React.useEffect(() => { firstPaint.current = false; }, []);
 
@@ -70,28 +70,23 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <FlatList
         data={filtered}
         keyExtractor={(n) => n.id}
-        renderItem={({ item: n, index: i }) => {
-          const card = (
-            <GlassCard pad={16} onPress={() => nav.openNote(n.id)} onLongPress={() => { tap(); setMenuNote(n); }}>
-              <Row style={{ justifyContent: 'space-between' }}>
-                <Text style={{ color: C.text, fontSize: 16, fontFamily: F.semi, flex: 1 }} numberOfLines={1}>
-                  {n.title || 'Untitled'}
+        renderItem={({ item: n, index: i }) => (
+          <ListSlice first={i === 0} last={i === filtered.length - 1} enter={firstPaint.current}>
+            <ListRow onPress={() => nav.openNote(n.id)} onLongPress={() => { tap(); setMenuNote(n); }} style={st.note}>
+              <View style={{ flex: 1 }}>
+                <Row>
+                  <Text style={st.noteTitle} numberOfLines={1}>{n.title || 'Untitled'}</Text>
+                  {n.pinned && <Ionicons name="pin" size={14} color={C.amber} style={{ marginLeft: 6 }} />}
+                  {n.locked && <Ionicons name="lock-closed" size={13} color={C.textFaint} style={{ marginLeft: 6 }} />}
+                </Row>
+                {!!n.body && !n.locked && <Text style={st.noteBody} numberOfLines={2}>{n.body}</Text>}
+                <Text style={st.noteMeta} numberOfLines={1}>
+                  {n.folder}{n.subject ? ` · ${n.subject}` : ''} · {new Date(n.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
                 </Text>
-                {n.pinned && <Ionicons name="pin" size={15} color={C.amber} />}
-                {n.locked && <Ionicons name="lock-closed" size={14} color={C.textFaint} style={{ marginLeft: 6 }} />}
-              </Row>
-              {!!n.body && !n.locked && (
-                <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginTop: 4, lineHeight: 18 }} numberOfLines={2}>
-                  {n.body}
-                </Text>
-              )}
-              <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 11, marginTop: 6 }}>
-                {n.folder}{n.subject ? ` · ${n.subject}` : ''} · {new Date(n.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-              </Text>
-            </GlassCard>
-          );
-          return i < 10 && firstPaint.current ? <Enter index={Math.min(i, 8)}>{card}</Enter> : card;
-        }}
+              </View>
+            </ListRow>
+          </ListSlice>
+        )}
         contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 110 + (mode === 'tab' ? 0 : insets.bottom) }}
         keyboardShouldPersistTaps="handled"
         initialNumToRender={10}
@@ -190,4 +185,8 @@ const st = StyleSheet.create({
     position: 'absolute', right: 20, bottom: 24, width: 56, height: 56, borderRadius: 28,
     alignItems: 'center', justifyContent: 'center',
   },
+  note: { alignItems: 'flex-start', paddingVertical: 14 },
+  noteTitle: { flex: 1, color: C.text, fontFamily: F.semi, fontSize: 16 },
+  noteBody: { color: C.textDim, fontFamily: F.reg, fontSize: 13, lineHeight: 18, marginTop: 4 },
+  noteMeta: { color: C.textFaint, fontFamily: F.reg, fontSize: 11, marginTop: 6 },
 });

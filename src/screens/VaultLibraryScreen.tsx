@@ -8,7 +8,8 @@ import { C, F, S, T, NEU } from '../theme';
 import { useStore, VaultVideo, VaultFolder } from '../store';
 import { parseYouTubeId, fmtMediaTime } from '../utils';
 import {
-  ScreenBG, Card, Field, EmptyState, Row, Chip, Sheet, PillButton, IconBtn, NeuHeader, NeuIconBtn, DotMenu,
+  ScreenBG, Card, Field, EmptyState, ListCard, ListRow, ListSlice, Row, Chip, Sheet, PillButton, IconBtn, NeuHeader,
+  NeuIconBtn, DotMenu,
 } from '../components/UI';
 import { toast } from '../components/Toast';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -164,23 +165,19 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const openAt = (videoDbId: string, time: number) =>
     nav.openVideo(videoDbId, time);
 
-  const videoRow = (v: VaultVideo, i: number, showFolder = false) => (
-    <Enter key={v.id} index={Math.min(i, 8)}>
-      <Card pad={12} onPress={() => nav.openVideo(v.id)}>
-        <Row>
-          <Thumb videoId={v.videoId} />
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={[T.body, { fontFamily: F.semi, fontSize: 14, lineHeight: 19 }]} numberOfLines={2}>{v.title}</Text>
-            <Text style={[T.caption, { marginTop: 3 }]} numberOfLines={1}>
-              {showFolder && v.folderId ? (folders.find((f) => f.id === v.folderId)?.name || '') + ' · ' : ''}
-              {v.notes.length} notes · {v.bookmarks.length} marks
-              {v.tags.length ? ' · ' + v.tags.map((t) => '#' + t).join(' ') : ''}
-            </Text>
-          </View>
-          <IconBtn name="ellipsis-vertical" size={17} onPress={() => setVideoMenu(v)} />
-        </Row>
-      </Card>
-    </Enter>
+  const videoRow = (v: VaultVideo, showFolder = false) => (
+    <ListRow key={v.id} onPress={() => nav.openVideo(v.id)} onLongPress={() => setVideoMenu(v)} style={{ paddingVertical: 10 }}>
+      <Thumb videoId={v.videoId} />
+      <View style={{ flex: 1, marginLeft: 12 }}>
+        <Text style={[T.body, { fontFamily: F.semi, fontSize: 14, lineHeight: 19 }]} numberOfLines={2}>{v.title}</Text>
+        <Text style={[T.caption, { marginTop: 3 }]} numberOfLines={1}>
+          {showFolder && v.folderId ? (folders.find((f) => f.id === v.folderId)?.name || '') + ' · ' : ''}
+          {v.notes.length} {v.notes.length === 1 ? 'note' : 'notes'} · {v.bookmarks.length} {v.bookmarks.length === 1 ? 'mark' : 'marks'}
+          {v.tags.length ? ' · ' + v.tags.map((t) => '#' + t).join(' ') : ''}
+        </Text>
+      </View>
+      <IconBtn name="ellipsis-vertical" size={17} onPress={() => setVideoMenu(v)} />
+    </ListRow>
   );
 
   const pageW = width;
@@ -242,23 +239,29 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
               <Chip small icon="add" label="Folder" onPress={() => { setFolderName(''); setFolderSheet({ mode: 'new' }); }} />
             </Row>
 
-            {subFolders.map((f, i) => {
-              const count = videos.filter((v) => v.folderId === f.id).length + folders.filter((x) => x.parentId === f.id).length;
-              return (
-                <Enter key={f.id} index={i}>
-                  <Card pad={14} onPress={() => setCwd(f.id)} onLongPress={() => setFolderMenu(f)}>
-                    <Row>
-                      <Ionicons name="folder" size={22} color={C.amber} />
-                      <Text style={[T.title, { flex: 1, marginLeft: 12, fontSize: 15 }]} numberOfLines={1}>{f.name}</Text>
-                      <Text style={T.caption}>{count}</Text>
-                      <IconBtn name="ellipsis-vertical" size={16} onPress={() => setFolderMenu(f)} />
-                    </Row>
-                  </Card>
-                </Enter>
-              );
-            })}
+            {subFolders.length > 0 && (
+              <Enter index={0}>
+                <ListCard>
+                  {subFolders.map((f) => {
+                    const count = videos.filter((v) => v.folderId === f.id).length + folders.filter((x) => x.parentId === f.id).length;
+                    return (
+                      <ListRow key={f.id} onPress={() => setCwd(f.id)} onLongPress={() => setFolderMenu(f)} style={{ paddingVertical: 10 }}>
+                        <Ionicons name="folder" size={22} color={C.amber} />
+                        <Text style={[T.title, { flex: 1, marginLeft: 12, fontSize: 15 }]} numberOfLines={1}>{f.name}</Text>
+                        <Text style={T.caption}>{count}</Text>
+                        <IconBtn name="ellipsis-vertical" size={16} onPress={() => setFolderMenu(f)} />
+                      </ListRow>
+                    );
+                  })}
+                </ListCard>
+              </Enter>
+            )}
 
-            {hereVideos.map((v, i) => videoRow(v, subFolders.length + i))}
+            {hereVideos.length > 0 && (
+              <Enter index={1}>
+                <ListCard>{hereVideos.map((v) => videoRow(v))}</ListCard>
+              </Enter>
+            )}
             {subFolders.length === 0 && hereVideos.length === 0 && (
               <EmptyState
                 icon={cwd ? 'folder-open-outline' : 'play-circle-outline'}
@@ -275,7 +278,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
             keyExtractor={(v) => v.id}
             initialNumToRender={8}
             windowSize={7}
-            renderItem={({ item, index }) => videoRow(item, index, true)}
+            renderItem={({ item, index }) => (
+              <ListSlice first={index === 0} last={index === recentVideos.length - 1}>{videoRow(item, true)}</ListSlice>
+            )}
             ListEmptyComponent={<EmptyState icon="time-outline" title="Nothing added yet" body="Recently added videos land here, newest first." />}
           />
 
@@ -286,28 +291,25 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
             keyExtractor={(x) => (x.isBookmark ? 'b' : 'n') + x.item.id}
             initialNumToRender={10}
             windowSize={7}
-            renderItem={({ item: x, index: i }) => {
-              const card = (
-                <Card pad={13} onPress={() => openAt(x.video.id, x.item.time)}>
-                  <Row>
-                    <View style={[st.timePill, { borderColor: (x.isBookmark ? C.pink : C.green) + '66', backgroundColor: (x.isBookmark ? C.pink : C.green) + '14' }]}>
-                      <Ionicons name={x.isBookmark ? 'bookmark' : 'create-outline'} size={11} color={x.isBookmark ? C.pink : C.green} />
-                      <Text style={{ color: x.isBookmark ? C.pink : C.green, fontSize: 11, fontFamily: F.semi, marginLeft: 4, fontVariant: ['tabular-nums'] }}>
-                        {fmtMediaTime(x.item.time)}
-                      </Text>
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={[T.body, { fontSize: 14 }]} numberOfLines={2}>
-                        {x.isBookmark ? x.item.label : x.item.text}
-                      </Text>
-                      <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{x.video.title}</Text>
-                    </View>
-                    <IconBtn name="ellipsis-vertical" size={17} onPress={() => setNoteMenu(x)} />
-                  </Row>
-                </Card>
-              );
-              return i < 8 ? <Enter index={i}>{card}</Enter> : card;
-            }}
+            renderItem={({ item: x, index: i }) => (
+              <ListSlice first={i === 0} last={i === allNotes.length - 1}>
+                <ListRow onPress={() => openAt(x.video.id, x.item.time)} onLongPress={() => setNoteMenu(x)} style={{ paddingVertical: 11 }}>
+                  <View style={[st.timePill, { borderColor: (x.isBookmark ? C.pink : C.green) + '66', backgroundColor: (x.isBookmark ? C.pink : C.green) + '14' }]}>
+                    <Ionicons name={x.isBookmark ? 'bookmark' : 'create-outline'} size={11} color={x.isBookmark ? C.pink : C.green} />
+                    <Text style={{ color: x.isBookmark ? C.pink : C.green, fontSize: 11, fontFamily: F.semi, marginLeft: 4, fontVariant: ['tabular-nums'] }}>
+                      {fmtMediaTime(x.item.time)}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={[T.body, { fontSize: 14 }]} numberOfLines={2}>
+                      {x.isBookmark ? x.item.label : x.item.text}
+                    </Text>
+                    <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{x.video.title}</Text>
+                  </View>
+                  <IconBtn name="ellipsis-vertical" size={17} onPress={() => setNoteMenu(x)} />
+                </ListRow>
+              </ListSlice>
+            )}
             ListEmptyComponent={
               <EmptyState icon="bookmark-outline" title="No notes or bookmarks yet" body="Timed notes and bookmarks from every video appear here. Tap one to jump to that moment." />
             }
@@ -356,10 +358,11 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
       <Sheet visible={!!moveSheet} onClose={() => setMoveSheet(null)} title="Move to folder">
         <Row style={{ flexWrap: 'wrap' }}>
-          <Chip label="⌂ No folder" color={C.pink} active={moveSheet?.folderId === null}
+          <Chip icon="home-outline" label="No folder" color={C.pink} active={moveSheet?.folderId === null}
             onPress={() => { if (moveSheet) updateVideo(moveSheet.id, { folderId: null }); setMoveSheet(null); }} />
           {folders.map((f) => (
-            <Chip key={f.id} label={f.parentId ? '· ' + f.name : f.name} color={C.pink} active={moveSheet?.folderId === f.id}
+            <Chip key={f.id} icon="folder-outline" color={C.pink} active={moveSheet?.folderId === f.id}
+              label={f.parentId ? (folders.find((p) => p.id === f.parentId)?.name || '') + ' / ' + f.name : f.name}
               onPress={() => { if (moveSheet) updateVideo(moveSheet.id, { folderId: f.id }); setMoveSheet(null); }} />
           ))}
         </Row>
