@@ -296,7 +296,10 @@ export function JournalGate({ header, guard, children }: {
   }, [locked, shown]);
 
   const ask = React.useCallback(async () => {
-    if (pass === false) {
+    // a tap can beat the keystore read, so settle it here too: a journal with no passcode must never be asked for one
+    const has = pass ?? await hasJournalPass();
+    if (pass === null) setPass(has);
+    if (!has) {
       // locked before passcodes: the phone's own lock still opens it
       const r = await unlockWithDevice('Unlock the journal');
       if (r === 'needs-pin') setSheet(true);

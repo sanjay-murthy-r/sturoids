@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Alert, Linking } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -110,15 +110,19 @@ export default function Settings() {
     setTimeout(rescheduleAllReminders, 200);
   };
 
-  const exportData = async (confirmed = false) => {
-    // a backup carries locked pages in full, so making one asks for the owner, like turning a lock off
+  // the journal's passcode, given for this one backup: it authorises the export without opening the journal
+  const journalExportOk = useRef(false);
+
+  const exportData = async () => {
+    // a backup carries locked pages in full, so it asks for everything that guards them: the owner for locked
+    // notes, the journal's own passcode for the journal. Each answer comes back here, past the checks it settled.
     const s = useStore.getState();
-    // a locked note answers to the device or the app PIN; a locked journal answers to its own passcode
-    const carriesNotes = s.notes.some((n) => n.locked);
-    if (!confirmed && (carriesNotes || s.settings.journalLocked)) {
-      const ok = carriesNotes ? await confirmOwner('export') : await confirmJournal('export');
-      if (!ok) return;
+    if (s.notes.some((n) => n.locked) && !(await confirmOwner('export'))) {
+      journalExportOk.current = false;
+      return;
     }
+    if (s.settings.journalLocked && !journalExportOk.current && !(await confirmJournal('export'))) return;
+    journalExportOk.current = false;
     try {
       const snap = exportSnapshot();
       // journal text lives in files, so the backup carries it inline
@@ -279,7 +283,8 @@ export default function Settings() {
     const step = passStep;
     setPassStep(null);
     if (!step) return;
-    markJournalUnlocked();
+    // the passcode speaks for this one step; only a step about the journal itself opens the journal
+    if (step.then !== 'export') markJournalUnlocked();
     if (step.mode === 'set') {
       setPassSet(true);
       if (step.then === 'journal-on') setSetting('journalLocked', true);
@@ -290,7 +295,10 @@ export default function Settings() {
       await removeJournalPass();
       setPassSet(false);
     } else if (step.then === 'change') setTimeout(() => setPassStep({ mode: 'set', then: 'change' }), 350);
-    else if (step.then === 'export') exportData(true);
+    else if (step.then === 'export') {
+      journalExportOk.current = true;
+      exportData();
+    }
   };
 
   const changePin = async () => {
@@ -325,7 +333,7 @@ export default function Settings() {
       else if (step.then === 'journal-pass') setTimeout(() => setPassStep({ mode: 'set', then: 'change' }), 350);
       else if (step.then === 'change') setTimeout(() => setPinStep({ mode: 'set', then: 'change' }), 350);
       else if (step.then === 'remove') { await removePin(); refreshLockInfo(); }
-      else if (step.then === 'export') exportData(true);
+      else if (step.then === 'export') exportData();
       return;
     }
     refreshLockInfo();

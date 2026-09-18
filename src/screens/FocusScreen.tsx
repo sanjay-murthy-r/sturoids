@@ -121,6 +121,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [ambient, setAmbient] = useState(false);
   const [review, setReview] = useState<{ items: Attached[]; choices: Record<string, ReviewChoice> } | null>(null);
   const endedRef = useRef(false);
+  // the wrap-up the completion pulse schedules, kept so ending by hand first can call it off
+  const wrapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // "until a time of day" countdown seeding
   const [untilSheet, setUntilSheet] = useState(false);
@@ -199,7 +201,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         withTiming(1, { duration: 380, easing: Easing.inOut(Easing.quad) }),
       );
       // not cleared with the effect: once the pulse has begun, the session must still wrap up
-      setTimeout(() => endSessionRef.current(), 650);
+      wrapTimer.current = setTimeout(() => { wrapTimer.current = null; endSessionRef.current(); }, 650);
     }, Math.max(0, left * 1000));
     return () => clearTimeout(t);
   }, [timerMode, running, startTs, accumSec, targetMin, level]);
@@ -303,6 +305,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, [finishAt]);
 
   function endSession() {
+    // one wrap-up per session: a countdown running out and a tap on End must never both build the review
+    if (wrapTimer.current) { clearTimeout(wrapTimer.current); wrapTimer.current = null; }
+    if (review) return;
     const reachedFinish = finishAt != null && Date.now() >= finishAt;
     clearFinishLine();
     let net = accumSec + (running && startTs ? (Date.now() - startTs) / 1000 : 0);

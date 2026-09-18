@@ -538,11 +538,16 @@ function QuickTile({ q, meta, index, rect, wide, rects, isDragging, onDragState,
   const dragStable = React.useCallback((id: string) => dragStateRef.current(id), []);
 
   React.useEffect(() => {
-    // a tile whose span changes grows or narrows on its way; while dragging, the finger owns the position
-    w.value = level === 'none' ? rect.w : withSpring(rect.w, RISE_OUT);
+    // while dragging, the finger owns the tile: its place and its width both hold still until it lands, so a tile
+    // that is about to change span never grows under the finger
     if (isDragging) return;
-    if (level === 'none') { x.value = rect.x; y.value = rect.y; }
-    else { x.value = withSpring(rect.x, RISE_OUT); y.value = withSpring(rect.y, RISE_OUT); }
+    if (level === 'none') {
+      x.value = rect.x; y.value = rect.y; w.value = rect.w;
+    } else {
+      x.value = withSpring(rect.x, RISE_OUT);
+      y.value = withSpring(rect.y, RISE_OUT);
+      w.value = withSpring(rect.w, RISE_OUT);
+    }
   }, [rect.x, rect.y, rect.w, isDragging, level]);
 
   // 420ms: long enough that a lingering tap never rearranges by accident,

@@ -56,13 +56,18 @@ export function Wheel({
   const settled = React.useRef(index);
   const wrap = React.useCallback((k: number) => (loop ? mod(k, count) : Math.min(count - 1, Math.max(0, k))), [loop, count]);
 
+  // the screen behind re-renders on its own (a clock, a store change), so its callbacks go through refs: the
+  // gesture is never rebuilt, and a drag under way is never handed a new recogniser
+  const changeRef = React.useRef(onChange); changeRef.current = onChange;
+  const centerRef = React.useRef(onPressCenter); centerRef.current = onPressCenter;
+
   const commit = React.useCallback((k: number) => {
     const i = loop ? mod(k, count) : Math.min(count - 1, Math.max(0, k));
     if (i === settled.current) return;
     settled.current = i;
-    onChange(i);
-  }, [loop, count, onChange]);
-  const pressCenter = React.useCallback(() => { onPressCenter?.(); }, [onPressCenter]);
+    changeRef.current(i);
+  }, [loop, count]);
+  const pressCenter = React.useCallback(() => { centerRef.current?.(); }, []);
 
   // a value set from outside (today, a new custom length) glides there the short way round
   React.useEffect(() => {
