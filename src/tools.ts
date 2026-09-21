@@ -68,6 +68,24 @@ export function normaliseSlots(slots: unknown): ToolKey[] {
   return out;
 }
 
+/** Tools archived on a fresh install: kept out of sight until the user restores them. */
+export const DEFAULT_ARCHIVED: ToolKey[] = ['desmos', 'ai'];
+
+/**
+ * The archived tools that can really be archived: known, not repeated, and never one in a tab slot (the slot wins),
+ * so a tool can never be both on the bar and hidden.
+ */
+export function normaliseArchived(archived: unknown, slots: ToolKey[]): ToolKey[] {
+  const out: ToolKey[] = [];
+  if (!Array.isArray(archived)) return out;
+  for (const k of archived) {
+    if (typeof k === 'string' && TOOL_KEYS.includes(k as ToolKey) && !slots.includes(k as ToolKey) && !out.includes(k as ToolKey)) {
+      out.push(k as ToolKey);
+    }
+  }
+  return out;
+}
+
 /** Old route targets, as persisted by quick access before v5. */
 export const ROUTE_TO_TOOL: Record<string, ToolKey> = {
   '/tasks': 'tasks', '/focus': 'focus', '/planner': 'planner', '/notes': 'notes',

@@ -85,8 +85,55 @@ const scenarios = {
     const s = app.state();
     assert.deepEqual(s.settings.tabSlots, ['tasks', 'focus', 'planner']);
     assert.equal(s.notes.length, 0);
+    assert.deepEqual(s.scores, []);
+    assert.deepEqual(s.settings.archivedTools, ['desmos', 'ai'], 'Desmos and AI start archived');
+    assert.equal(s.settings.journalCheckout, true);
     assert.equal(app.store.loadFailedThisLaunch(), false);
     assert.deepEqual(app.notices, []);
+  },
+
+  async 'a tool in a tab slot is never archived'() {
+    const saved = { ...V4, settings: { ...V4.settings, tabSlots: ['desmos', 'focus', 'planner'] } };
+    const app = boot({ [KEY]: JSON.stringify({ state: saved, version: 5 }) });
+    await settled(app);
+    const st = app.state;
+    assert.deepEqual(st().settings.archivedTools, ['ai'], 'a slotted Desmos stays out of the archive');
+    assert.equal(st().setToolArchived('focus', true), false, 'a slotted tool refuses');
+    assert.equal(st().setToolArchived('notes', true), true);
+    assert.deepEqual(st().settings.archivedTools, ['ai', 'notes']);
+    st().setTabSlots(['notes', 'focus', 'planner']);
+    assert.deepEqual(st().settings.archivedTools, ['ai'], 'slotting a tool restores it');
+    st().setTabSlots(['tasks', 'notes', 'planner']);
+    st().setDeepWork({ mode: 'countdown', targetMin: 25, running: true, startTs: 1, accumSec: 0, startedAt: 1, subject: '', attached: [], finishAt: null });
+    assert.equal(st().setToolArchived('focus', false), true);
+    assert.equal(st().setToolArchived('focus', true), false, 'never while a session is going');
+    st().setDeepWork(null);
+    assert.equal(st().setToolArchived('focus', true), true);
+    assert.equal(st().setToolArchived('focus', false), true);
+    assert.deepEqual(st().settings.archivedTools, ['ai']);
+  },
+
+  async 'tasks added return their ids, and score nodes keep no empty fields'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    const d = st().addDaily('Read');
+    const m = st().addMission('Mock', '2026-10-01');
+    assert.equal(st().dailyTasks[0].id, d);
+    assert.equal(st().missions[0].id, m);
+    const g = st().addScoreNode({ parentId: null, kind: 'group', title: 'Mocks' });
+    const e = st().addScoreNode({ parentId: g, kind: 'exam', title: 'Mock 1', score: 50, outOf: 100, note: undefined });
+    assert.ok(!('note' in st().scores.find((x) => x.id === e)), 'undefined is never stored');
+    st().patchScoreNode(e, { score: undefined });
+    assert.ok(!('score' in st().scores.find((x) => x.id === e)), 'clearing a mark removes it');
+    assert.equal(st().moveScoreNode(g, e), false, 'a group never moves into an exam');
+    const copy = st().duplicateScoreNode(e);
+    assert.equal(st().scores.find((x) => x.id === copy).title, 'Mock 2');
+    const removed = st().removeScoreNode(g);
+    assert.equal(removed.length, 3, 'the group and both exams');
+    assert.deepEqual(st().scores, []);
+    st().restoreScoreNodes(removed);
+    assert.equal(st().scores.length, 3, 'Undo puts them all back');
   },
 
   async 'a v4 blob upgrades through the real persist migration'() {
@@ -103,6 +150,8 @@ const scenarios = {
     assert.deepEqual(s.notes[0].attachments, []);
     assert.equal(s.deepWork, null);
     assert.deepEqual(s.journal, []);
+    assert.deepEqual(s.scores, []);
+    assert.deepEqual(s.settings.archivedTools, ['desmos', 'ai'], 'an upgrade takes the archive default');
     assert.equal(s.settings.name, 'Sam');
     await sleep(10);
     app.store.flushSaves(); // saves wait for a pause; the test does not
@@ -118,10 +167,24 @@ const scenarios = {
       dailyTasks: 'oops', missions: [null, { id: 'm', title: 'x', subtasks: 'bad' }], habits: [null, { id: 'h', doneDates: 'bad' }],
       planner: 'nope', weekTemplates: { broken: 'x', good: { Mon: [null, { id: 'b', color: '#8FB6E8' }] } },
       noteFolders: [1, 'General'], vaultVideos: [{ id: 'v', notes: null }], journalTags: ['a', 2],
-      journal: [{ id: 'j', dateKey: '2026-09-01', body: 'hello there' }, { dateKey: 'no id' }],
+      journal: [
+        { id: 'j', dateKey: '2026-09-01', body: 'hello there' }, { dateKey: 'no id' },
+        { id: 'j2', dateKey: '2026-09-02', mood: 9, rating: 4, checkoutSkipped: 'yes' },
+      ],
       quickAccess: [{ target: '/tasks', kind: 'route' }],
+      scores: [null, { id: 'g', kind: 'group', title: 'G', parentId: 'e' }, { id: 'e', kind: 'exam', title: 'E', parentId: 'g', score: 'x', outOf: 100 }],
+      settings: { tabSlots: ['ai', 'bogus'], archivedTools: ['ai', 'nope', 'vault', 'vault'] },
     };
     const once = migrateV5(junk);
+    const j2 = once.journal.find((e) => e.id === 'j2');
+    assert.ok(!('mood' in j2), 'a mood out of range is dropped');
+    assert.equal(j2.rating, 4);
+    assert.ok(!('checkoutSkipped' in j2), 'only true counts');
+    assert.equal(once.scores.length, 2);
+    assert.equal(once.scores.find((n) => n.id === 'g').parentId, null, 'a group never sits inside an exam');
+    assert.ok(!('score' in once.scores.find((n) => n.id === 'e')));
+    assert.deepEqual(once.settings.tabSlots, ['ai', 'tasks', 'focus']);
+    assert.deepEqual(once.settings.archivedTools, ['vault'], 'slotted, unknown and repeated tools leave the archive');
     assert.deepEqual(once.dailyTasks, []);
     assert.deepEqual(once.missions, [{ id: 'm', title: 'x', subtasks: [] }]);
     assert.deepEqual(once.habits, [{ id: 'h', doneDates: [] }]);
@@ -131,7 +194,7 @@ const scenarios = {
     assert.deepEqual(once.noteFolders, ['General']);
     assert.deepEqual(once.vaultVideos[0].notes, []);
     assert.deepEqual(once.journalTags, ['a']);
-    assert.equal(once.journal.length, 1);
+    assert.equal(once.journal.length, 2, 'the entry without an id is dropped');
     assert.equal(once.journal[0].body, undefined, 'text never kept inline');
     assert.deepEqual(migrateV5(once), once, 'a second pass changes nothing');
     const v4once = migrateV5(V4);
@@ -141,14 +204,18 @@ const scenarios = {
   async 'a backup round-trips and junk is refused'() {
     const app = boot({ [KEY]: JSON.stringify({ state: V4, version: 4 }) });
     await settled(app);
+    const g = app.state().addScoreNode({ parentId: null, kind: 'group', title: 'Mocks', target: 75 });
+    app.state().addScoreNode({ parentId: g, kind: 'exam', title: 'Mock 1', date: '2026-09-01', score: -4, outOf: 100 });
+    app.state().setToolArchived('vault', true);
     const snap = JSON.parse(JSON.stringify(app.store.exportSnapshot()));
+    assert.equal(snap.scores.length, 2, 'scores ride along in a backup');
     app.state().setSetting('name', 'Changed');
     assert.equal(app.store.importSnapshot('not json'), false);
     assert.equal(app.store.importSnapshot('{"hello":1}'), false);
     assert.equal(app.state().settings.name, 'Changed', 'refused imports change nothing');
     assert.equal(app.store.importSnapshot(JSON.stringify(snap)), true);
     const s = app.state();
-    for (const k of ['settings', 'notes', 'planner', 'quickAccess', 'dailyTasks', 'habits', 'journal', 'calcHistory']) {
+    for (const k of ['settings', 'notes', 'planner', 'quickAccess', 'dailyTasks', 'habits', 'journal', 'calcHistory', 'scores']) {
       assert.deepEqual(s[k], snap[k], k + ' restored');
     }
     assert.equal(s.deepWork, null);

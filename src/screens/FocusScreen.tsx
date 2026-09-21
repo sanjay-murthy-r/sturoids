@@ -697,12 +697,12 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 const st = StyleSheet.create({
   h1: { ...(T.display as object), marginBottom: 6 } as any,
-  time: { ...T.mono48, letterSpacing: 0 },
+  time: { ...T.numHero, letterSpacing: 0 },
   clockSlot: { height: CLOCK_SLOT_H, alignItems: 'center', justifyContent: 'center' },
   clockRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   digit: { position: 'absolute', left: 0, right: 0, textAlign: 'center' },
   wheelBox: { alignSelf: 'stretch' },
-  wheelText: { color: C.text, fontFamily: F.mono, fontSize: 52, lineHeight: 64 },
+  wheelText: { ...T.numWheel },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 10, flex: 1 },
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   sheetSection: { color: C.textFaint, fontSize: 12, fontFamily: F.semi, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10, marginBottom: 6 },

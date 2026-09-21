@@ -60,7 +60,10 @@ export interface EntryDraft {
   dateKey: string;
   title: string;
   body: string;
+  /** mood, rating and skipped: a draft that carries the key decides, even when it clears the value */
   mood?: JournalEntry['mood'];
+  rating?: JournalEntry['rating'];
+  checkoutSkipped?: boolean;
   tags?: string[];
   pinned?: boolean;
   promptId?: string;
@@ -71,25 +74,34 @@ export interface EntryDraft {
  * was not written. Creates the entry when `id` is new. Returns the id.
  */
 export async function saveEntry(d: EntryDraft): Promise<string> {
-  const { journal, upsertJournalEntry } = useStore.getState();
-  const existing = d.id ? journal.find((e) => e.id === d.id) : undefined;
   const id = d.id || uid();
   await writeBody(id, d.body);
+  // read after the write, so a pin or a change of day made while the file was being written is kept
+  const { journal, upsertJournalEntry } = useStore.getState();
+  const existing = d.id ? journal.find((e) => e.id === d.id) : undefined;
+  const carries = (k: keyof EntryDraft) => Object.prototype.hasOwnProperty.call(d, k);
   const now = Date.now();
-  upsertJournalEntry({
+  const entry: JournalEntry = {
     id,
     // an entry that already exists keeps the store's day, so a move made in the archive is never written back
     dateKey: existing?.dateKey ?? d.dateKey,
     title: d.title.trim(),
     excerpt: excerptOf(d.body),
     wordCount: countWords(d.body),
-    mood: d.mood ?? existing?.mood,
     tags: d.tags ?? existing?.tags ?? [],
     pinned: d.pinned ?? existing?.pinned ?? false,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
-    promptId: d.promptId ?? existing?.promptId,
-  });
+  };
+  const mood = carries('mood') ? d.mood : existing?.mood;
+  const rating = carries('rating') ? d.rating : existing?.rating;
+  const skipped = carries('checkoutSkipped') ? d.checkoutSkipped : existing?.checkoutSkipped;
+  const promptId = d.promptId ?? existing?.promptId;
+  if (mood) entry.mood = mood;
+  if (rating) entry.rating = rating;
+  if (skipped) entry.checkoutSkipped = true;
+  if (promptId) entry.promptId = promptId;
+  upsertJournalEntry(entry);
   return id;
 }
 

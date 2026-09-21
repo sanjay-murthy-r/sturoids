@@ -4,7 +4,8 @@ import { create } from 'zustand';
 import { persist, createJSONStorage, PersistStorage, StorageValue } from 'zustand/middleware';
 import { uid, todayKey, DayName, DAY_NAMES } from './utils';
 import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
-import { ToolKey, DEFAULT_SLOTS, ROUTE_TO_TOOL, TOOLS, normaliseSlots, toolByKey } from './tools';
+import { ToolKey, DEFAULT_SLOTS, DEFAULT_ARCHIVED, ROUTE_TO_TOOL, TOOLS, normaliseSlots, normaliseArchived, toolByKey } from './tools';
+import { ScoreNode, sanitizeScores, indexScores, descendantIds, canMove, duplicateStructure } from './scores';
 
 // ---------- types ----------
 
@@ -66,6 +67,10 @@ export interface JournalEntry {
   /** the first ~200 characters, for lists; the full text lives in a file (src/journal.ts) */
   excerpt: string;
   mood?: 1 | 2 | 3 | 4 | 5;
+  /** how the day went, in stars */
+  rating?: 1 | 2 | 3 | 4 | 5;
+  /** the after-writing check-out was skipped for this entry, so it never asks again */
+  checkoutSkipped?: boolean;
   tags: string[];
   wordCount: number;
   pinned: boolean;
@@ -106,12 +111,23 @@ export interface Settings {
   journalWordGoal: number;
   /** 'HH:MM' daily journal nudge, '' = off */
   journalReminderTime: string;
+  /** after writing, a quiet card asks for a mood and a rating */
+  journalCheckout: boolean;
+  /** tools kept out of sight (never one in a tab slot) */
+  archivedTools: ToolKey[];
 }
 
 export type PlannerWeek = Record<DayName, PlannerBlock[]>;
 
 const emptyWeek = (): PlannerWeek =>
   Object.fromEntries(DAY_NAMES.map((d) => [d, []])) as PlannerWeek;
+
+/** A copy without the keys that hold undefined, so a cleared field is removed instead of kept empty. */
+function withoutUndefined<T extends object>(o: T): T {
+  const out: any = {};
+  for (const k of Object.keys(o)) if ((o as any)[k] !== undefined) out[k] = (o as any)[k];
+  return out;
+}
 
 const DEFAULT_AI_LINKS: AiLink[] = [
   { id: 'claude', label: 'Claude', url: 'https://claude.ai' },
@@ -161,12 +177,14 @@ export const DEFAULT_SETTINGS: Settings = {
   journalPromptsOn: true,
   journalWordGoal: 0,
   journalReminderTime: '',
+  journalCheckout: true,
+  archivedTools: [...DEFAULT_ARCHIVED],
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
 export function initialData() {
   return {
-    settings: { ...DEFAULT_SETTINGS, tabSlots: [...DEFAULT_SLOTS] },
+    settings: { ...DEFAULT_SETTINGS, tabSlots: [...DEFAULT_SLOTS], archivedTools: [...DEFAULT_ARCHIVED] },
     aiLinks: DEFAULT_AI_LINKS,
     quickAccess: DEFAULT_QUICK,
     todoReminders: [] as TodoReminder[],
@@ -185,6 +203,7 @@ export function initialData() {
     deepWork: null as ActiveSession | null,
     journal: [] as JournalEntry[],
     journalTags: [] as string[],
+    scores: [] as ScoreNode[],
   };
 }
 type DataKey = keyof ReturnType<typeof initialData>;
@@ -210,21 +229,26 @@ export interface AppState {
   deepWork: ActiveSession | null;
   journal: JournalEntry[];
   journalTags: string[];
+  scores: ScoreNode[];
 
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
+  /** puts tools in the three slots; a tool placed in a slot is restored if it was archived */
+  setTabSlots: (slots: ToolKey[]) => void;
+  /** false when the tool cannot be archived: it is in a tab slot, or it is Deep Work with a session going */
+  setToolArchived: (key: ToolKey, archived: boolean) => boolean;
   setAiLinks: (links: AiLink[]) => void;
   setQuickAccess: (items: QuickItem[]) => void;
   addTodoReminder: (time: string, label: string) => void;
   removeTodoReminder: (id: string) => void;
 
-  addDaily: (title: string) => void;
+  addDaily: (title: string) => string;
   toggleDaily: (id: string) => void;
   removeDaily: (id: string) => void;
   /** puts a removed task back at its old place in the list (an undo) */
   restoreDaily: (task: DailyTask, index: number) => void;
   setLastTriage: (dateKey: string) => void;
 
-  addMission: (title: string, deadline: string) => void;
+  addMission: (title: string, deadline: string) => string;
   toggleMission: (id: string) => void;
   removeMission: (id: string) => void;
   addSubtask: (missionId: string, title: string) => void;
@@ -279,6 +303,17 @@ export interface AppState {
   patchJournalEntry: (id: string, patch: Partial<JournalEntry>) => void;
   removeJournalEntry: (id: string) => void;
   setJournalTags: (tags: string[]) => void;
+
+  addScoreNode: (n: Omit<ScoreNode, 'id' | 'createdAt' | 'updatedAt'>) => string;
+  /** a field set to undefined in the patch is removed */
+  patchScoreNode: (id: string, patch: Partial<Omit<ScoreNode, 'id' | 'createdAt'>>) => void;
+  /** false when the move is not allowed (a group into an exam, or anything into itself) */
+  moveScoreNode: (id: string, parentId: string | null) => boolean;
+  /** removes the node and everything under it, and returns them so an Undo can put them back */
+  removeScoreNode: (id: string) => ScoreNode[];
+  restoreScoreNodes: (nodes: ScoreNode[]) => void;
+  /** a copy of the node's structure without marks; returns the copy's id */
+  duplicateScoreNode: (id: string) => string | null;
 
   pushCalc: (expr: string, result: string) => void;
   clearCalcHistory: () => void;
@@ -431,11 +466,14 @@ export function migrateV5(p: any): any {
     out.noteFolders = Array.isArray(out.noteFolders) ? out.noteFolders.filter((x: any) => typeof x === 'string') : fresh.noteFolders;
   }
   const s = { ...(p?.settings || {}) };
+  const tabSlots = normaliseSlots(s.tabSlots);
   out.settings = {
     ...DEFAULT_SETTINGS,
     ...s,
     accent: s.accent || DEFAULT_ACCENT,
-    tabSlots: normaliseSlots(s.tabSlots),
+    tabSlots,
+    // a backup from before archiving takes the default; a tool in a slot is never archived
+    archivedTools: normaliseArchived(s.archivedTools ?? DEFAULT_ARCHIVED, tabSlots),
     // an upgrading user with data is "returning", never "first launch"
     firstOpenedAt: s.firstOpenedAt ?? (hasAnyUserData(p) ? earliestActivity(p) : undefined),
   };
@@ -454,17 +492,26 @@ export function migrateV5(p: any): any {
   out.deepWork = p?.deepWork ?? null;
   // entry text lives in files. No saved store ever held it inline; a backup's inline text is written back by
   // restoreBodies right after an import, so only the index is built here
+  const scale = (v: any) => Number.isInteger(v) && v >= 1 && v <= 5;
   out.journal = (Array.isArray(p?.journal) ? p.journal : [])
     .filter((e: any) => e && typeof e === 'object' && typeof e.id === 'string' && typeof e.dateKey === 'string')
-    .map(({ body, ...e }: any) => ({
-      ...e,
-      title: typeof e.title === 'string' ? e.title : '',
-      excerpt: typeof e.excerpt === 'string' ? e.excerpt : String(body || '').slice(0, 200),
-      tags: Array.isArray(e.tags) ? e.tags.filter((t: any) => typeof t === 'string') : [],
-      wordCount: Number(e.wordCount) || 0,
-      pinned: !!e.pinned,
-    }));
+    .map(({ body, mood, rating, checkoutSkipped, ...e }: any) => {
+      const entry: any = {
+        ...e,
+        title: typeof e.title === 'string' ? e.title : '',
+        excerpt: typeof e.excerpt === 'string' ? e.excerpt : String(body || '').slice(0, 200),
+        tags: Array.isArray(e.tags) ? e.tags.filter((t: any) => typeof t === 'string') : [],
+        wordCount: Number(e.wordCount) || 0,
+        pinned: !!e.pinned,
+      };
+      // a mood or rating out of range is dropped, never kept as a key holding nothing
+      if (scale(mood)) entry.mood = mood;
+      if (scale(rating)) entry.rating = rating;
+      if (checkoutSkipped === true) entry.checkoutSkipped = true;
+      return entry;
+    });
   out.journalTags = list(p?.journalTags).filter((t) => typeof t === 'string');
+  out.scores = sanitizeScores(p?.scores);
   return out;
 }
 
@@ -542,6 +589,25 @@ export const useStore = create<AppState>()(
 
       setSetting: (key, value) =>
         set((s) => ({ settings: { ...s.settings, [key]: value } })),
+      setTabSlots: (slots) =>
+        set((s) => {
+          const tabSlots = normaliseSlots(slots);
+          return { settings: { ...s.settings, tabSlots, archivedTools: normaliseArchived(s.settings.archivedTools, tabSlots) } };
+        }),
+      setToolArchived: (key, archived) => {
+        const s = get();
+        const slots = normaliseSlots(s.settings.tabSlots);
+        const current = normaliseArchived(s.settings.archivedTools, slots);
+        if (archived) {
+          if (slots.includes(key)) return false;
+          // a session going on in an archived Deep Work would have no way back to it
+          if (key === 'focus' && s.deepWork) return false;
+          if (!current.includes(key)) set({ settings: { ...s.settings, archivedTools: [...current, key] } });
+          return true;
+        }
+        if (current.includes(key)) set({ settings: { ...s.settings, archivedTools: current.filter((k) => k !== key) } });
+        return true;
+      },
       setAiLinks: (links) => set({ aiLinks: links }),
       setQuickAccess: (items) => set({ quickAccess: items }),
       addTodoReminder: (time, label) =>
@@ -549,8 +615,11 @@ export const useStore = create<AppState>()(
       removeTodoReminder: (id) =>
         set((s) => ({ todoReminders: s.todoReminders.filter((r) => r.id !== id) })),
 
-      addDaily: (title) =>
-        set((s) => ({ dailyTasks: [...s.dailyTasks, { id: uid(), title, doneOn: null, createdAt: Date.now() }] })),
+      addDaily: (title) => {
+        const id = uid();
+        set((s) => ({ dailyTasks: [...s.dailyTasks, { id, title, doneOn: null, createdAt: Date.now() }] }));
+        return id;
+      },
       toggleDaily: (id) =>
         set((s) => ({
           dailyTasks: s.dailyTasks.map((t) =>
@@ -567,8 +636,11 @@ export const useStore = create<AppState>()(
         }),
       setLastTriage: (dateKey) => set({ lastTriage: dateKey }),
 
-      addMission: (title, deadline) =>
-        set((s) => ({ missions: [...s.missions, { id: uid(), title, deadline, done: false, subtasks: [] }] })),
+      addMission: (title, deadline) => {
+        const id = uid();
+        set((s) => ({ missions: [...s.missions, { id, title, deadline, done: false, subtasks: [] }] }));
+        return id;
+      },
       toggleMission: (id) =>
         set((s) => ({ missions: s.missions.map((m) => (m.id === id ? { ...m, done: !m.done } : m)) })),
       removeMission: (id) => set((s) => ({ missions: s.missions.filter((m) => m.id !== id) })),
@@ -793,6 +865,45 @@ export const useStore = create<AppState>()(
       removeJournalEntry: (id) => set((s) => ({ journal: s.journal.filter((x) => x.id !== id) })),
       setJournalTags: (tags) => set({ journalTags: tags }),
 
+      addScoreNode: (n) => {
+        const id = uid();
+        const now = Date.now();
+        set((s) => ({ scores: [...s.scores, withoutUndefined({ ...n, id, createdAt: now, updatedAt: now }) as ScoreNode] }));
+        return id;
+      },
+      patchScoreNode: (id, patch) =>
+        set((s) => ({
+          scores: s.scores.map((x) => (x.id === id ? (withoutUndefined({ ...x, ...patch, updatedAt: Date.now() }) as ScoreNode) : x)),
+        })),
+      moveScoreNode: (id, parentId) => {
+        const s = get();
+        if (!canMove(indexScores(s.scores), id, parentId)) return false;
+        set({ scores: s.scores.map((x) => (x.id === id ? { ...x, parentId, updatedAt: Date.now() } : x)) });
+        return true;
+      },
+      removeScoreNode: (id) => {
+        const s = get();
+        if (!s.scores.some((x) => x.id === id)) return [];
+        const gone = descendantIds(indexScores(s.scores), id);
+        gone.add(id);
+        const removed = s.scores.filter((x) => gone.has(x.id));
+        set({ scores: s.scores.filter((x) => !gone.has(x.id)) });
+        return removed;
+      },
+      restoreScoreNodes: (nodes) =>
+        set((s) => {
+          const have = new Set(s.scores.map((x) => x.id));
+          const back = nodes.filter((x) => !have.has(x.id));
+          // the tree is repaired in case a parent went away in the meantime
+          return back.length ? { scores: sanitizeScores([...s.scores, ...back]) } : {};
+        }),
+      duplicateScoreNode: (id) => {
+        const copy = duplicateStructure(get().scores, id);
+        if (!copy) return null;
+        set((s) => ({ scores: [...s.scores, ...copy.nodes] }));
+        return copy.rootId;
+      },
+
       pushCalc: (expr, result) =>
         set((s) => ({ calcHistory: [{ id: uid(), expr, result }, ...s.calcHistory].slice(0, 100) })),
       clearCalcHistory: () => set({ calcHistory: [] }),
@@ -816,6 +927,9 @@ export const useStore = create<AppState>()(
         if (persisted) mergedFromStorage = true;
         const merged = { ...current, ...(persisted || {}) };
         if (persisted?.settings) merged.settings = { ...current.settings, ...persisted.settings };
+        // a tool in a tab slot is never archived, whatever was saved (archiving arrived with its own default)
+        const tabSlots = normaliseSlots(merged.settings.tabSlots);
+        merged.settings = { ...merged.settings, tabSlots, archivedTools: normaliseArchived(merged.settings.archivedTools, tabSlots) };
         return merged;
       },
       // zustand reports a load that throws only here and never marks the store hydrated
@@ -1016,6 +1130,7 @@ export function exportSnapshot() {
     calcHistory: s.calcHistory,
     journal: s.journal,
     journalTags: s.journalTags,
+    scores: s.scores,
   };
 }
 

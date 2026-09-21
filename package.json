@@ -7,7 +7,8 @@
     "android": "expo start --android",
     "lint:type": "node scripts/lint-type.js",
     "test:store": "node scripts/test-store.js",
-    "test:backup": "node scripts/test-backup.js"
+    "test:backup": "node scripts/test-backup.js",
+    "test:scores": "node scripts/test-scores.js"
   },
   "dependencies": {
     "@expo-google-fonts/ibm-plex-mono": "^0.4.1",

@@ -186,7 +186,8 @@ export const F = {
 
 // type scale (~1.25 ratio)
 export type TName =
-  | 'display' | 'h1' | 'title' | 'body' | 'bodyLong' | 'label' | 'caption' | 'kicker' | 'mono48' | 'monoAmbient';
+  | 'display' | 'h1' | 'title' | 'body' | 'bodyLong' | 'label' | 'caption' | 'kicker'
+  | 'numHero' | 'numWheel' | 'numAmbient' | 'numStat';
 
 // faces carry the weight, so no token can hold a fontWeight (scripts/lint-type.js guards the call sites too)
 export const T: Record<TName, Omit<TextStyle, 'fontWeight'>> = {
@@ -202,10 +203,15 @@ export const T: Record<TName, Omit<TextStyle, 'fontWeight'>> = {
     color: C.textFaint, fontFamily: F.semi, fontSize: 11,
     letterSpacing: 2.2, textTransform: 'uppercase',
   },
+  // counting numbers: every timer and glance figure takes its face from these four
   /** the Deep Work hero timer */
-  mono48: { color: C.text, fontFamily: F.mono, fontSize: 48 },
+  numHero: { color: C.text, fontFamily: F.mono, fontSize: 48 },
+  /** the Deep Work minutes wheel */
+  numWheel: { color: C.text, fontFamily: F.mono, fontSize: 52, lineHeight: 64 },
   /** the ambient clock */
-  monoAmbient: { color: C.text, fontFamily: F.mono, fontSize: 68 },
+  numAmbient: { color: C.text, fontFamily: F.mono, fontSize: 68 },
+  /** glance figures: Today, the journal's stats, exam scores */
+  numStat: { color: C.text, fontFamily: F.bold, fontSize: 22, letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
 };
 
 export const BLOCK_COLORS = ['#9DBCE3', '#9AD6B0', '#E3C08D', '#E39EAC', '#745FF2', '#83DBD6', '#C2D392', '#D5C68E'];

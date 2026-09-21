@@ -814,7 +814,7 @@ const st = StyleSheet.create({
   },
   tagText: { fontFamily: F.bold, fontSize: 11, letterSpacing: 1.2 },
   vDivider: { width: StyleSheet.hairlineWidth, backgroundColor: C.hairline, alignSelf: 'stretch', marginVertical: 12 },
-  glanceValue: { fontFamily: F.bold, fontSize: 22, fontVariant: ['tabular-nums'], letterSpacing: -0.3 },
+  glanceValue: { ...T.numStat },
   glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: 0.4 },
   qaTile: { position: 'absolute', left: 0, top: 0, height: QA_ROW_H },
   qaFill: { flex: 1 },

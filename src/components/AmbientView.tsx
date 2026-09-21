@@ -171,7 +171,7 @@ const st = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.ambient, alignItems: 'center', justifyContent: 'center' },
   center: { alignItems: 'center' },
   subject: { fontFamily: F.semi, fontSize: 24, marginBottom: 18, maxWidth: 320, textAlign: 'center' },
-  clock: { ...T.monoAmbient, textAlign: 'center', fontVariant: ['tabular-nums'] },
+  clock: { ...T.numAmbient, textAlign: 'center', fontVariant: ['tabular-nums'] },
   rule: { height: 2, marginTop: 18, backgroundColor: C.textFaint + '4D', overflow: 'hidden' },
   meta: { color: C.textDim, fontFamily: F.reg, fontSize: 18, marginTop: 16, fontVariant: ['tabular-nums'] },
   task: { color: C.textDim, fontFamily: F.reg, fontSize: 18, marginTop: 30, maxWidth: 300, textAlign: 'center' },

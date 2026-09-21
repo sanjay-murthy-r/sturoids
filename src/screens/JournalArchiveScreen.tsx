@@ -360,7 +360,7 @@ const st = StyleSheet.create({
   dayNum: { color: C.text, fontFamily: F.bold, fontSize: 18, fontVariant: ['tabular-nums'], marginTop: 1 },
   excerpt: { color: C.textDim, fontFamily: F.reg, fontSize: 13, lineHeight: 19, marginTop: 4 },
   vDivider: { width: StyleSheet.hairlineWidth, backgroundColor: C.hairline, alignSelf: 'stretch' },
-  glanceValue: { color: C.gold, fontFamily: F.bold, fontSize: 22, fontVariant: ['tabular-nums'], letterSpacing: -0.3 },
+  glanceValue: { ...T.numStat, color: C.gold },
   glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: 0.4 },
   heat: { flexDirection: 'row', gap: 3, justifyContent: 'center', marginTop: 16 },
   heatCell: { width: 12, height: 12, borderRadius: 3 },
