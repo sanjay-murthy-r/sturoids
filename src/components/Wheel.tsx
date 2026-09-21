@@ -12,6 +12,10 @@ import { tick } from '../haptics';
 const SPRING = { mass: 1, stiffness: 180, damping: 27 };
 /** labels drawn either side of the centre; the rest are too faint to see */
 const WINDOW = 4;
+/** a tap reaches the labels that can be seen: two either side of the centre */
+const TAP_REACH = 2;
+/** on a wide window the wheel keeps a phone's reach instead of stretching across the card */
+const MAX_W = 480;
 
 const mod = (n: number, m: number) => ((n % m) + m) % m;
 
@@ -126,7 +130,7 @@ export function Wheel({
       .maxDuration(260)
       .onEnd((e) => {
         const r = Math.round(pos.value);
-        const k = Math.round(pos.value + (e.x - width.value / 2) / spacing);
+        const k = Math.min(r + TAP_REACH, Math.max(r - TAP_REACH, Math.round(pos.value + (e.x - width.value / 2) / spacing)));
         if (k === r) {
           runOnJS(pressCenter)();
           return;
@@ -158,7 +162,7 @@ export function Wheel({
   return (
     <GestureDetector gesture={gesture}>
       <View
-        style={{ height, overflow: 'hidden' }}
+        style={{ height, overflow: 'hidden', width: '100%', maxWidth: MAX_W, alignSelf: 'center' }}
         onLayout={(e: LayoutChangeEvent) => { width.value = e.nativeEvent.layout.width; }}
         accessible
         accessibilityRole="adjustable"

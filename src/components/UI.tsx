@@ -115,16 +115,21 @@ export function NeuHeader({ title, right, onBack, variant = 'page', compact = fa
 /** Small ⓘ that floats a short feature description in a raised dialog. */
 export function InfoDot({ text, size = 15 }: { text: string; size?: number }) {
   const theme = useTheme();
-  const { width: winW } = useWindowDimensions();
+  const { width: winW, height: winH } = useWindowDimensions();
   const [open, setOpen] = React.useState(false);
-  const [pos, setPos] = React.useState({ x: 0, y: 0 });
+  const [pos, setPos] = React.useState({ x: 0, y: 0, top: 0 });
+  // the bubble's own height, once it has laid out: near the foot of the screen it opens above the dot instead
+  const [bubbleH, setBubbleH] = React.useState(0);
   const ref = React.useRef<View>(null);
   const show = () => {
     ref.current?.measureInWindow((x, y, w, h) => {
-      setPos({ x, y: y + h });
+      setPos({ x, y: y + h, top: y });
+      setBubbleH(0);
       setOpen(true);
     });
   };
+  const below = pos.y + 8;
+  const top = bubbleH > 0 && below + bubbleH > winH - 16 ? Math.max(16, pos.top - 8 - bubbleH) : below;
   return (
     <>
       <Pressable ref={ref} onPress={show} hitSlop={10} style={{ marginLeft: 6 }}>
@@ -137,11 +142,14 @@ export function InfoDot({ text, size = 15 }: { text: string; size?: number }) {
       <Modal visible={open} transparent statusBarTranslucent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={{ flex: 1 }} onPress={() => setOpen(false)}>
           <View
+            onLayout={(e) => setBubbleH(e.nativeEvent.layout.height)}
             style={[
               {
-                position: 'absolute', top: pos.y + 8,
+                position: 'absolute', top,
                 left: Math.min(Math.max(12, pos.x - 110), winW - 252),
                 width: 240, borderRadius: 14, padding: 12,
+                // hidden for the one frame before it knows whether it fits below the dot
+                opacity: bubbleH > 0 ? 1 : 0,
               },
               theme === 'minimal'
                 ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }

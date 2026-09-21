@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, useWindowDimensions } from 'react-native';
+import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, {
   Easing, Extrapolation, cancelAnimation, interpolate, useAnimatedProps, useAnimatedStyle, useSharedValue,
   withDelay, withSequence, withTiming,
@@ -12,6 +12,7 @@ import { setIntroPhase } from '../intro';
 import { SIG, SIG_SIZE, SIG_SPEED } from '../signature';
 import { DATE_PLACE } from '../handDate';
 import { useAnimLevel } from './Motion';
+import { WIDE_AT } from '../layout';
 import { DATE_SPEED, SHINE_SKEW, Signature, SignatureStill, layoutDate } from './Signature';
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
@@ -29,6 +30,14 @@ const GAP_SIG = 34;
 const HERO_W = 0.78;
 const HERO_Y = 0.46;
 const CAPTION_OPACITY = 0.8;
+/**
+ * A wide window lays the intro out on a phone's width and scales the whole of it up, never past this, and never past
+ * the height it has: the signature keeps its proportion to the plate on a tablet, and still fits a split screen.
+ */
+const DESIGN_W = 440;
+const K_MAX = 1.33;
+/** the share of a wide window's height the settled column may take */
+const FIT_H = 0.86;
 
 // The icon's two seam grooves (viewBox = plate), a dark carve over a light lip, as in
 // assets/icon.png. They fade and settle in; they are never stroke-drawn.
@@ -329,13 +338,17 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
 
   if (level === 'none' || gone) return null;
 
-  const sigW = SIG_SIZE * W;
+  // a phone lays the intro out on its own width, as it always has; a wide window on a phone's, then scales it by k
+  const wide = W >= WIDE_AT;
+  const sigW = SIG_SIZE * (wide ? DESIGN_W : W);
   const sigH = (sigW * SIG.vh) / SIG.vw;
   const columnH = PLATE + GAP_WORD + WORD_H + GAP_CAPTION + CAPTION_H + GAP_SIG + sigH;
-  // the column is centred, so the slot's centre sits (columnH - sigH) / 2 below the screen's
-  const heroY = HERO_Y * H - (H / 2 + (columnH - sigH) / 2);
+  const k = wide ? Math.min(K_MAX, (FIT_H * H) / columnH) : 1;
+  // the column is centred and scaled about its centre, so the slot's centre sits k * (columnH - sigH) / 2 below the
+  // screen's, and an offset inside it moves k times as far on screen
+  const heroY = (HERO_Y * H - H / 2) / k - (columnH - sigH) / 2;
   // on a short window the hero never grows past 70% of the height
-  const heroScale = Math.max(1, Math.min(HERO_W / SIG_SIZE, (0.7 * H) / sigH));
+  const heroScale = Math.max(1, Math.min(HERO_W / SIG_SIZE, (0.7 * H) / (k * sigH)));
 
   return (
     <Animated.View
@@ -344,53 +357,57 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
       accessibilityElementsHidden
       style={[StyleSheet.absoluteFill, st.overlay, { backgroundColor: bgFor(theme) }, overlayStyle]}
     >
-      <Animated.View style={[st.column, { height: columnH }, columnStyle]}>
-        <Animated.View style={[st.plate, plateStyle]}>
-          <Animated.View style={[st.plateFace, st.tierLow, tierLowStyle]} />
-          <Animated.View style={[st.plateFace, st.tierMid, tierMidStyle]} />
-          <Animated.View style={[st.plateFace, NEU.raisedHigh, tierHighStyle]} />
-          <Animated.View style={[st.plateFace, st.plateBody, bodyStyle]} />
-          <Animated.View style={[st.plateFace, st.clip, grooveStyle]}>
-            <Svg width={PLATE} height={PLATE} viewBox={`0 0 ${PLATE} ${PLATE}`}>
-              <Path d={GROOVE_TOP} stroke={liteSh(0.55)} strokeWidth={1.6} strokeLinecap="round" fill="none" translateX={1.2} translateY={2} />
-              <Path d={GROOVE_BOT} stroke={liteSh(0.55)} strokeWidth={1.6} strokeLinecap="round" fill="none" translateX={1.2} translateY={2} />
-              <Path d={GROOVE_TOP} stroke={darkSh(0.85)} strokeWidth={3} strokeLinecap="round" fill="none" />
-              <Path d={GROOVE_BOT} stroke={darkSh(0.85)} strokeWidth={3} strokeLinecap="round" fill="none" />
-            </Svg>
+      <View style={[st.scaler, k !== 1 && { transform: [{ scale: k }] }]}>
+        <Animated.View style={[st.column, { height: columnH }, columnStyle]}>
+          <Animated.View style={[st.plate, plateStyle]}>
+            <Animated.View style={[st.plateFace, st.tierLow, tierLowStyle]} />
+            <Animated.View style={[st.plateFace, st.tierMid, tierMidStyle]} />
+            <Animated.View style={[st.plateFace, NEU.raisedHigh, tierHighStyle]} />
+            <Animated.View style={[st.plateFace, st.plateBody, bodyStyle]} />
+            <Animated.View style={[st.plateFace, st.clip, grooveStyle]}>
+              <Svg width={PLATE} height={PLATE} viewBox={`0 0 ${PLATE} ${PLATE}`}>
+                <Path d={GROOVE_TOP} stroke={liteSh(0.55)} strokeWidth={1.6} strokeLinecap="round" fill="none" translateX={1.2} translateY={2} />
+                <Path d={GROOVE_BOT} stroke={liteSh(0.55)} strokeWidth={1.6} strokeLinecap="round" fill="none" translateX={1.2} translateY={2} />
+                <Path d={GROOVE_TOP} stroke={darkSh(0.85)} strokeWidth={3} strokeLinecap="round" fill="none" />
+                <Path d={GROOVE_BOT} stroke={darkSh(0.85)} strokeWidth={3} strokeLinecap="round" fill="none" />
+              </Svg>
+            </Animated.View>
+            {full ? <PlateSheen glint={glint} /> : null}
           </Animated.View>
-          {full ? <PlateSheen glint={glint} /> : null}
-        </Animated.View>
 
-        <Animated.Text style={[st.word, wordStyle]}>STUROIDS</Animated.Text>
-        <Animated.Text style={[st.caption, captionStyle]}>ALL-IN-ONE STUDENT APP</Animated.Text>
+          <Animated.Text style={[st.word, wordStyle]}>STUROIDS</Animated.Text>
+          <Animated.Text style={[st.caption, captionStyle]}>ALL-IN-ONE STUDENT APP</Animated.Text>
 
-        <Animated.View style={[{ width: sigW, height: sigH, marginTop: GAP_SIG }, sigStyle]}>
-          {full ? (
-            <Signature
-              width={sigW}
-              heroScale={heroScale}
-              heroX={0}
-              heroY={heroY}
-              tau={tau}
-              date={date}
-              dateTau={dateTau}
-              dateLate={DATE_LATE}
-              travel={travel}
-              ink={ink}
-              carve={carve}
-              glint={glint}
-            />
-          ) : (
-            <SignatureStill width={sigW} date={date} />
-          )}
+          <Animated.View style={[{ width: sigW, height: sigH, marginTop: GAP_SIG }, sigStyle]}>
+            {full ? (
+              <Signature
+                width={sigW}
+                heroScale={heroScale}
+                heroX={0}
+                heroY={heroY}
+                tau={tau}
+                date={date}
+                dateTau={dateTau}
+                dateLate={DATE_LATE}
+                travel={travel}
+                ink={ink}
+                carve={carve}
+                glint={glint}
+              />
+            ) : (
+              <SignatureStill width={sigW} date={date} />
+            )}
+          </Animated.View>
         </Animated.View>
-      </Animated.View>
+      </View>
     </Animated.View>
   );
 }
 
 const st = StyleSheet.create({
   overlay: { zIndex: 100, alignItems: 'center', justifyContent: 'center' },
+  /** as wide as the screen, so the column inside is laid out as it always was; on a wide window it scales */
+  scaler: { alignSelf: 'stretch' },
   column: { alignSelf: 'stretch', alignItems: 'center' },
   plate: { width: PLATE, height: PLATE, marginBottom: GAP_WORD },
   plateFace: {

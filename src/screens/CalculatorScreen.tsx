@@ -1,15 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, useWindowDimensions } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { create, all } from 'mathjs';
 import * as Clipboard from 'expo-clipboard';
-import { C, F, MIN, NEU, S, neuRaised } from '../theme';
+import { C, F, MIN, NEU, S, T, neuRaised } from '../theme';
 import { useStore } from '../store';
 import { ScreenBG, Sheet, Row, PillButton, Inset, Chip, IconBtn, NeuHeader, useTheme } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Bouncy, useAnimLevel } from '../components/Motion';
 import { tick } from '../haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { RAIL_W, TWO_COL_AT, WIDE_AT, WIDE_MAX } from '../layout';
 
 // Precise engine: BigNumber arithmetic — 0.1 + 0.2 is exactly 0.3 here.
 const math = create(all, { number: 'BigNumber', precision: 40 });
@@ -37,6 +38,19 @@ function toEngine(expr: string): string {
     .replace(/π/g, 'pi').replace(/√\(/g, 'sqrt(').replace(/×10\^/g, '*10^');
 }
 
+/** a wide window's calculator column: a keypad with a phone's proportions, larger */
+const CALC_MAX = 480;
+/** a wide window's key heights: fitted to the room, within these */
+const KEY_MIN = 44;
+const KEY_MAX = 88;
+/** a function key's height, as a share of a number key's */
+const SCI_SHARE = 0.8;
+/** the equals key's height on a wide window, with and without the functions out */
+const EQ_H = 56;
+const EQ_H_SCI = 48;
+/** the keypad's width beside the display on a sideways tablet */
+const SPLIT_PAD_W = 440;
+
 const BASIC: string[][] = [
   ['C', '⌫', '(', ')'],
   ['7', '8', '9', '÷'],
@@ -54,6 +68,9 @@ const SCI: string[][] = [
 export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const theme = useTheme();
+  const { width, height } = useWindowDimensions();
+  // the keypad's box, measured on a wide window to fit the keys to it
+  const [pad, setPad] = useState({ w: 0, h: 0 });
   const pushCalc = useStore((s) => s.pushCalc);
   const history = useStore((s) => s.calcHistory);
   const clearCalcHistory = useStore((s) => s.clearCalcHistory);
@@ -137,92 +154,147 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
   };
 
-  return (
-    <ScreenBG guard={mode === 'tab'}>
-      <NeuHeader title="Calculator" variant={mode === 'tab' ? 'tab' : 'page'} compact />
-      <View style={{ flex: 1, padding: S.pad, paddingTop: 8, paddingBottom: S.pad + (mode === 'tab' ? 0 : insets.bottom) }}>
-        {/* display — carved into the material */}
-        <Inset pad={16} style={{ borderRadius: S.radius, marginBottom: 12, overflow: 'visible' }}>
-          <ScrollView style={{ maxHeight: 90 }} contentContainerStyle={{ justifyContent: 'flex-end' }}>
-            <Animated.Text style={[st.expr, riseStyle]} selectable>{expr || '0'}</Animated.Text>
-          </ScrollView>
-          <Text style={[st.preview, { color: evalError ? C.danger : C.accent }]} numberOfLines={1}>{evalError ? "Can't evaluate" : justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
-        </Inset>
+  // A phone keeps its keypad exactly as it was. A wide window sets the calculator in a column of its own width with
+  // keys fitted to the height it has; a sideways tablet sets the display, the controls and the history on the left
+  // and the keypad on the right.
+  const wide = width >= WIDE_AT;
+  const split = wide && width > height && width - (mode === 'tab' ? RAIL_W : 0) >= TWO_COL_AT;
+  const rows = BASIC.length + (sci ? SCI.length * SCI_SHARE : 0);
+  const gaps = sci ? (SCI.length + BASIC.length) * 6 : BASIC.length * 8;
+  const eqH = sci ? EQ_H_SCI : EQ_H;
+  const keyH = wide && pad.h > 0
+    ? Math.floor(Math.max(KEY_MIN, Math.min(KEY_MAX, (pad.w - 24) / 4, (pad.h - gaps - eqH - 10) / rows)))
+    : undefined;
 
-        {/* controls sit under the display, so the well holds only the sum and its answer */}
-        <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-          <Row style={{ flexShrink: 1, flexWrap: 'wrap' }}>
-            <SegmentedControl
-              size="sm"
-              options={[{ key: 'deg', label: 'DEG' }, { key: 'rad', label: 'RAD' }]}
-              value={deg ? 'deg' : 'rad'}
-              onChange={(k) => setDeg(k === 'deg')}
-              style={{ marginRight: 8, marginBottom: 8 }}
+  const display = (
+    // display — carved into the material
+    <Inset pad={16} style={{ borderRadius: S.radius, marginBottom: 12, overflow: 'visible' }}>
+      <ScrollView style={{ maxHeight: split ? 140 : 90 }} contentContainerStyle={{ justifyContent: 'flex-end' }}>
+        <Animated.Text style={[st.expr, riseStyle]} selectable>{expr || '0'}</Animated.Text>
+      </ScrollView>
+      <Text style={[st.preview, { color: evalError ? C.danger : C.accent }]} numberOfLines={1}>{evalError ? "Can't evaluate" : justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
+    </Inset>
+  );
+
+  const controls = (
+    // controls sit under the display, so the well holds only the sum and its answer
+    <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+      <Row style={{ flexShrink: 1, flexWrap: 'wrap' }}>
+        <SegmentedControl
+          size="sm"
+          options={[{ key: 'deg', label: 'DEG' }, { key: 'rad', label: 'RAD' }]}
+          value={deg ? 'deg' : 'rad'}
+          onChange={(k) => setDeg(k === 'deg')}
+          style={{ marginRight: 8, marginBottom: 8 }}
+        />
+        <Chip small label="SCI" active={sciNotation} color={C.amber} onPress={() => setSciNotation(!sciNotation)} />
+        <Chip small icon="grid-outline" label="Functions" active={sci} onPress={() => setSci(!sci)} />
+      </Row>
+      {split ? null : <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} />}
+    </Row>
+  );
+
+  const keypad = (
+    // keys — rows tighten when the sci pad is out so everything fits
+    <View
+      style={{ flex: 1, justifyContent: 'flex-end' }}
+      onLayout={wide ? (e) => {
+        const { width: w, height: h } = e.nativeEvent.layout;
+        if (Math.abs(w - pad.w) > 0.5 || Math.abs(h - pad.h) > 0.5) setPad({ w, h });
+      } : undefined}
+    >
+      {sci && SCI.map((row, i) => (
+        <Row key={`s${i}`} style={{ gap: 8, marginBottom: 6 }}>
+          {row.map((k) => (
+            <Key
+              key={k} label={k.replace('(', '')} pad={8} small onPress={() => press(k)} color={C.accent}
+              height={keyH ? Math.round(keyH * SCI_SHARE) : undefined}
             />
-            <Chip small label="SCI" active={sciNotation} color={C.amber} onPress={() => setSciNotation(!sciNotation)} />
-            <Chip small icon="grid-outline" label="Functions" active={sci} onPress={() => setSci(!sci)} />
-          </Row>
-          <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} />
+          ))}
         </Row>
+      ))}
+      {BASIC.map((row, i) => (
+        <Row key={i} style={{ gap: 8, marginBottom: sci ? 6 : 8 }}>
+          {row.map((k) => (
+            <Key
+              key={k} label={k} pad={sci ? 11 : 16} onPress={() => press(k)}
+              onLongPress={k === '⌫' ? () => { tick(); setExpr(''); setJustEvaluated(false); } : undefined}
+              color={['÷', '×', '−', '+'].includes(k) ? C.accent : ['C', '⌫'].includes(k) ? C.danger : C.text}
+              height={keyH}
+            />
+          ))}
+        </Row>
+      ))}
+      <Bouncy
+        onPress={() => { tick(); equals(); }}
+        onLongPress={async () => {
+          const out = justEvaluated ? expr : preview;
+          if (out) { await Clipboard.setStringAsync(out); tick(); }
+        }}
+        radius={16}
+        scaleTo={0.96}
+        style={[
+          st.equals,
+          sci && { paddingVertical: 10 },
+          wide && { height: eqH, paddingVertical: 0, justifyContent: 'center' },
+          theme === 'minimal'
+            ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
+            : { backgroundColor: C.accent, ...NEU.raisedMid },
+        ]}
+      >
+        <Text style={{ color: theme === 'minimal' ? C.accent : C.onAccent, fontSize: 26, fontFamily: F.semi }}>=</Text>
+      </Bouncy>
+    </View>
+  );
 
-        {/* keys — rows tighten when the sci pad is out so everything fits */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          {sci && SCI.map((row, i) => (
-            <Row key={`s${i}`} style={{ gap: 8, marginBottom: 6 }}>
-              {row.map((k) => (
-                <Key key={k} label={k.replace('(', '')} pad={8} small onPress={() => press(k)} color={C.accent} />
-              ))}
-            </Row>
-          ))}
-          {BASIC.map((row, i) => (
-            <Row key={i} style={{ gap: 8, marginBottom: sci ? 6 : 8 }}>
-              {row.map((k) => (
-                <Key
-                  key={k} label={k} pad={sci ? 11 : 16} onPress={() => press(k)}
-                  onLongPress={k === '⌫' ? () => { tick(); setExpr(''); setJustEvaluated(false); } : undefined}
-                  color={['÷', '×', '−', '+'].includes(k) ? C.accent : ['C', '⌫'].includes(k) ? C.danger : C.text}
-                />
-              ))}
-            </Row>
-          ))}
-          <Bouncy
-            onPress={() => { tick(); equals(); }}
-            onLongPress={async () => {
-              const out = justEvaluated ? expr : preview;
-              if (out) { await Clipboard.setStringAsync(out); tick(); }
-            }}
-            radius={16}
-            scaleTo={0.96}
-            style={[
-              st.equals,
-              sci && { paddingVertical: 10 },
-              theme === 'minimal'
-                ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
-                : { backgroundColor: C.accent, ...NEU.raisedMid },
-            ]}
-          >
-            <Text style={{ color: theme === 'minimal' ? C.accent : C.onAccent, fontSize: 26, fontFamily: F.semi }}>=</Text>
-          </Bouncy>
+  const historyRows = history.map((h) => (
+    <Bouncy
+      key={h.id} style={st.histRow} radius={14} scaleTo={0.98}
+      onPress={() => { if (h.result !== 'Error') { setExpr((e) => e + h.result); setHistSheet(false); } }}
+    >
+      <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13 }} numberOfLines={1}>{h.expr}</Text>
+      <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, fontFamily: F.semi }} numberOfLines={1}>
+        = {h.result}
+      </Text>
+    </Bouncy>
+  ));
+  const historyEmpty = (
+    <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 13 }}>Past calculations appear here. Tap one to reuse its result.</Text>
+  );
+
+  const bodyPad = { padding: S.pad, paddingTop: 8, paddingBottom: S.pad + (mode === 'tab' ? 0 : insets.bottom) };
+
+  return (
+    <ScreenBG guard={mode === 'tab'} maxWidth={split ? WIDE_MAX : CALC_MAX}>
+      <NeuHeader title="Calculator" variant={mode === 'tab' ? 'tab' : 'page'} compact />
+      {split ? (
+        <View style={[st.split, bodyPad]}>
+          <View style={st.splitSide}>
+            {display}
+            {controls}
+            <View style={st.histHead}>
+              <Text style={T.kicker}>History</Text>
+              {history.length > 0 ? (
+                <Text style={st.histClear} onPress={clearCalcHistory} accessibilityRole="button">Clear</Text>
+              ) : null}
+            </View>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 8 }}>
+              {history.length === 0 ? historyEmpty : historyRows}
+            </ScrollView>
+          </View>
+          <View style={st.splitPad}>{keypad}</View>
         </View>
-      </View>
+      ) : (
+        <View style={[{ flex: 1 }, bodyPad]}>
+          {display}
+          {controls}
+          {keypad}
+        </View>
+      )}
 
       {/* history */}
       <Sheet visible={histSheet} onClose={() => setHistSheet(false)} title="History">
-        {history.length === 0 ? (
-          <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 13 }}>Past calculations appear here. Tap one to reuse its result.</Text>
-        ) : (
-          history.map((h) => (
-            <Bouncy
-              key={h.id} style={st.histRow} radius={14} scaleTo={0.98}
-              onPress={() => { if (h.result !== 'Error') { setExpr((e) => e + h.result); setHistSheet(false); } }}
-            >
-              <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13 }} numberOfLines={1}>{h.expr}</Text>
-              <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, fontFamily: F.semi }} numberOfLines={1}>
-                = {h.result}
-              </Text>
-            </Bouncy>
-          ))
-        )}
+        {history.length === 0 ? historyEmpty : historyRows}
         {history.length > 0 && (
           <PillButton label="Clear history" color={C.danger} outline onPress={clearCalcHistory} style={{ marginTop: 10 }} />
         )}
@@ -232,8 +304,10 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
 }
 
 /** Raised neumorphic key — sinks + carves in on press, with a haptic tick. */
-function Key({ label, onPress, onLongPress, color, small, pad }: {
+function Key({ label, onPress, onLongPress, color, small, pad, height }: {
   label: string; onPress: () => void; onLongPress?: () => void; color: string; small?: boolean; pad?: number;
+  /** a wide window's key height, fitted to the room; a phone's key takes its height from its padding */
+  height?: number;
 }) {
   const theme = useTheme();
   return (
@@ -244,7 +318,7 @@ function Key({ label, onPress, onLongPress, color, small, pad }: {
       scaleTo={0.94}
       style={[
         st.key,
-        { paddingVertical: pad ?? (small ? 10 : 16) },
+        height ? { height, paddingVertical: 0 } : { paddingVertical: pad ?? (small ? 10 : 16) },
         theme === 'minimal'
           ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
           : { backgroundColor: C.card, ...neuRaised('low') },
@@ -265,4 +339,9 @@ const st = StyleSheet.create({
     paddingVertical: 14, borderRadius: 16, alignItems: 'center', marginBottom: 10,
   },
   histRow: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border },
+  split: { flex: 1, flexDirection: 'row', gap: 28 },
+  splitSide: { flex: 1, minWidth: 0 },
+  splitPad: { width: SPLIT_PAD_W },
+  histHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 6 },
+  histClear: { color: C.danger, fontFamily: F.semi, fontSize: 13 },
 });

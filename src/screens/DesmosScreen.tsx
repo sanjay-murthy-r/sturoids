@@ -26,7 +26,7 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, [goBack]));
   // the material every tool sits on, without the tab fling, which would fight the graph's own pan
   return (
-    <ScreenBG guard={mode === 'tab'} fling={false}>
+    <ScreenBG guard={mode === 'tab'} fling={false} maxWidth={null}>
       <View style={{ flex: 1, backgroundColor: bg, paddingBottom: mode === 'tab' ? 0 : insets.bottom }}>
         <NeuHeader
           title="Desmos"

@@ -14,6 +14,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { C, F, MIN, S, T, neuInset, neuPressedInner, neuRaised, NEU } from '../theme';
+import { columnWidth } from '../layout';
 import { useStore, Attachment } from '../store';
 import { todayKey, uid } from '../utils';
 import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuHeader, NeuIconBtn, PillButton, DotMenu, useTheme } from '../components/UI';
@@ -321,9 +322,11 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   };
 
   const words = note.body.trim() ? note.body.trim().split(/\s+/).length : 0;
+  // the note's column: the window on a phone, a capped column on a wide window
+  const colW = columnWidth(width, mode === 'tab');
   // under 372dp the nine toolbar targets overflow: media, file, undo and redo move into a menu
-  const narrow = width < 372;
-  const mediaW = (width - S.pad * 2 - 10) / 2;
+  const narrow = colW < 372;
+  const mediaW = (colW - S.pad * 2 - 10) / 2;
 
   return (
     <ScreenBG>

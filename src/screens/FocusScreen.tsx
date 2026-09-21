@@ -21,7 +21,7 @@ import { FINISH_NOTIF_ID, TimerState } from '../deepWork';
 import { AmbientView } from '../components/AmbientView';
 import { ClockDigits } from '../components/ClockDigits';
 import { SessionStage } from '../components/SessionStage';
-import { READ_MAX, WIDE_MAX, frame } from '../layout';
+import { READ_MAX, TWO_COL_AT, WIDE_MAX, frame } from '../layout';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
@@ -30,8 +30,6 @@ type ReviewChoice = 'done' | 'pending' | 'drop';
 const CLOCK_SLOT_H = 60;
 /** a stopwatch left running with no finish line (a killed app, a forgotten session) logs at most this much */
 const STOPWATCH_CAP_SEC = 12 * 3600;
-/** from this width of the screen's area, a sideways tablet, the session tasks and history sit beside the session */
-const TWO_COL_AT = 900;
 
 /** the countdown lengths the wheel offers, in minutes; a custom length joins them */
 const LENGTHS = Array.from({ length: 48 }, (_, i) => 5 + 5 * i);

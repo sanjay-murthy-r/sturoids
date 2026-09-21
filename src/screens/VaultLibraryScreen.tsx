@@ -17,6 +17,7 @@ import { Enter } from '../components/Motion';
 import { useToolNav } from '../toolNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as CachedImage } from 'expo-image';
+import { columnWidth } from '../layout';
 
 const thumb = (videoId: string) => 'https://img.youtube.com/vi/' + videoId + '/mqdefault.jpg';
 
@@ -32,6 +33,8 @@ async function fetchTitle(videoId: string): Promise<string> {
 }
 
 type ViewTab = 'library' | 'recent' | 'notes';
+/** the pager's pages, in order */
+const PAGES: ViewTab[] = ['library', 'recent', 'notes'];
 
 /** A video's thumbnail, cached on the phone, with a carved play mark when it cannot load. */
 function Thumb({ videoId }: { videoId: string }) {
@@ -85,6 +88,19 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [editDraft, setEditDraft] = useState('');
   const [previewSheet, setPreviewSheet] = useState<any>(null);
   const pagerRef = useRef<ScrollView>(null);
+  // a page is as wide as the pager: the window on a phone; on a wide window known ahead, then measured
+  const [pageW, setPageW] = useState(() => columnWidth(width, mode === 'tab'));
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  // a rotation or a split screen changes the page width: the page in view is set back square in the pager, never
+  // left showing parts of two pages
+  React.useEffect(() => {
+    // a frame later, once the pages have taken their new width
+    const f = requestAnimationFrame(() => {
+      pagerRef.current?.scrollTo({ x: PAGES.indexOf(tabRef.current) * pageW, animated: false });
+    });
+    return () => cancelAnimationFrame(f);
+  }, [pageW]);
 
   const subFolders = useMemo(
     () => folders.filter((f) => f.parentId === cwd).sort((a, b) => a.name.localeCompare(b.name)),
@@ -159,8 +175,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const goTab = (t: ViewTab) => {
     setTab(t);
-    const idx = ['library', 'recent', 'notes'].indexOf(t);
-    pagerRef.current?.scrollTo({ x: idx * width, animated: true });
+    pagerRef.current?.scrollTo({ x: PAGES.indexOf(t) * pageW, animated: true });
   };
 
   const openAt = (videoDbId: string, time: number) =>
@@ -181,7 +196,6 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     </ListRow>
   );
 
-  const pageW = width;
   const pageStyle = { padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) };
 
   return (
@@ -225,9 +239,13 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <ScrollView
           ref={pagerRef}
           horizontal pagingEnabled showsHorizontalScrollIndicator={false}
+          onLayout={(e) => {
+            const w = Math.round(e.nativeEvent.layout.width);
+            if (w > 0 && w !== pageW) setPageW(w);
+          }}
           onMomentumScrollEnd={(e) => {
             const idx = Math.round(e.nativeEvent.contentOffset.x / pageW);
-            setTab((['library', 'recent', 'notes'] as ViewTab[])[idx] || 'library');
+            setTab(PAGES[idx] || 'library');
           }}
         >
           <ScrollView style={{ width: pageW }} contentContainerStyle={pageStyle}>

@@ -26,15 +26,13 @@ import { journalDayFor } from '../../src/journal';
 import { indexScores, upcoming, groupSummary, fmtPct, fromToday } from '../../src/scores';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
 import { useNow } from '../../src/hooks/useNow';
-import { WIDE_AT, WIDE_MAX } from '../../src/layout';
+import { TWO_COL_AT, WIDE_AT, WIDE_MAX } from '../../src/layout';
 
 // what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
 const NO_SESSIONS: FocusSession[] = [];
 const NO_HABITS: Habit[] = [];
 const NO_PLAN = {} as PlannerWeek;
 
-/** From this width of the day's column, Today sets its sections in two columns. */
-const TWO_COL_AT = 900;
 
 /** A shortcut to an archived tool stays in the saved list but is not shown. */
 const hiddenTile = (q: QuickItem, archived: ReadonlySet<string>) => q.kind === 'tool' && archived.has(q.target);

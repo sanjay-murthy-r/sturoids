@@ -11,11 +11,20 @@ import {
 import { toast } from '../components/Toast';
 import { Enter } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { READ_MAX, TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth, frame } from '../layout';
+
+/** on a wide window the video never takes more than this share of the window's height */
+const PLAYER_MAX_H = 0.55;
+/** between the video's column and the notes' column on a sideways tablet */
+const COL_GAP = 28;
 
 export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const { id, t } = useLocalSearchParams<{ id: string; t?: string }>();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const wide = width >= WIDE_AT;
+  // the screen's area: the window on a phone; on a wide window known ahead (less the rail in a tab), then measured
+  const [areaW, setAreaW] = useState(() => columnWidth(width, mode === 'tab', WIDE_MAX));
   const video = useStore((s) => s.vaultVideos.find((v) => v.id === id));
   const folders = useStore((s) => s.vaultFolders);
   const updateVideo = useStore((s) => s.updateVideo);
@@ -114,55 +123,100 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     </Enter>
   );
 
+  // a sideways tablet sets the notes beside the video; otherwise one column, the video across its top
+  const twoCol = wide && areaW >= TWO_COL_AT;
+  const colW = twoCol ? ((areaW - S.pad * 2 - COL_GAP) * 3) / 5 : Math.min(areaW, READ_MAX);
+  // 16:9 across the column. A phone's video is exactly as it always was; a wide window's never takes over the
+  // height, and when it would, it narrows to keep its shape
+  let playerH = Math.round((colW * 9) / 16);
+  let playerW: number | undefined;
+  if (wide) {
+    playerH = Math.min(playerH, Math.round(height * PLAYER_MAX_H));
+    playerW = Math.min(Math.round(colW), Math.round((playerH * 16) / 9));
+  }
+
+  const player = (
+    <YoutubePlayer
+      ref={playerRef}
+      width={playerW}
+      height={playerH}
+      play={playing}
+      videoId={video.videoId}
+      onReady={onReady}
+      onFullScreenChange={(f: boolean) => { fullscreen.current = f; }}
+      onChangeState={(s: string) => {
+        if (s === 'playing') setPlaying(true);
+        if (s === 'paused' || s === 'ended') setPlaying(false);
+      }}
+    />
+  );
+
+  const info = (
+    <>
+      <Text style={T.title}>{video.title}</Text>
+
+      <Row style={{ flexWrap: 'wrap', marginTop: 10 }}>
+        {video.tags.map((x) => (
+          <Chip key={x} small label={'#' + x} color={C.teal} active onPress={() => removeVideoTag(video.id, x)} />
+        ))}
+        <Chip small label="+ tag" onPress={() => { setTagDraft(''); setTagSheet(true); }} />
+      </Row>
+
+      <Row style={{ marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
+        <PillButton small label="Note @ now" icon="create-outline" color={C.green}
+          onPress={async () => { setDraft(''); setNoteSheet({ time: await now() }); }} />
+        <PillButton small label="Mark @ now" icon="bookmark-outline" color={C.pink}
+          onPress={async () => { setDraft(''); setBmSheet({ time: await now() }); }} />
+        <PillButton small label="→ Notes" icon="download-outline" color={C.accent} outline onPress={exportToNotes} />
+        <PillButton small label="Move" icon="folder-outline" color={C.textDim} outline onPress={() => setFolderSheet(true)} />
+      </Row>
+    </>
+  );
+
+  const lists = (
+    <>
+      <SectionTitle>Bookmarks</SectionTitle>
+      {video.bookmarks.length === 0 ? (
+        <EmptyState compact icon="bookmark-outline" title="No bookmarks yet" body="Mark key moments, then tap one to jump there." />
+      ) : (
+        video.bookmarks.map((b, i) => itemRow(b, true, i))
+      )}
+
+      <SectionTitle>Timed notes</SectionTitle>
+      {video.notes.length === 0 ? (
+        <EmptyState compact icon="create-outline" title="No timed notes yet" body='Pin a note to a moment, like "why does this step work?" at 12:34.' />
+      ) : (
+        video.notes.map((n, i) => itemRow(n, false, i))
+      )}
+    </>
+  );
+
   return (
-    <ScreenBG>
-      <NeuHeader title={video.folderId ? folders.find((f) => f.id === video.folderId)?.name || 'YT Vault' : 'YT Vault'} />
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}>
-        <YoutubePlayer
-          ref={playerRef}
-          height={Math.round((width * 9) / 16)}
-          play={playing}
-          videoId={video.videoId}
-          onReady={onReady}
-          onFullScreenChange={(f: boolean) => { fullscreen.current = f; }}
-          onChangeState={(s: string) => {
-            if (s === 'playing') setPlaying(true);
-            if (s === 'paused' || s === 'ended') setPlaying(false);
-          }}
-        />
-        <View style={{ padding: S.pad }}>
-          <Text style={T.title}>{video.title}</Text>
-
-          <Row style={{ flexWrap: 'wrap', marginTop: 10 }}>
-            {video.tags.map((x) => (
-              <Chip key={x} small label={'#' + x} color={C.teal} active onPress={() => removeVideoTag(video.id, x)} />
-            ))}
-            <Chip small label="+ tag" onPress={() => { setTagDraft(''); setTagSheet(true); }} />
-          </Row>
-
-          <Row style={{ marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
-            <PillButton small label="Note @ now" icon="create-outline" color={C.green}
-              onPress={async () => { setDraft(''); setNoteSheet({ time: await now() }); }} />
-            <PillButton small label="Mark @ now" icon="bookmark-outline" color={C.pink}
-              onPress={async () => { setDraft(''); setBmSheet({ time: await now() }); }} />
-            <PillButton small label="→ Notes" icon="download-outline" color={C.accent} outline onPress={exportToNotes} />
-            <PillButton small label="Move" icon="folder-outline" color={C.textDim} outline onPress={() => setFolderSheet(true)} />
-          </Row>
-
-          <SectionTitle>Bookmarks</SectionTitle>
-          {video.bookmarks.length === 0 ? (
-            <EmptyState compact icon="bookmark-outline" title="No bookmarks yet" body="Mark key moments, then tap one to jump there." />
-          ) : (
-            video.bookmarks.map((b, i) => itemRow(b, true, i))
-          )}
-
-          <SectionTitle>Timed notes</SectionTitle>
-          {video.notes.length === 0 ? (
-            <EmptyState compact icon="create-outline" title="No timed notes yet" body='Pin a note to a moment, like "why does this step work?" at 12:34.' />
-          ) : (
-            video.notes.map((n, i) => itemRow(n, false, i))
-          )}
-        </View>
+    <ScreenBG maxWidth={WIDE_MAX}>
+      <View style={frame(twoCol ? WIDE_MAX : READ_MAX)}>
+        <NeuHeader title={video.folderId ? folders.find((f) => f.id === video.folderId)?.name || 'YT Vault' : 'YT Vault'} />
+      </View>
+      <ScrollView
+        onLayout={(e) => { if (wide) setAreaW(e.nativeEvent.layout.width); }}
+        contentContainerStyle={{ paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
+      >
+        {twoCol ? (
+          <View style={st.cols}>
+            <View style={st.main}>
+              <View style={{ alignItems: 'center' }}>{player}</View>
+              <View style={{ paddingTop: S.pad }}>{info}</View>
+            </View>
+            <View style={st.side}>{lists}</View>
+          </View>
+        ) : (
+          <View style={frame(READ_MAX)}>
+            {wide ? <View style={{ alignItems: 'center' }}>{player}</View> : player}
+            <View style={{ padding: S.pad }}>
+              {info}
+              {lists}
+            </View>
+          </View>
+        )}
       </ScrollView>
 
       <Sheet visible={!!noteSheet} onClose={() => setNoteSheet(null)} title={'Note @ ' + fmtMediaTime(noteSheet?.time || 0)}>
@@ -234,4 +288,8 @@ const st = StyleSheet.create({
   timePill: {
     borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4,
   },
+  cols: { flexDirection: 'row', alignItems: 'flex-start', gap: COL_GAP, paddingHorizontal: S.pad, paddingTop: 8 },
+  main: { flex: 3, minWidth: 0 },
+  /** the side column's first title lines up with the top of the video instead of a section's gap below it */
+  side: { flex: 2, minWidth: 0, marginTop: -S.section },
 });

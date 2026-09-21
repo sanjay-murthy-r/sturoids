@@ -14,6 +14,7 @@ import { TAB_ROUTES } from '../toolNav';
 import { useIntro } from '../intro';
 import { tick } from '../haptics';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
+import { RAIL_W } from '../layout';
 
 interface ItemMeta {
   /** full name, read by screen readers */
@@ -39,7 +40,6 @@ const DOT_TOP = BAR_PAD_TOP + ITEM_PAD + ICON + GAP + LABEL_H + GAP;
 const SWITCH = { duration: 200, easing: Easing.out(Easing.cubic) };
 
 // the rail: the same tabs standing in a column on the left of a wide window
-const RAIL_W = 88;
 const RAIL_PAD_TOP = 18;
 const RAIL_ITEM_H = 64;
 const RAIL_GAP = 8;

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Linking, Alert } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Linking, Alert, useWindowDimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
@@ -9,6 +9,10 @@ import { ScreenBG, Card, Sheet, Field, PillButton, Row, IconBtn, InfoDot, NeuHea
 import { toast } from '../components/Toast';
 import { Enter } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { WIDE_AT, columnWidth } from '../layout';
+
+/** between launchers on a wide window */
+const GRID_GAP = 14;
 
 function domainOf(url: string): string {
   try { return new URL(url).hostname; } catch { return ''; }
@@ -46,6 +50,7 @@ function LinkIcon({ link }: { link: AiLink }) {
 
 export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
+  const { width: winW } = useWindowDimensions();
   const aiLinks = useStore((s) => s.aiLinks);
   const setAiLinks = useStore((s) => s.setAiLinks);
   const [edit, setEdit] = useState(false);
@@ -76,6 +81,10 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setLabel(''); setUrl(''); setAddSheet(false);
   };
 
+  // two launchers a row on a phone, three on a wide window
+  const wide = winW >= WIDE_AT;
+  const itemW = wide ? (columnWidth(winW, mode === 'tab') - S.pad * 2 - GRID_GAP * 2) / 3 : 0;
+
   return (
     <ScreenBG guard={mode === 'tab'}>
       <NeuHeader
@@ -88,9 +97,9 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <PillButton small label={edit ? 'Done' : 'Edit'} outline onPress={() => setEdit(!edit)} />
         </Row>
 
-        <View style={st.grid}>
+        <View style={wide ? st.gridWide : st.grid}>
           {aiLinks.map((l, i) => (
-            <Enter key={l.id} index={i} style={st.item}>
+            <Enter key={l.id} index={i} style={wide ? { width: itemW } : st.item}>
               <Card pad={0} onPress={() => (edit ? undefined : open(l))}>
                 <View style={{ alignItems: 'center', paddingVertical: 18 }}>
                   <LinkIcon link={l} />
@@ -133,6 +142,7 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 const st = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   item: { width: '48%' },
+  gridWide: { flexDirection: 'row', flexWrap: 'wrap', columnGap: GRID_GAP },
   fallbackIcon: {
     width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
   },

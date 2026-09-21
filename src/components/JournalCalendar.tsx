@@ -59,7 +59,7 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
   while (cells.length % 7) cells.push(null);
 
   return (
-    <View>
+    <View style={st.root}>
       <View style={st.head}>
         <NeuIconBtn
           name="chevron-back" dim={36} size={17}
@@ -122,6 +122,8 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
 }
 
 const st = StyleSheet.create({
+  /** a month keeps a phone's proportions in a wide sheet */
+  root: { width: '100%', maxWidth: 420, alignSelf: 'center' },
   head: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   row: { flexDirection: 'row' },
   cellBox: { width: `${100 / 7}%`, alignItems: 'center', justifyContent: 'center', paddingVertical: 4 },
