@@ -15,6 +15,7 @@ import { useStore } from '../store';
 import { Bouncy, Pop, RISE_OUT, useAnimLevel, useEntrance } from './Motion';
 import { tap, tick } from '../haptics';
 import { stepTab } from '../toolNav';
+import { READ_MAX, WIDE_AT } from '../layout';
 
 export const useTheme = (): ThemeMode => {
   // subscribing to the accent here makes EVERY themed component repaint the
@@ -28,13 +29,17 @@ export const useTheme = (): ThemeMode => {
  * `guard` marks a screen shown in the tab bar: it paints an opaque status-bar zone and lets a
  * left or right fling move to the neighbouring tab, in bar order. `fling={false}` keeps the guard
  * but leaves horizontal gestures to the screen (a pager, a web view).
+ * On a wide window the screen sits in a centred column no wider than `maxWidth` (null: the whole width), so its
+ * header, its content and its floating buttons line up; on a phone nothing changes.
  */
-export function ScreenBG({ children, guard = false, fling = true }: {
-  children: React.ReactNode; guard?: boolean; fling?: boolean;
+export function ScreenBG({ children, guard = false, fling = true, maxWidth = READ_MAX }: {
+  children: React.ReactNode; guard?: boolean; fling?: boolean; maxWidth?: number | null;
 }) {
   const theme = useTheme(); // subscribes to the accent too, so every screen repaints on a new accent
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const bg = bgFor(theme);
+  const column = maxWidth != null && width >= WIDE_AT;
 
   const go = React.useCallback((dir: 1 | -1) => {
     if (stepTab(dir)) tick();
@@ -47,7 +52,7 @@ export function ScreenBG({ children, guard = false, fling = true }: {
 
   const body = (
     <View style={{ flex: 1, backgroundColor: bg }}>
-      {children}
+      {column ? <View style={{ flex: 1, width: '100%', maxWidth: maxWidth as number, alignSelf: 'center' }}>{children}</View> : children}
       {guard && (
         <View
           pointerEvents="none"
@@ -502,7 +507,9 @@ export function Sheet({
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
-  const { height: winH } = useWindowDimensions();
+  const { height: winH, width: winW } = useWindowDimensions();
+  // on a wide window a sheet keeps a phone's proportions: at most 560 wide, centred, still rising from the bottom
+  const narrowPanel = winW >= WIDE_AT ? st.sheetWide : null;
   // the panel's fixed chrome (padding 22 + paddingBottom 36 + handle 21 +
   // title 38, about 120dp) sits OUTSIDE this scroller, so the cap has to come
   // off the screen — a flat 540 pushed the primary button below a short display
@@ -561,7 +568,7 @@ export function Sheet({
         <Pressable style={{ flex: 1 }} onPress={onClose} />
       </Animated.View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <Animated.View style={[st.sheet, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: undefined }, panelStyle]}>
+        <Animated.View style={[st.sheet, narrowPanel, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: undefined }, panelStyle]}>
           {/* minimal has no shadow to define the handle, so the FILL has to
               carry it — C.inset on MIN.card is all but invisible */}
           <GestureDetector gesture={pull}>
@@ -821,6 +828,7 @@ const st = StyleSheet.create({
     borderTopWidth: 1.5, borderColor: C.lite,
     boxShadow: SH.sheetLift,
   },
+  sheetWide: { width: '100%', maxWidth: 560, alignSelf: 'center' },
   sheetHandle: {
     alignSelf: 'center', width: 44, height: 5, borderRadius: 3,
     backgroundColor: C.inset, marginBottom: 18,

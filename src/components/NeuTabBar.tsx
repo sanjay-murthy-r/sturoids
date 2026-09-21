@@ -38,12 +38,21 @@ const GAP = 3;
 const DOT_TOP = BAR_PAD_TOP + ITEM_PAD + ICON + GAP + LABEL_H + GAP;
 const SWITCH = { duration: 200, easing: Easing.out(Easing.cubic) };
 
+// the rail: the same tabs standing in a column on the left of a wide window
+const RAIL_W = 88;
+const RAIL_PAD_TOP = 18;
+const RAIL_ITEM_H = 64;
+const RAIL_GAP = 8;
+const RAIL_PITCH = RAIL_ITEM_H + RAIL_GAP;
+/** a rail tab centres its icon, name and dot room in its height; the dot's room starts this far down */
+const RAIL_DOT_IN_ITEM = (RAIL_ITEM_H - (ICON + GAP + LABEL_H + GAP + DOT)) / 2 + ICON + GAP + LABEL_H + GAP;
+
 /**
  * One tab of the rail: an outline icon that takes the accent when it is the current tab, with the tab's name arriving
  * beneath it. The two icon colours crossfade, so nothing snaps. The dot under the name belongs to the bar, which
  * glides it from tab to tab; each tab keeps the dot's room so nothing moves.
  */
-function TabItem({ meta, focused, onPress }: { meta: ItemMeta; focused: boolean; onPress: () => void }) {
+function TabItem({ meta, focused, onPress, vertical }: { meta: ItemMeta; focused: boolean; onPress: () => void; vertical: boolean }) {
   const level = useAnimLevel();
   const press = useSharedValue(0);
   const on = useSharedValue(focused ? 1 : 0);
@@ -62,7 +71,7 @@ function TabItem({ meta, focused, onPress }: { meta: ItemMeta; focused: boolean;
       onPress={onPress}
       onPressIn={() => { if (level !== 'none') press.value = withTiming(1, SINK_IN); }}
       onPressOut={() => { if (level !== 'none') press.value = withSpring(0, RISE_OUT); }}
-      style={st.item}
+      style={vertical ? st.railItem : st.item}
       accessibilityRole="tab"
       accessibilityState={{ selected: focused }}
       accessibilityLabel={meta.label}
@@ -86,16 +95,20 @@ function TabItem({ meta, focused, onPress }: { meta: ItemMeta; focused: boolean;
 /**
  * The quiet rail: five fixed routes (Today, three slots, More) as outline icons on the material, under one hairline.
  * Only the current tab takes the accent, with its name and a small dot beneath: no pill, no well, no shadow. A slot's
- * icon and name follow whichever tool Settings put in it, so a swap can never add, drop or reflow a tab.
+ * icon and name follow whichever tool Settings put in it, so a swap can never add, drop or reflow a tab. On a wide
+ * window (the navigator puts the bar on the left) the same tabs stand in a column, with a hairline on their right.
  */
-export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
+export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
   const theme = useTheme();
   const level = useAnimLevel();
   const insets = useSafeAreaInsets();
   const rawSlots = useStore((s) => s.settings.tabSlots);
   const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
-  // the bar steps aside while the keyboard is up, so a text field never sits under a row of tabs
+  const vertical = descriptors[state.routes[state.index]?.key]?.options.tabBarPosition === 'left';
+  // the bar steps aside while the keyboard is up, so a text field never sits under a row of tabs; the rail, beside
+  // the screen rather than under it, stays
   const keyboardOpen = useKeyboardOpen();
+  const stepAside = keyboardOpen && !vertical;
 
   const routeNames = TAB_ROUTES as readonly string[];
   const focusedName = state.routes[state.index]?.name;
@@ -106,13 +119,13 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
   const barH = useSharedValue(0);
   const hide = useSharedValue(0);
   React.useEffect(() => {
-    const to = keyboardOpen ? 1 : 0;
+    const to = stepAside ? 1 : 0;
     hide.value = level === 'none'
       ? to
-      : withTiming(to, keyboardOpen
+      : withTiming(to, stepAside
         ? { duration: 180, easing: Easing.in(Easing.quad) }
         : { duration: 240, easing: Easing.out(Easing.cubic) });
-  }, [keyboardOpen, level]);
+  }, [stepAside, level]);
   // the bar arrives last, once the intro has left and the day has begun to rise into its place
   const introOver = useIntro((s) => s.phase !== 'playing');
   const arrive = useSharedValue(introOver || level === 'none' ? 1 : 0);
@@ -120,10 +133,9 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
     if (!introOver) return;
     arrive.value = level === 'none' ? 1 : withDelay(320, withTiming(1, { duration: 520, easing: Easing.out(Easing.cubic) }));
   }, [introOver, level]);
-  const slideStyle = useAnimatedStyle(() => ({
-    opacity: arrive.value,
-    transform: [{ translateY: hide.value * (barH.value + 2) + 18 * (1 - arrive.value) }],
-  }));
+  const slideStyle = useAnimatedStyle(() => (vertical
+    ? { opacity: arrive.value, transform: [{ translateX: -18 * (1 - arrive.value) }] }
+    : { opacity: arrive.value, transform: [{ translateY: hide.value * (barH.value + 2) + 18 * (1 - arrive.value) }] }), [vertical]);
 
   // the one dot, under the current tab's name: it glides from tab to tab instead of appearing at the new one. On
   // the first paint it is already in place, and with animations off it moves without travelling.
@@ -132,9 +144,11 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
   const dotAt = useSharedValue(Math.max(0, focusIndex));
   React.useEffect(() => {
     if (focusIndex < 0) return;
-    dotAt.value = level === 'none' || slotW === 0 ? focusIndex : withTiming(focusIndex, SWITCH);
+    dotAt.value = level === 'none' || (!vertical && slotW === 0) ? focusIndex : withTiming(focusIndex, SWITCH);
   }, [focusIndex, level]);
-  const dotStyle = useAnimatedStyle(() => ({ transform: [{ translateX: dotAt.value * slotW }] }), [slotW]);
+  const dotStyle = useAnimatedStyle(() => (vertical
+    ? { transform: [{ translateY: dotAt.value * RAIL_PITCH }] }
+    : { transform: [{ translateX: dotAt.value * slotW }] }), [slotW, vertical]);
 
   const metaFor = (name: string): ItemMeta => {
     if (name === 'index') return TODAY;
@@ -143,21 +157,26 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
     return tool ? { label: tool.label, shortLabel: tool.shortLabel, icon: tool.icon } : MORE;
   };
 
+  const hairline = theme === 'minimal' ? MIN.hairline : C.hairline;
   return (
     <Animated.View
-      pointerEvents={keyboardOpen ? 'none' : 'auto'}
-      onLayout={(e) => {
+      pointerEvents={stepAside ? 'none' : 'auto'}
+      onLayout={vertical ? undefined : (e) => {
         barH.value = e.nativeEvent.layout.height;
         setSlotW((e.nativeEvent.layout.width - BAR_PAD_X * 2) / routeNames.length);
       }}
-      style={[
+      style={vertical ? [
+        st.rail,
+        { paddingTop: insets.top + RAIL_PAD_TOP, backgroundColor: bgFor(theme), borderRightColor: hairline },
+        slideStyle,
+      ] : [
         st.bar,
         {
           paddingBottom: Math.max(insets.bottom, 10) + 2,
           backgroundColor: bgFor(theme),
-          borderTopColor: theme === 'minimal' ? MIN.hairline : C.hairline,
+          borderTopColor: hairline,
         },
-        keyboardOpen && st.lifted,
+        stepAside && st.lifted,
         slideStyle,
       ]}
     >
@@ -180,9 +199,14 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
             navigation.dispatch({ ...StackActions.popToTop(), target: nested.key });
           }
         };
-        return <TabItem key={name} meta={metaFor(name)} focused={focused} onPress={onPress} />;
+        return <TabItem key={name} meta={metaFor(name)} focused={focused} onPress={onPress} vertical={vertical} />;
       })}
-      {slotW > 0 && focusIndex >= 0 ? (
+      {vertical && focusIndex >= 0 ? (
+        <Animated.View pointerEvents="none" style={[st.railDot, { top: insets.top + RAIL_PAD_TOP + RAIL_DOT_IN_ITEM }, dotStyle]}>
+          <View style={[st.dot, { backgroundColor: C.accent }]} />
+        </Animated.View>
+      ) : null}
+      {!vertical && slotW > 0 && focusIndex >= 0 ? (
         <Animated.View pointerEvents="none" style={[st.dotTrack, { width: slotW }, dotStyle]}>
           <View style={[st.dot, { backgroundColor: C.accent }]} />
         </Animated.View>
@@ -203,5 +227,8 @@ const st = StyleSheet.create({
   },
   dotRoom: { width: DOT, height: DOT, marginTop: GAP },
   dotTrack: { position: 'absolute', top: DOT_TOP, left: BAR_PAD_X, height: DOT, alignItems: 'center' },
+  rail: { width: RAIL_W, paddingBottom: 12, borderRightWidth: 1 },
+  railItem: { height: RAIL_ITEM_H, marginBottom: RAIL_GAP, alignItems: 'center', justifyContent: 'center' },
+  railDot: { position: 'absolute', left: 0, width: RAIL_W, height: DOT, alignItems: 'center' },
   dot: { width: DOT, height: DOT, borderRadius: DOT / 2 },
 });

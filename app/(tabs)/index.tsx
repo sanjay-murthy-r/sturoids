@@ -26,11 +26,15 @@ import { journalDayFor } from '../../src/journal';
 import { indexScores, upcoming, groupSummary, fmtPct, fromToday } from '../../src/scores';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
 import { useNow } from '../../src/hooks/useNow';
+import { WIDE_AT, WIDE_MAX } from '../../src/layout';
 
 // what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
 const NO_SESSIONS: FocusSession[] = [];
 const NO_HABITS: Habit[] = [];
 const NO_PLAN = {} as PlannerWeek;
+
+/** From this width of the day's column, Today sets its sections in two columns. */
+const TWO_COL_AT = 900;
 
 /** A shortcut to an archived tool stays in the saved list but is not shown. */
 const hiddenTile = (q: QuickItem, archived: ReadonlySet<string>) => q.kind === 'tool' && archived.has(q.target);
@@ -67,6 +71,7 @@ export default function Today() {
   const [installed, setInstalled] = useState<InstalledApp[]>([]);
   const [appsLoaded, setAppsLoaded] = useState(false);
   const [customLabel, setCustomLabel] = useState('');
+  const [areaW, setAreaW] = useState(0);
   const now = useNow();
 
   const today = todayKey();
@@ -277,13 +282,8 @@ export default function Today() {
     };
   }, [introDone]);
 
-  return (
-    <ScreenBG guard>
-      <ScrollView
-        key={fk}
-        contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 44 }}
-        showsVerticalScrollIndicator={false}
-      >
+  // the sections, placed in one column on a phone (and a tablet held upright), in two on a wide window
+  const greetingBlock = (
         <Enter index={0}>
           <Pressable onPress={() => { setNameDraft(settings.name); setNameSheet(true); }}>
             <Text style={T.kicker}>{fmtDate(now)}</Text>
@@ -295,7 +295,11 @@ export default function Today() {
             {greeting.sub ? <Text style={[T.label, { marginBottom: 24 }]}>{greeting.sub}</Text> : null}
           </Pressable>
         </Enter>
+  );
 
+  const noBlocksToday = !nextBlock && !(planner[dayName(now)] || []).length;
+  const planBlock = hidePlanner || (!nextBlock && !noBlocksToday) ? null : (
+      <>
         {nextBlock && !hidePlanner && (
           <Enter index={1}>
             <Card hero pad={16} onPress={() => openTool('planner')}>
@@ -332,8 +336,10 @@ export default function Today() {
             </Pressable>
           </Enter>
         ) : null}
+      </>
+  );
 
-        {hideTasks && hidePlanner && hideFocus ? null : (
+  const glanceBlock = hideTasks && hidePlanner && hideFocus ? null : (
           <Enter index={2}>
             <Card pad={0}>
               <Row>
@@ -350,8 +356,10 @@ export default function Today() {
               </Row>
             </Card>
           </Enter>
-        )}
+  );
 
+  const quickBlock = (
+      <>
         <Enter index={3}>
           <SectionTitle
             right={
@@ -374,8 +382,10 @@ export default function Today() {
             onAdd={openQaAdd}
           />
         </Enter>
+      </>
+  );
 
-        {journalNudge ? (
+  const journalBlock = journalNudge ? (
           <Enter index={4}>
             <Pressable
               onPress={() => openTool('journal')}
@@ -389,8 +399,9 @@ export default function Today() {
               <Text style={[st.link, { color: C.gold }]}>Write</Text>
             </Pressable>
           </Enter>
-        ) : null}
-        {hideTasks ? null : (
+  ) : null;
+
+  const listBlock = hideTasks ? null : (
           <>
             <Enter index={4}>
               <SectionTitle
@@ -416,9 +427,9 @@ export default function Today() {
               )}
             </Enter>
           </>
-        )}
+  );
 
-        {habits.length > 0 && !hidePlanner && (
+  const habitsBlock = habits.length > 0 && !hidePlanner && (
           <Enter index={5}>
             <SectionTitle>Habits</SectionTitle>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
@@ -438,9 +449,9 @@ export default function Today() {
               })}
             </View>
           </Enter>
-        )}
+  );
 
-        {hideFocus ? null : (
+  const weekBlock = hideFocus ? null : (
           <>
             <Enter index={6}>
               <SectionTitle>Focus this week</SectionTitle>
@@ -462,6 +473,43 @@ export default function Today() {
                 </Text>
               </Card>
             </Enter>
+          </>
+  );
+
+  // two columns once a wide window gives the day room for them: what is planned and what is left on the left, the
+  // shortcuts, the journal, habits and the week on the right
+  const twoCol = areaW >= TWO_COL_AT && !!listBlock;
+  return (
+    <ScreenBG guard maxWidth={WIDE_MAX}>
+      <ScrollView
+        key={fk}
+        onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}
+        contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 44 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {greetingBlock}
+        {twoCol ? (
+          <>
+            {planBlock && glanceBlock ? (
+              <View style={st.pair}>
+                <View style={st.col}>{planBlock}</View>
+                <View style={st.col}>{glanceBlock}</View>
+              </View>
+            ) : planBlock || glanceBlock}
+            <View style={st.pair}>
+              <View style={st.col}>{listBlock}</View>
+              <View style={st.col}>{quickBlock}{journalBlock}{habitsBlock}{weekBlock}</View>
+            </View>
+          </>
+        ) : (
+          <>
+            {planBlock}
+            {glanceBlock}
+            {quickBlock}
+            {journalBlock}
+            {listBlock}
+            {habitsBlock}
+            {weekBlock}
           </>
         )}
       </ScrollView>
@@ -562,21 +610,24 @@ const QA_ADD_H = 52;
 
 interface QaRect { x: number; y: number; w: number }
 
+/** a wide window gives each column at least this much, so tiles keep a phone's proportions */
+const QA_MIN_W = 88;
+
 /**
- * Packs tiles into rows of four columns, in their order: a shortcut with something to say spans two columns, the rest
- * one. A row that cannot take the next tile, and the last row, widen their own small tiles into the gap, and a tile
- * alone on the last row spans it, so no row ends with a hole.
+ * Packs tiles into rows of `cols` columns (four on a phone), in their order: a shortcut with something to say spans two
+ * columns, the rest one. A row that cannot take the next tile, and the last row, widen their own small tiles into the
+ * gap, and a tile alone on the last row spans it, so no row ends with a hole.
  */
-function packTiles(spans: number[], colW: number): QaRect[] {
+function packTiles(spans: number[], colW: number, cols: number): QaRect[] {
   const cells: { col: number; row: number; span: number }[] = [];
   let row = 0;
   let used = 0;
   let start = 0;
   const close = () => {
     const line = cells.slice(start);
-    let gap = QA_COLS - used;
+    let gap = cols - used;
     if (line.length === 1) {
-      line[0].span = QA_COLS;
+      line[0].span = cols;
       gap = 0;
     }
     for (let i = line.length - 1; i >= 0 && gap > 0; i--) {
@@ -586,7 +637,7 @@ function packTiles(spans: number[], colW: number): QaRect[] {
     for (const c of line) { c.col = col; col += c.span; }
   };
   spans.forEach((span) => {
-    if (used + span > QA_COLS) {
+    if (used + span > cols) {
       close();
       row++;
       used = 0;
@@ -771,10 +822,15 @@ const QuickGrid = React.memo(function QuickGrid({ items, metas, edit, onRun, onR
 }) {
   const { width: winW } = useWindowDimensions();
   const level = useAnimLevel();
-  const colW = (winW - S.pad * 2 - QA_GAP * (QA_COLS - 1)) / QA_COLS;
+  // the grid measures its own room (a column of Today on a wide window); until it has, it assumes the phone's
+  const [boxW, setBoxW] = useState(0);
+  const avail = boxW || winW - S.pad * 2;
+  // a phone always has four columns; a wide window fits as many as keep the tiles in a phone's proportions
+  const cols = winW >= WIDE_AT ? Math.max(QA_COLS, Math.floor((avail + QA_GAP) / (QA_MIN_W + QA_GAP))) : QA_COLS;
+  const colW = (avail - QA_GAP * (cols - 1)) / cols;
   const [dragId, setDragId] = useState<string | null>(null);
   const spanKey = items.map((q) => (metas[q.id] ? 2 : 1)).join('');
-  const layout = useMemo(() => packTiles(spanKey.split('').map(Number), colW), [spanKey, colW]);
+  const layout = useMemo(() => packTiles(spanKey.split('').map(Number), colW, cols), [spanKey, colW, cols]);
   // the drag worklets read the packed slots from here, so a reorder never rebuilds a gesture mid-drag
   const rects = useSharedValue<QaRect[]>(layout);
   useEffect(() => { rects.value = layout; }, [layout]);
@@ -796,7 +852,7 @@ const QuickGrid = React.memo(function QuickGrid({ items, metas, edit, onRun, onR
     onReorder(next);
   };
   return (
-    <View style={{ height, marginBottom: 6 }}>
+    <View style={{ height, marginBottom: 6 }} onLayout={(e) => setBoxW(e.nativeEvent.layout.width)}>
       {items.map((q, i) => (
         <QuickTile
           key={q.id} q={q} meta={metas[q.id] ?? null} index={i} rect={layout[i]} wide={layout[i].w > colW + 1} rects={rects}
@@ -866,6 +922,8 @@ function WeekBar({ label, mins, maxMins, isToday }: {
 }
 
 const st = StyleSheet.create({
+  pair: { flexDirection: 'row', alignItems: 'flex-start', gap: 28 },
+  col: { flex: 1, minWidth: 0 },
   blockBar: { width: 4, height: 34, borderRadius: 2, marginRight: 12 },
   // accent colours are applied inline at the call site: a StyleSheet freezes
   // C.accent at import time and would never follow an accent change

@@ -1,10 +1,11 @@
 import React from 'react';
-import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, F, MIN, NEU } from '../theme';
 import { useTheme } from './UI';
 import { tick } from '../haptics';
+import { WIDE_AT } from '../layout';
 
 export interface ToastAction { label: string; onPress: () => void }
 type Shown = { message: string; action?: ToastAction; key: number };
@@ -24,6 +25,7 @@ export function toast(message: string, action?: ToastAction) {
 export function ToastHost() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const { width: winW } = useWindowDimensions();
   const [shownToast, setShownToast] = React.useState<Shown | null>(null);
   const shown = useSharedValue(0);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -56,7 +58,8 @@ export function ToastHost() {
   const { message, action, key } = shownToast;
 
   return (
-    <Animated.View pointerEvents="box-none" style={[st.wrap, { bottom: insets.bottom + 96 }, style]}>
+    // above the tab bar on a phone; a wide window keeps its tabs in a rail at the side, so the card sits low
+    <Animated.View pointerEvents="box-none" style={[st.wrap, { bottom: insets.bottom + (winW >= WIDE_AT ? 24 : 96) }, style]}>
       <View
         pointerEvents={action ? 'auto' : 'none'}
         style={[

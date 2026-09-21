@@ -4,7 +4,7 @@
     "slug": "all-in-one-student-app",
     "version": "1.4.3",
     "scheme": "sturoids",
-    "orientation": "portrait",
+    "orientation": "default",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#30302E",
     "newArchEnabled": true,

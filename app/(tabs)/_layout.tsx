@@ -1,5 +1,7 @@
 import React from 'react';
+import { useWindowDimensions } from 'react-native';
 import { Tabs } from 'expo-router';
+import { WIDE_AT } from '../../src/layout';
 import { bgFor } from '../../src/theme';
 import { useStore } from '../../src/store';
 import { NeuTabBar } from '../../src/components/NeuTabBar';
@@ -14,12 +16,16 @@ export default function TabLayout() {
   useRegisterNavigation();
   const theme = useStore((s) => s.settings.theme);
   const level = useAnimLevel();
+  const { width } = useWindowDimensions();
   return (
     <Tabs
       tabBar={(props) => <NeuTabBar {...props} />}
       backBehavior="initialRoute"
       screenOptions={{
         headerShown: false,
+        // a wide window (a tablet, a wide split screen) keeps its tabs in a rail on the left, like a phone's bar
+        // turned on its side; crossing the width keeps whichever tab is open
+        tabBarPosition: width >= WIDE_AT ? 'left' : 'bottom',
         sceneStyle: { backgroundColor: bgFor(theme) },
         // a tab slides a short way in from its side of the bar
         animation: level === 'none' ? 'none' : 'shift',

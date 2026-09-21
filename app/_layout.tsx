@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Alert, InteractionManager, Platform, View } from 'react-native';
+import { Alert, Dimensions, InteractionManager, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
 import * as NavigationBar from 'expo-navigation-bar';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import {
   useFonts, Rubik_400Regular, Rubik_500Medium, Rubik_600SemiBold, Rubik_700Bold,
 } from '@expo-google-fonts/rubik';
@@ -21,6 +22,15 @@ import { ToastHost } from '../src/components/Toast';
 // frame — no bare-material gap between the splash icon and the first real frame
 SplashScreen.preventAutoHideAsync().catch(() => {});
 SplashScreen.setOptions({ duration: 180, fade: true });
+
+// a phone stays upright, as it always was; a tablet turns either way. Decided by the screen, not the window, so
+// splitting a tablet's screen never makes it count as a phone.
+{
+  const screen = Dimensions.get('screen');
+  if (Math.min(screen.width, screen.height) < 600) {
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+  }
+}
 
 export default function RootLayout() {
   const hydrated = useHydrated();
