@@ -34,6 +34,16 @@ export const RISE_OUT = { damping: 20, stiffness: 240, mass: 0.8 };
 
 const ENTER = { duration: 540, easing: Easing.out(Easing.cubic) };
 
+/** A panel that takes another's place rises a short way into it as it comes up to full strength. */
+export const riseIn = () => {
+  'worklet';
+  const ease = { duration: 240, easing: Easing.out(Easing.cubic) };
+  return {
+    initialValues: { opacity: 0, transform: [{ translateY: 8 }] },
+    animations: { opacity: withTiming(1, ease), transform: [{ translateY: withTiming(0, ease) }] },
+  };
+};
+
 /**
  * A surface's entrance: it rises a short way out of the material and comes up to full strength, once, the first time
  * its screen is really in view. That is after the intro has left, and for a tab the first time it is opened, not
@@ -76,6 +86,7 @@ export function Enter({
  */
 export function Bouncy({
   onPress, onLongPress, children, style, disabled, scaleTo = 0.975, radius = 22, hitSlop, sink = true,
+  accessibilityLabel, accessibilityRole,
 }: {
   onPress?: () => void; onLongPress?: () => void; children: React.ReactNode;
   style?: any; disabled?: boolean; scaleTo?: number;
@@ -84,6 +95,8 @@ export function Bouncy({
   hitSlop?: number;
   /** false keeps the element in place while pressed (a row inside a card): only the carve shows */
   sink?: boolean;
+  accessibilityLabel?: string;
+  accessibilityRole?: 'button' | 'tab' | 'link';
 }) {
   const level = useAnimLevel();
   const p = useSharedValue(0); // 0 = rest, 1 = pressed
@@ -97,7 +110,10 @@ export function Bouncy({
 
   if (level === 'none') {
     return (
-      <Pressable onPress={onPress} onLongPress={onLongPress} disabled={disabled} style={style} hitSlop={hitSlop}>
+      <Pressable
+        onPress={onPress} onLongPress={onLongPress} disabled={disabled} style={style} hitSlop={hitSlop}
+        accessibilityLabel={accessibilityLabel} accessibilityRole={accessibilityRole}
+      >
         {children}
       </Pressable>
     );
@@ -108,6 +124,8 @@ export function Bouncy({
       onLongPress={onLongPress}
       disabled={disabled}
       hitSlop={hitSlop}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole={accessibilityRole}
       onPressIn={() => { p.value = withTiming(1, SINK_IN); }}
       onPressOut={() => { p.value = withSpring(0, RISE_OUT); }}
       style={[style, aStyle]}

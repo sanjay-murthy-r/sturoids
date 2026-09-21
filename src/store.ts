@@ -115,6 +115,10 @@ export interface Settings {
   journalCheckout: boolean;
   /** tools kept out of sight (never one in a tab slot) */
   archivedTools: ToolKey[];
+  /** Deep Work's ambient screen shows the seconds beside the minutes */
+  ambientSeconds: boolean;
+  /** and the time of day above them */
+  ambientClock: boolean;
 }
 
 export type PlannerWeek = Record<DayName, PlannerBlock[]>;
@@ -180,6 +184,8 @@ export const DEFAULT_SETTINGS: Settings = {
   journalReminderTime: '',
   journalCheckout: true,
   archivedTools: [...DEFAULT_ARCHIVED],
+  ambientSeconds: true,
+  ambientClock: false,
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */

@@ -1,26 +1,16 @@
 import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { Easing, FadeOut, withTiming } from 'react-native-reanimated';
+import Animated, { FadeOut } from 'react-native-reanimated';
 import { C, F, MIN, NEU, S } from '../theme';
 import { JournalEntry } from '../store';
 import { MOODS, journalDateParts, shiftKey } from '../journal';
 import { todayKey } from '../utils';
-import { Bouncy, useAnimLevel } from './Motion';
+import { Bouncy, riseIn, useAnimLevel } from './Motion';
 import { useTheme } from './UI';
 import { tick } from '../haptics';
 
 type Scale = JournalEntry['mood'];
-
-/** the card rises 8 dp as it fades in */
-const rise = () => {
-  'worklet';
-  const ease = { duration: 240, easing: Easing.out(Easing.cubic) };
-  return {
-    initialValues: { opacity: 0, transform: [{ translateY: 8 }] },
-    animations: { opacity: withTiming(1, ease), transform: [{ translateY: withTiming(0, ease) }] },
-  };
-};
 
 /**
  * The day's check-out: how it felt (five flat moods) and how it went (five stars). It sits above the journal's
@@ -46,7 +36,7 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
 
   return (
     <Animated.View
-      entering={level === 'none' ? undefined : rise}
+      entering={level === 'none' ? undefined : riseIn}
       exiting={level === 'none' ? undefined : FadeOut.duration(160)}
       style={[st.card, surface]}
     >

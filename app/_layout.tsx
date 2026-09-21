@@ -6,10 +6,13 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import {
-  useFonts, Rubik_400Regular, Rubik_500Medium, Rubik_600SemiBold, Rubik_700Bold,
-} from '@expo-google-fonts/rubik';
-import { IBMPlexMono_600SemiBold } from '@expo-google-fonts/ibm-plex-mono';
+// each face from its own file: the package's index would carry all eighteen Rubik files into the app
+import { useFonts } from '@expo-google-fonts/rubik/useFonts';
+import { Rubik_300Light } from '@expo-google-fonts/rubik/300Light';
+import { Rubik_400Regular } from '@expo-google-fonts/rubik/400Regular';
+import { Rubik_500Medium } from '@expo-google-fonts/rubik/500Medium';
+import { Rubik_600SemiBold } from '@expo-google-fonts/rubik/600SemiBold';
+import { Rubik_700Bold } from '@expo-google-fonts/rubik/700Bold';
 import { bgFor } from '../src/theme';
 import { useStore, subscribeLoadNotices } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
@@ -41,7 +44,7 @@ export default function RootLayout() {
   // the intro renders only these two faces, so only they gate its first frame. A face that fails
   // to load falls back to the system font instead of holding the app on its splash forever.
   const [introLoaded, introError] = useFonts({ Rubik_500Medium, Rubik_600SemiBold });
-  const [appLoaded, appError] = useFonts({ Rubik_400Regular, Rubik_700Bold, IBMPlexMono_600SemiBold });
+  const [appLoaded, appError] = useFonts({ Rubik_300Light, Rubik_400Regular, Rubik_700Bold });
   const introFonts = introLoaded || !!introError;
   const appFonts = appLoaded || !!appError;
   const splashHidden = useRef(false);

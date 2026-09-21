@@ -88,6 +88,8 @@ const scenarios = {
     assert.deepEqual(s.scores, []);
     assert.deepEqual(s.settings.archivedTools, ['desmos', 'ai'], 'Desmos and AI start archived');
     assert.equal(s.settings.journalCheckout, true);
+    assert.equal(s.settings.ambientSeconds, true, 'the ambient screen shows seconds, as picked in the lab');
+    assert.equal(s.settings.ambientClock, false);
     assert.equal(app.store.loadFailedThisLaunch(), false);
     assert.deepEqual(app.notices, []);
   },

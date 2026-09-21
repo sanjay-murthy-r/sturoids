@@ -288,9 +288,9 @@ export function IconBtn({ name, onPress, color = C.textDim, size = 22, style, pa
 }
 
 /** Raised circular action button (kit button geometry). `active` carves in. */
-export function NeuIconBtn({ name, onPress, color, size = 20, dim = 44, active, style }: {
+export function NeuIconBtn({ name, onPress, color, size = 20, dim = 44, active, style, accessibilityLabel }: {
   name: any; onPress?: () => void; color?: string; size?: number; dim?: number;
-  active?: boolean; style?: ViewStyle;
+  active?: boolean; style?: ViewStyle; accessibilityLabel?: string;
 }) {
   const theme = useTheme();
   const c = color || C.accent;
@@ -299,6 +299,8 @@ export function NeuIconBtn({ name, onPress, color, size = 20, dim = 44, active, 
       onPress={onPress}
       scaleTo={0.9}
       radius={dim / 2}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole={accessibilityLabel ? 'button' : undefined}
       style={[
         { width: dim, height: dim, borderRadius: dim / 2, alignItems: 'center', justifyContent: 'center' },
         theme === 'minimal'

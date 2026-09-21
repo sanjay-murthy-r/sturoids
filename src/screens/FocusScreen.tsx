@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Pressable, Modal, Alert, AppState } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Pressable, Alert, AppState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
-import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T } from '../theme';
 import { useStore } from '../store';
 import { todayKey, fmtDuration, uid, toMinutes, fmtClockTime } from '../utils';
@@ -13,93 +13,28 @@ import {
   ListCard, ListRow,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Enter, useAnimLevel, useFocusKey } from '../components/Motion';
+import { Enter, riseIn, useAnimLevel, useFocusKey } from '../components/Motion';
 import { Wheel } from '../components/Wheel';
 import { tick as haptic } from '../haptics';
 import { NOTIF_CHANNEL_ID, cancelCountdownEnd, ensurePermission, scheduleCountdownEnd } from '../notifications';
-import { FINISH_NOTIF_ID, TimerState, displayOf, elapsedOf, shownSecondsOf, useSessionTick } from '../deepWork';
+import { FINISH_NOTIF_ID, TimerState } from '../deepWork';
 import { AmbientView } from '../components/AmbientView';
+import { ClockDigits } from '../components/ClockDigits';
+import { SessionStage } from '../components/SessionStage';
+import { READ_MAX, WIDE_MAX, frame } from '../layout';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
 
-/** The finish-line heads-up has a fixed id, so it can be cancelled even after the app was killed. */
-const HERO_SIZES = [48, 42, 38];
-/** the clock's slot keeps the hero height at every size, so a smaller clock never moves what sits below it */
-const CLOCK_SLOT_H = Math.round(HERO_SIZES[0] * 1.25);
+/** the idle stopwatch's clock sits in the slot the clock has always had, so the card keeps its height */
+const CLOCK_SLOT_H = 60;
 /** a stopwatch left running with no finish line (a killed app, a forgotten session) logs at most this much */
 const STOPWATCH_CAP_SEC = 12 * 3600;
+/** from this width of the screen's area, a sideways tablet, the session tasks and history sit beside the session */
+const TWO_COL_AT = 900;
 
 /** the countdown lengths the wheel offers, in minutes; a custom length joins them */
 const LENGTHS = Array.from({ length: 48 }, (_, i) => 5 + 5 * i);
-const ROLL = { duration: 420, easing: Easing.out(Easing.cubic) };
-
-/** a digit arriving from above, and the one it replaces dropping away */
-const rollIn = (h: number) => () => {
-  'worklet';
-  return {
-    initialValues: { opacity: 0, transform: [{ translateY: -h * 0.6 }] },
-    animations: { opacity: withTiming(1, ROLL), transform: [{ translateY: withTiming(0, ROLL) }] },
-  };
-};
-const rollOut = (h: number) => () => {
-  'worklet';
-  return {
-    initialValues: { opacity: 1, transform: [{ translateY: 0 }] },
-    animations: { opacity: withTiming(0, ROLL), transform: [{ translateY: withTiming(h * 0.6, ROLL) }] },
-  };
-};
-
-/** The live time. Only this re-renders each second, and each digit that changes rolls over instead of blinking. */
-function LiveClock({ timer, availW = 0, reserve = 0 }: { timer: TimerState; availW?: number; reserve?: number }) {
-  useSessionTick(timer);
-  const level = useAnimLevel();
-  const text = fmtDuration(shownSecondsOf(timer));
-  // m:ss always keeps the hero size; h:mm:ss steps down only when it would not fit the card
-  let size = HERO_SIZES[0];
-  if (availW > 0 && text.length >= 7) {
-    size = HERO_SIZES.find((px) => text.length * 0.6 * px + reserve <= availW - 24) ?? HERO_SIZES[HERO_SIZES.length - 1];
-  }
-  const h = Math.round(size * 1.25);
-  // When the hours arrive and the clock has to step down a size, the smaller clock fades in over the larger one in
-  // the same slot, instead of every digit and colon snapping smaller in one frame. The clock's first size needs no
-  // fade: the card it sits in brings it in.
-  const firstSize = React.useRef(size);
-  const resized = level !== 'none' && size !== firstSize.current;
-  return (
-    <View style={st.clockSlot}>
-      <Animated.View
-        key={size}
-        entering={resized ? FadeIn.duration(280) : undefined}
-        exiting={level === 'none' ? undefined : FadeOut.duration(200)}
-        style={[st.clockRow, { height: h }]}
-        accessible
-        accessibilityLabel={text}
-      >
-        {text.split('').map((ch, i) => (ch === ':' ? (
-          <Text key={'sep' + (text.length - i)} style={[st.time, { fontSize: size, lineHeight: h }]}>:</Text>
-        ) : (
-          // cells are keyed from the right, so the seconds keep their place when the hours appear
-          <View key={'cell' + (text.length - i)} style={{ width: size * 0.6, height: h, overflow: 'hidden' }}>
-            <Animated.Text
-              key={ch}
-              entering={level === 'none' ? undefined : rollIn(h)}
-              exiting={level === 'none' ? undefined : rollOut(h)}
-              style={[st.time, st.digit, { fontSize: size, lineHeight: h }]}
-            >
-              {ch}
-            </Animated.Text>
-          </View>
-        )))}
-      </Animated.View>
-    </View>
-  );
-}
-
-function LiveProgress({ timer }: { timer: TimerState }) {
-  useSessionTick(timer);
-  return <ProgressBar value={Math.min(1, Math.max(0, 1 - displayOf(timer) / (timer.targetMin * 60)))} />;
-}
 
 export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
@@ -129,7 +64,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [accumSec, setAccumSec] = useState(saved?.accumSec ?? 0);
   const [subject, setSubject] = useState(saved?.subject ?? '');
   const [attached, setAttached] = useState<Attached[]>(saved?.attached ?? []);
-  const [heroW, setHeroW] = useState(0);
+  const [subjectSheet, setSubjectSheet] = useState(false);
+  const [areaW, setAreaW] = useState(0);
   const startedAtRef = useRef<number | null>(saved?.startedAt ?? null);
   const [pickSheet, setPickSheet] = useState(false);
   const [customTask, setCustomTask] = useState('');
@@ -423,24 +359,27 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     sessions.filter((s) => s.dateKey === today).reduce((a, s) => a + s.netSeconds, 0) / 60
   );
 
-  return (
-    <ScreenBG guard={mode === 'tab'}>
-      {mode !== 'tab' && <NeuHeader title="Deep Work" />}
-      <ScrollView
-        key={fk}
-        contentContainerStyle={{ padding: S.pad, paddingTop: mode === 'tab' ? insets.top + 20 : 8, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
-      >
-        {mode === 'tab' && <Text style={st.h1}>Deep Work</Text>}
-        {todayFocusMin > 0 ? (
-          <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginBottom: 22 }}>
-            {todayFocusMin} focused minutes today
-          </Text>
-        ) : (
-          <View style={{ height: 22 }} />
-        )}
+  const idle = !started;
+  // the screen's own entrance brings the first stage in; after that, a start or an end rises the new one in place
+  const stageNow = idle ? 'idle' : 'running';
+  const lastStage = useRef(stageNow);
+  const switched = useRef(false);
+  if (lastStage.current !== stageNow) {
+    lastStage.current = stageNow;
+    switched.current = true;
+  }
+  const switchIn = switched.current && level !== 'none' ? riseIn : undefined;
+  const shownSubject = subject.trim();
+  const current = attached.length === 0
+    ? undefined
+    : currentTask ? { title: currentTask.title, color: currentTask.kind === 'mission' ? C.amber : C.green } : null;
+  const twoCol = areaW >= TWO_COL_AT;
 
-        {/* timer mode */}
-        {!started && (
+  const stageBlock = (
+    <Enter index={0}>
+      {idle ? (
+        <Animated.View key="idle" entering={switchIn}>
+          {/* timer mode */}
           <SegmentedControl
             size="sm"
             options={[
@@ -451,13 +390,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             onChange={(k) => { setTimerMode(k); if (k === 'countdown') clearFinishLine(); }}
             style={{ marginBottom: 24 }}
           />
-        )}
-
-        {/* timer hero */}
-        <Enter index={0}>
           <GlassCard hero style={{ alignItems: 'center', paddingVertical: 34 }}>
-            <View style={{ alignSelf: 'stretch' }} onLayout={(e) => setHeroW(e.nativeEvent.layout.width)} />
-            {!started && timerMode === 'countdown' ? (
+            {timerMode === 'countdown' ? (
               // the length: drag it or tap a length beside it; tap the number for an exact length or a clock time
               <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(260)} style={st.wheelBox}>
                 <Wheel
@@ -476,13 +410,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 />
               </Animated.View>
             ) : (
-              <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(260)} style={pulseStyle}>
-                <LiveClock timer={timer} availW={heroW} />
+              <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(260)} style={st.clockSlot}>
+                <ClockDigits text="0:00" size={48} lineHeight={CLOCK_SLOT_H} roll={false} />
               </Animated.View>
             )}
             <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginTop: 4 }}>
-              {timerMode === 'countdown' ? (started ? `${targetMin} min block` : 'minutes, or tap the number to type one') : 'stopwatch'}
-              {subject ? ` · ${subject}` : ''}
+              {timerMode === 'countdown' ? 'minutes, or tap the number to type one' : 'stopwatch'}
+              {shownSubject ? ` · ${shownSubject}` : ''}
             </Text>
             {timerMode === 'stopwatch' && (
               <View style={{ marginTop: 10 }}>
@@ -497,74 +431,145 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             )}
             {timerMode === 'countdown' && (
               <View style={{ alignSelf: 'stretch', marginTop: 12 }}>
-                <LiveProgress timer={timer} />
-                {running ? (
-                  <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12, marginBottom: -10 }}>
-                    <Chip small label="+5 min" onPress={addFive} />
-                  </View>
-                ) : null}
+                <ProgressBar value={0} />
               </View>
             )}
             <Row style={{ marginTop: 20, gap: 10 }}>
-              {!running ? (
-                <PillButton label={started ? 'Resume' : 'Start'} icon="play" onPress={start} />
-              ) : (
-                <PillButton label="Pause" icon="pause" color={C.amber} onPress={pause} />
-              )}
-              {started && <PillButton label="End" icon="stop" color={C.danger} outline onPress={endSession} />}
-              {running && <PillButton label="Ambient" icon="moon" color={C.accent} outline onPress={() => setAmbient(true)} />}
+              <PillButton label="Start" icon="play" onPress={start} />
             </Row>
           </GlassCard>
-        </Enter>
-
-        <Enter index={1}>
           <Field value={subject} onChangeText={setSubject} placeholder="Subject, like Physics (optional)" />
-        </Enter>
+        </Animated.View>
+      ) : (
+        <Animated.View key="running" entering={switchIn}>
+          <SessionStage
+            timer={timer}
+            subject={shownSubject}
+            startedAt={startedAtRef.current}
+            finishAt={finishAt}
+            hour24={hour24}
+            current={current}
+            onSubject={() => setSubjectSheet(true)}
+            onToggle={running ? pause : start}
+            onEnd={endSession}
+            onAmbient={() => setAmbient(true)}
+            onAddFive={addFive}
+            onFinishLine={() => setFinishSheet(true)}
+            onTickCurrent={() => { if (currentTask) markAttached(currentTask.key); }}
+            clockStyle={pulseStyle}
+          />
+        </Animated.View>
+      )}
+    </Enter>
+  );
 
-        {/* attached tasks */}
-        <SectionTitle right={<Text style={{ color: C.accent, fontFamily: F.semi, fontSize: 13 }} onPress={() => setPickSheet(true)}>+ Attach</Text>}>
-          Session tasks
-        </SectionTitle>
-        <Enter index={2}>
-          <GlassCard pad={12}>
-            {attached.length === 0 ? (
-              <EmptyState compact icon="link-outline" title="No tasks attached" body="Attach tasks before or during the session, then check them off as you go." />
-            ) : (
-              attached.map((a) => (
-                <Row key={a.key} style={{ paddingVertical: 7, paddingHorizontal: 4 }}>
-                  <CheckCircle done={a.done} color={a.kind === 'mission' ? C.amber : C.green} onPress={() => markAttached(a.key)} />
-                  <Text style={[st.taskText, a.done && st.taskDone]} numberOfLines={1}>{a.title}</Text>
-                  <IconBtn name="close" size={16} onPress={() => setAttached((l) => l.filter((x) => x.key !== a.key))} />
-                </Row>
-              ))
-            )}
-          </GlassCard>
-        </Enter>
+  const tasksBlock = (
+    <>
+      {/* attached tasks */}
+      <SectionTitle right={<Text style={{ color: C.accent, fontFamily: F.semi, fontSize: 13 }} onPress={() => setPickSheet(true)}>+ Attach</Text>}>
+        Session tasks
+      </SectionTitle>
+      <Enter index={2}>
+        <GlassCard pad={12}>
+          {attached.length === 0 ? (
+            <EmptyState compact icon="link-outline" title="No tasks attached" body="Attach tasks before or during the session, then check them off as you go." />
+          ) : (
+            attached.map((a) => (
+              <Row key={a.key} style={{ paddingVertical: 7, paddingHorizontal: 4 }}>
+                <CheckCircle done={a.done} color={a.kind === 'mission' ? C.amber : C.green} onPress={() => markAttached(a.key)} />
+                <Text style={[st.taskText, a.done && st.taskDone]} numberOfLines={1}>{a.title}</Text>
+                <IconBtn name="close" size={16} onPress={() => setAttached((l) => l.filter((x) => x.key !== a.key))} />
+              </Row>
+            ))
+          )}
+        </GlassCard>
+      </Enter>
 
-        {/* recent sessions */}
-        <SectionTitle>Recent sessions</SectionTitle>
-        {sessions.length === 0 ? (
-          <EmptyState compact icon="time-outline" title="No sessions yet" body="Finished sessions land here." />
-        ) : (
-          <Enter index={3}>
-            <ListCard>
-              {[...sessions].reverse().slice(0, 6).map((s) => (
-                <ListRow key={s.id} style={{ paddingVertical: 12 }}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14 }}>
-                      {Math.round(s.netSeconds / 60)} min{s.subject ? ` · ${s.subject}` : ''}
-                    </Text>
-                    <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
-                      {s.dateKey}{s.taskTitles.length ? ` · ${s.taskTitles.join(', ')}` : ''}
-                    </Text>
-                  </View>
-                  <Ionicons name="flash" size={18} color={C.accent} />
-                </ListRow>
-              ))}
-            </ListCard>
-          </Enter>
-        )}
+      {/* recent sessions: history belongs to the time between sessions */}
+      {idle && (
+        <>
+          <SectionTitle>Recent sessions</SectionTitle>
+          {sessions.length === 0 ? (
+            <EmptyState compact icon="time-outline" title="No sessions yet" body="Finished sessions land here." />
+          ) : (
+            <Enter index={3}>
+              <ListCard>
+                {[...sessions].reverse().slice(0, 6).map((s) => (
+                  <ListRow key={s.id} style={{ paddingVertical: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14 }}>
+                        {Math.round(s.netSeconds / 60)} min{s.subject ? ` · ${s.subject}` : ''}
+                      </Text>
+                      <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+                        {s.dateKey}{s.taskTitles.length ? ` · ${s.taskTitles.join(', ')}` : ''}
+                      </Text>
+                    </View>
+                    <Ionicons name="flash" size={18} color={C.accent} />
+                  </ListRow>
+                ))}
+              </ListCard>
+            </Enter>
+          )}
+        </>
+      )}
+    </>
+  );
+
+  // the subject sheet closes onto the store at once, not half a second later
+  const closeSubject = () => {
+    setSubjectSheet(false);
+    if (startedRef.current) patchDeepWork({ subject: subjectRef.current });
+  };
+
+  return (
+    <ScreenBG guard={mode === 'tab'} maxWidth={WIDE_MAX}>
+      {mode !== 'tab' && (
+        <View style={frame(twoCol ? WIDE_MAX : READ_MAX)}>
+          <NeuHeader title="Deep Work" />
+        </View>
+      )}
+      <ScrollView
+        key={fk}
+        onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}
+        contentContainerStyle={{ padding: S.pad, paddingTop: mode === 'tab' ? insets.top + 20 : 8, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
+      >
+        <View style={frame(twoCol ? WIDE_MAX : READ_MAX)}>
+          {mode === 'tab' && <Text style={st.h1}>Deep Work</Text>}
+          {todayFocusMin > 0 ? (
+            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, marginBottom: 22 }}>
+              {todayFocusMin} focused minutes today
+            </Text>
+          ) : (
+            <View style={{ height: 22 }} />
+          )}
+
+          {twoCol ? (
+            // a sideways tablet: the session on the left, its tasks and the history beside it
+            <View style={st.cols}>
+              <View style={st.col}>{stageBlock}</View>
+              <View style={[st.col, st.colSide]}>{tasksBlock}</View>
+            </View>
+          ) : (
+            <>
+              {stageBlock}
+              {tasksBlock}
+            </>
+          )}
+        </View>
       </ScrollView>
+
+      {/* the subject, once a session is under way */}
+      <Sheet visible={subjectSheet} onClose={closeSubject} title="Subject">
+        <Field
+          value={subject}
+          onChangeText={setSubject}
+          placeholder="Subject, like Physics"
+          autoFocus
+          returnKeyType="done"
+          onSubmitEditing={closeSubject}
+        />
+        <PillButton label="Done" onPress={closeSubject} />
+      </Sheet>
 
       {/* attach sheet */}
       <Sheet visible={pickSheet} onClose={() => setPickSheet(false)} title="Attach tasks">
@@ -710,8 +715,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </Sheet>
 
       <AmbientView
-        visible={ambient} timer={timer} subject={subject} task={currentTask?.title}
-        finishAt={finishAt} hour24={hour24} onExit={() => setAmbient(false)}
+        visible={ambient} timer={timer} subject={shownSubject} task={currentTask?.title}
+        startedAt={startedAtRef.current} finishAt={finishAt} hour24={hour24} onExit={() => setAmbient(false)}
       />
     </ScreenBG>
   );
@@ -719,14 +724,15 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 const st = StyleSheet.create({
   h1: { ...(T.display as object), marginBottom: 6 } as any,
-  time: { ...T.numHero, letterSpacing: 0 },
   clockSlot: { height: CLOCK_SLOT_H, alignItems: 'center', justifyContent: 'center' },
-  clockRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  digit: { position: 'absolute', left: 0, right: 0, textAlign: 'center' },
   wheelBox: { alignSelf: 'stretch' },
   wheelText: { ...T.numWheel },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, marginLeft: 10, flex: 1 },
   taskDone: { color: C.textFaint, textDecorationLine: 'line-through' },
   sheetSection: { color: C.textFaint, fontSize: 12, fontFamily: F.semi, textTransform: 'uppercase', letterSpacing: 1, marginTop: 10, marginBottom: 6 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border },
+  cols: { flexDirection: 'row', alignItems: 'flex-start', gap: 28 },
+  col: { flex: 1, minWidth: 0 },
+  /** the side column's first title lines up with the top of the session instead of a section's gap below it */
+  colSide: { marginTop: -S.section },
 });

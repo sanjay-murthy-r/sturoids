@@ -180,14 +180,21 @@ export const F = {
   med: 'Rubik_500Medium',
   semi: 'Rubik_600SemiBold',
   bold: 'Rubik_700Bold',
-  /** timers / counters — clean mono digits, naturally stable width */
-  mono: 'IBMPlexMono_600SemiBold',
+  /** counting numbers: timers, clocks and big figures (Rubik Light, the Focus Lab pick) */
+  num: 'Rubik_300Light',
 };
+
+/**
+ * Rubik Light's widest figure and its colon, as shares of the font size: the cells a rolling clock sets each digit in,
+ * so a count never shifts sideways (measured from the font file).
+ */
+export const NUM_DIGIT_W = 0.618;
+export const NUM_COLON_W = 0.241;
 
 // type scale (~1.25 ratio)
 export type TName =
   | 'display' | 'h1' | 'title' | 'body' | 'bodyLong' | 'label' | 'caption' | 'kicker'
-  | 'numHero' | 'numWheel' | 'numAmbient' | 'numStat';
+  | 'numHero' | 'numWheel' | 'numAmbient' | 'numStat' | 'numDisplay';
 
 // faces carry the weight, so no token can hold a fontWeight (scripts/lint-type.js guards the call sites too)
 export const T: Record<TName, Omit<TextStyle, 'fontWeight'>> = {
@@ -203,15 +210,17 @@ export const T: Record<TName, Omit<TextStyle, 'fontWeight'>> = {
     color: C.textFaint, fontFamily: F.semi, fontSize: 11,
     letterSpacing: 2.2, textTransform: 'uppercase',
   },
-  // counting numbers: every timer and glance figure takes its face from these four
-  /** the Deep Work hero timer */
-  numHero: { color: C.text, fontFamily: F.mono, fontSize: 48 },
+  // counting numbers: large figures in Rubik Light, small ones in Rubik Medium (the Focus Lab pick)
+  /** the Deep Work clock */
+  numHero: { color: C.text, fontFamily: F.num, fontSize: 48 },
   /** the Deep Work minutes wheel */
-  numWheel: { color: C.text, fontFamily: F.mono, fontSize: 52, lineHeight: 64 },
+  numWheel: { color: C.text, fontFamily: F.num, fontSize: 52, lineHeight: 64 },
   /** the ambient clock */
-  numAmbient: { color: C.text, fontFamily: F.mono, fontSize: 68 },
-  /** glance figures: Today, the journal's stats, exam scores */
-  numStat: { color: C.text, fontFamily: F.bold, fontSize: 22, letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
+  numAmbient: { color: C.text, fontFamily: F.num, fontSize: 68 },
+  /** big figures: an exam's result */
+  numDisplay: { color: C.text, fontFamily: F.num, fontSize: 44, fontVariant: ['tabular-nums'] },
+  /** glance figures: Today, the journal's stats, marks */
+  numStat: { color: C.text, fontFamily: F.med, fontSize: 22, letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
 };
 
 export const BLOCK_COLORS = ['#9DBCE3', '#9AD6B0', '#E3C08D', '#E39EAC', '#745FF2', '#83DBD6', '#C2D392', '#D5C68E'];

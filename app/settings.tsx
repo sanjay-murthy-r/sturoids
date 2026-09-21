@@ -493,6 +493,25 @@ export default function Settings() {
           </Row>
         </Card>
 
+        <SectionTitle>Deep Work</SectionTitle>
+        <Card>
+          <Row style={{ justifyContent: 'space-between', marginBottom: 10 }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[T.body, { fontFamily: F.med }]}>Seconds on the ambient screen</Text>
+              <Text style={[T.caption, { marginTop: 2 }]}>Off, it shows whole minutes.</Text>
+            </View>
+            <Toggle value={settings.ambientSeconds} onChange={(v) => setSetting('ambientSeconds', v)} color={C.accent} />
+          </Row>
+          <Hairline />
+          <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[T.body, { fontFamily: F.med }]}>Time of day on the ambient screen</Text>
+              <Text style={[T.caption, { marginTop: 2 }]}>Shown small, above the timer.</Text>
+            </View>
+            <Toggle value={settings.ambientClock} onChange={(v) => setSetting('ambientClock', v)} color={C.accent} />
+          </Row>
+        </Card>
+
         <SectionTitle>Privacy</SectionTitle>
         <Card>
           <Row style={{ justifyContent: 'space-between' }}>
