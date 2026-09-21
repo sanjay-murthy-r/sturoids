@@ -458,7 +458,8 @@ export function ProgressBar({ value, color, height = 8 }: { value: number; color
   const v = Math.min(1, Math.max(0, value));
   const w = useSharedValue(v);
   React.useEffect(() => {
-    w.value = level === 'none' ? v : withSpring(v, RISE_OUT);
+    // an ease, not a spring: a bar that moves every second (Deep Work) must step, never bounce
+    w.value = level === 'none' ? v : withTiming(v, { duration: 280, easing: Easing.out(Easing.cubic) });
   }, [v, level]);
   const trackW = useSharedValue(0);
   // a full-width fill slides in from the left: a transform, so no layout pass per frame. Hidden until the track

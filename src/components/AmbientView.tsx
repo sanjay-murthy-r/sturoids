@@ -7,7 +7,7 @@ import * as Brightness from 'expo-brightness';
 import * as NavigationBar from 'expo-navigation-bar';
 import { C, F, T } from '../theme';
 import { fmtClockTime } from '../utils';
-import { TimerState, displayOf, useSessionTick } from '../deepWork';
+import { TimerState, displayOf, shownSecondsOf, useSessionTick } from '../deepWork';
 import { useAnimLevel } from './Motion';
 
 /** the ambient screen never brightens a dim room: it only ever lowers the phone to this */
@@ -66,7 +66,7 @@ function useAmbientSystem() {
 function Clock({ timer, width, finishAt, hour24 }: { timer: TimerState; width: number; finishAt: number | null; hour24: boolean }) {
   useSessionTick(timer);
   const raw = displayOf(timer);
-  const secs = timer.mode === 'countdown' ? Math.ceil(raw) : Math.floor(raw);
+  const secs = shownSecondsOf(timer);
   const text = pad2(Math.floor(secs / 3600)) + ':' + pad2(Math.floor((secs % 3600) / 60)) + ':' + pad2(secs % 60);
   // sized for 00:00:00 and held at that width, so nothing shifts when the hour digit changes
   const size = Math.min(68, Math.floor((width - 40) / (8 * MONO_ADVANCE)));

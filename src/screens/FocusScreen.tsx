@@ -16,15 +16,14 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { Enter, useAnimLevel, useFocusKey } from '../components/Motion';
 import { Wheel } from '../components/Wheel';
 import { tick as haptic } from '../haptics';
-import { NOTIF_CHANNEL_ID, ensurePermission } from '../notifications';
-import { TimerState, displayOf, elapsedOf, useSessionTick } from '../deepWork';
+import { NOTIF_CHANNEL_ID, cancelCountdownEnd, ensurePermission, scheduleCountdownEnd } from '../notifications';
+import { FINISH_NOTIF_ID, TimerState, displayOf, elapsedOf, shownSecondsOf, useSessionTick } from '../deepWork';
 import { AmbientView } from '../components/AmbientView';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
 
 /** The finish-line heads-up has a fixed id, so it can be cancelled even after the app was killed. */
-const FINISH_NOTIF_ID = 'sturoids-finish-line';
 const HERO_SIZES = [48, 42, 38];
 /** the clock's slot keeps the hero height at every size, so a smaller clock never moves what sits below it */
 const CLOCK_SLOT_H = Math.round(HERO_SIZES[0] * 1.25);
@@ -55,7 +54,7 @@ const rollOut = (h: number) => () => {
 function LiveClock({ timer, availW = 0, reserve = 0 }: { timer: TimerState; availW?: number; reserve?: number }) {
   useSessionTick(timer);
   const level = useAnimLevel();
-  const text = fmtDuration(displayOf(timer));
+  const text = fmtDuration(shownSecondsOf(timer));
   // m:ss always keeps the hero size; h:mm:ss steps down only when it would not fit the card
   let size = HERO_SIZES[0];
   if (availW > 0 && text.length >= 7) {
@@ -222,6 +221,24 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }, Math.max(0, left * 1000));
     return () => clearTimeout(t);
   }, [timerMode, running, startTs, accumSec, targetMin, level]);
+
+  // a countdown that ends while the phone is away still says so. Rescheduled on every start, resume and +5 min,
+  // cancelled on pause, end and reset, and never on unmount: a full-page Focus closes while its session goes on
+  useEffect(() => {
+    if (timerMode === 'countdown' && running && startTs) {
+      const endAt = startTs + (targetMin * 60 - accumSec) * 1000;
+      void scheduleCountdownEnd(endAt, targetMin, subjectRef.current);
+    } else {
+      cancelCountdownEnd();
+    }
+  }, [timerMode, running, startTs, accumSec, targetMin]);
+
+  // five more minutes on a running block; inert once the block has run out and is wrapping up
+  const addFive = () => {
+    if (wrapTimer.current || endedRef.current) return;
+    haptic();
+    setTargetMin((m) => m + 5);
+  };
 
   const start = () => {
     // the block has run out and is wrapping up: there is nothing left to resume
@@ -481,6 +498,11 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             {timerMode === 'countdown' && (
               <View style={{ alignSelf: 'stretch', marginTop: 12 }}>
                 <LiveProgress timer={timer} />
+                {running ? (
+                  <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12, marginBottom: -10 }}>
+                    <Chip small label="+5 min" onPress={addFive} />
+                  </View>
+                ) : null}
               </View>
             )}
             <Row style={{ marginTop: 20, gap: 10 }}>

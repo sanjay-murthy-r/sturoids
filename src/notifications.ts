@@ -1,19 +1,25 @@
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { useStore } from './store';
 import { toMinutes } from './utils';
+import { COUNTDOWN_NOTIF_ID, FINISH_NOTIF_ID } from './deepWork';
 
 let handlerSet = false;
 function ensureHandler() {
   if (handlerSet) return;
   handlerSet = true;
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: false,
-      shouldSetBadge: false,
-    }),
+    handleNotification: async (n) => {
+      // a session's own alerts are for when the app is away; in the app, the clock itself already says so
+      const id = n.request.identifier;
+      const quiet = AppState.currentState === 'active' && (id === COUNTDOWN_NOTIF_ID || id === FINISH_NOTIF_ID);
+      return {
+        shouldShowBanner: !quiet,
+        shouldShowList: !quiet,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    },
   });
 }
 ensureHandler();
@@ -73,6 +79,34 @@ export async function ensureChannel() {
   } catch {
     // no notification service in some environments — fail quietly
   }
+}
+
+/**
+ * The heads-up for a countdown that ends while the phone is away. Scheduled only when notifications are already
+ * allowed, so starting a session never stops to ask; replacing it under its fixed id keeps exactly one.
+ */
+export async function scheduleCountdownEnd(endAt: number, minutes: number, subject: string) {
+  try {
+    const perm = await Notifications.getPermissionsAsync();
+    if (!perm.granted) return;
+    await ensureChannel();
+    await Notifications.cancelScheduledNotificationAsync(COUNTDOWN_NOTIF_ID).catch(() => {});
+    if (endAt <= Date.now()) return;
+    await Notifications.scheduleNotificationAsync({
+      identifier: COUNTDOWN_NOTIF_ID,
+      content: {
+        title: 'Session complete',
+        body: subject.trim() ? minutes + ' minutes of ' + subject.trim() + ', done.' : 'Your ' + minutes + '-minute block is done.',
+      },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(endAt), channelId: NOTIF_CHANNEL_ID } as any,
+    });
+  } catch {
+    // no notification service in some environments: the in-app wrap-up still happens
+  }
+}
+
+export function cancelCountdownEnd() {
+  Notifications.cancelScheduledNotificationAsync(COUNTDOWN_NOTIF_ID).catch(() => {});
 }
 
 /**
