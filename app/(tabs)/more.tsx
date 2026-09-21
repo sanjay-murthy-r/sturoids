@@ -4,15 +4,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, neuInset } from '../../src/theme';
-import { ScreenBG, ListCard, ListRow, SectionTitle, useTheme } from '../../src/components/UI';
+import { ScreenBG, ListCard, ListRow, SectionTitle, DotMenu, useTheme } from '../../src/components/UI';
 import { Enter, useFocusKey } from '../../src/components/Motion';
+import { ToolArchiveSheet } from '../../src/components/ToolArchiveSheet';
+import { toast } from '../../src/components/Toast';
 import { useStore } from '../../src/store';
-import { TOOLS, ToolKey, colorOf, normaliseSlots } from '../../src/tools';
+import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots } from '../../src/tools';
 import { openTool } from '../../src/toolNav';
 
 /**
- * Every tool that is not in a bar slot, then Settings. A tool opened from here is a full page with a
- * back button; moving it into a slot (Settings, Tab bar) takes it off this list.
+ * Every tool that is neither in a bar slot nor archived, then the archived ones behind one row, then Settings. A tool
+ * opened from here is a full page with a back button; moving it into a slot (Settings, Tools) takes it off this list.
  */
 export default function More() {
   const insets = useSafeAreaInsets();
@@ -20,13 +22,21 @@ export default function More() {
   const router = useRouter();
   const theme = useTheme();
   const rawSlots = useStore((s) => s.settings.tabSlots);
+  const rawArchived = useStore((s) => s.settings.archivedTools);
   const notes = useStore((s) => s.notes.length);
   const videos = useStore((s) => s.vaultVideos.length);
   const journalCount = useStore((s) => s.journal.length);
   const journalLocked = useStore((s) => s.settings.journalLocked);
   const notesLocked = useStore((s) => s.settings.notesLocked === true);
+  const setToolArchived = useStore((s) => s.setToolArchived);
   const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
-  const tools = TOOLS.filter((t) => !slots.includes(t.key));
+  const archived = React.useMemo(() => normaliseArchived(rawArchived, slots), [rawArchived, slots]);
+  const tools = TOOLS.filter((t) => !slots.includes(t.key) && !archived.includes(t.key));
+  const archivedTools = TOOLS.filter((t) => archived.includes(t.key));
+  // the menu keeps its tool while it closes, so its rows never empty out mid-animation
+  const [menuFor, setMenuFor] = React.useState<Tool | null>(null);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const [archiveSheet, setArchiveSheet] = React.useState(false);
   // a locked tool shows no count: even how many pages it holds stays private
   const counts: Partial<Record<ToolKey, number>> = {
     notes: notesLocked ? 0 : notes, vault: videos, journal: journalLocked ? 0 : journalCount,
@@ -37,6 +47,11 @@ export default function More() {
     theme === 'minimal'
       ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
       : { backgroundColor: C.inset, ...neuInset('low') };
+
+  const archive = (t: Tool) => {
+    if (setToolArchived(t.key, true)) toast(t.label + ' archived. Restore it from Archived at the end of this list.');
+    else toast('End the Deep Work session first.');
+  };
 
   return (
     <ScreenBG guard>
@@ -49,7 +64,7 @@ export default function More() {
             {tools.map((t) => {
               const count = counts[t.key];
               return (
-                <ListRow key={t.key} onPress={() => openTool(t.key)} style={{ paddingVertical: 12 }}>
+                <ListRow key={t.key} onPress={() => openTool(t.key)} onLongPress={() => { setMenuFor(t); setMenuOpen(true); }} style={{ paddingVertical: 12 }}>
                   <View style={[st.iconWell, well]}>
                     <Ionicons name={t.icon as any} size={22} color={colorOf(t.colorKey)} />
                   </View>
@@ -65,6 +80,19 @@ export default function More() {
                 </ListRow>
               );
             })}
+            {archivedTools.length ? (
+              <ListRow key="archived" onPress={() => setArchiveSheet(true)} style={{ paddingVertical: 12 }}>
+                <View style={[st.iconWell, well]}>
+                  <Ionicons name="archive-outline" size={21} color={C.textDim} />
+                </View>
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <Text style={st.title}>Archived</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{archivedTools.map((t) => t.label).join(', ')}</Text>
+                </View>
+                <Text style={st.count}>{archivedTools.length}</Text>
+                <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+              </ListRow>
+            ) : null}
           </ListCard>
         </Enter>
 
@@ -78,13 +106,23 @@ export default function More() {
               </View>
               <View style={{ flex: 1, marginLeft: 14 }}>
                 <Text style={st.title}>Settings</Text>
-                <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>Theme, tab bar, reminders and backup</Text>
+                <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>Theme, tools, reminders and backup</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
             </ListRow>
           </ListCard>
         </Enter>
       </ScrollView>
+
+      <DotMenu
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        items={menuFor ? [
+          { label: 'Open', icon: 'open-outline', onPress: () => openTool(menuFor.key) },
+          { label: 'Archive', icon: 'archive-outline', onPress: () => archive(menuFor) },
+        ] : []}
+      />
+      <ToolArchiveSheet visible={archiveSheet} onClose={() => setArchiveSheet(false)} />
     </ScreenBG>
   );
 }

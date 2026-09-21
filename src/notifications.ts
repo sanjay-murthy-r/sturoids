@@ -23,9 +23,17 @@ ensureHandler();
  * the startup path): the channel exists before anything posts to it, and
  * reminders a reboot or an OS alarm purge dropped are scheduled again.
  */
+let archiveWatch: (() => void) | null = null;
+
 export async function initNotifications() {
   ensureHandler();
   await ensureChannel();
+  if (!archiveWatch) {
+    // archiving a tool pauses its reminders; restoring it schedules them again
+    archiveWatch = useStore.subscribe((s, prev) => {
+      if ((s.settings.archivedTools || []).join() !== (prev.settings.archivedTools || []).join()) void rescheduleAllReminders();
+    });
+  }
   if (useStore.getState().settings.remindersEnabled) await rescheduleAllReminders();
 }
 
@@ -113,21 +121,27 @@ export async function rescheduleAllReminders() {
     await cancelOwnReminders();
     const s = useStore.getState();
     if (!s.settings.remindersEnabled) return;
-    for (const h of s.habits) {
-      if (h.remindTime) await scheduleDaily(`habit:${h.id}`, h.remindTime, 'Streak check-in', h.title);
+    // an archived tool's reminders pause until it is restored: habits belong to the Planner, ToDos to Tasks
+    const archived = new Set<string>(s.settings.archivedTools || []);
+    if (!archived.has('planner')) {
+      for (const h of s.habits) {
+        if (h.remindTime) await scheduleDaily(`habit:${h.id}`, h.remindTime, 'Streak check-in', h.title);
+      }
     }
-    if (s.settings.todoReminderEnabled) {
-      await scheduleDaily(
-        'todo-daily',
-        s.settings.todoReminderTime,
-        "Plan today's ToDos",
-        'Two minutes now saves the whole day. Set up your list.'
-      );
+    if (!archived.has('tasks')) {
+      if (s.settings.todoReminderEnabled) {
+        await scheduleDaily(
+          'todo-daily',
+          s.settings.todoReminderTime,
+          "Plan today's ToDos",
+          'Two minutes now saves the whole day. Set up your list.'
+        );
+      }
+      for (const r of s.todoReminders) {
+        await scheduleDaily(`todo:${r.id}`, r.time, 'ToDo check-in', r.label || 'How is the list going?');
+      }
     }
-    for (const r of s.todoReminders) {
-      await scheduleDaily(`todo:${r.id}`, r.time, 'ToDo check-in', r.label || 'How is the list going?');
-    }
-    if (s.settings.journalReminderTime) {
+    if (!archived.has('journal') && s.settings.journalReminderTime) {
       await scheduleDaily('journal-daily', s.settings.journalReminderTime, 'Journal', 'A few lines about your day?');
     }
   } catch {

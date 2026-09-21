@@ -9,7 +9,7 @@ import Animated, {
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { C, F, MIN, S, T, neuInset } from '../../src/theme';
-import { useStore, QuickItem } from '../../src/store';
+import { useStore, QuickItem, FocusSession, Habit, PlannerWeek } from '../../src/store';
 import { uid, fmtDate, todayKey, dayName, DAY_NAMES, toMinutes, fmtClockTime, daysUntil } from '../../src/utils';
 import {
   ScreenBG, Card, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Hairline, Chip, IconBtn,
@@ -25,6 +25,14 @@ import { useIntro } from '../../src/intro';
 import { journalDayFor } from '../../src/journal';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
 import { useNow } from '../../src/hooks/useNow';
+
+// what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
+const NO_SESSIONS: FocusSession[] = [];
+const NO_HABITS: Habit[] = [];
+const NO_PLAN = {} as PlannerWeek;
+
+/** A shortcut to an archived tool stays in the saved list but is not shown. */
+const hiddenTile = (q: QuickItem, archived: ReadonlySet<string>) => q.kind === 'tool' && archived.has(q.target);
 
 export default function Today() {
   const insets = useSafeAreaInsets();
@@ -60,6 +68,14 @@ export default function Today() {
   const now = useNow();
 
   const today = todayKey();
+
+  // an archived tool steps out of Today entirely: its sections, its glance and its shortcuts
+  const archived = useMemo(() => new Set<string>(settings.archivedTools), [settings.archivedTools]);
+  const hideTasks = archived.has('tasks');
+  const hidePlanner = archived.has('planner');
+  const hideFocus = archived.has('focus');
+  const hideJournal = archived.has('journal');
+  const visibleQuick = useMemo(() => quickAccess.filter((q) => !hiddenTile(q, archived)), [quickAccess, archived]);
 
   // a deadline falls due as the day turns, so today is part of the answer
   const dueMissions = useMemo(
@@ -115,13 +131,18 @@ export default function Today() {
   const doneCount = todayList.filter((t) => t.done).length;
 
   const greeting = useGreeting({
-    now, name: settings.name, sessions, habits, planner,
-    listTotal: todayList.length, listDone: doneCount, nextBlock,
+    now, name: settings.name,
+    sessions: hideFocus ? NO_SESSIONS : sessions,
+    habits: hidePlanner ? NO_HABITS : habits,
+    planner: hidePlanner ? NO_PLAN : planner,
+    listTotal: hideTasks ? 0 : todayList.length,
+    listDone: hideTasks ? 0 : doneCount,
+    nextBlock: hidePlanner ? null : nextBlock,
   });
 
   // a quiet reminder of the Journal's page for today, never shown while the journal is locked
   const journalDay = journalDayFor(now, settings.journalCutoffHour);
-  const journalNudge = !settings.journalLocked && !journal.some((e) => e.dateKey === journalDay);
+  const journalNudge = !hideJournal && !settings.journalLocked && !journal.some((e) => e.dateKey === journalDay);
 
   // what a shortcut's wide tile says: a live fact about its tool. A shortcut with nothing to say stays a small tile,
   // and every tool always says the same kind of thing, so live changes never reshuffle the grid.
@@ -129,7 +150,7 @@ export default function Today() {
     const count = (n: number, one: string, many: string) => n + ' ' + (n === 1 ? one : many);
     const dayEntries = journal.filter((e) => e.dateKey === journalDay);
     const out: Record<string, string | null> = {};
-    for (const q of quickAccess) {
+    for (const q of visibleQuick) {
       let meta: string | null = null;
       if (q.kind === 'tool') {
         switch (q.target as ToolKey) {
@@ -169,7 +190,7 @@ export default function Today() {
       out[q.id] = meta;
     }
     return out;
-  }, [quickAccess, todayList.length, tasksLeft, deepWork, focusToday, nextBlock, noteCount, videoCount, journal, journalDay, today,
+  }, [visibleQuick, todayList.length, tasksLeft, deepWork, focusToday, nextBlock, noteCount, videoCount, journal, journalDay, today,
     settings.journalLocked, settings.notesLocked, settings.hour24]);
 
   // the grid's callbacks keep their identity, so the grid (and its drag gestures) re-renders only for its own changes
@@ -181,6 +202,15 @@ export default function Today() {
   }, [qaEdit, router]);
   const removeQuick = useCallback((id: string) => {
     setQuickAccess(useStore.getState().quickAccess.filter((q) => q.id !== id));
+  }, [setQuickAccess]);
+  // the grid reorders only what it shows: hidden tiles keep their places in the saved list, so restoring an archived
+  // tool brings its shortcut back where it was
+  const reorderQuick = useCallback((nextVisible: QuickItem[]) => {
+    const { quickAccess: full, settings: s } = useStore.getState();
+    const hidden = new Set<string>(s.archivedTools);
+    if (full.filter((q) => !hiddenTile(q, hidden)).length !== nextVisible.length) return;
+    let i = 0;
+    setQuickAccess(full.map((q) => (hiddenTile(q, hidden) ? q : nextVisible[i++])));
   }, [setQuickAccess]);
   // open instantly; enumerate installed apps only after the sheet is up
   const openQaAdd = useCallback(() => {
@@ -252,7 +282,7 @@ export default function Today() {
           </Pressable>
         </Enter>
 
-        {nextBlock && (
+        {nextBlock && !hidePlanner && (
           <Enter index={1}>
             <Card hero pad={16} onPress={() => openTool('planner')}>
               <Row style={{ justifyContent: 'space-between' }}>
@@ -272,7 +302,7 @@ export default function Today() {
             </Card>
           </Enter>
         )}
-        {!nextBlock && !(planner[dayName(now)] || []).length ? (
+        {!hidePlanner && !nextBlock && !(planner[dayName(now)] || []).length ? (
           <Enter index={1}>
             <Pressable
               onPress={() => openTool('planner')}
@@ -289,17 +319,24 @@ export default function Today() {
           </Enter>
         ) : null}
 
-        <Enter index={2}>
-          <Card pad={0}>
-            <Row>
-              <Glance value={tasksLeft} label="tasks left" color={C.accent} />
-              <View style={st.vDivider} />
-              <Glance value={habitsDone} total={habits.length} label="habits" color={C.green} />
-              <View style={st.vDivider} />
-              <Glance value={focusToday} suffix=" min" label="focused" color={C.accent} />
-            </Row>
-          </Card>
-        </Enter>
+        {hideTasks && hidePlanner && hideFocus ? null : (
+          <Enter index={2}>
+            <Card pad={0}>
+              <Row>
+                {[
+                  hideTasks ? null : <Glance key="tasks" value={tasksLeft} label="tasks left" color={C.accent} />,
+                  hidePlanner ? null : <Glance key="habits" value={habitsDone} total={habits.length} label="habits" color={C.green} />,
+                  hideFocus ? null : <Glance key="focus" value={focusToday} suffix=" min" label="focused" color={C.accent} />,
+                ].filter(Boolean).map((cell, i) => (
+                  <React.Fragment key={(cell as React.ReactElement).key}>
+                    {i > 0 ? <View style={st.vDivider} /> : null}
+                    {cell}
+                  </React.Fragment>
+                ))}
+              </Row>
+            </Card>
+          </Enter>
+        )}
 
         <Enter index={3}>
           <SectionTitle
@@ -314,18 +351,18 @@ export default function Today() {
         </Enter>
         <Enter index={3}>
           <QuickGrid
-            items={quickAccess}
+            items={visibleQuick}
             metas={quickMetas}
             edit={qaEdit}
             onRun={runQuick}
             onRemove={removeQuick}
-            onReorder={setQuickAccess}
+            onReorder={reorderQuick}
             onAdd={openQaAdd}
           />
         </Enter>
 
-        <Enter index={4}>
-          {journalNudge ? (
+        {journalNudge ? (
+          <Enter index={4}>
             <Pressable
               onPress={() => openTool('journal')}
               style={[
@@ -337,31 +374,37 @@ export default function Today() {
               <Text style={st.journalNudgeText}>{journalDay === today ? "Today's page is empty" : "Yesterday's page is empty"}</Text>
               <Text style={[st.link, { color: C.gold }]}>Write</Text>
             </Pressable>
-          ) : null}
-          <SectionTitle
-            right={
-              <Pressable onPress={() => openTool('tasks')} hitSlop={8}>
-                <Text style={[st.link, { color: C.accent }]}>All tasks →</Text>
-              </Pressable>
-            }
-          >
-            Today {todayList.length > 0 ? '· ' + doneCount + '/' + todayList.length : ''}
-          </SectionTitle>
-          <View style={{ marginTop: 2, marginBottom: 16 }}>
-            <ProgressBar value={doneCount / Math.max(1, todayList.length)} />
-          </View>
-        </Enter>
-        <Enter index={4}>
-          {todayList.length === 0 ? (
-            <Card pad={6}>
-              <EmptyState compact icon="checkbox-outline" title="Nothing on the list yet" body="Add ToDos from Tasks." actionLabel="Open Tasks" onAction={() => openTool('tasks')} />
-            </Card>
-          ) : (
-            <TodayList items={todayList} onToggleDaily={toggleDaily} onToggleMission={toggleMission} />
-          )}
-        </Enter>
+          </Enter>
+        ) : null}
+        {hideTasks ? null : (
+          <>
+            <Enter index={4}>
+              <SectionTitle
+                right={
+                  <Pressable onPress={() => openTool('tasks')} hitSlop={8}>
+                    <Text style={[st.link, { color: C.accent }]}>All tasks →</Text>
+                  </Pressable>
+                }
+              >
+                Today {todayList.length > 0 ? '· ' + doneCount + '/' + todayList.length : ''}
+              </SectionTitle>
+              <View style={{ marginTop: 2, marginBottom: 16 }}>
+                <ProgressBar value={doneCount / Math.max(1, todayList.length)} />
+              </View>
+            </Enter>
+            <Enter index={4}>
+              {todayList.length === 0 ? (
+                <Card pad={6}>
+                  <EmptyState compact icon="checkbox-outline" title="Nothing on the list yet" body="Add ToDos from Tasks." actionLabel="Open Tasks" onAction={() => openTool('tasks')} />
+                </Card>
+              ) : (
+                <TodayList items={todayList} onToggleDaily={toggleDaily} onToggleMission={toggleMission} />
+              )}
+            </Enter>
+          </>
+        )}
 
-        {habits.length > 0 && (
+        {habits.length > 0 && !hidePlanner && (
           <Enter index={5}>
             <SectionTitle>Habits</SectionTitle>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
@@ -383,26 +426,30 @@ export default function Today() {
           </Enter>
         )}
 
-        <Enter index={6}>
-          <SectionTitle>Focus this week</SectionTitle>
-        </Enter>
-        <Enter index={6}>
-          <Card>
-            <Row style={{ alignItems: 'flex-end', justifyContent: 'space-between', paddingHorizontal: 4 }}>
-              {weekBars.map((b, i) => (
-                <WeekBar key={i} label={b.label} mins={b.mins} maxMins={maxMins} isToday={i === 6} />
-              ))}
-            </Row>
-            <Hairline />
-            <Text style={[T.caption, { textAlign: 'center', marginTop: 10 }]}>
-              {weekTotal > 0 ? (
-                <>
-                  <CountUp value={weekTotal} style={{ color: C.accent, fontFamily: F.semi }}> min</CountUp> focused in the last 7 days
-                </>
-              ) : 'No focus logged this week yet.'}
-            </Text>
-          </Card>
-        </Enter>
+        {hideFocus ? null : (
+          <>
+            <Enter index={6}>
+              <SectionTitle>Focus this week</SectionTitle>
+            </Enter>
+            <Enter index={6}>
+              <Card>
+                <Row style={{ alignItems: 'flex-end', justifyContent: 'space-between', paddingHorizontal: 4 }}>
+                  {weekBars.map((b, i) => (
+                    <WeekBar key={i} label={b.label} mins={b.mins} maxMins={maxMins} isToday={i === 6} />
+                  ))}
+                </Row>
+                <Hairline />
+                <Text style={[T.caption, { textAlign: 'center', marginTop: 10 }]}>
+                  {weekTotal > 0 ? (
+                    <>
+                      <CountUp value={weekTotal} style={{ color: C.accent, fontFamily: F.semi }}> min</CountUp> focused in the last 7 days
+                    </>
+                  ) : 'No focus logged this week yet.'}
+                </Text>
+              </Card>
+            </Enter>
+          </>
+        )}
       </ScrollView>
 
       <Sheet visible={nameSheet} onClose={() => setNameSheet(false)} title="Your name">
@@ -413,7 +460,7 @@ export default function Today() {
       <Sheet visible={qaAddSheet} onClose={() => setQaAddSheet(false)} title="Add to quick access">
         <Text style={st.sheetSection}>In-app</Text>
         <Row style={{ flexWrap: 'wrap' }}>
-          {ROUTE_CATALOG.filter((r) => !quickAccess.some((q) => q.kind === r.kind && q.target === r.target)).map((r) => (
+          {ROUTE_CATALOG.filter((r) => !(r.kind === 'tool' && archived.has(r.target)) && !quickAccess.some((q) => q.kind === r.kind && q.target === r.target)).map((r) => (
             <Chip key={r.kind + r.target} label={r.label} color={colorOf(r.color)} onPress={() => addQuick(r)} />
           ))}
         </Row>

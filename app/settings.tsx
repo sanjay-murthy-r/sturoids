@@ -18,7 +18,8 @@ import { journalForBackup, restoreBodies } from '../src/journal';
 import { estimateBackupBytes, openBackup, restoredPath, writeBackup } from '../src/backup';
 import { deviceAuthAvailable, isOpen, markOpen, pinStatus, removePin } from '../src/lock';
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
-import { TOOLS, ToolKey, colorOf, normaliseSlots, toolByKey } from '../src/tools';
+import { TOOLS, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../src/tools';
+import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.4.3';
@@ -89,14 +90,17 @@ export default function Settings() {
   const setSetting = useStore((s) => s.setSetting);
   const [checking, setChecking] = useState(false);
 
+  const setTabSlots = useStore((s) => s.setTabSlots);
   const slots = normaliseSlots(settings.tabSlots);
+  const archived = normaliseArchived(settings.archivedTools, slots);
   const [slotPicker, setSlotPicker] = useState<number | null>(null);
+  const [archiveSheet, setArchiveSheet] = useState(false);
   const setSlot = (i: number, key: ToolKey) => {
     const next = [...slots];
     const j = next.indexOf(key);
     if (j >= 0 && j !== i) next[j] = next[i]; // swap so no destination repeats
     next[i] = key;
-    setSetting('tabSlots', normaliseSlots(next));
+    setTabSlots(next); // a slotted tool is restored if it was archived
   };
 
   const toggleReminders = async (v: boolean) => {
@@ -407,8 +411,8 @@ export default function Settings() {
           </Text>
         </Card>
 
-        <SectionTitle right={<InfoDot text="Today and More stay fixed. Tools placed in a slot open as tabs; the rest live in More." />}>
-          Tab bar
+        <SectionTitle right={<InfoDot text="Today and More stay fixed. Tools placed in a slot open as tabs; the rest live in More. Archived tools stay out of sight until you restore them." />}>
+          Tools
         </SectionTitle>
         <Card pad={6}>
           {slots.map((key, i) => {
@@ -425,7 +429,17 @@ export default function Settings() {
               </View>
             );
           })}
+          <Hairline />
+          <Bouncy onPress={() => { tick(); setArchiveSheet(true); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}>
+            <Text style={st.slotIndex}>Archived</Text>
+            <Ionicons name="archive-outline" size={19} color={C.textDim} />
+            <Text style={[T.body, { flex: 1, marginLeft: 10, fontFamily: F.med }]} numberOfLines={1}>
+              {archived.length ? archived.map((k) => toolByKey(k)?.label).join(', ') : 'Nothing archived'}
+            </Text>
+            <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
+          </Bouncy>
         </Card>
+        <ToolArchiveSheet manage visible={archiveSheet} onClose={() => setArchiveSheet(false)} />
         <Sheet visible={slotPicker !== null} onClose={() => setSlotPicker(null)} title="Choose a tool">
           {TOOLS.map((t, k) => {
             const active = slotPicker !== null && slots[slotPicker] === t.key;
@@ -446,7 +460,9 @@ export default function Settings() {
                   <View style={{ flex: 1, marginLeft: 12 }}>
                     <Text style={[T.body, { fontFamily: active ? F.semi : F.med }]}>{t.label}</Text>
                     <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>
-                      {elsewhere >= 0 && !active ? 'Now in slot ' + (elsewhere + 1) + '. Picking it swaps the two.' : t.desc}
+                      {elsewhere >= 0 && !active
+                        ? 'Now in slot ' + (elsewhere + 1) + '. Picking it swaps the two.'
+                        : archived.includes(t.key) ? 'Archived. Picking it restores it.' : t.desc}
                     </Text>
                   </View>
                   {active ? <Ionicons name="checkmark" size={18} color={C.accent} /> : null}
