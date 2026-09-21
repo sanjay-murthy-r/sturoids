@@ -1,5 +1,5 @@
 import React from 'react';
-import { Keyboard, Pressable, StyleSheet } from 'react-native';
+import { Keyboard, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withSpring, withTiming } from 'react-native-reanimated';
@@ -29,6 +29,12 @@ const ICON = 24;
 /** every tab keeps room for a name and a dot under its icon, so no icon moves when the current tab changes */
 const LABEL_H = 14;
 const DOT = 4;
+const BAR_PAD_TOP = 10;
+const BAR_PAD_X = 8;
+const ITEM_PAD = 2;
+const GAP = 3;
+/** where the dot's row sits: under the icon and the name of every tab */
+const DOT_TOP = BAR_PAD_TOP + ITEM_PAD + ICON + GAP + LABEL_H + GAP;
 const SWITCH = { duration: 200, easing: Easing.out(Easing.cubic) };
 
 /** The bar steps aside while the keyboard is up, so a text field never sits under a row of tabs. */
@@ -46,8 +52,9 @@ function useKeyboardOpen() {
 }
 
 /**
- * One tab of the rail: an outline icon that takes the accent when it is the current tab, with the tab's name and a
- * small accent dot arriving beneath it. The two icon colours crossfade, so nothing snaps.
+ * One tab of the rail: an outline icon that takes the accent when it is the current tab, with the tab's name arriving
+ * beneath it. The two icon colours crossfade, so nothing snaps. The dot under the name belongs to the bar, which
+ * glides it from tab to tab; each tab keeps the dot's room so nothing moves.
  */
 function TabItem({ meta, focused, onPress }: { meta: ItemMeta; focused: boolean; onPress: () => void }) {
   const level = useAnimLevel();
@@ -62,10 +69,6 @@ function TabItem({ meta, focused, onPress }: { meta: ItemMeta; focused: boolean;
   const nameStyle = useAnimatedStyle(() => ({
     opacity: on.value,
     transform: [{ translateY: 3 * (1 - on.value) }],
-  }));
-  const dotStyle = useAnimatedStyle(() => ({
-    opacity: on.value,
-    transform: [{ scale: 0.4 + 0.6 * on.value }],
   }));
   return (
     <Pressable
@@ -88,7 +91,7 @@ function TabItem({ meta, focused, onPress }: { meta: ItemMeta; focused: boolean;
       <Animated.Text numberOfLines={1} maxFontSizeMultiplier={1.2} style={[st.label, { color: C.accent }, nameStyle]}>
         {meta.shortLabel}
       </Animated.Text>
-      <Animated.View style={[st.dot, { backgroundColor: C.accent }, dotStyle]} />
+      <View style={st.dotRoom} />
     </Pressable>
   );
 }
@@ -134,6 +137,17 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
     transform: [{ translateY: hide.value * (barH.value + 2) + 18 * (1 - arrive.value) }],
   }));
 
+  // the one dot, under the current tab's name: it glides from tab to tab instead of appearing at the new one. On
+  // the first paint it is already in place, and with animations off it moves without travelling.
+  const focusIndex = routeNames.indexOf(focusedName as string);
+  const [slotW, setSlotW] = React.useState(0);
+  const dotAt = useSharedValue(Math.max(0, focusIndex));
+  React.useEffect(() => {
+    if (focusIndex < 0) return;
+    dotAt.value = level === 'none' || slotW === 0 ? focusIndex : withTiming(focusIndex, SWITCH);
+  }, [focusIndex, level]);
+  const dotStyle = useAnimatedStyle(() => ({ transform: [{ translateX: dotAt.value * slotW }] }), [slotW]);
+
   const metaFor = (name: string): ItemMeta => {
     if (name === 'index') return TODAY;
     if (name === 'more') return MORE;
@@ -144,7 +158,10 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
   return (
     <Animated.View
       pointerEvents={keyboardOpen ? 'none' : 'auto'}
-      onLayout={(e) => { barH.value = e.nativeEvent.layout.height; }}
+      onLayout={(e) => {
+        barH.value = e.nativeEvent.layout.height;
+        setSlotW((e.nativeEvent.layout.width - BAR_PAD_X * 2) / routeNames.length);
+      }}
       style={[
         st.bar,
         {
@@ -177,19 +194,26 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
         };
         return <TabItem key={name} meta={metaFor(name)} focused={focused} onPress={onPress} />;
       })}
+      {slotW > 0 && focusIndex >= 0 ? (
+        <Animated.View pointerEvents="none" style={[st.dotTrack, { width: slotW }, dotStyle]}>
+          <View style={[st.dot, { backgroundColor: C.accent }]} />
+        </Animated.View>
+      ) : null}
     </Animated.View>
   );
 }
 
 const st = StyleSheet.create({
-  bar: { flexDirection: 'row', paddingTop: 10, paddingHorizontal: 8, borderTopWidth: 1 },
+  bar: { flexDirection: 'row', paddingTop: BAR_PAD_TOP, paddingHorizontal: BAR_PAD_X, borderTopWidth: 1 },
   lifted: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-  item: { flex: 1, alignItems: 'center', paddingVertical: 2 },
+  item: { flex: 1, alignItems: 'center', paddingVertical: ITEM_PAD },
   icon: { width: ICON, height: ICON },
   glyph: { position: 'absolute', top: 0, left: 0 },
   label: {
-    height: LABEL_H, lineHeight: LABEL_H, marginTop: 3, textAlign: 'center',
+    height: LABEL_H, lineHeight: LABEL_H, marginTop: GAP, textAlign: 'center',
     fontFamily: F.semi, fontSize: 11, letterSpacing: 0.2,
   },
-  dot: { width: DOT, height: DOT, borderRadius: DOT / 2, marginTop: 3 },
+  dotRoom: { width: DOT, height: DOT, marginTop: GAP },
+  dotTrack: { position: 'absolute', top: DOT_TOP, left: BAR_PAD_X, height: DOT, alignItems: 'center' },
+  dot: { width: DOT, height: DOT, borderRadius: DOT / 2 },
 });
