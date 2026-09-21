@@ -1,5 +1,5 @@
 import React from 'react';
-import { Keyboard, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withSpring, withTiming } from 'react-native-reanimated';
@@ -13,6 +13,7 @@ import { normaliseSlots, toolByKey } from '../tools';
 import { TAB_ROUTES } from '../toolNav';
 import { useIntro } from '../intro';
 import { tick } from '../haptics';
+import { useKeyboardOpen } from '../hooks/useKeyboard';
 
 interface ItemMeta {
   /** full name, read by screen readers */
@@ -36,20 +37,6 @@ const GAP = 3;
 /** where the dot's row sits: under the icon and the name of every tab */
 const DOT_TOP = BAR_PAD_TOP + ITEM_PAD + ICON + GAP + LABEL_H + GAP;
 const SWITCH = { duration: 200, easing: Easing.out(Easing.cubic) };
-
-/** The bar steps aside while the keyboard is up, so a text field never sits under a row of tabs. */
-function useKeyboardOpen() {
-  const [open, setOpen] = React.useState(false);
-  React.useEffect(() => {
-    const shown = Keyboard.addListener('keyboardDidShow', () => setOpen(true));
-    const hidden = Keyboard.addListener('keyboardDidHide', () => setOpen(false));
-    return () => {
-      shown.remove();
-      hidden.remove();
-    };
-  }, []);
-  return open;
-}
 
 /**
  * One tab of the rail: an outline icon that takes the accent when it is the current tab, with the tab's name arriving
@@ -107,6 +94,7 @@ export function NeuTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const rawSlots = useStore((s) => s.settings.tabSlots);
   const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
+  // the bar steps aside while the keyboard is up, so a text field never sits under a row of tabs
   const keyboardOpen = useKeyboardOpen();
 
   const routeNames = TAB_ROUTES as readonly string[];

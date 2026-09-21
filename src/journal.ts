@@ -209,12 +209,13 @@ export function promptFor(key: string): { id: string; text: string } {
   return { id: 'p' + i, text: PROMPTS[i] };
 }
 
+// a filled sun for Great: stars mean the day's rating, and sparkles would read as an AI feature
 export const MOODS: { value: 1 | 2 | 3 | 4 | 5; label: string; icon: string }[] = [
   { value: 1, label: 'Rough', icon: 'rainy-outline' },
   { value: 2, label: 'Low', icon: 'cloud-outline' },
   { value: 3, label: 'Okay', icon: 'partly-sunny-outline' },
   { value: 4, label: 'Good', icon: 'sunny-outline' },
-  { value: 5, label: 'Great', icon: 'star-outline' },
+  { value: 5, label: 'Great', icon: 'sunny' },
 ];
 
 // ---------- archive ----------
@@ -222,12 +223,16 @@ export const MOODS: { value: 1 | 2 | 3 | 4 | 5; label: string; icon: string }[] 
 export function journalStats(entries: JournalEntry[]) {
   const days = [...new Set(entries.map((e) => e.dateKey))];
   const { current, best } = streaks(days);
+  const rated = entries.filter((e) => e.rating);
   return {
     entries: entries.length,
     days: days.length,
     words: entries.reduce((a, e) => a + e.wordCount, 0),
     current,
     best,
+    /** days with at least one rated entry */
+    ratedDays: new Set(rated.map((e) => e.dateKey)).size,
+    avgRating: rated.length ? rated.reduce((a, e) => a + (e.rating as number), 0) / rated.length : null,
   };
 }
 

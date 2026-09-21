@@ -5,9 +5,9 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore } from '../store';
-import { todayKey, yesterdayKey, daysUntil, fmtShortDate, toMinutes } from '../utils';
+import { yesterdayKey, daysUntil, fmtShortDate, toMinutes } from '../utils';
 import {
-  ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Chip, Toggle, NeuHeader, useTheme,
+  ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, NeuHeader, useTheme,
   ListCard, ListRow, StrikeText,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -16,6 +16,7 @@ import { tap } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
 import { toast } from '../components/Toast';
 import { useToday } from '../hooks/useNow';
+import { QuickTaskSheet } from '../components/QuickTaskSheet';
 
 export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
@@ -25,7 +26,6 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [tab, setTab] = useState<'daily' | 'missions'>('daily');
 
   const dailyTasks = useStore((s) => s.dailyTasks);
-  const addDaily = useStore((s) => s.addDaily);
   const toggleDaily = useStore((s) => s.toggleDaily);
   const removeDaily = useStore((s) => s.removeDaily);
   const restoreDaily = useStore((s) => s.restoreDaily);
@@ -33,7 +33,6 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const setLastTriage = useStore((s) => s.setLastTriage);
 
   const missions = useStore((s) => s.missions);
-  const addMission = useStore((s) => s.addMission);
   const toggleMission = useStore((s) => s.toggleMission);
   const removeMission = useStore((s) => s.removeMission);
   const addSubtask = useStore((s) => s.addSubtask);
@@ -48,8 +47,6 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const [addSheet, setAddSheet] = useState(false);
   const [remindSheet, setRemindSheet] = useState(false);
-  const [title, setTitle] = useState('');
-  const [deadline, setDeadline] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [subDraft, setSubDraft] = useState('');
   const [triaged, setTriaged] = useState<string[]>([]);
@@ -100,14 +97,6 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     () => [...missions].sort((a, b) => (a.done === b.done ? a.deadline.localeCompare(b.deadline) : a.done ? 1 : -1)),
     [missions]
   );
-
-  const submitAdd = () => {
-    const t = title.trim();
-    if (!t) return;
-    if (tab === 'daily') addDaily(t);
-    else addMission(t, /^\d{4}-\d{2}-\d{2}$/.test(deadline.trim()) ? deadline.trim() : today);
-    setTitle(''); setDeadline(''); setAddSheet(false);
-  };
 
   const confirmDelete = (what: string, fn: () => void) =>
     Alert.alert('Delete', 'Remove "' + what + '"?', [
@@ -281,29 +270,11 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <Ionicons name="add" size={30} color={C.accent} />
       </Bouncy>
 
-      <Sheet
+      <QuickTaskSheet
         visible={addSheet}
         onClose={() => setAddSheet(false)}
-        title={tab === 'daily' ? 'New ToDo (daily)' : 'New long-term task'}
-      >
-        <Field
-          label={tab === 'daily' ? undefined : 'Task'}
-          value={title} onChangeText={setTitle} placeholder={tab === 'daily' ? 'e.g. 50 PYQs' : 'e.g. Full mock test + analysis'} autoFocus
-        />
-        {tab === 'missions' && (
-          <>
-            <Field label="Deadline" value={deadline} onChangeText={setDeadline} placeholder={'YYYY-MM-DD, e.g. ' + today} />
-            <Row style={{ flexWrap: 'wrap', marginBottom: 6 }}>
-              {[0, 1, 3, 7, 14].map((n) => {
-                const d = new Date(); d.setDate(d.getDate() + n);
-                const key = todayKey(d);
-                return <Chip key={n} small label={n === 0 ? 'Today' : '+' + n + 'd'} active={deadline === key} onPress={() => setDeadline(key)} />;
-              })}
-            </Row>
-          </>
-        )}
-        <PillButton label="Add" onPress={submitAdd} />
-      </Sheet>
+        initialKind={tab === 'daily' ? 'daily' : 'mission'}
+      />
 
       <Sheet visible={remindSheet} onClose={() => setRemindSheet(false)} title="ToDo reminders">
         <Row style={{ justifyContent: 'space-between', marginBottom: 8 }}>

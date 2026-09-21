@@ -285,10 +285,21 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     }
   };
 
+  // the toast waits for the sheet to go: a sheet is a window of its own and would cover it
+  const promoted = React.useRef<{ kind: 'daily' | 'mission'; id: string } | null>(null);
   const promote = (line: string, kind: 'daily' | 'mission') => {
-    if (kind === 'daily') addDaily(line);
-    else addMission(line, todayKey());
+    const id = kind === 'daily' ? addDaily(line) : addMission(line, todayKey());
+    promoted.current = { kind, id };
     setLineSheet(false);
+  };
+  const promotedToast = () => {
+    const p = promoted.current;
+    promoted.current = null;
+    if (!p) return;
+    toast(p.kind === 'daily' ? 'Added to ToDos' : 'Added to long-term tasks, due today', {
+      label: 'Undo',
+      onPress: () => (p.kind === 'daily' ? useStore.getState().removeDaily(p.id) : useStore.getState().removeMission(p.id)),
+    });
   };
 
   const toggleLock = async () => {
@@ -429,7 +440,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         )}
       </View>
 
-      <Sheet visible={lineSheet} onClose={() => setLineSheet(false)} title="Promote a line to a task">
+      <Sheet visible={lineSheet} onClose={() => setLineSheet(false)} onClosed={promotedToast} title="Promote a line to a task">
         {lines.length === 0 ? (
           <Text style={{ color: C.textFaint }}>Write a few lines first.</Text>
         ) : (

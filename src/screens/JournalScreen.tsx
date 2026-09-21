@@ -23,15 +23,21 @@ import { useToolNav } from '../toolNav';
 import { tap, tick } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
 import { markOpen, pinStatus } from '../lock';
+import { useKeyboardOpen } from '../hooks/useKeyboard';
+import { DayCheckout } from '../components/DayCheckout';
+import { QuickTaskSheet } from '../components/QuickTaskSheet';
 
 type Mood = JournalEntry['mood'];
+type Rating = JournalEntry['rating'];
 interface Draft {
   id: string | null; dateKey: string; title: string; body: string;
-  mood: Mood; tags: string[]; promptId?: string; dirty: boolean;
+  mood: Mood; rating: Rating; checkoutSkipped: boolean; tags: string[]; promptId?: string; dirty: boolean;
 }
 
 const SAVE_DEBOUNCE_MS = 400;
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** the check-out offers itself only after a real page has been written */
+const CHECKOUT_MIN_WORDS = 30;
 
 export function JournalScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const tabMode = mode === 'tab';
@@ -60,6 +66,13 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const [title, setTitle] = React.useState('');
   const [body, setBody] = React.useState('');
   const [mood, setMood] = React.useState<Mood>(undefined);
+  const [rating, setRating] = React.useState<Rating>(undefined);
+  const [skipped, setSkipped] = React.useState(false);
+  // the check-out card: offered by itself after writing ('offered'), or opened from the day button ('asked')
+  const [checkout, setCheckout] = React.useState<null | 'offered' | 'asked'>(null);
+  const [edited, setEdited] = React.useState(false);
+  const [taskSheet, setTaskSheet] = React.useState(false);
+  const [taskTitle, setTaskTitle] = React.useState('');
   const [tags, setTags] = React.useState<string[]>([]);
   const [loaded, setLoaded] = React.useState(false);
   const [saveFailed, setSaveFailed] = React.useState(false);
@@ -71,12 +84,19 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const [remindDraft, setRemindDraft] = React.useState(settings.journalReminderTime || '21:30');
   const [pinFlow, setPinFlow] = React.useState(false);
 
-  const draft = React.useRef<Draft>({ id: null, dateKey, title: '', body: '', mood: undefined, tags: [], dirty: false });
+  const draft = React.useRef<Draft>({
+    id: null, dateKey, title: '', body: '', mood: undefined, rating: undefined, checkoutSkipped: false, tags: [], dirty: false,
+  });
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const queue = React.useRef<Promise<void>>(Promise.resolve());
   const booted = React.useRef(false);
   const autoDay = React.useRef(true); // the page follows the journal day until the user picks one
   const bodyRef = React.useRef<TextInput>(null);
+  // what is selected in the page, to start a task with it, and whether the page had the keyboard, to give it back
+  const selection = React.useRef({ start: 0, end: 0 });
+  const bodyFocused = React.useRef(false);
+  const refocus = React.useRef(false);
+  const keyboardOpen = useKeyboardOpen();
 
   // ---- motion: chrome recedes while typing, a small tick confirms each save ----
   const dim = useSharedValue(0);
@@ -108,7 +128,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     const d = draft.current;
     if (!d.dirty) return;
     d.dirty = false;
-    const empty = !d.title.trim() && !d.body.trim() && d.mood == null && d.tags.length === 0;
+    const empty = !d.title.trim() && !d.body.trim() && d.mood == null && d.rating == null && d.tags.length === 0;
     try {
       if (empty) {
         if (d.id) {
@@ -119,7 +139,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         return;
       }
       const id = await saveEntry({
-        id: d.id ?? undefined, dateKey: d.dateKey, title: d.title, body: d.body, mood: d.mood, tags: d.tags, promptId: d.promptId,
+        id: d.id ?? undefined, dateKey: d.dateKey, title: d.title, body: d.body, mood: d.mood, rating: d.rating,
+        checkoutSkipped: d.checkoutSkipped, tags: d.tags, promptId: d.promptId,
       });
       if (draft.current === d && !d.id) {
         d.id = id;
@@ -150,13 +171,19 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     const text = meta ? await readBody(meta.id) : '';
     draft.current = {
       id: meta?.id ?? null, dateKey: key, title: meta?.title ?? '', body: text,
-      mood: meta?.mood, tags: meta?.tags ?? [], promptId: meta?.promptId, dirty: false,
+      mood: meta?.mood, rating: meta?.rating, checkoutSkipped: !!meta?.checkoutSkipped,
+      tags: meta?.tags ?? [], promptId: meta?.promptId, dirty: false,
     };
     setDateKey(key);
     setEntryId(meta?.id ?? null);
     setTitle(draft.current.title);
     setBody(text);
     setMood(meta?.mood);
+    setRating(meta?.rating);
+    setSkipped(!!meta?.checkoutSkipped);
+    // a page opened afresh has not been written in on this visit, so it offers no check-out
+    setEdited(false);
+    setCheckout(null);
     setTags(draft.current.tags);
     setLoaded(true);
   }, []);
@@ -214,13 +241,25 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   }, [journal, entryId, loadEntry]);
 
   // ---- edits ----
-  const onTitle = (t: string) => { setTitle(t); draft.current.title = t; schedule(); markTyping(); };
-  const onBody = (t: string) => { setBody(t); draft.current.body = t; schedule(); markTyping(); };
+  // writing tucks the check-out away; the next time the keyboard goes down it may offer itself again
+  const wrote = () => { if (!edited) setEdited(true); if (checkout) setCheckout(null); };
+  const onTitle = (t: string) => { setTitle(t); draft.current.title = t; schedule(); markTyping(); wrote(); };
+  const onBody = (t: string) => { setBody(t); draft.current.body = t; schedule(); markTyping(); wrote(); };
   const pickMood = (m: Mood) => {
+    setMood(m);
+    draft.current.mood = m;
+    schedule();
+  };
+  const pickRating = (r: Rating) => {
+    setRating(r);
+    draft.current.rating = r;
+    schedule();
+  };
+  const skipCheckout = () => {
     tick();
-    const next = draft.current.mood === m ? undefined : m;
-    setMood(next);
-    draft.current.mood = next;
+    setCheckout(null);
+    setSkipped(true);
+    draft.current.checkoutSkipped = true;
     schedule();
   };
   const toggleTag = (t: string) => {
@@ -260,6 +299,40 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const sub = parts.weekday + (hint ? ' · ' + hint : '');
   const marked = React.useMemo(() => new Set(journal.map((e) => e.dateKey)), [journal]);
   const current = entryId ? journal.find((e) => e.id === entryId) : undefined;
+  const tasksArchived = settings.archivedTools.includes('tasks');
+
+  // The check-out offers itself only while every one of these holds, so it can never be spent where nobody sees it:
+  // the setting is on, the keyboard is down, this page was written in on this visit and has a real page of words,
+  // it has no mood or rating yet, it was never skipped, and no other entry that day has been rated.
+  const ratedSameDay = dayEntries.some((e) => e.id !== entryId && !!e.rating);
+  const offer = settings.journalCheckout && loaded && !keyboardOpen && edited && words >= CHECKOUT_MIN_WORDS
+    && !mood && !rating && !skipped && !ratedSameDay;
+  React.useEffect(() => {
+    if (offer && !checkout) setCheckout('offered');
+  }, [offer]);
+  // the keyboard coming up tucks the card away
+  React.useEffect(() => {
+    if (keyboardOpen && checkout) setCheckout(null);
+  }, [keyboardOpen]);
+  // a mood and a rating together finish it: the card stays a moment to show both, then leaves
+  React.useEffect(() => {
+    if (!checkout || !mood || !rating) return undefined;
+    const t = setTimeout(() => setCheckout(null), 900);
+    return () => clearTimeout(t);
+  }, [checkout, mood, rating]);
+
+  const dayIcon = mood ? MOODS.find((m) => m.value === mood)?.icon || 'partly-sunny-outline' : rating ? 'star' : 'partly-sunny-outline';
+  const openTask = () => {
+    tick();
+    // words selected in the page start the task; the page gets its keyboard back after
+    const { start, end } = selection.current;
+    const a = Math.max(0, Math.min(start, end, body.length));
+    const b = Math.max(0, Math.min(Math.max(start, end), body.length));
+    const picked = body.slice(a, b).split('\n').map((l) => l.trim()).find(Boolean) || '';
+    setTaskTitle(picked.slice(0, 140));
+    refocus.current = bodyFocused.current;
+    setTaskSheet(true);
+  };
 
   const openArchive = async () => { tick(); await flush(); nav.openArchive(); };
   const pickDay = (key: string) => { setDateSheet(false); autoDay.current = false; openDay(key); };
@@ -358,6 +431,9 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           ref={bodyRef}
           value={body}
           onChangeText={onBody}
+          onSelectionChange={(e) => { selection.current = e.nativeEvent.selection; }}
+          onFocus={() => { bodyFocused.current = true; }}
+          onBlur={() => { bodyFocused.current = false; }}
           editable={loaded}
           placeholder="Start writing"
           placeholderTextColor={C.textFaint}
@@ -368,23 +444,37 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         />
       </Animated.ScrollView>
 
+      {checkout ? (
+        <DayCheckout
+          dateKey={dateKey}
+          mood={mood}
+          rating={rating}
+          offered={checkout === 'offered'}
+          onMood={pickMood}
+          onRating={pickRating}
+          onSkip={skipCheckout}
+          onDone={() => setCheckout(null)}
+        />
+      ) : null}
       <Animated.View style={[st.foot, { paddingBottom: 10 + (tabMode ? 0 : insets.bottom) }, footStyle]}>
         <Row style={{ flex: 1 }}>
-          {MOODS.map((m) => {
-            const active = mood === m.value;
-            return (
-              <Bouncy
-                key={m.value}
-                onPress={() => pickMood(m.value)}
-                scaleTo={0.9}
-                radius={17}
-                style={[st.moodWell, active && { backgroundColor: C.gold + '24' }]}
-              >
-                <Ionicons name={m.icon as any} size={17} color={active ? C.gold : C.textFaint} accessibilityLabel={m.label} />
-              </Bouncy>
-            );
-          })}
+          <Bouncy
+            onPress={() => { tick(); setCheckout(checkout ? null : 'asked'); }}
+            scaleTo={0.9}
+            radius={17}
+            style={[st.dayWell, (mood || rating || checkout) ? { backgroundColor: C.gold + '24' } : null]}
+          >
+            <Ionicons
+              name={dayIcon as any}
+              size={18}
+              color={mood || rating ? C.gold : C.textFaint}
+              accessibilityLabel={'How the day went' + (mood ? ', ' + MOODS.find((m) => m.value === mood)?.label : '') + (rating ? ', ' + rating + ' of 5 stars' : '')}
+            />
+          </Bouncy>
           <IconBtn name={tags.length ? 'pricetag' : 'pricetag-outline'} size={19} pad={8} color={tags.length ? C.gold : C.textDim} onPress={() => setTagSheet(true)} />
+          {tasksArchived ? null : (
+            <IconBtn name="checkbox-outline" size={19} pad={8} color={C.textDim} onPress={openTask} />
+          )}
         </Row>
         <View style={{ alignItems: 'flex-end' }}>
           <Text
@@ -449,6 +539,14 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           <Toggle value={settings.journalPromptsOn} onChange={(v) => setSetting('journalPromptsOn', v)} color={C.gold} />
         </Row>
         <Hairline />
+        <Row style={st.prefRow}>
+          <Text style={[T.body, { flex: 1 }]}>Ask how the day went</Text>
+          <Toggle value={settings.journalCheckout} onChange={(v) => setSetting('journalCheckout', v)} color={C.gold} />
+        </Row>
+        <Text style={[T.caption, { marginBottom: 6 }]}>
+          After you write, a quiet card asks for a mood and a star rating. Skip is always there, and the sun button in the corner opens it any time.
+        </Text>
+        <Hairline />
         <Text style={st.prefLabel}>Word goal</Text>
         <SegmentedControl
           size="sm" stretch
@@ -479,6 +577,16 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         </Text>
       </Sheet>
 
+      <QuickTaskSheet
+        visible={taskSheet}
+        onClose={() => setTaskSheet(false)}
+        onClosed={() => {
+          if (refocus.current) setTimeout(() => bodyRef.current?.focus(), 80);
+          refocus.current = false;
+        }}
+        initialTitle={taskTitle}
+      />
+
       <PinSheet
         visible={pinFlow}
         mode="set"
@@ -507,7 +615,7 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: S.pad, paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,
   },
-  moodWell: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+  dayWell: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 4 },
   words: { color: C.textFaint, fontFamily: F.med, fontSize: 12, fontVariant: ['tabular-nums'] },
   tick: { width: 16, height: 2, borderRadius: 1, backgroundColor: C.accent, marginTop: 4 },
   prefLabel: { ...T.label, marginTop: 10, marginBottom: 8 },

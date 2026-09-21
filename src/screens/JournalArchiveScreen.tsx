@@ -19,7 +19,9 @@ import {
 import { openTool } from '../toolNav';
 import { tick } from '../haptics';
 
-type Sort = 'newest' | 'oldest' | 'longest';
+type Sort = 'newest' | 'oldest' | 'longest' | 'best';
+const SORT_LABEL: Record<Sort, string> = { newest: 'Newest', oldest: 'Oldest', longest: 'Longest', best: 'Best days' };
+const NEXT_SORT: Record<Sort, Sort> = { newest: 'oldest', oldest: 'longest', longest: 'best', best: 'newest' };
 const HEAT_WEEKS = 12;
 
 export function JournalArchiveScreen({ mode }: { mode: 'tab' | 'stack' }) {
@@ -55,6 +57,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   const [bodies, setBodies] = React.useState<Map<string, string> | null>(null);
   const [month, setMonth] = React.useState<string | null>(null); // 'YYYY-MM'
   const [moods, setMoods] = React.useState<number[]>([]);
+  const [ratings, setRatings] = React.useState<number[]>([]);
   const [tags, setTags] = React.useState<string[]>([]);
   const [pinnedOnly, setPinnedOnly] = React.useState(false);
   const [sort, setSort] = React.useState<Sort>('newest');
@@ -84,17 +87,23 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     const out = journal.filter((e) =>
       (!month || e.dateKey.startsWith(month))
       && (!moods.length || (e.mood != null && moods.includes(e.mood)))
+      && (!ratings.length || (e.rating != null && ratings.includes(e.rating)))
       && (!tags.length || tags.every((t) => e.tags.includes(t)))
       && (!pinnedOnly || e.pinned)
       && entryMatches(e, bodies?.get(e.id), tokens));
+    const newest = (a: JournalEntry, b: JournalEntry) => b.dateKey.localeCompare(a.dateKey) || b.createdAt - a.createdAt;
     return out.sort((a, b) =>
       sort === 'longest' ? b.wordCount - a.wordCount
-        : sort === 'oldest' ? a.dateKey.localeCompare(b.dateKey) || a.createdAt - b.createdAt
-          : b.dateKey.localeCompare(a.dateKey) || b.createdAt - a.createdAt);
-  }, [journal, month, moods, tags, pinnedOnly, tokens, bodies, sort]);
+        : sort === 'best' ? (b.rating ?? 0) - (a.rating ?? 0) || newest(a, b)
+          : sort === 'oldest' ? a.dateKey.localeCompare(b.dateKey) || a.createdAt - b.createdAt
+            : newest(a, b));
+  }, [journal, month, moods, ratings, tags, pinnedOnly, tokens, bodies, sort]);
 
   const sections = React.useMemo(() => {
-    if (sort === 'longest') return visible.length ? [{ title: 'Longest first', data: visible }] : [];
+    // ranked orders are one list: month headings would repeat as the dates jump about
+    if (sort === 'longest' || sort === 'best') {
+      return visible.length ? [{ title: sort === 'best' ? 'Best days first' : 'Longest first', data: visible }] : [];
+    }
     const groups: { title: string; data: JournalEntry[] }[] = [];
     for (const e of visible) {
       const title = keyToDate(e.dateKey).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -111,14 +120,15 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     return [...counts.entries()].sort((a, b) => b[0].localeCompare(a[0]));
   }, [journal]);
 
-  const filterCount = (month ? 1 : 0) + moods.length + tags.length;
+  const filterCount = (month ? 1 : 0) + moods.length + ratings.length + tags.length;
   const summary = [
     month ? keyToDate(month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : '',
     moods.length ? moods.map((m) => MOODS.find((x) => x.value === m)?.label).join(', ') : '',
+    ratings.length ? [...ratings].sort((a, b) => b - a).map((r) => r + (r === 1 ? ' star' : ' stars')).join(', ') : '',
     tags.length ? tags.length + (tags.length === 1 ? ' tag' : ' tags') : '',
     pinnedOnly ? 'pinned' : '',
   ].filter(Boolean).join(', ');
-  const clearAll = () => { setMonth(null); setMoods([]); setTags([]); setPinnedOnly(false); setQ(''); };
+  const clearAll = () => { setMonth(null); setMoods([]); setRatings([]); setTags([]); setPinnedOnly(false); setQ(''); };
 
   const open = (dateKey: string, id?: string) => {
     tick();
@@ -170,11 +180,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -6 }} contentContainerStyle={{ paddingHorizontal: 6, paddingVertical: 12 }}>
         <Chip icon="options-outline" label={filterCount ? 'Filters ' + filterCount : 'Filters'} active={filterCount > 0} onPress={() => setFilters(true)} />
         <Chip icon="pin-outline" label="Pinned" active={pinnedOnly} onPress={() => setPinnedOnly(!pinnedOnly)} />
-        <Chip
-          icon="swap-vertical-outline"
-          label={sort === 'newest' ? 'Newest' : sort === 'oldest' ? 'Oldest' : 'Longest'}
-          onPress={() => setSort(sort === 'newest' ? 'oldest' : sort === 'oldest' ? 'longest' : 'newest')}
-        />
+        <Chip icon="swap-vertical-outline" label={SORT_LABEL[sort]} onPress={() => setSort(NEXT_SORT[sort])} />
       </ScrollView>
       {summary || tokens.length ? (
         <Row style={{ justifyContent: 'space-between', marginTop: -4, marginBottom: 10 }}>
@@ -193,6 +199,11 @@ function Archive({ tabMode }: { tabMode: boolean }) {
             <View style={st.vDivider} />
             <Glance value={s.words} label="words" />
           </Row>
+          {s.avgRating != null ? (
+            <Text style={[T.caption, { textAlign: 'center', marginTop: 12 }]}>
+              Average day {s.avgRating.toFixed(1)} of 5  ·  {s.ratedDays} rated {s.ratedDays === 1 ? 'day' : 'days'}
+            </Text>
+          ) : null}
           <View style={st.heat}>
             {heat.map((week, w) => (
               <View key={w} style={{ gap: 3 }}>
@@ -260,6 +271,12 @@ function Archive({ tabMode }: { tabMode: boolean }) {
                     <Highlighted text={e.title || e.excerpt.split(/[.!?\n]/)[0] || 'Untitled'} tokens={tokens} style={[T.title, { flex: 1 }]} lines={1} />
                     {e.pinned ? <Ionicons name="pin" size={14} color={C.gold} style={{ marginLeft: 6 }} /> : null}
                     {moodIcon ? <Ionicons name={moodIcon as any} size={15} color={C.gold} style={{ marginLeft: 6 }} /> : null}
+                    {e.rating ? (
+                      <View style={st.rate}>
+                        <Ionicons name="star" size={12} color={C.gold} />
+                        <Text style={st.rateText}>{e.rating}</Text>
+                      </View>
+                    ) : null}
                   </Row>
                   {e.excerpt ? <Highlighted text={snippet(e)} tokens={tokens} style={st.excerpt} lines={2} /> : null}
                   <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>
@@ -293,6 +310,16 @@ function Archive({ tabMode }: { tabMode: boolean }) {
             />
           ))}
         </Row>
+        <Hairline />
+        <Text style={st.sheetLabel}>Rating</Text>
+        <Row style={{ flexWrap: 'wrap' }}>
+          {[5, 4, 3, 2, 1].map((r) => (
+            <Chip
+              key={r} small icon="star" label={String(r)} color={C.gold} active={ratings.includes(r)}
+              onPress={() => setRatings(ratings.includes(r) ? ratings.filter((x) => x !== r) : [...ratings, r])}
+            />
+          ))}
+        </Row>
         {journalTags.length ? (
           <>
             <Hairline />
@@ -308,7 +335,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
         <Text style={st.sheetLabel}>Sort</Text>
         <SegmentedControl
           size="sm" stretch value={sort} onChange={(k) => setSort(k as Sort)}
-          options={[{ key: 'newest', label: 'Newest' }, { key: 'oldest', label: 'Oldest' }, { key: 'longest', label: 'Longest' }]}
+          options={[{ key: 'newest', label: 'Newest' }, { key: 'oldest', label: 'Oldest' }, { key: 'longest', label: 'Longest' }, { key: 'best', label: 'Best' }]}
         />
         <PillButton label="Show entries" onPress={() => setFilters(false)} style={{ marginTop: 16 }} />
       </Sheet>
@@ -350,6 +377,8 @@ function Glance({ value, label }: { value: number; label: string }) {
 
 const st = StyleSheet.create({
   link: { color: C.accent, fontFamily: F.semi, fontSize: 13, marginLeft: 12 },
+  rate: { flexDirection: 'row', alignItems: 'center', marginLeft: 6 },
+  rateText: { color: C.gold, fontFamily: F.semi, fontSize: 12, marginLeft: 2, fontVariant: ['tabular-nums'] },
   // a sticky month spans the whole width, so the card's side shadows pass under it instead of beside it
   section: {
     ...T.kicker, marginHorizontal: -S.pad, paddingHorizontal: S.pad, paddingTop: 14, paddingBottom: 8,
