@@ -6,7 +6,7 @@ import { C } from './theme';
  * source, so Home and More can never disagree about a tool's name or colour.
  */
 export type ToolKey =
-  | 'tasks' | 'focus' | 'planner' | 'notes' | 'journal'
+  | 'tasks' | 'focus' | 'planner' | 'notes' | 'journal' | 'scores'
   | 'calculator' | 'desmos' | 'vault' | 'ai';
 
 /** Palette slots rather than hex, so a palette swap recolours every tile. */
@@ -32,6 +32,7 @@ export const TOOLS: Tool[] = [
   { key: 'planner', label: 'Planner', shortLabel: 'Planner', desc: 'Week blocks and streaks', icon: 'calendar-outline', colorKey: 'teal', stackPath: '/planner' },
   { key: 'notes', label: 'Notes', shortLabel: 'Notes', desc: 'Text, voice, images and files', icon: 'document-text-outline', colorKey: 'green', stackPath: '/notes', lockable: true },
   { key: 'journal', label: 'Journal', shortLabel: 'Journal', desc: 'A page a day, in your words', icon: 'journal-outline', colorKey: 'gold', stackPath: '/journal', lockable: true },
+  { key: 'scores', label: 'Scores', shortLabel: 'Scores', desc: 'Exam marks, grouped your way', icon: 'ribbon-outline', colorKey: 'accent', stackPath: '/scores' },
   { key: 'calculator', label: 'Calculator', shortLabel: 'Calc', desc: 'Precise scientific calculator', icon: 'calculator-outline', colorKey: 'amber', stackPath: '/calculator' },
   { key: 'desmos', label: 'Desmos', shortLabel: 'Desmos', desc: 'Graphing calculator', icon: 'analytics-outline', colorKey: 'teal', stackPath: '/desmos' },
   { key: 'vault', label: 'YT Vault', shortLabel: 'Vault', desc: 'YouTube study library', icon: 'play-circle-outline', colorKey: 'pink', stackPath: '/vault' },

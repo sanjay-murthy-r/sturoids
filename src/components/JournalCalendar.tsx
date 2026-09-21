@@ -13,17 +13,18 @@ const CELL = 40;
 
 /**
  * A month of days, kept flat: a day with an entry carries a small dot, the picked day wears an accent ring, and
- * days after `maxKey` cannot be picked. Only the month arrows are raised. A new month glides in from the side it
- * was reached from.
+ * days outside `minKey`..`maxKey` (either may be left open) cannot be picked. Only the month arrows are raised. A
+ * new month glides in from the side it was reached from. With no day picked (`value` empty) it opens on this month.
  */
-export function JournalCalendar({ value, onPick, marked, maxKey }: {
-  value: string; onPick: (key: string) => void; marked: Set<string>; maxKey: string;
+export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
+  value: string; onPick: (key: string) => void; marked?: Set<string>; maxKey?: string; minKey?: string;
 }) {
   useTheme(); // repaints on a new accent: the ring and the picked day read it
   const level = useAnimLevel();
-  const start = keyToDate(value);
+  const start = keyToDate(value || todayKey());
   const [ym, setYm] = React.useState({ y: start.getFullYear(), m: start.getMonth() });
   React.useEffect(() => {
+    if (!value) return;
     const d = keyToDate(value);
     setYm({ y: d.getFullYear(), m: d.getMonth() });
   }, [value]);
@@ -32,10 +33,13 @@ export function JournalCalendar({ value, onPick, marked, maxKey }: {
   const fade = useSharedValue(1);
   const monthStyle = useAnimatedStyle(() => ({ opacity: fade.value, transform: [{ translateX: slide.value * 24 }] }));
 
-  const max = keyToDate(maxKey);
-  const atLatestMonth = ym.y > max.getFullYear() || (ym.y === max.getFullYear() && ym.m >= max.getMonth());
+  const max = maxKey ? keyToDate(maxKey) : null;
+  const min = minKey ? keyToDate(minKey) : null;
+  const atLatestMonth = !!max && (ym.y > max.getFullYear() || (ym.y === max.getFullYear() && ym.m >= max.getMonth()));
+  const atEarliestMonth = !!min && (ym.y < min.getFullYear() || (ym.y === min.getFullYear() && ym.m <= min.getMonth()));
   const shift = (dir: 1 | -1) => {
     if (dir === 1 && atLatestMonth) return;
+    if (dir === -1 && atEarliestMonth) return;
     tick();
     setYm(({ y, m }) => {
       const d = new Date(y, m + dir, 1);
@@ -57,7 +61,12 @@ export function JournalCalendar({ value, onPick, marked, maxKey }: {
   return (
     <View>
       <View style={st.head}>
-        <NeuIconBtn name="chevron-back" dim={36} size={17} color={C.textDim} onPress={() => shift(-1)} />
+        <NeuIconBtn
+          name="chevron-back" dim={36} size={17}
+          color={atEarliestMonth ? C.textFaint : C.textDim}
+          style={atEarliestMonth ? { opacity: 0.4 } : undefined}
+          onPress={() => shift(-1)}
+        />
         <Animated.Text style={[T.title, { flex: 1, textAlign: 'center' }, monthStyle]}>
           {first.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
         </Animated.Text>
@@ -82,16 +91,16 @@ export function JournalCalendar({ value, onPick, marked, maxKey }: {
           if (day == null) return <View key={i} style={st.cellBox} />;
           const key = todayKey(new Date(ym.y, ym.m, day));
           const selected = key === value;
-          const hasEntry = marked.has(key);
-          const future = key > maxKey;
+          const hasEntry = !!marked?.has(key);
+          const outside = (!!maxKey && key > maxKey) || (!!minKey && key < minKey);
           return (
             <View key={i} style={st.cellBox}>
               <Bouncy
-                disabled={future}
+                disabled={outside}
                 onPress={() => { tick(); onPick(key); }}
                 scaleTo={0.9}
                 radius={CELL / 2}
-                style={[st.cell, selected ? { borderColor: C.accent } : null, future ? { opacity: 0.35 } : null]}
+                style={[st.cell, selected ? { borderColor: C.accent } : null, outside ? { opacity: 0.35 } : null]}
               >
                 <Text
                   style={[

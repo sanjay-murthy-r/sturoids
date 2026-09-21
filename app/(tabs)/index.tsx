@@ -23,6 +23,7 @@ import { openTool } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
 import { useIntro } from '../../src/intro';
 import { journalDayFor } from '../../src/journal';
+import { indexScores, upcoming, groupSummary, fmtPct, fromToday } from '../../src/scores';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
 import { useNow } from '../../src/hooks/useNow';
 
@@ -54,6 +55,7 @@ export default function Today() {
   const noteCount = useStore((s) => s.notes.length);
   const videoCount = useStore((s) => s.vaultVideos.length);
   const deepWork = useStore((s) => s.deepWork);
+  const scores = useStore((s) => s.scores);
   const setQuickAccess = useStore((s) => s.setQuickAccess);
 
   const [nameSheet, setNameSheet] = useState(false);
@@ -180,6 +182,18 @@ export default function Today() {
           case 'vault':
             meta = videoCount ? count(videoCount, 'lecture saved', 'lectures saved') : 'No lectures yet';
             break;
+          case 'scores': {
+            // the next exam coming up says the most; failing that, how the latest one went
+            const ix = indexScores(scores);
+            const next = upcoming(ix, null, today)[0];
+            if (next) {
+              meta = (next.title || 'An exam') + ' ' + fromToday(next.date as string, today).toLowerCase();
+            } else {
+              const sum = groupSummary(ix, null);
+              meta = sum ? 'Latest ' + fmtPct(sum.latest.pct) : 'No exams yet';
+            }
+            break;
+          }
         }
       } else if (q.kind === 'app') {
         // a long app name needs the wide tile to be readable
@@ -191,7 +205,7 @@ export default function Today() {
     }
     return out;
   }, [visibleQuick, todayList.length, tasksLeft, deepWork, focusToday, nextBlock, noteCount, videoCount, journal, journalDay, today,
-    settings.journalLocked, settings.notesLocked, settings.hour24]);
+    scores, settings.journalLocked, settings.notesLocked, settings.hour24]);
 
   // the grid's callbacks keep their identity, so the grid (and its drag gestures) re-renders only for its own changes
   const runQuick = useCallback((q: QuickItem) => {

@@ -238,6 +238,33 @@ export function canMove(ix: ScoreIndex, id: string, parentId: string | null): bo
   return n.kind === 'group' ? p.kind === 'group' : true;
 }
 
+// ---------- dates ----------
+
+const dayNumber = (key: string) => {
+  const [y, m, d] = key.split('-').map(Number);
+  return Date.UTC(y, m - 1, d) / 86400000;
+};
+
+/** "Sat, 12 Sep", or with `long` "Saturday, 12 September"; the year only when it is not this year. */
+export function fmtExamDate(key: string, long = false, now = new Date()): string {
+  const d = new Date(key + 'T00:00:00');
+  if (isNaN(d.getTime())) return key;
+  const opts: Intl.DateTimeFormatOptions = long
+    ? { weekday: 'long', day: 'numeric', month: 'long' }
+    : { weekday: 'short', day: 'numeric', month: 'short' };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString('en-IN', opts);
+}
+
+/** "Today", "Tomorrow", "in 6 days", "Yesterday", "3 days ago". */
+export function fromToday(key: string, today: string): string {
+  const n = Math.round(dayNumber(key) - dayNumber(today));
+  if (n === 0) return 'Today';
+  if (n === 1) return 'Tomorrow';
+  if (n === -1) return 'Yesterday';
+  return n > 1 ? 'in ' + n + ' days' : -n + ' days ago';
+}
+
 // ---------- numbers ----------
 
 /** 74.666 is 74.7%; 80 is 80%. */

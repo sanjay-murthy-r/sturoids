@@ -14,17 +14,20 @@ import { DesmosScreen } from './DesmosScreen';
 import { VaultLibraryScreen } from './VaultLibraryScreen';
 import { AiLinksScreen } from './AiLinksScreen';
 import { JournalScreen } from './JournalScreen';
+import { ScoresScreen } from './ScoresScreen';
 
 /**
- * The screen each tool shows at the root of a bar slot. A new slot-eligible tool registers here, and
- * its own pages get a route in every slot folder beside `note/[id].tsx` and `video/[id].tsx`.
+ * The screen each tool shows at the root of a bar slot. Every tool must register here (a missing one fails to
+ * compile rather than leaving a blank tab), and its own pages get a route in every slot folder beside
+ * `note/[id].tsx` and `video/[id].tsx`.
  */
-export const SLOT_SCREENS: { [K in ToolKey]?: React.ComponentType<{ mode: ScreenMode }> } = {
+export const SLOT_SCREENS: Record<ToolKey, React.ComponentType<{ mode: ScreenMode }>> = {
   tasks: TasksScreen,
   focus: FocusScreen,
   planner: PlannerScreen,
   notes: NotesListScreen,
   journal: JournalScreen,
+  scores: ScoresScreen,
   calculator: CalculatorScreen,
   desmos: DesmosScreen,
   vault: VaultLibraryScreen,

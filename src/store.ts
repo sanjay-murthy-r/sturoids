@@ -152,8 +152,9 @@ export const DEFAULT_QUICK: QuickItem[] = [
   { id: 'q-notes', ...toolQuick('notes') },
   { id: 'q-calc', ...toolQuick('calculator') },
   { id: 'q-vault', ...toolQuick('vault', 'YT Vault') },
-  { id: 'q-desmos', ...toolQuick('desmos') },
-  { id: 'q-ai', ...toolQuick('ai') },
+  // Desmos and AI start archived, so a fresh install's shortcuts point at tools it shows
+  { id: 'q-scores', ...toolQuick('scores') },
+  { id: 'q-journal', ...toolQuick('journal') },
   { id: 'q-settings', ...SETTINGS_QUICK },
 ];
 
