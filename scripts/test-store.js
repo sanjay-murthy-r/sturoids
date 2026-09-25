@@ -115,6 +115,34 @@ const scenarios = {
     assert.deepEqual(st().settings.archivedTools, ['ai']);
   },
 
+  async 'a damaged exam tree is repaired on every load, not only on the upgrade'() {
+    // version 5: zustand skips the migration entirely, so the repair has to live in merge
+    const saved = {
+      ...V4,
+      scores: [
+        { id: 'a', parentId: 'b', kind: 'group', title: 'A', createdAt: 1, updatedAt: 1 },
+        { id: 'b', parentId: 'a', kind: 'group', title: 'B', createdAt: 1, updatedAt: 1 },
+        { id: 'c', parentId: 'gone', kind: 'exam', title: 'C', createdAt: 1, updatedAt: 1 },
+        { id: 'd', kind: 'exam', title: 7, createdAt: 1, updatedAt: 1 },
+      ],
+    };
+    const app = boot({ [KEY]: JSON.stringify({ state: saved, version: 5 }) });
+    await settled(app);
+    const scores = app.state().scores;
+    assert.ok(scores.every((n) => typeof n.title === 'string'), 'a title that is not text is dropped');
+    const byId = new Map(scores.map((n) => [n.id, n]));
+    for (const n of scores) {
+      const seen = new Set([n.id]);
+      let p = n.parentId;
+      while (p) {
+        assert.ok(!seen.has(p), 'no node is its own ancestor');
+        seen.add(p);
+        assert.ok(byId.has(p), 'every parent exists');
+        p = byId.get(p).parentId;
+      }
+    }
+  },
+
   async 'tasks added return their ids, and score nodes keep no empty fields'() {
     const app = boot();
     await settled(app);

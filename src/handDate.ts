@@ -294,9 +294,9 @@ export const DATE_PLACE: HandDatePlace = {
   gap: 0.4,
   tilt: -14,
   groups: {
-    dd: { x: 409, y: 440 },
+    dd: { x: 370, y: 447 },
     mm: { x: 536, y: 410 },
-    yy: { x: 676, y: 376 },
+    yy: { x: 656, y: 376 },
   },
 };
 
@@ -305,18 +305,7 @@ export const DATE_PLACE: HandDatePlace = {
  * smaller size only where that is not enough. Every other pair is written exactly as placed.
  */
 export const DATE_FIT: { readonly dd: HandFits; readonly mm: HandFits; readonly yy: HandFits } = {
-  dd: {
-    '02': { gap: 0.26, scale: 1 },
-    '20': { gap: 0.28, scale: 1 },
-    '22': { gap: 0.2, scale: 0.84 },
-    '23': { gap: 0.2, scale: 0.97 },
-    '24': { gap: 0.2, scale: 0.99 },
-    '25': { gap: 0.2, scale: 0.97 },
-    '26': { gap: 0.3, scale: 1 },
-    '27': { gap: 0.2, scale: 0.99 },
-    '28': { gap: 0.32, scale: 1 },
-    '29': { gap: 0.31, scale: 1 },
-  },
+  dd: {},
   mm: {
     '02': { gap: 0.2, scale: 0.92 },
     '03': { gap: 0.33, scale: 1 },

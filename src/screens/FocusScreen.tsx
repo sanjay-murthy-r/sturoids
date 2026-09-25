@@ -7,7 +7,7 @@ import * as Notifications from 'expo-notifications';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T } from '../theme';
 import { useStore } from '../store';
-import { todayKey, fmtDuration, uid, toMinutes, fmtClockTime } from '../utils';
+import { todayKey, uid, toMinutes, fmtClockTime } from '../utils';
 import {
   ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, ProgressBar, NeuHeader,
   ListCard, ListRow,

@@ -26,12 +26,13 @@ import { ToastHost } from '../src/components/Toast';
 SplashScreen.preventAutoHideAsync().catch(() => {});
 SplashScreen.setOptions({ duration: 180, fade: true });
 
-// a phone stays upright, as it always was; a tablet turns either way. Decided by the screen, not the window, so
-// splitting a tablet's screen never makes it count as a phone.
+// A phone stays upright, as it always was: app.json locks the manifest to portrait, so not even the splash can
+// turn. A tablet unlocks itself here. Decided by the screen, not the window, so splitting a tablet's screen never
+// makes it count as a phone.
 {
   const screen = Dimensions.get('screen');
-  if (Math.min(screen.width, screen.height) < 600) {
-    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+  if (Math.min(screen.width, screen.height) >= 600) {
+    ScreenOrientation.unlockAsync().catch(() => {});
   }
 }
 

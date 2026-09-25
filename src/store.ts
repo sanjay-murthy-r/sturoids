@@ -937,6 +937,9 @@ export const useStore = create<AppState>()(
         // a tool in a tab slot is never archived, whatever was saved (archiving arrived with its own default)
         const tabSlots = normaliseSlots(merged.settings.tabSlots);
         merged.settings = { ...merged.settings, tabSlots, archivedTools: normaliseArchived(merged.settings.archivedTools, tabSlots) };
+        // the migration only runs the first time after an upgrade; the exam tree is repaired on every load, so a tree
+        // damaged after that (a bad import, a half-written save) can never reach a screen
+        merged.scores = sanitizeScores(merged.scores);
         return merged;
       },
       // zustand reports a load that throws only here and never marks the store hydrated

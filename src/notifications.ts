@@ -31,13 +31,20 @@ ensureHandler();
  */
 let archiveWatch: (() => void) | null = null;
 
+/** the pending reschedule after tools were archived or restored */
+let archiveSettle: ReturnType<typeof setTimeout> | null = null;
+
 export async function initNotifications() {
   ensureHandler();
   await ensureChannel();
   if (!archiveWatch) {
     // archiving a tool pauses its reminders; restoring it schedules them again
     archiveWatch = useStore.subscribe((s, prev) => {
-      if ((s.settings.archivedTools || []).join() !== (prev.settings.archivedTools || []).join()) void rescheduleAllReminders();
+      if ((s.settings.archivedTools || []).join() === (prev.settings.archivedTools || []).join()) return;
+      // several tools toggled in a row settle into one reschedule, so two passes can never cross and leave a
+      // reminder cancelled that the last change restored
+      if (archiveSettle) clearTimeout(archiveSettle);
+      archiveSettle = setTimeout(() => { archiveSettle = null; void rescheduleAllReminders(); }, 400);
     });
   }
   if (useStore.getState().settings.remindersEnabled) await rescheduleAllReminders();
