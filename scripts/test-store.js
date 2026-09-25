@@ -160,10 +160,40 @@ const scenarios = {
     const copy = st().duplicateScoreNode(e);
     assert.equal(st().scores.find((x) => x.id === copy).title, 'Mock 2');
     const removed = st().removeScoreNode(g);
-    assert.equal(removed.length, 3, 'the group and both exams');
+    assert.equal(removed.nodes.length, 3, 'the group and both exams');
     assert.deepEqual(st().scores, []);
     st().restoreScoreNodes(removed);
     assert.equal(st().scores.length, 3, 'Undo puts them all back');
+  },
+
+  async 'tags are made once, renamed uniquely, and let go of everything when deleted'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    const a = st().addScoreTag('  Silly mistakes ');
+    assert.equal(st().scoreTags[0].label, 'Silly mistakes', 'a name is trimmed');
+    assert.equal(st().addScoreTag('SILLY MISTAKES'), a, 'the same name is the same tag');
+    const b = st().addScoreTag('Revision');
+    assert.notEqual(st().scoreTags[0].color, st().scoreTags[1].color, 'a new tag takes a free colour');
+    assert.equal(st().patchScoreTag(b, { label: 'silly mistakes' }), false, 'a name already in use is refused');
+    assert.equal(st().patchScoreTag(b, { label: 'Revision gaps' }), true);
+    const exam = st().addScoreNode({ parentId: null, kind: 'exam', title: 'Mock 1', tags: [a, b] });
+    const l1 = st().addLearning({ nodeId: exam, text: '  Read the question twice  ', tags: [a] });
+    st().addLearning({ nodeId: exam, text: 'Revise rotation', tags: [a, b] });
+    assert.equal(st().learnings[0].text, 'Read the question twice', 'a learning is trimmed');
+    assert.equal(st().addLearning({ nodeId: exam, text: '   ' }), '', 'an empty learning is not kept');
+    st().removeScoreTag(a);
+    assert.deepEqual(st().scores.find((x) => x.id === exam).tags, [b], 'the tag leaves the exam');
+    assert.deepEqual(st().learnings.map((l) => l.tags), [[], [b]], 'and every learning');
+    const gone = st().removeLearning(l1);
+    assert.equal(st().learnings.length, 1);
+    st().restoreLearnings([gone]);
+    assert.equal(st().learnings.length, 2, 'Undo puts a learning back');
+    const removed = st().removeScoreNode(exam);
+    assert.equal(removed.learnings.length, 2, 'an exam takes its learnings with it');
+    assert.equal(st().learnings.length, 0);
+    st().restoreScoreNodes(removed);
+    assert.equal(st().learnings.length, 2, 'and brings them back');
   },
 
   async 'a v4 blob upgrades through the real persist migration'() {

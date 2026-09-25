@@ -187,6 +187,33 @@ const checks = {
     assert.deepEqual(S.sanitizeScores(once), once, 'a second pass changes nothing');
     assert.deepEqual(S.sanitizeScores('nope'), []);
   },
+  'a tag filter keeps any of them, or only all of them'() {
+    const tags = S.sanitizeTags([
+      { id: 't1', label: ' Careless ', createdAt: 1 },
+      { id: 't2', label: 'careless', createdAt: 2 },
+      { id: 't3', label: 'Formulae', color: '#9AD6B0', createdAt: 3 },
+      { id: 'bad', label: '   ', createdAt: 4 },
+    ]);
+    assert.deepEqual(tags.map((t) => t.id), ['t1', 't3'], 'the same name twice is one tag, a blank name is none');
+    assert.equal(tags[0].label, 'Careless');
+    const learnings = S.sanitizeLearnings([
+      { id: 'l1', nodeId: 'e1', text: 'Both', tags: ['t1', 't3', 'gone'], createdAt: 3 },
+      { id: 'l2', nodeId: 'e1', text: 'One', tags: ['t1'], createdAt: 2 },
+      { id: 'l3', nodeId: 'e2', text: 'Other', tags: ['t3'], createdAt: 1 },
+      { id: 'l4', nodeId: 'e1', text: '  ', tags: [], createdAt: 4 },
+    ], tags);
+    assert.deepEqual(learnings.map((l) => l.id), ['l1', 'l2', 'l3'], 'an empty learning is dropped');
+    assert.deepEqual(learnings[0].tags, ['t1', 't3'], 'a tag that no longer exists is dropped');
+    const ids = (list) => list.map((l) => l.id);
+    assert.deepEqual(ids(S.filterLearnings(learnings, [], 'any')), ['l1', 'l2', 'l3'], 'no filter keeps them, newest first');
+    assert.deepEqual(ids(S.filterLearnings(learnings, ['t1', 't3'], 'any')), ['l1', 'l2', 'l3']);
+    assert.deepEqual(ids(S.filterLearnings(learnings, ['t1', 't3'], 'all')), ['l1'], 'all means every tag picked');
+    assert.deepEqual(ids(S.filterLearnings(learnings, ['t1'], 'any', new Set(['e1']))), ['l1', 'l2'], 'a deleted exam is left out');
+    const use = S.tagUse(tags, [{ id: 'e1', tags: ['t1'] }], learnings);
+    assert.equal(use.get('t1'), 3, 'an exam and two learnings');
+    assert.equal(use.get('t3'), 2);
+    assert.notEqual(S.nextTagColor([{ color: S.TAG_COLORS[0] }]), S.TAG_COLORS[0], 'a new tag takes a free colour');
+  },
 };
 
 let failed = 0;

@@ -7,6 +7,7 @@ import { ScoreNode, fmtExamDate, fmtMark, indexScores, marksProblem, parseMark }
 import { todayKey } from '../utils';
 import { shiftKey } from '../journal';
 import { Sheet, Field, PillButton, Chip, Row } from './UI';
+import { TagPicker } from './ScoreTags';
 import { SegmentedControl } from './SegmentedControl';
 import { JournalCalendar } from './JournalCalendar';
 
@@ -27,10 +28,12 @@ interface Draft {
   grade: string;
   note: string;
   combine: 'sum' | 'weighted';
+  tags: string[];
 }
 
 const EMPTY: Draft = {
-  title: '', date: '', score: '', outOf: '', weight: '', target: '', rank: '', percentile: '', grade: '', note: '', combine: 'sum',
+  title: '', date: '', score: '', outOf: '', weight: '', target: '', rank: '', percentile: '', grade: '', note: '',
+  combine: 'sum', tags: [],
 };
 
 const num = (n: number | undefined) => (typeof n === 'number' ? fmtMark(n) : '');
@@ -38,7 +41,7 @@ const num = (n: number | undefined) => (typeof n === 'number' ? fmtMark(n) : '')
 type Problems = { title?: string; marks?: string; weight?: string; details?: string };
 
 /**
- * One sheet for adding or editing an exam, a sub-exam or a group. Marks are typed as they are printed on the paper
+ * One sheet for adding or editing an exam, one of its subjects, or a group. Marks are typed as they are printed on the paper
  * (negative marking included), the total is filled in from the exam before it, and everything a mock test report
  * carries (target, rank, percentile, grade, a note) waits behind "More details".
  */
@@ -74,7 +77,7 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
       setD({
         title: n.title, date: n.date || '', score: num(n.score), outOf: num(n.outOf), weight: num(n.weight),
         target: num(n.target), rank: num(n.rank), percentile: num(n.percentile), grade: n.grade || '', note: n.note || '',
-        combine: n.combine || 'sum',
+        combine: n.combine || 'sum', tags: n.tags || [],
       });
       setMore(n.target != null || n.rank != null || n.percentile != null || !!n.grade || !!n.note);
       return;
@@ -135,6 +138,7 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
         percentile: percentile.value,
         grade: d.grade.trim() || undefined,
         note: d.note.trim() || undefined,
+        tags: d.tags.length ? d.tags : undefined,
       };
     if (shown?.mode === 'edit' && node) patchScoreNode(node.id, fields);
     else addScoreNode({ ...(fields as any), kind, parentId });
@@ -142,9 +146,9 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
   };
 
   const sheetTitle = shown?.mode === 'edit'
-    ? kind === 'group' ? 'Rename group' : isSub ? 'Edit sub-exam' : 'Edit exam'
+    ? kind === 'group' ? 'Rename group' : isSub ? 'Edit subject' : 'Edit exam'
     : kind === 'group' ? 'New group'
-      : isSub ? 'New sub-exam in ' + (parent?.title || 'this exam')
+      : isSub ? 'New subject in ' + (parent?.title || 'this exam')
         : parent ? 'New exam in ' + parent.title : 'New exam';
   const today = todayKey();
   const yesterday = shiftKey(today, -1);
@@ -152,7 +156,7 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
   return (
     <Sheet visible={!!target} onClose={onClose} title={sheetTitle}>
       <Field
-        label={kind === 'group' ? 'Group' : isSub ? 'Sub-exam' : 'Exam'}
+        label={kind === 'group' ? 'Group' : isSub ? 'Subject' : 'Exam'}
         value={d.title}
         onChangeText={(v) => set({ title: v })}
         placeholder={kind === 'group' ? 'e.g. JEE mocks' : isSub ? 'e.g. Physics' : 'e.g. Mock test 7'}
@@ -190,12 +194,12 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
             />
           </Row>
           <Text style={[problems.marks ? st.problem : st.hint]}>
-            {problems.marks || (hasParts ? 'Leave the marks empty to add up the sub-exams.' : 'Negative marks are fine, like -4.')}
+            {problems.marks || (hasParts ? 'Leave the marks empty to add up the subjects.' : 'Negative marks are fine, like -4.')}
           </Text>
 
           {hasParts ? (
             <>
-              <Text style={st.label}>How sub-exams add up</Text>
+              <Text style={st.label}>How subjects add up</Text>
               <SegmentedControl
                 size="sm"
                 stretch
@@ -218,6 +222,8 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
               </Text>
             </>
           ) : null}
+
+          <TagPicker value={d.tags} onChange={(tags) => set({ tags })} />
 
           <Pressable onPress={() => setMore(!more)} hitSlop={8} style={st.moreRow} accessibilityRole="button">
             <Text style={[st.moreText, { color: C.accent }]}>More details</Text>
@@ -243,7 +249,7 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
       {problems.details ? <Text style={st.problem}>{problems.details}</Text> : null}
 
       <PillButton
-        label={shown?.mode === 'edit' ? 'Save' : kind === 'group' ? 'Add group' : isSub ? 'Add sub-exam' : 'Add exam'}
+        label={shown?.mode === 'edit' ? 'Save' : kind === 'group' ? 'Add group' : isSub ? 'Add subject' : 'Add exam'}
         onPress={save}
         style={{ marginTop: 6 }}
       />

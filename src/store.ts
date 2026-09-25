@@ -5,7 +5,10 @@ import { persist, createJSONStorage, PersistStorage, StorageValue } from 'zustan
 import { uid, todayKey, DayName, DAY_NAMES } from './utils';
 import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
 import { ToolKey, DEFAULT_SLOTS, DEFAULT_ARCHIVED, ROUTE_TO_TOOL, TOOLS, normaliseSlots, normaliseArchived, toolByKey } from './tools';
-import { ScoreNode, sanitizeScores, indexScores, descendantIds, canMove, duplicateStructure } from './scores';
+import {
+  ScoreNode, ScoreTag, Learning, sanitizeScores, sanitizeTags, sanitizeLearnings, indexScores, descendantIds,
+  canMove, duplicateStructure, nextTagColor, sameTagName,
+} from './scores';
 
 // ---------- types ----------
 
@@ -78,6 +81,9 @@ export interface JournalEntry {
   updatedAt: number;
   promptId?: string;
 }
+
+/** what a delete took away, and what an Undo puts back */
+export interface RemovedScores { nodes: ScoreNode[]; learnings: Learning[] }
 
 export interface Settings {
   name: string;
@@ -214,6 +220,8 @@ export function initialData() {
     journal: [] as JournalEntry[],
     journalTags: [] as string[],
     scores: [] as ScoreNode[],
+    scoreTags: [] as ScoreTag[],
+    learnings: [] as Learning[],
   };
 }
 type DataKey = keyof ReturnType<typeof initialData>;
@@ -240,6 +248,8 @@ export interface AppState {
   journal: JournalEntry[];
   journalTags: string[];
   scores: ScoreNode[];
+  scoreTags: ScoreTag[];
+  learnings: Learning[];
 
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** puts tools in the three slots; a tool placed in a slot is restored if it was archived */
@@ -319,11 +329,23 @@ export interface AppState {
   patchScoreNode: (id: string, patch: Partial<Omit<ScoreNode, 'id' | 'createdAt'>>) => void;
   /** false when the move is not allowed (a group into an exam, or anything into itself) */
   moveScoreNode: (id: string, parentId: string | null) => boolean;
-  /** removes the node and everything under it, and returns them so an Undo can put them back */
-  removeScoreNode: (id: string) => ScoreNode[];
-  restoreScoreNodes: (nodes: ScoreNode[]) => void;
+  /** removes the node, everything under it and their learnings, and returns them so an Undo can put them back */
+  removeScoreNode: (id: string) => RemovedScores;
+  restoreScoreNodes: (removed: RemovedScores) => void;
   /** a copy of the node's structure without marks; returns the copy's id */
   duplicateScoreNode: (id: string) => string | null;
+
+  /** the id of the tag with this name, making it (in the next free colour) when it is new */
+  addScoreTag: (label: string) => string;
+  /** renaming to a name already in use is refused and returns false */
+  patchScoreTag: (id: string, patch: { label?: string; color?: string }) => boolean;
+  /** the tag goes from the list and from every exam and learning carrying it */
+  removeScoreTag: (id: string) => void;
+  addLearning: (l: { nodeId: string; text: string; tags?: string[] }) => string;
+  patchLearning: (id: string, patch: { text?: string; tags?: string[] }) => void;
+  /** returns the learning so an Undo can put it back */
+  removeLearning: (id: string) => Learning | null;
+  restoreLearnings: (list: Learning[]) => void;
 
   pushCalc: (expr: string, result: string) => void;
   clearCalcHistory: () => void;
@@ -522,6 +544,8 @@ export function migrateV5(p: any): any {
     });
   out.journalTags = list(p?.journalTags).filter((t) => typeof t === 'string');
   out.scores = sanitizeScores(p?.scores);
+  out.scoreTags = sanitizeTags(p?.scoreTags);
+  out.learnings = sanitizeLearnings(p?.learnings, out.scoreTags);
   return out;
 }
 
@@ -893,19 +917,30 @@ export const useStore = create<AppState>()(
       },
       removeScoreNode: (id) => {
         const s = get();
-        if (!s.scores.some((x) => x.id === id)) return [];
+        if (!s.scores.some((x) => x.id === id)) return { nodes: [], learnings: [] };
         const gone = descendantIds(indexScores(s.scores), id);
         gone.add(id);
-        const removed = s.scores.filter((x) => gone.has(x.id));
-        set({ scores: s.scores.filter((x) => !gone.has(x.id)) });
-        return removed;
+        const nodes = s.scores.filter((x) => gone.has(x.id));
+        // an exam's learnings go with it, and come back with it
+        const learnings = s.learnings.filter((l) => gone.has(l.nodeId));
+        set({
+          scores: s.scores.filter((x) => !gone.has(x.id)),
+          learnings: learnings.length ? s.learnings.filter((l) => !gone.has(l.nodeId)) : s.learnings,
+        });
+        return { nodes, learnings };
       },
-      restoreScoreNodes: (nodes) =>
+      restoreScoreNodes: (removed) =>
         set((s) => {
           const have = new Set(s.scores.map((x) => x.id));
-          const back = nodes.filter((x) => !have.has(x.id));
+          const back = removed.nodes.filter((x) => !have.has(x.id));
+          const hasL = new Set(s.learnings.map((l) => l.id));
+          const backL = removed.learnings.filter((l) => !hasL.has(l.id));
+          if (!back.length && !backL.length) return {};
           // the tree is repaired in case a parent went away in the meantime
-          return back.length ? { scores: sanitizeScores([...s.scores, ...back]) } : {};
+          return {
+            ...(back.length ? { scores: sanitizeScores([...s.scores, ...back]) } : {}),
+            ...(backL.length ? { learnings: [...s.learnings, ...backL] } : {}),
+          };
         }),
       duplicateScoreNode: (id) => {
         const copy = duplicateStructure(get().scores, id);
@@ -913,6 +948,65 @@ export const useStore = create<AppState>()(
         set((s) => ({ scores: [...s.scores, ...copy.nodes] }));
         return copy.rootId;
       },
+
+      addScoreTag: (label) => {
+        const name = label.trim().slice(0, 40);
+        const s = get();
+        const already = s.scoreTags.find((t) => sameTagName(t.label, name));
+        if (!name || already) return already?.id || '';
+        const tag: ScoreTag = { id: uid(), label: name, color: nextTagColor(s.scoreTags), createdAt: Date.now() };
+        set({ scoreTags: [...s.scoreTags, tag] });
+        return tag.id;
+      },
+      patchScoreTag: (id, patch) => {
+        const s = get();
+        const name = patch.label?.trim().slice(0, 40);
+        if (patch.label !== undefined && !name) return false;
+        if (name && s.scoreTags.some((t) => t.id !== id && sameTagName(t.label, name))) return false;
+        set({
+          scoreTags: s.scoreTags.map((t) => (t.id === id
+            ? { ...t, ...(name ? { label: name } : {}), ...(patch.color ? { color: patch.color } : {}) }
+            : t)),
+        });
+        return true;
+      },
+      removeScoreTag: (id) =>
+        set((s) => ({
+          scoreTags: s.scoreTags.filter((t) => t.id !== id),
+          scores: s.scores.map((n) => (n.tags?.includes(id) ? { ...n, tags: n.tags.filter((t) => t !== id) } : n)),
+          learnings: s.learnings.map((l) => (l.tags.includes(id) ? { ...l, tags: l.tags.filter((t) => t !== id) } : l)),
+        })),
+      addLearning: ({ nodeId, text, tags }) => {
+        const body = text.trim();
+        if (!body) return '';
+        const id = uid();
+        const now = Date.now();
+        set((s) => ({ learnings: [...s.learnings, { id, nodeId, text: body, tags: tags || [], createdAt: now, updatedAt: now }] }));
+        return id;
+      },
+      patchLearning: (id, patch) =>
+        set((s) => ({
+          learnings: s.learnings.map((l) => (l.id === id
+            ? {
+              ...l,
+              ...(patch.text !== undefined ? { text: patch.text.trim() || l.text } : {}),
+              ...(patch.tags ? { tags: patch.tags } : {}),
+              updatedAt: Date.now(),
+            }
+            : l)),
+        })),
+      removeLearning: (id) => {
+        const s = get();
+        const gone = s.learnings.find((l) => l.id === id) || null;
+        if (gone) set({ learnings: s.learnings.filter((l) => l.id !== id) });
+        return gone;
+      },
+      restoreLearnings: (list) =>
+        set((s) => {
+          const have = new Set(s.learnings.map((l) => l.id));
+          const back = list.filter((l) => !have.has(l.id));
+          return back.length ? { learnings: [...s.learnings, ...back] } : {};
+        }),
 
       pushCalc: (expr, result) =>
         set((s) => ({ calcHistory: [{ id: uid(), expr, result }, ...s.calcHistory].slice(0, 100) })),
@@ -943,6 +1037,8 @@ export const useStore = create<AppState>()(
         // the migration only runs the first time after an upgrade; the exam tree is repaired on every load, so a tree
         // damaged after that (a bad import, a half-written save) can never reach a screen
         merged.scores = sanitizeScores(merged.scores);
+        merged.scoreTags = sanitizeTags(merged.scoreTags);
+        merged.learnings = sanitizeLearnings(merged.learnings, merged.scoreTags);
         return merged;
       },
       // zustand reports a load that throws only here and never marks the store hydrated
@@ -1144,6 +1240,8 @@ export function exportSnapshot() {
     journal: s.journal,
     journalTags: s.journalTags,
     scores: s.scores,
+    scoreTags: s.scoreTags,
+    learnings: s.learnings,
   };
 }
 

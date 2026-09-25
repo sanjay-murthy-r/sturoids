@@ -1,4 +1,4 @@
-// Exam scores: a tree of groups, exams and sub-exams. Every sum is worked out here, so screens only draw. Nothing in
+// Exam scores: a tree of groups, exams and their subjects. Every sum is worked out here, so screens only draw. Nothing in
 // this file touches React Native: the store and the Node tests load it as it is.
 //
 // Every walk up or down the tree keeps a visited set, so a damaged tree (a cycle written by an old build or an edited
@@ -10,7 +10,7 @@ export interface ScoreNode {
   id: string;
   /** null at the top level */
   parentId: string | null;
-  /** a group holds groups and exams; an exam holds sub-exams, to any depth */
+  /** a group holds groups and exams; an exam holds its subjects, to any depth */
   kind: 'group' | 'exam';
   title: string;
   /** the day an exam is sat, YYYY-MM-DD; unmarked and today or later means it is coming up */
@@ -18,9 +18,9 @@ export interface ScoreNode {
   /** an exam's own marks; negative marking can take the score below zero */
   score?: number;
   outOf?: number;
-  /** how an exam's sub-exams add up: their marks summed (the default), or their percentages weighted */
+  /** how an exam's subjects add up: their marks summed (the default), or their percentages weighted */
   combine?: 'sum' | 'weighted';
-  /** a sub-exam's share inside a weighted parent; 1 when unset */
+  /** a subject's share inside a weighted exam; 1 when unset */
   weight?: number;
   /** a goal, as a percentage */
   target?: number;
@@ -29,6 +29,8 @@ export interface ScoreNode {
   /** free text, for a letter grade or a CGPA */
   grade?: string;
   note?: string;
+  /** ids from the tag list; an exam and its subjects carry their own */
+  tags?: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -38,7 +40,7 @@ export interface ScoreResult {
   /** marks, when they can be added up (a weighted result has only a percentage) */
   score?: number;
   outOf?: number;
-  /** a result worked out from sub-exams: how many of them are marked */
+  /** a result worked out from subjects: how many of them are marked */
   marked?: number;
   parts?: number;
   from: 'own' | 'parts';
@@ -78,7 +80,7 @@ export function ownResult(n: ScoreNode): ScoreResult | null {
   return { pct: (n.score / n.outOf) * 100, score: n.score, outOf: n.outOf, from: 'own' };
 }
 
-/** What an exam's sub-exams add up to, ignoring its own marks. */
+/** What an exam's subjects add up to, ignoring its own marks. */
 export function partsResult(n: ScoreNode, ix: ScoreIndex, seen: Set<string> = new Set()): ScoreResult | null {
   if (n.kind !== 'exam' || seen.has(n.id)) return null;
   seen.add(n.id);
@@ -108,14 +110,14 @@ export function partsResult(n: ScoreNode, ix: ScoreIndex, seen: Set<string> = ne
   return { pct, marked: marked.length, parts: parts.length, from: 'parts' };
 }
 
-/** An exam's result: its own marks when it has them, otherwise what its sub-exams add up to. */
+/** An exam's result: its own marks when it has them, otherwise what its subjects add up to. */
 export function resultOf(n: ScoreNode, ix: ScoreIndex, seen: Set<string> = new Set()): ScoreResult | null {
   if (n.kind !== 'exam') return null;
   return ownResult(n) || partsResult(n, ix, seen);
 }
 
 /**
- * The difference between an exam's own marks and what its sub-exams add up to, for a gentle hint on the exam's
+ * The difference between an exam's own marks and what its subjects add up to, for a gentle hint on the exam's
  * page. Null when there is nothing to compare or the two agree.
  */
 export function partsMismatch(n: ScoreNode, ix: ScoreIndex): ScoreResult | null {
@@ -369,6 +371,10 @@ export function sanitizeScores(raw: unknown): ScoreNode[] {
     if (finite(r.percentile)) n.percentile = r.percentile;
     if (typeof r.grade === 'string' && r.grade.trim()) n.grade = r.grade;
     if (typeof r.note === 'string' && r.note.trim()) n.note = r.note;
+    if (Array.isArray(r.tags)) {
+      const tags = [...new Set(r.tags.filter((t: unknown) => typeof t === 'string' && t))] as string[];
+      if (tags.length) n.tags = tags;
+    }
     nodes.push(n);
   }
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -391,4 +397,128 @@ export function sanitizeScores(raw: unknown): ScoreNode[] {
     }
   }
   return nodes;
+}
+
+/* ---------------- tags and learnings ---------------- */
+
+/** A tag an exam, a subject or a learning can carry. Its colour is drawn translucent, never as a fill. */
+export interface ScoreTag {
+  id: string;
+  label: string;
+  /** one of TAG_COLORS, or any hex a user picked from them */
+  color: string;
+  createdAt: number;
+}
+
+/** Something learned from an exam, kept with it and gathered in the notebook. */
+export interface Learning {
+  id: string;
+  /** the exam (or subject) it came from */
+  nodeId: string;
+  text: string;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** The pastels a new tag takes, in order; they read as themselves against the material at 12% fill. */
+export const TAG_COLORS = ['#9AD6B0', '#E3C08D', '#E39EAC', '#83DBD6', '#9DBCE3', '#C2D392', '#D5C68E', '#728AB7'];
+
+/** The colour a new tag takes: the least used one, so a short list never repeats. */
+export function nextTagColor(tags: ScoreTag[]): string {
+  const used = new Map<string, number>(TAG_COLORS.map((c) => [c, 0]));
+  for (const t of tags) if (used.has(t.color)) used.set(t.color, (used.get(t.color) || 0) + 1);
+  let best = TAG_COLORS[0];
+  let low = Infinity;
+  for (const c of TAG_COLORS) {
+    const n = used.get(c) || 0;
+    if (n < low) { low = n; best = c; }
+  }
+  return best;
+}
+
+/** Two names are the same tag when they differ only by case or by the spaces around them. */
+export const sameTagName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** The tags an id list stands for, in the order the tags were made, with ids that no longer exist left out. */
+export function tagsOf(ids: string[] | undefined, all: ScoreTag[]): ScoreTag[] {
+  if (!ids || !ids.length) return [];
+  const want = new Set(ids);
+  return all.filter((t) => want.has(t.id));
+}
+
+/** How a filter of several tags reads: any of them (the default), or every one of them. */
+export type TagMatch = 'any' | 'all';
+
+/** The learnings a filter keeps: newest first, and only from the exams that still exist. */
+export function filterLearnings(
+  learnings: Learning[], selected: string[], match: TagMatch, alive?: Set<string>,
+): Learning[] {
+  const sel = selected.filter(Boolean);
+  return learnings
+    .filter((l) => (alive ? alive.has(l.nodeId) : true))
+    .filter((l) => {
+      if (!sel.length) return true;
+      const has = new Set(l.tags);
+      return match === 'all' ? sel.every((t) => has.has(t)) : sel.some((t) => has.has(t));
+    })
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** How many learnings and nodes carry each tag, for the tag manager. */
+export function tagUse(tags: ScoreTag[], nodes: ScoreNode[], learnings: Learning[]): Map<string, number> {
+  const count = new Map<string, number>(tags.map((t) => [t.id, 0]));
+  const bump = (ids?: string[]) => {
+    for (const id of ids || []) if (count.has(id)) count.set(id, (count.get(id) || 0) + 1);
+  };
+  for (const n of nodes) bump(n.tags);
+  for (const l of learnings) bump(l.tags);
+  return count;
+}
+
+/** Drops anything that is not a tag, and any duplicate name or id. */
+export function sanitizeTags(raw: unknown): ScoreTag[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ScoreTag[] = [];
+  const ids = new Set<string>();
+  for (const r of raw as any[]) {
+    if (!r || typeof r !== 'object') continue;
+    if (typeof r.id !== 'string' || !r.id || ids.has(r.id)) continue;
+    const label = typeof r.label === 'string' ? r.label.trim() : '';
+    if (!label) continue;
+    if (out.some((t) => sameTagName(t.label, label))) continue;
+    ids.add(r.id);
+    out.push({
+      id: r.id,
+      label: label.slice(0, 40),
+      color: typeof r.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(r.color) ? r.color : TAG_COLORS[out.length % TAG_COLORS.length],
+      createdAt: finite(r.createdAt) ? r.createdAt : 0,
+    });
+  }
+  return out;
+}
+
+/** Drops anything that is not a learning, and tag ids that no longer exist. */
+export function sanitizeLearnings(raw: unknown, tags: ScoreTag[]): Learning[] {
+  if (!Array.isArray(raw)) return [];
+  const known = new Set(tags.map((t) => t.id));
+  const out: Learning[] = [];
+  const ids = new Set<string>();
+  for (const r of raw as any[]) {
+    if (!r || typeof r !== 'object') continue;
+    if (typeof r.id !== 'string' || !r.id || ids.has(r.id)) continue;
+    if (typeof r.nodeId !== 'string' || !r.nodeId) continue;
+    const text = typeof r.text === 'string' ? r.text.trim() : '';
+    if (!text) continue;
+    ids.add(r.id);
+    out.push({
+      id: r.id,
+      nodeId: r.nodeId,
+      text,
+      tags: Array.isArray(r.tags) ? [...new Set(r.tags.filter((t: unknown) => typeof t === 'string' && known.has(t)))] as string[] : [],
+      createdAt: finite(r.createdAt) ? r.createdAt : 0,
+      updatedAt: finite(r.updatedAt) ? r.updatedAt : 0,
+    });
+  }
+  return out;
 }

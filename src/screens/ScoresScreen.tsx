@@ -6,8 +6,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, NEU, S, T, neuRaised } from '../theme';
 import { useStore } from '../store';
 import {
-  ScoreNode, ScoreIndex, indexScores, resultOf, partsMismatch, groupSummary, examsUnder, upcoming, deltaVsPrevious,
-  pathOf, descendantIds, canMove, fmtPct, fmtMark, fmtExamDate, fromToday, whenOf,
+  ScoreNode, ScoreIndex, Learning, TagMatch, indexScores, resultOf, partsMismatch, groupSummary, examsUnder, upcoming,
+  deltaVsPrevious, pathOf, descendantIds, canMove, fmtPct, fmtMark, fmtExamDate, fromToday, whenOf, filterLearnings,
 } from '../scores';
 import { todayKey } from '../utils';
 import {
@@ -17,6 +17,8 @@ import {
 import { Bouncy, Enter, useFocusKey } from '../components/Motion';
 import { Sparkline } from '../components/Sparkline';
 import { ScoreEditor, ScoreEditTarget } from '../components/ScoreEditor';
+import { TagRow, TagManagerSheet } from '../components/ScoreTags';
+import { LearningSheet, LearningTarget } from '../components/LearningSheet';
 import { toast } from '../components/Toast';
 import { tap, tick } from '../haptics';
 import { READ_MAX, frame } from '../layout';
@@ -52,7 +54,8 @@ function Bar({ pct }: { pct: number }) {
 }
 
 /**
- * Exam scores: groups hold groups and exams, an exam holds sub-exams. The page walks the tree in place (hardware back
+ * Exam scores: groups hold groups and exams, an exam holds its subjects, and every exam keeps what it taught you.
+ * The page walks the tree in place (hardware back
  * climbs one level), so it works the same in a tab slot and as a full page.
  */
 export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
@@ -61,6 +64,9 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const theme = useTheme();
   const fk = useFocusKey();
   const scores = useStore((s) => s.scores);
+  const learnings = useStore((s) => s.learnings);
+  const removeLearning = useStore((s) => s.removeLearning);
+  const restoreLearnings = useStore((s) => s.restoreLearnings);
   const removeScoreNode = useStore((s) => s.removeScoreNode);
   const restoreScoreNodes = useStore((s) => s.restoreScoreNodes);
   const duplicateScoreNode = useStore((s) => s.duplicateScoreNode);
@@ -79,6 +85,14 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [moveOpen, setMoveOpen] = useState(false);
   const moved = useRef<string | null>(null);
   const [areaW, setAreaW] = useState(0);
+  // the notebook is the tool's other half: every learning, from every exam, filtered by the same tags
+  const [notebook, setNotebook] = useState(false);
+  const [tagsOpen, setTagsOpen] = useState(false);
+  const [learn, setLearn] = useState<LearningTarget | null>(null);
+  const [learnNode, setLearnNode] = useState<Learning | null>(null);
+  const [learnMenu, setLearnMenu] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [match, setMatch] = useState<TagMatch>('any');
 
   const here = cwd ? ix.byId.get(cwd) : undefined;
 
@@ -97,7 +111,13 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const hereRef = useRef(here);
   hereRef.current = here;
+  const notebookRef = useRef(notebook);
+  notebookRef.current = notebook;
   const goUp = React.useCallback(() => {
+    if (notebookRef.current) {
+      setNotebook(false);
+      return true;
+    }
     const cur = hereRef.current;
     if (!cur) return false;
     setCwd(cur.parentId);
@@ -114,7 +134,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const below = [...descendantIds(ix, n.id)].map((id) => ix.byId.get(id)).filter(Boolean) as ScoreNode[];
     const run = () => {
       const removed = removeScoreNode(n.id);
-      if (!removed.length) return;
+      if (!removed.nodes.length) return;
       tap();
       toast('Deleted ' + (n.title || (n.kind === 'group' ? 'the group' : 'the exam')), {
         label: 'Undo',
@@ -125,7 +145,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const exams = below.filter((x) => x.kind === 'exam').length;
     const groups = below.length - exams;
     const what = n.kind === 'exam'
-      ? (exams === 1 ? 'Its sub-exam goes with it.' : 'Its ' + exams + ' sub-exams go with it.')
+      ? (exams === 1 ? 'Its subject goes with it.' : 'Its ' + exams + ' subjects go with it.')
       : 'Everything inside goes with it: ' + [exams ? plural(exams, 'exam') : '', groups ? plural(groups, 'group') : ''].filter(Boolean).join(' and ') + '.';
     Alert.alert('Delete ' + (n.title || 'this') + '?', what, [
       { text: 'Cancel', style: 'cancel' },
@@ -137,6 +157,14 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const id = duplicateScoreNode(n.id);
     const copy = id ? useStore.getState().scores.find((x) => x.id === id) : undefined;
     if (copy) toast('Added ' + copy.title + ', ready for its marks');
+  };
+
+  const openLearning = (l: Learning) => { setLearnNode(l); setLearnMenu(true); };
+  const deleteLearning = (l: Learning) => {
+    const gone = removeLearning(l.id);
+    if (!gone) return;
+    tap();
+    toast('Learning deleted', { label: 'Undo', onPress: () => restoreLearnings([gone]) });
   };
 
   const menuItems = (n: ScoreNode, open: boolean) => [
@@ -165,20 +193,47 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     <ScreenBG guard={mode === 'tab'}>
       <View style={{ flex: 1 }} onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}>
         <NeuHeader
-          title={titleOf(here)}
-          variant={mode === 'tab' && !here ? 'tab' : 'page'}
+          title={notebook ? 'Learnings' : titleOf(here)}
+          variant={mode === 'tab' && !here && !notebook ? 'tab' : 'page'}
           onBack={() => { if (!goUp()) router.back(); }}
-          right={here ? (
-            <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => openMenu(here)} />
-          ) : undefined}
+          right={(
+            <View style={st.headRight}>
+              {notebook ? (
+                <NeuIconBtn
+                  name="pricetags-outline" dim={38} size={18} color={C.textDim} onPress={() => setTagsOpen(true)}
+                  accessibilityLabel="Manage tags"
+                />
+              ) : (
+                <NeuIconBtn
+                  name="book-outline" dim={38} size={18} color={C.textDim} onPress={() => setNotebook(true)}
+                  accessibilityLabel="Learnings notebook"
+                />
+              )}
+              {here && !notebook ? (
+                <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => openMenu(here)} />
+              ) : null}
+            </View>
+          )}
         />
         <ScrollView
-          key={fk + ':' + (cwd || 'top')}
+          key={fk + ':' + (notebook ? 'notebook' : cwd || 'top')}
           contentContainerStyle={[
             frame(READ_MAX),
-            { padding: S.pad, paddingTop: 4, paddingBottom: (inExam ? 40 : 120) + (mode === 'tab' ? 0 : insets.bottom) },
+            { padding: S.pad, paddingTop: 4, paddingBottom: (inExam || notebook ? 40 : 120) + (mode === 'tab' ? 0 : insets.bottom) },
           ]}
         >
+          {notebook ? (
+            <Notebook
+              learnings={learnings} ix={ix} picked={picked} match={match}
+              onPick={(id) => { tick(); setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])); }}
+              onMatch={() => { tick(); setMatch((m) => (m === 'all' ? 'any' : 'all')); }}
+              onClear={() => { tick(); setPicked([]); setMatch('any'); }}
+              onOpen={(l) => { setNotebook(false); setCwd(l.nodeId); }}
+              onMenu={openLearning}
+              onManage={() => setTagsOpen(true)}
+            />
+          ) : (
+          <>
           {here && pathOf(ix, here.id).length ? (
             <Text style={[T.kicker, { marginBottom: 12 }]} numberOfLines={1}>
               {pathOf(ix, here.id).map((p) => titleOf(p)).join('  /  ')}
@@ -189,6 +244,9 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
               exam={here} ix={ix} today={today} onOpen={setCwd} onMenu={openMenu}
               onEdit={() => setEditor({ mode: 'edit', id: here.id })}
               onAddPart={() => setEditor({ mode: 'new', kind: 'exam', parentId: here.id })}
+              learnings={learnings.filter((l) => l.nodeId === here.id)}
+              onAddLearning={() => setLearn({ mode: 'new', nodeId: here.id })}
+              onLearningMenu={openLearning}
             />
           ) : (
             <GroupView
@@ -198,9 +256,11 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
               onAdd={() => setEditor({ mode: 'new', kind: 'exam', parentId: here?.id ?? null })}
             />
           )}
+          </>
+          )}
         </ScrollView>
 
-        {!inExam ? (
+        {!inExam && !notebook ? (
           <Bouncy
             radius={999}
             scaleTo={0.9}
@@ -260,9 +320,28 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           );
         })}
         {moveNode?.kind === 'exam' ? (
-          <Text style={[T.caption, { marginTop: 12 }]}>To make an exam part of another one, add it there as a sub-exam.</Text>
+          <Text style={[T.caption, { marginTop: 12 }]}>To make an exam part of another one, add it there as a subject.</Text>
         ) : null}
       </Sheet>
+      <DotMenu
+        visible={learnMenu}
+        onClose={() => setLearnMenu(false)}
+        items={learnNode ? [
+          { label: 'Edit', icon: 'create-outline', onPress: () => setLearn({ mode: 'edit', learning: learnNode }) },
+          ...(notebook ? [{
+            label: 'Open its exam',
+            icon: 'open-outline',
+            onPress: () => { setNotebook(false); setCwd(learnNode.nodeId); },
+          }] : []),
+          { label: 'Delete', icon: 'trash-outline', color: C.danger, onPress: () => deleteLearning(learnNode) },
+        ] : []}
+      />
+      <LearningSheet
+        target={learn}
+        onClose={() => setLearn(null)}
+        title={learn?.mode === 'new' ? titleOf(ix.byId.get(learn.nodeId)) : undefined}
+      />
+      <TagManagerSheet visible={tagsOpen} onClose={() => setTagsOpen(false)} />
       <ScoreEditor target={editor} onClose={() => setEditor(null)} />
     </ScreenBG>
   );
@@ -393,7 +472,7 @@ function ExamRow({ n, ix, today, onOpen, onMenu }: {
   const parts = (ix.children.get(n.id) || []).filter((k) => k.kind === 'exam').length;
   const delta = r ? deltaVsPrevious(n, ix) : null;
   const upcomingDay = !r && n.date && n.date >= today;
-  const caption = [n.date ? fmtExamDate(n.date) : '', parts ? plural(parts, 'sub-exam') : ''].filter(Boolean).join('  ·  ');
+  const caption = [n.date ? fmtExamDate(n.date) : '', parts ? plural(parts, 'subject') : ''].filter(Boolean).join('  ·  ');
   return (
     <ListRow onPress={() => onOpen(n.id)} onLongPress={() => onMenu(n)} style={{ paddingVertical: 12 }}>
       <View style={{ flex: 1 }}>
@@ -419,9 +498,12 @@ function ExamRow({ n, ix, today, onOpen, onMenu }: {
 
 /* ---------------- one exam ---------------- */
 
-function ExamView({ exam, ix, today, onOpen, onMenu, onEdit, onAddPart }: {
+function ExamView({
+  exam, ix, today, onOpen, onMenu, onEdit, onAddPart, learnings, onAddLearning, onLearningMenu,
+}: {
   exam: ScoreNode; ix: ScoreIndex; today: string; onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void;
   onEdit: () => void; onAddPart: () => void;
+  learnings: Learning[]; onAddLearning: () => void; onLearningMenu: (l: Learning) => void;
 }) {
   const r = resultOf(exam, ix);
   const parts = (ix.children.get(exam.id) || []).filter((k) => k.kind === 'exam').sort((a, b) => a.createdAt - b.createdAt);
@@ -450,7 +532,7 @@ function ExamView({ exam, ix, today, onOpen, onMenu, onEdit, onAddPart }: {
                 <Text style={st.heroMarks}>{fmtMark(r.score)} / {fmtMark(r.outOf)}</Text>
               ) : null}
               {r.from === 'parts' && r.marked != null && r.parts != null && r.marked < r.parts ? (
-                <Text style={[T.caption, { marginTop: 4 }]}>{r.marked} of {plural(r.parts, 'sub-exam')} marked</Text>
+                <Text style={[T.caption, { marginTop: 4 }]}>{r.marked} of {plural(r.parts, 'subject')} marked</Text>
               ) : null}
             </>
           ) : (
@@ -463,6 +545,7 @@ function ExamView({ exam, ix, today, onOpen, onMenu, onEdit, onAddPart }: {
               ) : null}
             </>
           )}
+          <TagRow ids={exam.tags} style={{ marginTop: 14, marginBottom: -6 }} />
           {facts ? <Text style={[st.facts, { marginTop: 12 }]}>{facts}</Text> : null}
           {gap != null || delta != null ? (
             <View style={[st.sideRow, { marginTop: 8, flexWrap: 'wrap', gap: 14 }]}>
@@ -488,7 +571,7 @@ function ExamView({ exam, ix, today, onOpen, onMenu, onEdit, onAddPart }: {
           <View style={st.hintRow}>
             <Ionicons name="information-circle-outline" size={16} color={C.textFaint} />
             <Text style={[T.caption, { flex: 1, marginLeft: 8 }]}>
-              Its sub-exams add up to {mismatch.score != null && mismatch.outOf != null ? fmtMark(mismatch.score) + ' / ' + fmtMark(mismatch.outOf) + ', ' : ''}
+              Its subjects add up to {mismatch.score != null && mismatch.outOf != null ? fmtMark(mismatch.score) + ' / ' + fmtMark(mismatch.outOf) + ', ' : ''}
               {fmtPct(mismatch.pct)}. The marks you entered for the whole exam are the ones shown.
             </Text>
           </View>
@@ -503,7 +586,7 @@ function ExamView({ exam, ix, today, onOpen, onMenu, onEdit, onAddPart }: {
             </Pressable>
           }
         >
-          Sub-exams{weighted && parts.length ? '  ·  weighted' : ''}
+          Subjects{weighted && parts.length ? '  ·  weighted' : ''}
         </SectionTitle>
         {parts.length ? (
           <ListCard>
@@ -522,7 +605,7 @@ function ExamView({ exam, ix, today, onOpen, onMenu, onEdit, onAddPart }: {
                       {[
                         pr && pr.score != null && pr.outOf != null ? fmtMark(pr.score) + ' / ' + fmtMark(pr.outOf) : '',
                         weighted ? 'weight ' + fmtMark(p.weight ?? 1) : '',
-                        sub ? 'has sub-exams' : '',
+                        sub ? 'has subjects' : '',
                       ].filter(Boolean).join('  ·  ') || ' '}
                     </Text>
                   </View>
@@ -532,16 +615,49 @@ function ExamView({ exam, ix, today, onOpen, onMenu, onEdit, onAddPart }: {
           </ListCard>
         ) : (
           <Card pad={16}>
-            <Text style={T.label}>Split it into parts, like Physics, Chemistry and Maths, and their marks add up here.</Text>
+            <Text style={T.label}>Split it into subjects, like Physics, Chemistry and Maths, and their marks add up here.</Text>
             <View style={{ flexDirection: 'row', marginTop: 12 }}>
-              <Chip small icon="add" label="Add a sub-exam" onPress={onAddPart} />
+              <Chip small icon="add" label="Add a subject" onPress={onAddPart} />
+            </View>
+          </Card>
+        )}
+      </Enter>
+
+      <Enter index={3}>
+        <SectionTitle
+          right={(
+            <Pressable onPress={onAddLearning} hitSlop={8} accessibilityRole="button">
+              <Text style={[st.link, { color: C.accent }]}>+ Add</Text>
+            </Pressable>
+          )}
+        >
+          Learnings
+        </SectionTitle>
+        {learnings.length ? (
+          <ListCard>
+            {[...learnings].sort((a, b) => b.createdAt - a.createdAt).map((l) => (
+              <ListRow key={l.id} onPress={() => onLearningMenu(l)} onLongPress={() => onLearningMenu(l)} style={{ paddingVertical: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={T.body}>{l.text}</Text>
+                  <TagRow ids={l.tags} style={{ marginTop: 8, marginBottom: -6 }} />
+                </View>
+              </ListRow>
+            ))}
+          </ListCard>
+        ) : (
+          <Card pad={16}>
+            <Text style={T.label}>
+              What this exam taught you, in your own words. Tag them, and they gather in the notebook.
+            </Text>
+            <View style={{ flexDirection: 'row', marginTop: 12 }}>
+              <Chip small icon="add" label="Add a learning" onPress={onAddLearning} />
             </View>
           </Card>
         )}
       </Enter>
 
       {exam.note ? (
-        <Enter index={3}>
+        <Enter index={4}>
           <SectionTitle>Note</SectionTitle>
           <Card>
             <Text style={T.body}>{exam.note}</Text>
@@ -552,7 +668,102 @@ function ExamView({ exam, ix, today, onOpen, onMenu, onEdit, onAddPart }: {
   );
 }
 
+/* ---------------- the learnings notebook ---------------- */
+
+/**
+ * Every learning, from every exam, newest first. Picking tags narrows it: by default a learning shows when it carries
+ * any of them, and "All tags" keeps only the ones carrying every tag picked, whatever else they carry too.
+ */
+function Notebook({ learnings, ix, picked, match, onPick, onMatch, onClear, onOpen, onMenu, onManage }: {
+  learnings: Learning[]; ix: ScoreIndex; picked: string[]; match: TagMatch;
+  onPick: (id: string) => void; onMatch: () => void; onClear: () => void;
+  onOpen: (l: Learning) => void; onMenu: (l: Learning) => void; onManage: () => void;
+}) {
+  const tags = useStore((s) => s.scoreTags);
+  const alive = React.useMemo(() => new Set(ix.byId.keys()), [ix]);
+  const shown = React.useMemo(
+    () => filterLearnings(learnings, picked, match, alive),
+    [learnings, picked, match, alive],
+  );
+  const mine = learnings.filter((l) => alive.has(l.nodeId));
+
+  if (!mine.length) {
+    return (
+      <EmptyState
+        icon="book-outline"
+        title="Nothing learned yet"
+        body="Open an exam and add what it taught you. Every learning gathers here, and its tags bring it back."
+      />
+    );
+  }
+
+  return (
+    <>
+      {tags.length ? (
+        <Enter index={0}>
+          <View style={st.filterRow}>
+            {tags.map((t) => (
+              <Chip
+                key={t.id} small label={t.label} color={t.color} active={picked.includes(t.id)}
+                onPress={() => onPick(t.id)}
+              />
+            ))}
+          </View>
+          <View style={st.filterRow}>
+            {picked.length > 1 ? (
+              <Chip
+                small icon={match === 'all' ? 'checkmark-circle' : 'ellipse-outline'} label="All tags"
+                active={match === 'all'} onPress={onMatch}
+              />
+            ) : null}
+            {picked.length ? <Chip small icon="close" label="Clear" onPress={onClear} /> : null}
+            <Chip small icon="pricetags-outline" label="Manage tags" onPress={onManage} />
+          </View>
+          {picked.length > 1 ? (
+            <Text style={[T.caption, { marginBottom: 14 }]}>
+              {match === 'all'
+                ? 'Only learnings carrying every tag picked.'
+                : 'Learnings carrying any of the tags picked. Turn on All tags for the ones carrying every one.'}
+            </Text>
+          ) : null}
+        </Enter>
+      ) : null}
+
+      <Text style={[T.kicker, { marginBottom: 12 }]}>
+        {shown.length === mine.length ? plural(mine.length, 'learning') : shown.length + ' of ' + mine.length}
+      </Text>
+
+      {shown.length ? (
+        <Enter index={1}>
+          <ListCard>
+            {shown.map((l) => {
+              const from = ix.byId.get(l.nodeId);
+              const path = from ? [...pathOf(ix, from.id).map((n) => n.title || 'Untitled'), from.title || 'Untitled'] : [];
+              return (
+                <ListRow key={l.id} onPress={() => onOpen(l)} onLongPress={() => onMenu(l)} style={{ paddingVertical: 12 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={T.body}>{l.text}</Text>
+                    <TagRow ids={l.tags} style={{ marginTop: 8, marginBottom: -6 }} />
+                    <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>{path.join('  /  ')}</Text>
+                  </View>
+                </ListRow>
+              );
+            })}
+          </ListCard>
+        </Enter>
+      ) : (
+        <EmptyState
+          compact icon="filter-outline" title="Nothing with those tags"
+          body={match === 'all' ? 'No learning carries every tag picked. Turn All tags off to see any of them.' : 'Try another tag.'}
+        />
+      )}
+    </>
+  );
+}
+
 const st = StyleSheet.create({
+  headRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
   fab: {
     position: 'absolute', width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center',
   },
