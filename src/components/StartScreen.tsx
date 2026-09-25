@@ -123,6 +123,39 @@ function beats(dateMs: number, late: boolean) {
     DONE: HANDOFF + 560,
   };
 }
+/**
+ * "Logo first" (Settings, Start screen): the plate rises unhurried and settles, the wordmark and caption arrive, and
+ * only then does the pen write the signature in the place it ends up in either way, below them. It sinks into the
+ * carve, the same slow shine crosses the plate and the signature, and the scene hands over as usual.
+ */
+function logoBeats(dateMs: number, late: boolean) {
+  const RISE = { at: 160, dur: 1250, settle: 260 };
+  const GROOVES = { at: RISE.at + 950, dur: 520 };
+  const TEXT = RISE.at + RISE.dur + RISE.settle + 30;
+  const WORD = { at: TEXT, dur: 800 };
+  const CAPTION = { at: TEXT + 260, dur: 560 };
+  /** the pen sets down as the caption finishes arriving */
+  const penAt = TEXT + 680;
+  const signed = penAt + real(SIG.total);
+  const dateStart = late ? 0 : signed + DATE_LIFT;
+  const penDone = late ? signed : dateStart + dateMs;
+  /** the ink settles into the carve, where it stays */
+  const SINK = { at: penDone + 260, dur: 620 };
+  const SHINE = { at: SINK.at + 500, dur: 1900 };
+  const shineEnd = SHINE.at + SHINE.dur;
+  const lateStart = shineEnd + DATE_LIFT;
+  const LEAVE = late ? lateStart + dateMs + HOLD : shineEnd + 300;
+  const HANDOFF = LEAVE + 300;
+  return {
+    penAt,
+    dateStart: late ? lateStart : dateStart,
+    REVEAL: penDone + 80,
+    RISE, GROOVES, WORD, CAPTION, SINK, SHINE, LEAVE, HANDOFF,
+    CLEAR: { at: HANDOFF, dur: 260 },
+    DONE: HANDOFF + 560,
+  };
+}
+
 const RECEDE = { words: 0, plate: 70, sig: 140, dur: 460 };
 
 // 'some': the composed end state fades in, the app is built beneath it, the scene settles back and hands over
@@ -182,12 +215,16 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
   const liveLevel = useAnimLevel();
   // _layout mounts the intro only after hydration, so these are the user's settings; the intro
   // commits to them for its whole run
-  const [{ level, theme }] = useState(() => ({ level: liveLevel, theme: liveTheme }));
+  const liveIntro = useStore((s) => s.settings.introStyle);
+  const [{ level, theme, style }] = useState(() => ({ level: liveLevel, theme: liveTheme, style: liveIntro }));
+  const logoFirst = style === 'logo';
   const { width: W, height: H } = useWindowDimensions();
   const [gone, setGone] = useState(false);
   const [date, setDate] = useState(todayDigits);
   const dateRef = useRef(date);
-  const B = useMemo(() => beats(layoutDate(date).total / DATE_SPEED, DATE_LATE), []);
+  const dateMs = useMemo(() => layoutDate(date).total / DATE_SPEED, []);
+  const B = useMemo(() => beats(dateMs, DATE_LATE), []);
+  const L = useMemo(() => logoBeats(dateMs, DATE_LATE), []);
   const callbacks = useRef({ onReveal, onDone });
   callbacks.current = { onReveal, onDone };
 
@@ -234,6 +271,50 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
       at(SOME.reveal, () => callbacks.current.onReveal());
       at(SOME.handoff, () => setIntroPhase('leaving'));
       at(SOME.done, finish);
+    } else if (logoFirst) {
+      const cubicInOut = Easing.inOut(Easing.cubic);
+      // beat 1: the plate rises out of the material and its grooves settle, unhurried; the signature is already in
+      // its place, waiting for the pen, so nothing travels later
+      travel.value = 1;
+      rise.value = withDelay(L.RISE.at, withSequence(
+        withTiming(0.99, { duration: L.RISE.dur, easing: cubicOut }),
+        withTiming(1, { duration: L.RISE.settle, easing: Easing.inOut(Easing.quad) }),
+      ));
+      grooves.value = withDelay(L.GROOVES.at, withTiming(1, { duration: L.GROOVES.dur, easing: cubicOut }));
+      // beat 2: the wordmark and the caption
+      word.value = withDelay(L.WORD.at, withTiming(1, { duration: L.WORD.dur, easing: cubicOut }));
+      caption.value = withDelay(L.CAPTION.at, withTiming(CAPTION_OPACITY, {
+        duration: L.CAPTION.dur, easing: Easing.linear,
+      }));
+      // beat 3: the pen writes below them, in the place the signature keeps, and today's date after it
+      tau.value = withDelay(L.penAt, withTiming(SIG.total, { duration: real(SIG.total), easing: Easing.linear }));
+      const writeDate = (delay: number, digits: string) => {
+        const total = layoutDate(digits).total;
+        dateTau.value = withDelay(delay, withTiming(total, { duration: total / DATE_SPEED, easing: Easing.linear }));
+      };
+      writeDate(L.dateStart, dateRef.current);
+      at(L.dateStart - 150, () => {
+        const now = todayDigits();
+        if (now === dateRef.current) return;
+        dateRef.current = now;
+        setDate(now);
+        cancelAnimation(dateTau);
+        dateTau.value = 0;
+        writeDate(150, now);
+      });
+      // the ink settles into the carve, then one shine crosses the plate and the signature together
+      ink.value = withDelay(L.SINK.at, withTiming(0, { duration: L.SINK.dur, easing: cubicInOut }));
+      carve.value = withDelay(L.SINK.at, withTiming(1, { duration: L.SINK.dur, easing: cubicInOut }));
+      glint.value = withDelay(L.SHINE.at, withTiming(1, { duration: L.SHINE.dur, easing: Easing.inOut(Easing.sin) }));
+      // beat 4: the hand-over, as it always is
+      const settle = { duration: RECEDE.dur, easing: cubicOut };
+      leaveWords.value = withDelay(L.LEAVE + RECEDE.words, withTiming(1, settle));
+      leavePlate.value = withDelay(L.LEAVE + RECEDE.plate, withTiming(1, settle));
+      leaveSig.value = withDelay(L.LEAVE + RECEDE.sig, withTiming(1, settle));
+      overlay.value = withDelay(L.CLEAR.at, withTiming(0, { duration: L.CLEAR.dur, easing: Easing.inOut(Easing.quad) }));
+      at(L.REVEAL, () => callbacks.current.onReveal());
+      at(L.HANDOFF, () => setIntroPhase('leaving'));
+      at(L.DONE, finish);
     } else {
       const cubicInOut = Easing.inOut(Easing.cubic);
       // beat 1: the pen, then today's date a little quicker
@@ -347,8 +428,9 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
   // the column is centred and scaled about its centre, so the slot's centre sits k * (columnH - sigH) / 2 below the
   // screen's, and an offset inside it moves k times as far on screen
   const heroY = (HERO_Y * H - H / 2) / k - (columnH - sigH) / 2;
-  // on a short window the hero never grows past 70% of the height
-  const heroScale = Math.max(1, Math.min(HERO_W / SIG_SIZE, (0.7 * H) / (k * sigH)));
+  // on a short window the hero never grows past 70% of the height. Logo first never writes large, so its ink is laid
+  // out at its own size instead of the hero's.
+  const heroScale = logoFirst ? 1 : Math.max(1, Math.min(HERO_W / SIG_SIZE, (0.7 * H) / (k * sigH)));
 
   return (
     <Animated.View

@@ -115,6 +115,8 @@ export interface Settings {
   journalCheckout: boolean;
   /** tools kept out of sight (never one in a tab slot) */
   archivedTools: ToolKey[];
+  /** how the start screen plays: 'signed' writes the signature large first, 'logo' writes it last, in its place */
+  introStyle: 'signed' | 'logo';
   /** Deep Work's ambient screen shows the seconds beside the minutes */
   ambientSeconds: boolean;
   /** and the time of day above them */
@@ -184,6 +186,7 @@ export const DEFAULT_SETTINGS: Settings = {
   journalReminderTime: '',
   journalCheckout: true,
   archivedTools: [...DEFAULT_ARCHIVED],
+  introStyle: 'signed',
   ambientSeconds: true,
   ambientClock: false,
 };

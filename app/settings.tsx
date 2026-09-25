@@ -29,6 +29,11 @@ const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
   { key: 'minimal', label: 'Minimalistic', desc: 'High contrast, flat, maximum legibility' },
 ];
 
+const INTROS: { key: 'signed' | 'logo'; label: string; desc: string }[] = [
+  { key: 'signed', label: 'Signed first', desc: 'The signature is written large, then everything settles into place' },
+  { key: 'logo', label: 'Logo first', desc: 'The logo and the words arrive, then the signature is written below them' },
+];
+
 const ANIMS: { key: AnimLevel; label: string; desc: string }[] = [
   { key: 'none', label: 'Off', desc: 'No motion at all' },
   { key: 'some', label: 'Some', desc: 'Feedback only: taps and state changes' },
@@ -475,6 +480,13 @@ export default function Settings() {
         <SectionTitle>Animations</SectionTitle>
         <Card pad={12}>
           <OptionPicker options={ANIMS} value={settings.animLevel} onPick={(k) => setSetting('animLevel', k)} />
+        </Card>
+
+        <SectionTitle right={<InfoDot text="The start screen you see when the app opens cold. Both play the same four beats; they differ in when the signature is written. With animations off, neither plays." />}>
+          Start screen
+        </SectionTitle>
+        <Card pad={12}>
+          <OptionPicker options={INTROS} value={settings.introStyle} onPick={(k) => setSetting('introStyle', k)} />
         </Card>
 
         <SectionTitle>Time & reminders</SectionTitle>
