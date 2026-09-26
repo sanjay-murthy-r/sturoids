@@ -283,6 +283,10 @@ export interface AppState {
   updateBlock: (day: DayName, b: PlannerBlock) => void;
   removeBlock: (day: DayName, id: string) => void;
   copyDay: (from: DayName, to: DayName) => void;
+  /** puts a whole week back as it was, for an Undo */
+  restorePlanner: (week: PlannerWeek) => void;
+  /** puts a deleted habit back, streak and all, for an Undo */
+  restoreHabit: (h: Habit, index: number) => void;
   saveTemplate: (name: string) => void;
   applyTemplate: (name: string) => void;
   deleteTemplate: (name: string) => void;
@@ -718,6 +722,14 @@ export const useStore = create<AppState>()(
         set((s) => ({
           planner: { ...s.planner, [to]: s.planner[from].map((b) => ({ ...b, id: uid() })) },
         })),
+      restorePlanner: (week) => set({ planner: week }),
+      restoreHabit: (h, index) =>
+        set((s) => {
+          if (s.habits.some((x) => x.id === h.id)) return {};
+          const habits = [...s.habits];
+          habits.splice(Math.min(Math.max(0, index), habits.length), 0, h);
+          return { habits };
+        }),
       saveTemplate: (name) =>
         set((s) => ({ weekTemplates: { ...s.weekTemplates, [name]: JSON.parse(JSON.stringify(s.planner)) } })),
       applyTemplate: (name) => {

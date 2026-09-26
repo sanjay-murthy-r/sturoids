@@ -86,7 +86,7 @@ export function Enter({
  */
 export function Bouncy({
   onPress, onLongPress, children, style, disabled, scaleTo = 0.975, radius = 22, hitSlop, sink = true,
-  accessibilityLabel, accessibilityRole,
+  accessibilityLabel, accessibilityRole, accessibilityState,
 }: {
   onPress?: () => void; onLongPress?: () => void; children: React.ReactNode;
   style?: any; disabled?: boolean; scaleTo?: number;
@@ -96,7 +96,8 @@ export function Bouncy({
   /** false keeps the element in place while pressed (a row inside a card): only the carve shows */
   sink?: boolean;
   accessibilityLabel?: string;
-  accessibilityRole?: 'button' | 'tab' | 'link';
+  accessibilityRole?: 'button' | 'tab' | 'link' | 'checkbox' | 'switch';
+  accessibilityState?: { checked?: boolean; selected?: boolean; disabled?: boolean };
 }) {
   const level = useAnimLevel();
   const p = useSharedValue(0); // 0 = rest, 1 = pressed
@@ -112,7 +113,7 @@ export function Bouncy({
     return (
       <Pressable
         onPress={onPress} onLongPress={onLongPress} disabled={disabled} style={style} hitSlop={hitSlop}
-        accessibilityLabel={accessibilityLabel} accessibilityRole={accessibilityRole}
+        accessibilityLabel={accessibilityLabel} accessibilityRole={accessibilityRole} accessibilityState={accessibilityState}
       >
         {children}
       </Pressable>
@@ -126,6 +127,7 @@ export function Bouncy({
       hitSlop={hitSlop}
       accessibilityLabel={accessibilityLabel}
       accessibilityRole={accessibilityRole}
+      accessibilityState={accessibilityState}
       onPressIn={() => { p.value = withTiming(1, SINK_IN); }}
       onPressOut={() => { p.value = withSpring(0, RISE_OUT); }}
       style={[style, aStyle]}

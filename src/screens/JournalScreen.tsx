@@ -536,12 +536,12 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         <Hairline />
         <Row style={st.prefRow}>
           <Text style={[T.body, { flex: 1 }]}>Daily prompt</Text>
-          <Toggle value={settings.journalPromptsOn} onChange={(v) => setSetting('journalPromptsOn', v)} color={C.gold} />
+          <Toggle value={settings.journalPromptsOn} onChange={(v) => setSetting('journalPromptsOn', v)} color={C.gold} label="Writing prompts" />
         </Row>
         <Hairline />
         <Row style={st.prefRow}>
           <Text style={[T.body, { flex: 1 }]}>Ask how the day went</Text>
-          <Toggle value={settings.journalCheckout} onChange={(v) => setSetting('journalCheckout', v)} color={C.gold} />
+          <Toggle value={settings.journalCheckout} onChange={(v) => setSetting('journalCheckout', v)} color={C.gold} label="Ask how the day went" />
         </Row>
         <Text style={[T.caption, { marginBottom: 6 }]}>
           After you write, a quiet card asks for a mood and a star rating. Skip is always there, and the sun button in the corner opens it any time.
@@ -557,7 +557,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         <Hairline />
         <Row style={st.prefRow}>
           <Text style={[T.body, { flex: 1 }]}>Reminder</Text>
-          <Toggle value={!!settings.journalReminderTime} onChange={saveReminder} color={C.gold} />
+          <Toggle value={!!settings.journalReminderTime} onChange={saveReminder} color={C.gold} label="Daily journal reminder" />
         </Row>
         {settings.remindersEnabled ? (
           <Field value={remindDraft} onChangeText={setRemindDraft} placeholder="21:30" keyboardType="numbers-and-punctuation" maxLength={5} onEndEditing={() => { if (settings.journalReminderTime && HHMM.test(remindDraft)) saveReminder(true); }} />
@@ -567,7 +567,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         <Hairline />
         <Row style={st.prefRow}>
           <Text style={[T.body, { flex: 1 }]}>Lock journal</Text>
-          <Toggle value={settings.journalLocked} onChange={setLock} color={C.gold} />
+          <Toggle value={settings.journalLocked} onChange={setLock} color={C.gold} label="Lock the journal" />
         </Row>
         <Text style={[T.caption, { marginBottom: 6 }]}>
           {settings.journalLocked

@@ -16,6 +16,7 @@ import { Bouncy, Enter, useAnimLevel, useFocusKey } from '../components/Motion';
 import { tick } from '../haptics';
 import { rescheduleAllReminders, ensurePermission } from '../notifications';
 import { openTool } from '../toolNav';
+import { toast } from '../components/Toast';
 
 const FULL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -39,6 +40,11 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const addHabit = useStore((s) => s.addHabit);
   const toggleHabitToday = useStore((s) => s.toggleHabitToday);
   const removeHabit = useStore((s) => s.removeHabit);
+  const restoreHabit = useStore((s) => s.restoreHabit);
+  const restorePlanner = useStore((s) => s.restorePlanner);
+  // a change made from a sheet says so once the sheet has gone, where its Undo can be seen
+  const afterSheet = React.useRef<(() => void) | null>(null);
+  const runAfterSheet = () => { const f = afterSheet.current; afterSheet.current = null; f?.(); };
   const setHabitReminder = useStore((s) => s.setHabitReminder);
   const remindersEnabled = useStore((s) => s.settings.remindersEnabled);
   const hour24 = useStore((s) => s.settings.hour24);
@@ -94,15 +100,33 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     if (!t) { Alert.alert('Missing subject', 'Give the block a subject.'); return; }
     if (toMinutes(s) < 0 || toMinutes(e) < 0) { Alert.alert('Time format', 'Use 24h HH:MM, e.g. 16:00'); return; }
     if (toMinutes(e) <= toMinutes(s)) { Alert.alert('Time order', 'End must be after start.'); return; }
-    if (editing) updateBlock(day, { ...editing, subject: t, start: s, end: e, color });
-    else addBlock(day, { subject: t, start: s, end: e, color });
-    setBlockSheet(false);
+    const save = () => {
+      if (editing) updateBlock(day, { ...editing, subject: t, start: s, end: e, color });
+      else addBlock(day, { subject: t, start: s, end: e, color });
+      setBlockSheet(false);
+    };
+    // two blocks at once would both claim "now": say so, and let a deliberate overlap through
+    const clash = (useStore.getState().planner[day] || []).find((b) => (
+      b.id !== editing?.id && toMinutes(b.start) < toMinutes(e) && toMinutes(s) < toMinutes(b.end)
+    ));
+    if (clash) {
+      Alert.alert(
+        'Overlaps ' + clash.subject,
+        clash.subject + ' runs ' + clash.start + ' to ' + clash.end + ' on ' + day + '. Save this block anyway?',
+        [{ text: 'Cancel', style: 'cancel' }, { text: 'Save anyway', onPress: save }],
+      );
+      return;
+    }
+    save();
   };
 
   const submitHabit = async () => {
     const t = habitTitle.trim();
     if (!t) return;
-    const time = /^\d{1,2}:\d{2}$/.test(habitTime.trim()) ? habitTime.trim() : undefined;
+    const typed = habitTime.trim();
+    const time = /^\d{1,2}:\d{2}$/.test(typed) && toMinutes(typed) >= 0 ? typed : undefined;
+    // a time that could never ring is said to be wrong, never saved looking like a working reminder
+    if (typed && !time) { Alert.alert('Time format', 'Use 24h HH:MM, like 21:00, or leave it empty.'); return; }
     addHabit(t, time);
     setHabitTitle(''); setHabitTime(''); setHabitSheet(false);
     if (time && remindersEnabled) {
@@ -225,7 +249,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 const done = h.doneDates.includes(today);
                 return (
                   <ListRow key={h.id} style={{ paddingVertical: 12 }}>
-                    <CheckCircle done={done} onPress={() => toggleHabitToday(h.id)} />
+                    <CheckCircle done={done} onPress={() => toggleHabitToday(h.id)} label={h.title + ', today'} />
                     <View style={{ flex: 1, marginLeft: 12 }}>
                       <Text style={T.title}>{h.title}</Text>
                       <Row style={{ marginTop: 3 }}>
@@ -249,7 +273,15 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
                         reminder keeps firing for a habit that no longer exists */}
                     <IconBtn
                       name="trash-outline" size={18}
-                      onPress={async () => { removeHabit(h.id); await rescheduleAllReminders(); }}
+                      onPress={async () => {
+                        const index = useStore.getState().habits.findIndex((x) => x.id === h.id);
+                        removeHabit(h.id);
+                        toast('Deleted ' + h.title, {
+                          label: 'Undo',
+                          onPress: () => { restoreHabit(h, index); void rescheduleAllReminders(); },
+                        });
+                        await rescheduleAllReminders();
+                      }}
                       accessibilityLabel={'Delete ' + h.title}
                     />
                   </ListRow>
@@ -285,17 +317,25 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </Sheet>
 
       {/* copy day sheet */}
-      <Sheet visible={copySheet} onClose={() => setCopySheet(false)} title={`Copy ${day} to…`}>
+      <Sheet visible={copySheet} onClose={() => setCopySheet(false)} onClosed={runAfterSheet} title={`Copy ${day} to…`}>
         <Row style={{ flexWrap: 'wrap' }}>
           {DAY_NAMES.filter((d) => d !== day).map((d) => (
-            <Chip key={d} label={d} onPress={() => { copyDay(day, d); setCopySheet(false); }} />
+            <Chip
+              key={d} label={d}
+              onPress={() => {
+                const before = useStore.getState().planner;
+                copyDay(day, d);
+                afterSheet.current = () => toast('Copied ' + day + ' to ' + d, { label: 'Undo', onPress: () => restorePlanner(before) });
+                setCopySheet(false);
+              }}
+            />
           ))}
         </Row>
         <Text style={[T.caption, { marginTop: 8 }]}>Replaces the target day's blocks.</Text>
       </Sheet>
 
       {/* templates sheet */}
-      <Sheet visible={tplSheet} onClose={() => setTplSheet(false)} title="Week templates">
+      <Sheet visible={tplSheet} onClose={() => setTplSheet(false)} onClosed={runAfterSheet} title="Week templates">
         {Object.keys(weekTemplates).length === 0 && (
           <Text style={[T.caption, { marginBottom: 10 }]}>
             Save the whole week ("Exam week", "Normal week") and switch anytime.
@@ -304,8 +344,22 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {Object.keys(weekTemplates).map((name) => (
           <Row key={name} style={{ paddingVertical: 8 }}>
             <Text style={[T.body, { flex: 1 }]}>{name}</Text>
-            <PillButton small label="Apply" onPress={() => { applyTemplate(name); setTplSheet(false); }} style={{ marginRight: 8 }} />
-            <IconBtn name="trash-outline" size={18} onPress={() => deleteTemplate(name)} accessibilityLabel={'Delete template ' + name} />
+            <PillButton
+              small label="Apply" style={{ marginRight: 8 }}
+              onPress={() => {
+                const before = useStore.getState().planner;
+                applyTemplate(name);
+                afterSheet.current = () => toast('Applied ' + name + ' to the week', { label: 'Undo', onPress: () => restorePlanner(before) });
+                setTplSheet(false);
+              }}
+            />
+            <IconBtn
+              name="trash-outline" size={18} accessibilityLabel={'Delete template ' + name}
+              onPress={() => Alert.alert('Delete ' + name + '?', 'The template goes. The week you are planning stays as it is.', [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Delete', style: 'destructive', onPress: () => deleteTemplate(name) },
+              ])}
+            />
           </Row>
         ))}
         <Row style={{ marginTop: 10 }}>

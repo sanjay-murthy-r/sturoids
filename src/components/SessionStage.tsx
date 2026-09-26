@@ -211,7 +211,7 @@ export function SessionStage({
               {current ? current.title : 'All tasks done'}
             </Animated.Text>
           </View>
-          {current ? <CheckCircle done={false} color={current.color} onPress={onTickCurrent} /> : null}
+          {current ? <CheckCircle done={false} color={current.color} onPress={onTickCurrent} label={current.title} /> : null}
         </View>
       ) : null}
     </LayoutAnimationConfig>

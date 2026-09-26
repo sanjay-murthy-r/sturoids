@@ -101,18 +101,16 @@ export default function Today() {
   // minute re-renders only the text that shows the time, never the shortcuts that read the next block.
   const nextBlockNow = useMemo(() => {
     const nowMin = now.getHours() * 60 + now.getMinutes();
-    const lateNight = now.getHours() >= 21;
     const dToday = dayName(now);
     const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
     const dTomorrow = dayName(tomorrow);
     const sorted = (d: typeof dToday) =>
       [...(planner[d] || [])].sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
-    if (!lateNight) {
-      const current = sorted(dToday).find((b) => toMinutes(b.start) <= nowMin && toMinutes(b.end) > nowMin);
-      if (current) return { block: current, tag: 'NOW' };
-      const next = sorted(dToday).find((b) => toMinutes(b.start) > nowMin);
-      if (next) return { block: next, tag: 'NEXT UP' };
-    }
+    // today's block comes first at any hour, so a late study block is never skipped for tomorrow's plan
+    const current = sorted(dToday).find((b) => toMinutes(b.start) <= nowMin && toMinutes(b.end) > nowMin);
+    if (current) return { block: current, tag: 'NOW' };
+    const next = sorted(dToday).find((b) => toMinutes(b.start) > nowMin);
+    if (next) return { block: next, tag: 'NEXT UP' };
     const first = sorted(dTomorrow)[0];
     if (first) return { block: first, tag: 'TOMORROW' };
     return null;
@@ -808,6 +806,7 @@ const TodayList = React.memo(function TodayList({ items, onToggleDaily, onToggle
             done={t.done}
             color={t.kind === 'mission' ? C.amber : C.green}
             onPress={() => (t.kind === 'daily' ? onToggleDaily(t.id) : onToggleMission(t.id))}
+            label={t.title}
           />
           <StrikeText done={t.done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{t.title}</StrikeText>
           {t.kind === 'mission' && (

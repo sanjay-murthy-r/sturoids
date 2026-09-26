@@ -336,11 +336,16 @@ export function NeuIconBtn({ name, onPress, color, size = 20, dim = 44, active, 
   );
 }
 
-export function CheckCircle({ done, onPress, color = C.green, size = 26 }: {
+export function CheckCircle({ done, onPress, color = C.green, size = 26, label }: {
   done: boolean; onPress: () => void; color?: string; size?: number;
+  /** what is being ticked, for a screen reader */
+  label?: string;
 }) {
   return (
-    <Bouncy onPress={onPress} scaleTo={0.82} style={{ padding: 2 }}>
+    <Bouncy
+      onPress={onPress} scaleTo={0.82} style={{ padding: 2 }}
+      accessibilityRole="checkbox" accessibilityState={{ checked: done }} accessibilityLabel={label}
+    >
       <Pop dep={done}>
         <Ionicons
           name={done ? 'checkmark-circle' : 'ellipse-outline'}
@@ -365,8 +370,10 @@ const TRACK_H = 26;
 const KNOB = 20;
 const KNOB_TRAVEL = TRACK_W - KNOB - 6; // 24
 
-export function Toggle({ value, onChange, color }: {
+export function Toggle({ value, onChange, color, label }: {
   value: boolean; onChange: (v: boolean) => void; color?: string;
+  /** what the switch turns on, for a screen reader (the row's own text) */
+  label?: string;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
@@ -377,7 +384,10 @@ export function Toggle({ value, onChange, color }: {
   }, [value, level]);
   const thumbStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value * KNOB_TRAVEL }] }));
   return (
-    <Pressable onPress={() => { tick(); onChange(!value); }} hitSlop={8}>
+    <Pressable
+      onPress={() => { tick(); onChange(!value); }} hitSlop={8}
+      accessibilityRole="switch" accessibilityState={{ checked: value }} accessibilityLabel={label}
+    >
       <View
         style={[
           st.ring,

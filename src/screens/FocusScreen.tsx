@@ -477,7 +477,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           ) : (
             attached.map((a) => (
               <Row key={a.key} style={{ paddingVertical: 7, paddingHorizontal: 4 }}>
-                <CheckCircle done={a.done} color={a.kind === 'mission' ? C.amber : C.green} onPress={() => markAttached(a.key)} />
+                <CheckCircle done={a.done} color={a.kind === 'mission' ? C.amber : C.green} onPress={() => markAttached(a.key)} label={a.title} />
                 <Text style={[st.taskText, a.done && st.taskDone]} numberOfLines={1}>{a.title}</Text>
                 <IconBtn name="close" size={16} onPress={() => setAttached((l) => l.filter((x) => x.key !== a.key))} accessibilityLabel={'Take ' + a.title + ' off this session'} />
               </Row>

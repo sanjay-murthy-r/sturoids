@@ -493,7 +493,7 @@ export default function Settings() {
         <Card>
           <Row style={{ justifyContent: 'space-between', marginBottom: 12 }}>
             <Text style={T.body}>24-hour time</Text>
-            <Toggle value={settings.hour24} onChange={(v) => setSetting('hour24', v)} color={C.accent} />
+            <Toggle value={settings.hour24} onChange={(v) => setSetting('hour24', v)} color={C.accent} label="24-hour time" />
           </Row>
           <Hairline />
           <Row style={{ justifyContent: 'space-between', marginTop: 12 }}>
@@ -501,7 +501,7 @@ export default function Settings() {
               <Text style={T.body}>All reminders (master)</Text>
               <InfoDot text="The master switch for every notification. Habit times live in Planner → Streaks; ToDo nudges in Tasks → bell icon." />
             </Row>
-            <Toggle value={settings.remindersEnabled} onChange={toggleReminders} color={C.green} />
+            <Toggle value={settings.remindersEnabled} onChange={toggleReminders} color={C.green} label="All reminders" />
           </Row>
         </Card>
 
@@ -512,7 +512,7 @@ export default function Settings() {
               <Text style={[T.body, { fontFamily: F.med }]}>Seconds on the ambient screen</Text>
               <Text style={[T.caption, { marginTop: 2 }]}>Off, it shows whole minutes.</Text>
             </View>
-            <Toggle value={settings.ambientSeconds} onChange={(v) => setSetting('ambientSeconds', v)} color={C.accent} />
+            <Toggle value={settings.ambientSeconds} onChange={(v) => setSetting('ambientSeconds', v)} color={C.accent} label="Seconds on the ambient screen" />
           </Row>
           <Hairline />
           <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
@@ -520,7 +520,7 @@ export default function Settings() {
               <Text style={[T.body, { fontFamily: F.med }]}>Time of day on the ambient screen</Text>
               <Text style={[T.caption, { marginTop: 2 }]}>Shown small, above the timer.</Text>
             </View>
-            <Toggle value={settings.ambientClock} onChange={(v) => setSetting('ambientClock', v)} color={C.accent} />
+            <Toggle value={settings.ambientClock} onChange={(v) => setSetting('ambientClock', v)} color={C.accent} label="Time of day on the ambient screen" />
           </Row>
         </Card>
 
@@ -531,7 +531,7 @@ export default function Settings() {
               <Text style={[T.body, { fontFamily: F.med }]}>Lock the journal</Text>
               <Text style={[T.caption, { marginTop: 2 }]}>Your app PIN opens it.</Text>
             </View>
-            <Toggle value={settings.journalLocked} onChange={(v) => setToolLock('journal', v)} color={C.gold} />
+            <Toggle value={settings.journalLocked} onChange={(v) => setToolLock('journal', v)} color={C.gold} label="Lock the journal" />
           </Row>
           <Hairline />
           <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
@@ -542,7 +542,7 @@ export default function Settings() {
                   + (lockedNotes ? '; ' + lockedNotes + (lockedNotes === 1 ? ' is locked now.' : ' are locked now.') : '.')}
               </Text>
             </View>
-            <Toggle value={settings.notesLocked === true} onChange={(v) => setToolLock('notes', v)} color={C.green} />
+            <Toggle value={settings.notesLocked === true} onChange={(v) => setToolLock('notes', v)} color={C.green} label="Lock Notes" />
           </Row>
           {deviceLock ? (
             <>
@@ -550,11 +550,11 @@ export default function Settings() {
               <Text style={[st.label, { marginTop: 10, marginBottom: 4 }]}>Your screen lock can also open</Text>
               <Row style={{ justifyContent: 'space-between', marginTop: 6 }}>
                 <Text style={T.body}>The journal</Text>
-                <Toggle value={settings.journalScreenLock === true} onChange={(v) => setScreenLock('journal', v)} color={C.gold} />
+                <Toggle value={settings.journalScreenLock === true} onChange={(v) => setScreenLock('journal', v)} color={C.gold} label="Screen lock opens the journal" />
               </Row>
               <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
                 <Text style={T.body}>Notes</Text>
-                <Toggle value={settings.notesScreenLock === true} onChange={(v) => setScreenLock('notes', v)} color={C.green} />
+                <Toggle value={settings.notesScreenLock === true} onChange={(v) => setScreenLock('notes', v)} color={C.green} label="Screen lock opens Notes" />
               </Row>
               <Text style={[T.caption, { marginTop: 8 }]}>
                 Fingerprint, face or the phone's own PIN, as well as the app PIN. A locked single note always asks for the

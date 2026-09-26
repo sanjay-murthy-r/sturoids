@@ -67,7 +67,7 @@ export function ToolArchiveSheet({ visible, onClose, manage = false }: {
                   {body}
                   {blocked ? null : (
                     <View style={st.toggle}>
-                      <Toggle value={on} onChange={(v) => setToolArchived(t.key, v)} color={C.accent} />
+                      <Toggle value={on} onChange={(v) => setToolArchived(t.key, v)} color={C.accent} label={'Archive ' + t.label} />
                     </View>
                   )}
                 </View>

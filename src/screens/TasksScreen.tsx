@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
-import { useStore } from '../store';
+import { useStore, DailyTask } from '../store';
 import { yesterdayKey, daysUntil, fmtShortDate, toMinutes } from '../utils';
 import {
   ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, NeuHeader, useTheme,
@@ -73,22 +73,37 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setTriaged((x) => [...x, id]);
     if (leftovers.length <= 1) setLastTriage(today);
   };
-  // dropping is the triage's answer, so it asks nothing first; for a slip of the finger, the toast offers Undo
+  // dropping is the triage's answer, so it asks nothing first; for a slip of the finger, the toast offers Undo. Drops
+  // made one after another share one toast and one Undo, so the first is never lost when the next toast replaces it.
+  const drops = React.useRef<{ list: { task: DailyTask; index: number }[]; triageBefore: string; timer: ReturnType<typeof setTimeout> | null }>({
+    list: [], triageBefore: '', timer: null,
+  });
+  React.useEffect(() => () => { if (drops.current.timer) clearTimeout(drops.current.timer); }, []);
   const dropOne = (id: string) => {
     const list = useStore.getState().dailyTasks;
     const index = list.findIndex((t) => t.id === id);
     if (index < 0) return;
     const task = list[index];
     const wasLast = leftovers.length <= 1;
-    const triageBefore = useStore.getState().lastTriage;
+    const batch = drops.current;
+    if (!batch.list.length) batch.triageBefore = useStore.getState().lastTriage;
+    batch.list.push({ task, index });
     removeDaily(id);
     if (wasLast) setLastTriage(today);
-    toast('Dropped "' + task.title + '"', {
+    // the batch lasts as long as its toast
+    if (batch.timer) clearTimeout(batch.timer);
+    batch.timer = setTimeout(() => { batch.list = []; batch.timer = null; }, 4400);
+    const taken = [...batch.list];
+    const triageBefore = batch.triageBefore;
+    toast(taken.length === 1 ? 'Dropped "' + task.title + '"' : 'Dropped ' + taken.length + ' ToDos', {
       label: 'Undo',
       onPress: () => {
-        restoreDaily(task, index);
-        // the leftover comes back undecided
-        if (wasLast) setLastTriage(triageBefore);
+        // back in the reverse order they went, so each lands at its old place
+        for (let i = taken.length - 1; i >= 0; i--) restoreDaily(taken[i].task, taken[i].index);
+        // the leftovers come back undecided
+        setLastTriage(triageBefore);
+        batch.list = [];
+        if (batch.timer) { clearTimeout(batch.timer); batch.timer = null; }
       },
     });
   };
@@ -180,7 +195,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   const done = t.doneOn === today;
                   return (
                     <ListRow key={t.id} style={{ paddingVertical: 10 }}>
-                      <CheckCircle done={done} onPress={() => toggleDaily(t.id)} />
+                      <CheckCircle done={done} onPress={() => toggleDaily(t.id)} label={t.title} />
                       <StrikeText done={done} style={st.taskText} wrapStyle={st.taskWrap}>{t.title}</StrikeText>
                       <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(t.title, () => removeDaily(t.id))} accessibilityLabel={'Delete ' + t.title} />
                     </ListRow>
@@ -205,7 +220,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   return (
                     <View key={m.id} style={st.missionRow}>
                       <Row>
-                        <CheckCircle done={m.done} color={C.amber} onPress={() => toggleMission(m.id)} />
+                        <CheckCircle done={m.done} color={C.amber} onPress={() => toggleMission(m.id)} label={m.title} />
                         {/* one subDraft serves every mission's step field, so it has to be
                             dropped here or a half-typed step follows you to the next mission */}
                         <Pressable style={st.taskWrap} onPress={() => { setSubDraft(''); setExpanded(open ? null : m.id); }}>
@@ -230,7 +245,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                         >
                           {m.subtasks.map((sub) => (
                             <Row key={sub.id} style={{ paddingVertical: 5 }}>
-                              <CheckCircle done={sub.done} size={20} onPress={() => toggleSubtask(m.id, sub.id)} />
+                              <CheckCircle done={sub.done} size={20} onPress={() => toggleSubtask(m.id, sub.id)} label={sub.title} />
                               <StrikeText done={sub.done} style={st.stepText} wrapStyle={st.stepWrap}>{sub.title}</StrikeText>
                               <IconBtn name="close" size={16} onPress={() => removeSubtask(m.id, sub.id)} accessibilityLabel={'Remove ' + sub.title} />
                             </Row>
@@ -284,6 +299,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <Toggle
             value={settings.todoReminderEnabled}
             color={C.green}
+            label="Daily plan your ToDos nudge"
             onChange={async (v) => {
               setSetting('todoReminderEnabled', v);
               await applyReminders();

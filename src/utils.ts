@@ -78,10 +78,13 @@ export function streaks(doneDates: string[]): { current: number; best: number } 
   // best: walk sorted dates
   const sorted = [...set].sort();
   let best = 1, run = 1;
+  // calendar days, counted in UTC: a day the clocks change on is still one day after the one before
+  const dayNo = (key: string) => {
+    const [y, m, d] = key.split('-').map(Number);
+    return Date.UTC(y, m - 1, d) / 86400000;
+  };
   for (let i = 1; i < sorted.length; i++) {
-    const prev = new Date(sorted[i - 1] + 'T00:00:00').getTime();
-    const cur = new Date(sorted[i] + 'T00:00:00').getTime();
-    run = cur - prev === 86400000 ? run + 1 : 1;
+    run = dayNo(sorted[i]) - dayNo(sorted[i - 1]) === 1 ? run + 1 : 1;
     if (run > best) best = run;
   }
   // current: count back from today (or yesterday if today not yet done)
