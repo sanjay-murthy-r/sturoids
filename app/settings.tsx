@@ -22,7 +22,7 @@ import { TOOLS, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey }
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
-const APP_VERSION = Constants.expoConfig?.version || '1.4.3';
+const APP_VERSION = Constants.expoConfig?.version || '1.5.0';
 
 const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
   { key: 'default', label: 'Default', desc: 'Soft grey neumorphism, one continuous material' },
