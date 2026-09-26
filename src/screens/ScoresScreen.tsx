@@ -72,6 +72,11 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const duplicateScoreNode = useStore((s) => s.duplicateScoreNode);
   const moveScoreNode = useStore((s) => s.moveScoreNode);
   const ix = useMemo(() => indexScores(scores), [scores]);
+  const learnedBy = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const l of learnings) m.set(l.nodeId, (m.get(l.nodeId) || 0) + 1);
+    return m;
+  }, [learnings]);
   const today = todayKey();
 
   const [cwd, setCwd] = useState<string | null>(null);
@@ -261,6 +266,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
               onSort={() => { tick(); setSort(SORTS[(SORTS.findIndex((x) => x.key === sort) + 1) % SORTS.length].key); }}
               onOpen={setCwd} onMenu={openMenu}
               onAdd={() => setEditor({ mode: 'new', kind: 'exam', parentId: here?.id ?? null })}
+              learnedBy={learnedBy}
             />
           )}
           </>
@@ -356,9 +362,11 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 /* ---------------- a group, or the top level ---------------- */
 
-function GroupView({ groupId, group, ix, today, sort, onSort, onOpen, onMenu, onAdd }: {
+function GroupView({ groupId, group, ix, today, sort, onSort, onOpen, onMenu, onAdd, learnedBy }: {
   groupId: string | null; group?: ScoreNode; ix: ScoreIndex; today: string; sort: Sort;
   onSort: () => void; onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void; onAdd: () => void;
+  /** how many learnings each exam keeps */
+  learnedBy: Map<string, number>;
 }) {
   const kids = ix.children.get(groupId) || [];
   const groups = kids.filter((k) => k.kind === 'group').sort((a, b) => a.title.localeCompare(b.title));
@@ -465,21 +473,23 @@ function GroupView({ groupId, group, ix, today, sort, onSort, onOpen, onMenu, on
               </ListRow>
             );
           })}
-          {exams.map((n) => <ExamRow key={n.id} n={n} ix={ix} today={today} onOpen={onOpen} onMenu={onMenu} />)}
+          {exams.map((n) => (
+            <ExamRow key={n.id} n={n} ix={ix} today={today} onOpen={onOpen} onMenu={onMenu} learned={learnedBy.get(n.id) || 0} />
+          ))}
         </ListCard>
       </Enter>
     </>
   );
 }
 
-function ExamRow({ n, ix, today, onOpen, onMenu }: {
+function ExamRow({ n, ix, today, onOpen, onMenu, learned }: {
   n: ScoreNode; ix: ScoreIndex; today: string; onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void;
+  learned: number;
 }) {
   const r = resultOf(n, ix);
   const parts = (ix.children.get(n.id) || []).filter((k) => k.kind === 'exam').length;
   const delta = r ? deltaVsPrevious(n, ix) : null;
   const upcomingDay = !r && n.date && n.date >= today;
-  const learned = useStore((s) => s.learnings.reduce((c, l) => c + (l.nodeId === n.id ? 1 : 0), 0));
   const caption = [
     n.date ? fmtExamDate(n.date) : '',
     parts ? plural(parts, 'subject') : '',
