@@ -275,7 +275,7 @@ const scenarios = {
     const app = boot({ [KEY]: JSON.stringify({ state: V4, version: 4 }) });
     await settled(app);
     const s = app.state();
-    assert.ok(s.quickAccess.every((q) => ['tool', 'route', 'app', 'url'].includes(q.kind)), 'quick access kinds');
+    assert.ok(s.quickAccess.every((q) => ['tool', 'route', 'url'].includes(q.kind)), 'quick access kinds');
     assert.equal(s.quickAccess.filter((q) => q.kind === 'tool' && q.target === 'notes').length, 1, 'duplicates dropped');
     assert.equal(s.planner.Mon[0].color, '#9DBCE3', 'planner colour remapped');
     for (const day of Object.keys(s.planner)) assert.ok(Array.isArray(s.planner[day]), 'day ' + day);

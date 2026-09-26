@@ -17,14 +17,13 @@ import {
 } from '../../src/components/UI';
 import { CountUp, Enter, Bouncy, Pop, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { tap } from '../../src/haptics';
-import { ROUTE_CATALOG, launchExternal } from '../../src/quickAccess';
+import { ROUTE_CATALOG, launchExternal, siteHost, siteName, siteUrl } from '../../src/quickAccess';
 import { ToolKey, colorOf, toolByKey } from '../../src/tools';
 import { openTool } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
 import { useIntro } from '../../src/intro';
 import { journalDayFor } from '../../src/journal';
 import { indexScores, upcoming, groupSummary, fmtPct, fromToday } from '../../src/scores';
-import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
 import { useNow } from '../../src/hooks/useNow';
 import { TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth } from '../../src/layout';
 
@@ -64,11 +63,9 @@ export default function Today() {
   const [nameDraft, setNameDraft] = useState(settings.name);
   const [qaEdit, setQaEdit] = useState(false);
   const [qaAddSheet, setQaAddSheet] = useState(false);
-  const [customPkg, setCustomPkg] = useState('');
-  const [appQuery, setAppQuery] = useState('');
-  const [installed, setInstalled] = useState<InstalledApp[]>([]);
-  const [appsLoaded, setAppsLoaded] = useState(false);
-  const [customLabel, setCustomLabel] = useState('');
+  const [siteDraft, setSiteDraft] = useState('');
+  const [siteLabel, setSiteLabel] = useState('');
+  const [siteError, setSiteError] = useState('');
   // the day's column, known ahead on a wide window (so two columns appear on the first frame), then measured
   const { width: dayWinW } = useWindowDimensions();
   const [areaW, setAreaW] = useState(() => columnWidth(dayWinW, true, WIDE_MAX));
@@ -200,11 +197,9 @@ export default function Today() {
             break;
           }
         }
-      } else if (q.kind === 'app') {
-        // a long app name needs the wide tile to be readable
-        meta = q.label.length > 9 ? 'App on this phone' : null;
       } else if (q.kind === 'url') {
-        meta = q.target.replace(/^https?:\/\//, '').split('/')[0] || null;
+        // the address, so two shortcuts to one site's pages read apart
+        meta = siteHost(q.target) || null;
       }
       out[q.id] = meta;
     }
@@ -231,27 +226,29 @@ export default function Today() {
     let i = 0;
     setQuickAccess(full.map((q) => (hiddenTile(q, hidden) ? q : nextVisible[i++])));
   }, [setQuickAccess]);
-  // open instantly; enumerate installed apps only after the sheet is up
   const openQaAdd = useCallback(() => {
-    setInstalled([]);
-    setAppsLoaded(false);
-    setAppQuery('');
+    setSiteDraft('');
+    setSiteLabel('');
+    setSiteError('');
     setQaAddSheet(true);
   }, []);
-  useEffect(() => {
-    if (!qaAddSheet) return;
-    // the native lookup runs off the JS thread, so the sheet opens and settles while the list loads
-    let live = true;
-    getInstalledApps().then((apps) => { if (live) { setInstalled(apps); setAppsLoaded(true); } });
-    return () => { live = false; };
-  }, [qaAddSheet]);
-  const appMatches = useMemo(() => {
-    const query = appQuery.trim().toLowerCase();
-    return installed.filter((a) => !quickAccess.some((x) => x.target === a.packageName) && (!query || a.label.toLowerCase().includes(query)));
-  }, [installed, quickAccess, appQuery]);
   const addQuick = (item: Omit<QuickItem, 'id'>) => {
-    if (quickAccess.some((q) => q.kind === item.kind && q.target === item.target)) return;
+    if (quickAccess.some((q) => q.kind === item.kind && q.target === item.target)) return false;
     setQuickAccess([...quickAccess, { ...item, id: uid() }]);
+    return true;
+  };
+  const addSite = () => {
+    const url = siteUrl(siteDraft);
+    if (!url) {
+      setSiteError(siteDraft.trim() ? 'That is not a web address. Try something like khanacademy.org' : "Type the site's address first.");
+      return;
+    }
+    if (!addQuick({ label: siteLabel.trim() || siteName(url), icon: 'globe-outline', color: 'teal', kind: 'url', target: url })) {
+      setSiteError('That site is already in quick access.');
+      return;
+    }
+    setSiteDraft(''); setSiteLabel(''); setSiteError('');
+    setQaAddSheet(false);
   };
 
   // once the intro has gone and the screen is still, the other tabs are built one at a time, so a first visit
@@ -527,57 +524,22 @@ export default function Today() {
             <Chip key={r.kind + r.target} label={r.label} color={colorOf(r.color)} onPress={() => addQuick(r)} />
           ))}
         </Row>
-        <Text style={st.sheetSection}>Apps on this phone</Text>
-        {installed.length === 0 ? (
-          <Text style={[T.caption, { marginBottom: 8 }]}>
-            {!appsLoaded && appListAvailable()
-              ? 'Loading apps…'
-              : appListAvailable()
-                ? 'No launchable apps found.'
-                : 'The live app list needs the installed app. Meanwhile, add apps by package name below.'}
-          </Text>
-        ) : (
-          <>
-            <Field value={appQuery} onChangeText={setAppQuery} placeholder="Search your apps…" />
-            <View style={{ maxHeight: 320 }}>
-              <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                {appMatches.slice(0, 60).map((a) => (
-                    <Bouncy
-                      key={a.packageName}
-                      onPress={() => addQuick({ label: a.label, icon: 'apps-outline', color: 'teal', kind: 'app', target: a.packageName })}
-                      style={{ paddingVertical: 9, flexDirection: 'row', alignItems: 'center' }}
-                    >
-                      <Ionicons name="apps-outline" size={16} color={C.teal} />
-                      <Text style={[T.body, { marginLeft: 10, flex: 1 }]} numberOfLines={1}>{a.label}</Text>
-                      <Ionicons name="add" size={18} color={C.textFaint} />
-                    </Bouncy>
-                  ))}
-                {appMatches.length > 60 ? (
-                  <Text style={[T.caption, { textAlign: 'center', paddingVertical: 10 }]}>Search to find the rest.</Text>
-                ) : null}
-              </ScrollView>
-            </View>
-          </>
-        )}
-        <Text style={st.sheetSection}>Custom app</Text>
-        <Field label="Name" value={customLabel} onChangeText={setCustomLabel} placeholder="BYJU'S" />
+        <Text style={st.sheetSection}>A website</Text>
+        <Field
+          label="Address" value={siteDraft} autoCapitalize="none" autoCorrect={false} keyboardType="url"
+          onChangeText={(t) => { setSiteDraft(t); if (siteError) setSiteError(''); }}
+          placeholder="khanacademy.org"
+        />
         <Row style={{ alignItems: 'flex-end' }}>
           <Field
-            label="Package name" value={customPkg} onChangeText={setCustomPkg} autoCapitalize="none"
-            placeholder="com.example.app" style={{ flex: 1, marginBottom: 0 }}
+            label="Name" value={siteLabel} onChangeText={setSiteLabel}
+            placeholder={siteUrl(siteDraft) ? siteName(siteUrl(siteDraft) as string) : 'Optional'}
+            style={{ flex: 1, marginBottom: 0 }} returnKeyType="done" onSubmitEditing={addSite}
           />
-          <PillButton
-            small label="Add" style={{ marginLeft: 12 }}
-            onPress={() => {
-              const p = customPkg.trim();
-              if (!p.includes('.')) return;
-              addQuick({ label: customLabel.trim() || p.split('.').pop() || 'App', icon: 'apps-outline', color: 'teal', kind: 'app', target: p });
-              setCustomPkg(''); setCustomLabel('');
-            }}
-          />
+          <PillButton small label="Add" style={{ marginLeft: 12 }} onPress={addSite} />
         </Row>
-        <Text style={[T.caption, { marginTop: 10 }]}>
-          Find an app's package name in its Play Store URL after "id=".
+        <Text style={[T.caption, { marginTop: 10, color: siteError ? C.danger : C.textFaint }]}>
+          {siteError || 'Opens in your default browser.'}
         </Text>
       </Sheet>
     </ScreenBG>

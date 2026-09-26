@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WIDE_AT, columnWidth } from '../layout';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import { aiLogoFor } from '../aiLogos';
+import { siteName, siteUrl } from '../quickAccess';
 
 /** between launchers on a wide window */
 const GRID_GAP = 14;
@@ -95,12 +96,12 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   };
 
   const add = () => {
-    const u = url.trim();
-    if (!label.trim() || !/^https?:\/\//.test(u)) {
-      Alert.alert('Check fields', 'Name + full URL starting with https://');
+    const u = siteUrl(url);
+    if (!u) {
+      Alert.alert('Check the address', url.trim() ? 'That is not a web address. Try something like claude.ai' : "Type the tool's address first.");
       return;
     }
-    setAiLinks([...aiLinks, { id: uid(), label: label.trim(), url: u, custom: true }]);
+    setAiLinks([...aiLinks, { id: uid(), label: label.trim() || siteName(u), url: u, custom: true }]);
     setLabel(''); setUrl(''); setAddSheet(false);
   };
 
@@ -155,7 +156,7 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
       <Sheet visible={addSheet} onClose={() => setAddSheet(false)} title="Add AI tool">
         <Field value={label} onChangeText={setLabel} placeholder="Name, e.g. NotebookLM" autoFocus />
-        <Field value={url} onChangeText={setUrl} placeholder="https://…" autoCapitalize="none" keyboardType="url" />
+        <Field value={url} onChangeText={setUrl} placeholder="Address, e.g. notebooklm.google.com" autoCapitalize="none" autoCorrect={false} keyboardType="url" />
         <PillButton label="Add" onPress={add} />
       </Sheet>
     </ScreenBG>

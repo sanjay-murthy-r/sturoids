@@ -40,10 +40,10 @@ export interface AiLink { id: string; label: string; url: string; custom?: boole
 export interface CalcEntry { id: string; expr: string; result: string }
 /**
  * `tool` targets a ToolKey (opens wherever that tool currently lives — its tab
- * slot or its full page); `route` is a plain path (Settings); `app` a package
- * name; `url` a link. `color` is a palette slot (e.g. 'green') or a literal hex.
+ * slot or its full page); `route` is a plain path (Settings); `url` a website, opened in the default browser.
+ * `color` is a palette slot (e.g. 'green') or a literal hex.
  */
-export interface QuickItem { id: string; label: string; icon: string; color: string; kind: 'tool' | 'route' | 'app' | 'url'; target: string }
+export interface QuickItem { id: string; label: string; icon: string; color: string; kind: 'tool' | 'route' | 'url'; target: string }
 export interface TodoReminder { id: string; time: string; label: string }
 
 /** A Deep Work session in flight — persisted so a process kill cannot lose it. */
@@ -459,7 +459,8 @@ function normaliseQuick(items: any): QuickItem[] {
     } else if (typeof q.color === 'string' && QUICK_COLOR_REMAP[q.color.toUpperCase()]) {
       q = { ...q, color: QUICK_COLOR_REMAP[q.color.toUpperCase()] };
     }
-    if (!['tool', 'route', 'app', 'url'].includes(q.kind)) continue;
+    // shortcuts to other apps went with the app launcher in 1.5.1: without the permission to see them they cannot open
+    if (!['tool', 'route', 'url'].includes(q.kind)) continue;
     if (out.some((o) => o.kind === q.kind && o.target === q.target)) continue;
     out.push(q);
   }

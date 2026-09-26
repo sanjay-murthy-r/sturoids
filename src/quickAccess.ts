@@ -8,29 +8,40 @@ export const ROUTE_CATALOG: Omit<QuickItem, 'id'>[] = [
   SETTINGS_QUICK,
 ];
 
-/** Launch a quick item (apps + urls; tools and routes are handled by the caller). */
+/**
+ * A typed address as a link the browser can open: "wikipedia.org" and "www.khanacademy.org/math" gain https://, an
+ * http(s) link stays as it is. Null when it is not a web address (no dot in the host, spaces, another scheme).
+ */
+export function siteUrl(input: string): string | null {
+  let u = input.trim();
+  if (!u || /\s/.test(u)) return null;
+  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(u) && !/^https?:\/\//i.test(u)) return null;
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u.replace(/^\/+/, '');
+  const host = siteHost(u);
+  if (!host || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host) || /^[.-]|[.-]$/.test(host)) return null;
+  return u;
+}
+
+/** "www.khanacademy.org" from a link, without the www. Empty when there is no host. */
+export function siteHost(url: string): string {
+  const m = /^https?:\/\/([^/?#:]+)/i.exec(url);
+  return m ? m[1].toLowerCase().replace(/^www\./, '') : '';
+}
+
+/** A short name for a site from its address: "khanacademy.org" becomes "Khanacademy". */
+export function siteName(url: string): string {
+  const host = siteHost(url);
+  const parts = host.split('.');
+  const core = parts.length > 2 && parts[parts.length - 2].length <= 3 ? parts[parts.length - 3] : parts[parts.length - 2] || host;
+  return core ? core.charAt(0).toUpperCase() + core.slice(1) : 'Website';
+}
+
+/** Open a website shortcut in the phone's default browser (tools and routes are handled by the caller). */
 export async function launchExternal(item: QuickItem) {
+  if (item.kind !== 'url') return;
   try {
-    if (item.kind === 'url') {
-      await Linking.openURL(item.target);
-      return;
-    }
-    if (item.kind === 'app') {
-      // required lazily: the launcher module stays off the startup path
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const IntentLauncher = require('expo-intent-launcher');
-      // The proper way: PackageManager#getLaunchIntentForPackage under the hood.
-      // Must be awaited — an un-awaited rejection (app uninstalled) would skip
-      // the catch below and never show the "not installed" alert.
-      await IntentLauncher.openApplication(item.target);
-      return;
-    }
+    await Linking.openURL(item.target);
   } catch {
-    Alert.alert(
-      'Could not launch',
-      item.kind === 'app'
-        ? '"' + item.label + '" (' + item.target + ") doesn't seem to be installed."
-        : 'Could not open ' + item.target
-    );
+    Alert.alert('Could not open the site', 'No browser could open ' + item.target + '. Check the address.');
   }
 }
