@@ -99,7 +99,7 @@ export function NeuHeader({ title, right, onBack, variant = 'page', compact = fa
       }}
     >
       {page ? (
-        <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={onBack || (() => router.back())} />
+        <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={onBack || (() => router.back())} accessibilityLabel="Back" />
       ) : null}
       <Text
         numberOfLines={1}
@@ -285,11 +285,16 @@ export function PillButton({
 }
 
 /** Bare icon button — padded + hit-slopped to a ≥44px effective target. */
-export function IconBtn({ name, onPress, color = C.textDim, size = 22, style, pad = 8 }: {
+export function IconBtn({ name, onPress, color = C.textDim, size = 22, style, pad = 8, accessibilityLabel }: {
   name: any; onPress?: () => void; color?: string; size?: number; style?: ViewStyle; pad?: number;
+  /** what the button does, for a screen reader: an icon alone says nothing */
+  accessibilityLabel?: string;
 }) {
   return (
-    <Bouncy onPress={onPress} scaleTo={0.85} hitSlop={6} radius={999} style={[{ padding: pad }, style]}>
+    <Bouncy
+      onPress={onPress} scaleTo={0.85} hitSlop={6} radius={999} style={[{ padding: pad }, style]}
+      accessibilityLabel={accessibilityLabel} accessibilityRole={accessibilityLabel ? 'button' : undefined}
+    >
       <Ionicons name={name} size={size} color={color} />
     </Bouncy>
   );

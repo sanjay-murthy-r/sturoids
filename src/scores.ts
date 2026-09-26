@@ -326,6 +326,9 @@ export function duplicateStructure(nodes: ScoreNode[], id: string, now = Date.no
     if (n.combine) c.combine = n.combine;
     if (typeof n.weight === 'number') c.weight = n.weight;
     if (typeof n.target === 'number') c.target = n.target;
+    // the exam's own tags say what kind of paper it is, so the next one keeps them; its subjects' tags describe how
+    // that attempt went, and start blank like the marks
+    if (isRoot && n.tags?.length) c.tags = [...n.tags];
     out.push(c);
     for (const k of kids(ix, n.id)) if (!seen.has(k.id)) copy(k, c.id, false);
     return c.id;
@@ -474,6 +477,24 @@ export function tagUse(tags: ScoreTag[], nodes: ScoreNode[], learnings: Learning
   for (const n of nodes) bump(n.tags);
   for (const l of learnings) bump(l.tags);
   return count;
+}
+
+/**
+ * Ties the three lists together after each is repaired on its own: a node keeps only tags that exist, and a learning
+ * whose exam is gone is dropped (an exam's learnings leave and come back with it, so one left behind is lost for
+ * good and could never be reached to delete). Nothing is rebuilt when nothing changes.
+ */
+export function pruneScoreRefs(nodes: ScoreNode[], tags: ScoreTag[], learnings: Learning[]): { nodes: ScoreNode[]; learnings: Learning[] } {
+  const known = new Set(tags.map((t) => t.id));
+  const ids = new Set(nodes.map((n) => n.id));
+  const outNodes = nodes.map((n) => {
+    if (!n.tags || n.tags.every((t) => known.has(t))) return n;
+    const kept = n.tags.filter((t) => known.has(t));
+    const { tags: _drop, ...rest } = n;
+    return kept.length ? { ...rest, tags: kept } : rest;
+  });
+  const outLearnings = learnings.every((l) => ids.has(l.nodeId)) ? learnings : learnings.filter((l) => ids.has(l.nodeId));
+  return { nodes: outNodes, learnings: outLearnings };
 }
 
 /** Drops anything that is not a tag, and any duplicate name or id. */

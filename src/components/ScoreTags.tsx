@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T } from '../theme';
 import { useStore } from '../store';
@@ -23,6 +23,18 @@ export function TagRow({ ids, onPress, style }: { ids?: string[]; onPress?: (id:
   return (
     <View style={[st.row, style]}>
       {mine.map((t) => <TagChip key={t.id} tag={t} onPress={onPress ? () => onPress(t.id) : undefined} />)}
+    </View>
+  );
+}
+
+/** A node's tags as small dots in their colours, for a list row where chips would crowd it (at most four). */
+export function TagDots({ ids }: { ids?: string[] }) {
+  const tags = useStore((s) => s.scoreTags);
+  const mine = tagsOf(ids, tags).slice(0, 4);
+  if (!mine.length) return null;
+  return (
+    <View style={st.dots} accessible accessibilityLabel={'Tagged ' + mine.map((t) => t.label).join(', ')}>
+      {mine.map((t) => <View key={t.id} style={[st.smallDot, { backgroundColor: t.color + '38', borderColor: t.color + 'B3' }]} />)}
     </View>
   );
 }
@@ -70,7 +82,7 @@ export function TagPicker({ value, onChange, label = 'Tags' }: {
           value={draft} onChangeText={setDraft} placeholder="New tag" maxLength={40}
           style={{ flex: 1, marginBottom: 14 }} onSubmitEditing={add} returnKeyType="done"
         />
-        <IconBtn name="add-circle" color={draft.trim() ? C.accent : C.textFaint} size={26} style={{ marginLeft: 8, marginTop: 6 }} onPress={add} />
+        <IconBtn name="add-circle" color={draft.trim() ? C.accent : C.textFaint} size={26} style={{ marginLeft: 8, marginTop: 6 }} onPress={add} accessibilityLabel="Add this tag" />
       </Row>
     </>
   );
@@ -86,15 +98,16 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
   const removeScoreTag = useStore((s) => s.removeScoreTag);
   const [edit, setEdit] = React.useState<ScoreTag | null>(null);
   const [name, setName] = React.useState('');
-  const [taken, setTaken] = React.useState(false);
+  const [taken, setTaken] = React.useState<'' | 'taken' | 'empty'>('');
   const [draft, setDraft] = React.useState('');
   const use = React.useMemo(() => tagUse(tags, scores, learnings), [tags, scores, learnings]);
 
-  const open = (t: ScoreTag) => { setEdit(t); setName(t.label); setTaken(false); };
+  const open = (t: ScoreTag) => { setEdit(t); setName(t.label); setTaken(''); };
   const saveName = () => {
     if (!edit) return;
-    if (name.trim() && name.trim() !== edit.label && !patchScoreTag(edit.id, { label: name })) { setTaken(true); return; }
-    setTaken(false);
+    if (!name.trim()) { setTaken('empty'); return; }
+    if (name.trim() !== edit.label && !patchScoreTag(edit.id, { label: name })) { setTaken('taken'); return; }
+    setTaken('');
     setEdit(null);
   };
 
@@ -132,13 +145,16 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
             name="add-circle" color={draft.trim() ? C.accent : C.textFaint} size={26}
             style={{ marginLeft: 8, marginTop: 6 }}
             onPress={() => { addScoreTag(draft); setDraft(''); }}
+            accessibilityLabel="Add this tag"
           />
         </Row>
       </Sheet>
 
       <Sheet visible={!!edit} onClose={() => setEdit(null)} title={edit ? edit.label : 'Tag'}>
-        <Field label="Name" value={name} onChangeText={(v) => { setName(v); setTaken(false); }} maxLength={40} />
-        {taken ? <Text style={st.problem}>Another tag already has that name.</Text> : null}
+        <Field label="Name" value={name} onChangeText={(v) => { setName(v); setTaken(''); }} maxLength={40} />
+        {taken ? (
+          <Text style={st.problem}>{taken === 'empty' ? 'Give the tag a name.' : 'Another tag already has that name.'}</Text>
+        ) : null}
         <Text style={st.label}>Colour</Text>
         <View style={st.row}>
           {TAG_COLORS.map((c) => {
@@ -160,7 +176,18 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
         <PillButton label="Save" onPress={saveName} style={{ marginTop: 4 }} />
         <PillButton
           label="Delete tag" color={C.danger} outline style={{ marginTop: 10 }}
-          onPress={() => { if (edit) { removeScoreTag(edit.id); setEdit(null); } }}
+          onPress={() => {
+            if (!edit) return;
+            const n = use.get(edit.id) || 0;
+            const go = () => { removeScoreTag(edit.id); setEdit(null); };
+            // a tag no exam or learning carries goes at once; one in use asks first, since it comes off all of them
+            if (!n) { go(); return; }
+            Alert.alert(
+              'Delete ' + edit.label + '?',
+              'It comes off the ' + (n === 1 ? 'one exam or learning' : n + ' exams and learnings') + ' carrying it. Nothing else is removed.',
+              [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: go }],
+            );
+          }}
         />
         <Text style={[T.caption, { marginTop: 10 }]}>
           Deleting a tag takes it off every exam and learning carrying it. Nothing else is removed.
@@ -176,6 +203,8 @@ const st = StyleSheet.create({
   problem: { color: C.danger, fontFamily: F.med, fontSize: 12, lineHeight: 17, marginTop: -8, marginBottom: 12 },
   manageRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 2 },
   dot: { width: 26, height: 26, borderRadius: 13, borderWidth: 1 },
+  dots: { flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: 6 },
+  smallDot: { width: 8, height: 8, borderRadius: 4, borderWidth: 1 },
   swatch: {
     width: 34, height: 34, borderRadius: 17, marginRight: 10, marginBottom: 10,
     alignItems: 'center', justifyContent: 'center',

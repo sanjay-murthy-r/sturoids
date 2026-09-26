@@ -190,19 +190,15 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <Chip small label="SCI" active={sciNotation} color={C.amber} onPress={() => setSciNotation(!sciNotation)} />
         <Chip small icon="grid-outline" label="Functions" active={sci} onPress={() => setSci(!sci)} />
       </Row>
-      {split ? null : <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} />}
+      {split ? null : <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} accessibilityLabel="History" />}
     </Row>
   );
 
-  const keypad = (
-    // keys — rows tighten when the sci pad is out so everything fits
-    <View
-      style={{ flex: 1, justifyContent: 'flex-end' }}
-      onLayout={wide ? (e) => {
-        const { width: w, height: h } = e.nativeEvent.layout;
-        if (Math.abs(w - pad.w) > 0.5 || Math.abs(h - pad.h) > 0.5) setPad({ w, h });
-      } : undefined}
-    >
+  // a wide window fits the keys to its height; one too short for them even at the smallest keys scrolls the keypad
+  // instead of pushing it over the display. A phone keeps its keypad exactly as it was.
+  const cramped = wide && pad.h > 0 && (pad.h - gaps - eqH - 10) / rows < KEY_MIN;
+  const keyRows = (
+    <>
       {sci && SCI.map((row, i) => (
         <Row key={`s${i}`} style={{ gap: 8, marginBottom: 6 }}>
           {row.map((k) => (
@@ -244,6 +240,24 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       >
         <Text style={{ color: theme === 'minimal' ? C.accent : C.onAccent, fontSize: 26, fontFamily: F.semi }}>=</Text>
       </Bouncy>
+    </>
+  );
+  const keypad = !wide ? (
+    // keys — rows tighten when the sci pad is out so everything fits
+    <View style={{ flex: 1, justifyContent: 'flex-end' }}>{keyRows}</View>
+  ) : (
+    <View
+      style={{ flex: 1 }}
+      onLayout={(e) => {
+        const { width: w, height: h } = e.nativeEvent.layout;
+        if (Math.abs(w - pad.w) > 0.5 || Math.abs(h - pad.h) > 0.5) setPad({ w, h });
+      }}
+    >
+      {cramped ? (
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }}>{keyRows}</ScrollView>
+      ) : (
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>{keyRows}</View>
+      )}
     </View>
   );
 

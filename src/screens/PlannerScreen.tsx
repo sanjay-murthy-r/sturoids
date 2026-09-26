@@ -127,8 +127,8 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const tabMode = mode === 'tab';
   const plannerActions = (
     <Row>
-      <IconBtn name="copy-outline" color={C.textDim} onPress={() => setCopySheet(true)} />
-      <IconBtn name="albums-outline" color={C.textDim} onPress={() => setTplSheet(true)} />
+      <IconBtn name="copy-outline" color={C.textDim} onPress={() => setCopySheet(true)} accessibilityLabel="Copy this day" />
+      <IconBtn name="albums-outline" color={C.textDim} onPress={() => setTplSheet(true)} accessibilityLabel="Week templates" />
     </Row>
   );
 
@@ -196,8 +196,8 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
                       <Text style={{ color: C.accent, fontFamily: F.semi, fontSize: 11, letterSpacing: 1 }}>NOW</Text>
                     </View>
                   )}
-                  <IconBtn name="create-outline" size={18} onPress={() => openEdit(b)} />
-                  <IconBtn name="trash-outline" size={18} onPress={() => removeBlock(day, b.id)} />
+                  <IconBtn name="create-outline" size={18} onPress={() => openEdit(b)} accessibilityLabel={'Edit ' + b.subject} />
+                  <IconBtn name="trash-outline" size={18} onPress={() => removeBlock(day, b.id)} accessibilityLabel={'Delete ' + b.subject} />
                 </ListRow>
               ))}
             </ListCard>
@@ -243,12 +243,14 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
                       name="alarm-outline" size={18}
                       color={h.remindTime ? C.accent : C.textFaint}
                       onPress={() => { setRemindDraft(h.remindTime || ''); setRemindEdit(h); }}
+                      accessibilityLabel={h.remindTime ? 'Reminder at ' + h.remindTime : 'Set a reminder'}
                     />
                     {/* re-run the scheduler after the delete, or the habit's daily
                         reminder keeps firing for a habit that no longer exists */}
                     <IconBtn
                       name="trash-outline" size={18}
                       onPress={async () => { removeHabit(h.id); await rescheduleAllReminders(); }}
+                      accessibilityLabel={'Delete ' + h.title}
                     />
                   </ListRow>
                 );
@@ -303,7 +305,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <Row key={name} style={{ paddingVertical: 8 }}>
             <Text style={[T.body, { flex: 1 }]}>{name}</Text>
             <PillButton small label="Apply" onPress={() => { applyTemplate(name); setTplSheet(false); }} style={{ marginRight: 8 }} />
-            <IconBtn name="trash-outline" size={18} onPress={() => deleteTemplate(name)} />
+            <IconBtn name="trash-outline" size={18} onPress={() => deleteTemplate(name)} accessibilityLabel={'Delete template ' + name} />
           </Row>
         ))}
         <Row style={{ marginTop: 10 }}>

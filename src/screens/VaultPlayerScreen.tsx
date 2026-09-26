@@ -117,7 +117,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <Text style={[T.body, { flex: 1, marginLeft: 10, fontSize: 14 }]}>
             {isBookmark ? (item as Bookmark).label : (item as TimedNote).text}
           </Text>
-          <IconBtn name="ellipsis-vertical" size={16} onPress={() => setMenu({ item, isBookmark })} />
+          <IconBtn name="ellipsis-vertical" size={16} onPress={() => setMenu({ item, isBookmark })} accessibilityLabel="More" />
         </Row>
       </Card>
     </Enter>
@@ -197,7 +197,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <NeuHeader title={video.folderId ? folders.find((f) => f.id === video.folderId)?.name || 'YT Vault' : 'YT Vault'} />
       </View>
       <ScrollView
-        onLayout={(e) => { if (wide) setAreaW(e.nativeEvent.layout.width); }}
+        onLayout={(e) => { const w = e.nativeEvent.layout.width; if (Math.abs(w - areaW) > 0.5) setAreaW(w); }}
         contentContainerStyle={{ paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
       >
         {twoCol ? (

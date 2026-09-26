@@ -196,6 +196,33 @@ const scenarios = {
     assert.equal(st().learnings.length, 2, 'and brings them back');
   },
 
+  async 'damaged tags and learnings from an old save or a backup never reach a screen'() {
+    const saved = {
+      ...V4,
+      scores: [{ id: 'e', parentId: null, kind: 'exam', title: 'E', tags: ['t1', 'ghost', 7], createdAt: 1, updatedAt: 1 }],
+      scoreTags: [
+        { id: 't1', label: 'Careless', color: '#E39EAC', createdAt: 1 },
+        { id: 't2', label: ' careless ', color: 'red', createdAt: 2 },
+        'junk', null, { id: 't3', label: 42 },
+      ],
+      learnings: [
+        { id: 'l1', nodeId: 'e', text: 'Keep', tags: ['t1', 'ghost'], createdAt: 1, updatedAt: 1 },
+        { id: 'l2', nodeId: 'nowhere', text: 'Orphan', tags: [], createdAt: 1, updatedAt: 1 },
+        { id: 'l3', nodeId: 'e', text: '   ', tags: [], createdAt: 1, updatedAt: 1 },
+        { nodeId: 'e', text: 'No id' },
+      ],
+    };
+    for (const version of [4, 5]) {
+      const app = boot({ [KEY]: JSON.stringify({ state: saved, version }) });
+      await settled(app);
+      const st = app.state();
+      assert.deepEqual(st.scoreTags.map((t) => t.id), ['t1'], 'v' + version + ': one tag per name, junk dropped');
+      assert.deepEqual(st.scores[0].tags, ['t1'], 'v' + version + ': unknown tag ids leave the exam');
+      assert.deepEqual(st.learnings.map((l) => l.id), ['l1'], 'v' + version + ': orphan, empty and id-less learnings dropped');
+      assert.deepEqual(st.learnings[0].tags, ['t1']);
+    }
+  },
+
   async 'a v4 blob upgrades through the real persist migration'() {
     const app = boot({ [KEY]: JSON.stringify({ state: V4, version: 4 }) });
     await settled(app);

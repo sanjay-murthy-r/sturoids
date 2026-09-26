@@ -44,11 +44,11 @@ function fitSize(big: string, sec: string, base: number, availW: number) {
 }
 
 /** The time, its progress rule and the times under it: the only part of the plate that renders each second. */
-function SlabClock({ timer, base, availW, startedAt, finishAt, hour24, clockStyle }: {
+function SlabClock({ timer, base, availW, startedAt, finishAt, hour24, clockStyle, hold }: {
   timer: TimerState; base: number; availW: number; startedAt: number | null; finishAt: number | null;
-  hour24: boolean; clockStyle?: any;
+  hour24: boolean; clockStyle?: any; hold?: boolean;
 }) {
-  useSessionTick(timer);
+  useSessionTick(timer, hold);
   const level = useAnimLevel();
   const [big, sec] = splitClock(shownSecondsOf(timer));
   const size = fitSize(big, sec, base, availW);
@@ -106,7 +106,7 @@ export interface StageTask { title: string; color: string }
  */
 export function SessionStage({
   timer, subject, startedAt, finishAt, hour24, current,
-  onSubject, onToggle, onEnd, onAmbient, onAddFive, onFinishLine, onTickCurrent, clockStyle,
+  onSubject, onToggle, onEnd, onAmbient, onAddFive, onFinishLine, onTickCurrent, clockStyle, hold,
 }: {
   timer: TimerState;
   subject: string;
@@ -124,6 +124,8 @@ export function SessionStage({
   onTickCurrent: () => void;
   /** the completion pulse, on the time */
   clockStyle?: any;
+  /** the ambient screen covers the plate: its clock rests until it is seen again */
+  hold?: boolean;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
@@ -164,7 +166,7 @@ export function SessionStage({
 
         <SlabClock
           timer={timer} base={base} availW={innerW} startedAt={startedAt} finishAt={finishAt} hour24={hour24}
-          clockStyle={clockStyle}
+          clockStyle={clockStyle} hold={hold}
         />
 
         <View style={st.dock}>

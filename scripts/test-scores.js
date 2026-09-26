@@ -214,6 +214,40 @@ const checks = {
     assert.equal(use.get('t3'), 2);
     assert.notEqual(S.nextTagColor([{ color: S.TAG_COLORS[0] }]), S.TAG_COLORS[0], 'a new tag takes a free colour');
   },
+  'the lists are tied together: dead tags leave exams, orphan learnings leave the notebook'() {
+    const tags = [{ id: 't1', label: 'Kept', color: '#9AD6B0', createdAt: 1 }];
+    const nodes = [
+      { id: 'e', parentId: null, kind: 'exam', title: 'E', tags: ['t1', 'ghost'], createdAt: 1, updatedAt: 1 },
+      { id: 'f', parentId: null, kind: 'exam', title: 'F', tags: ['ghost'], createdAt: 1, updatedAt: 1 },
+      { id: 'g', parentId: null, kind: 'exam', title: 'G', createdAt: 1, updatedAt: 1 },
+    ];
+    const learnings = [
+      { id: 'l1', nodeId: 'e', text: 'Stays', tags: [], createdAt: 1, updatedAt: 1 },
+      { id: 'l2', nodeId: 'gone', text: 'Orphan', tags: [], createdAt: 1, updatedAt: 1 },
+    ];
+    const out = S.pruneScoreRefs(nodes, tags, learnings);
+    assert.deepEqual(out.nodes[0].tags, ['t1'], 'a tag that no longer exists leaves the exam');
+    assert.ok(!('tags' in out.nodes[1]), 'no tags left means no tags key');
+    assert.equal(out.nodes[2], nodes[2], 'an untouched node is the same object');
+    assert.deepEqual(out.learnings.map((l) => l.id), ['l1'], 'a learning whose exam is gone is dropped');
+    const again = S.pruneScoreRefs(out.nodes, tags, out.learnings);
+    assert.equal(again.learnings, out.learnings, 'a second pass changes nothing');
+  },
+
+  'a duplicate keeps what kind of paper it is, not how the last attempt went'() {
+    const nodes = [
+      { id: 'm', parentId: null, kind: 'exam', title: 'Mock 7', tags: ['full'], score: 50, outOf: 100, createdAt: 1, updatedAt: 1 },
+      { id: 'p', parentId: 'm', kind: 'exam', title: 'Physics', tags: ['careless'], score: 20, outOf: 50, createdAt: 1, updatedAt: 1 },
+    ];
+    let n = 0;
+    const copy = S.duplicateStructure(nodes, 'm', 5, () => 'c' + ++n);
+    const root = copy.nodes.find((x) => x.id === copy.rootId);
+    const sub = copy.nodes.find((x) => x.id !== copy.rootId);
+    assert.equal(root.title, 'Mock 8');
+    assert.deepEqual(root.tags, ['full'], "the exam's own tags carry over");
+    assert.ok(!('tags' in sub), "a subject's tags start blank, like its marks");
+    assert.ok(!('score' in root) && !('score' in sub), 'no marks');
+  },
 };
 
 let failed = 0;

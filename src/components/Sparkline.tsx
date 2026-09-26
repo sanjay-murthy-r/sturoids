@@ -14,7 +14,9 @@ export function Sparkline({ values, target, height = 56, color }: {
 }) {
   const [w, setW] = React.useState(0);
   const c = color || C.accent;
-  const all = target != null ? [...values, target] : values;
+  // an empty series draws nothing, and never works out its bounds from Infinity
+  const all = (target != null ? [...values, target] : values).filter((v) => Number.isFinite(v));
+  if (!all.length) return null;
   let lo = Math.min(...all);
   let hi = Math.max(...all);
   if (hi - lo < 10) {

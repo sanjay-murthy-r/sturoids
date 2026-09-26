@@ -41,7 +41,7 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
       style={[st.card, surface]}
     >
       <View style={st.head}>
-        <Text style={st.title}>{title}</Text>
+        <Text style={[st.title, { flex: 1, marginRight: 12 }]} numberOfLines={1}>{title}</Text>
         <Pressable onPress={skip ? onSkip : onDone} hitSlop={10} accessibilityRole="button">
           <Text style={[st.action, { color: skip ? C.textDim : C.gold }]}>{skip ? 'Skip' : 'Done'}</Text>
         </Pressable>
@@ -57,6 +57,8 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
               scaleTo={0.92}
               radius={14}
               style={[st.mood, on && { backgroundColor: C.gold + '24' }]}
+              accessibilityRole="button"
+              accessibilityLabel={m.label + (on ? ', picked' : '')}
             >
               <Ionicons name={m.icon as any} size={22} color={on ? C.gold : C.textDim} />
               <Text style={[st.moodLabel, on && { color: C.gold, fontFamily: F.semi }]}>{m.label}</Text>
@@ -76,6 +78,8 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
                 hitSlop={4}
                 onPress={() => { tick(); onRating(rating === n ? undefined : (n as Scale)); }}
                 accessibilityLabel={n + (n === 1 ? ' star' : ' stars')}
+                accessibilityRole="button"
+                accessibilityState={{ selected: rating === n }}
                 style={st.star}
               >
                 <Ionicons name={lit ? 'star' : 'star-outline'} size={24} color={lit ? C.gold : C.textFaint} />

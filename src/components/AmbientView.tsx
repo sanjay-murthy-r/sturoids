@@ -94,10 +94,13 @@ function useMinuteTick(on: boolean) {
   }, [on]);
 }
 
-/** The large part and the small part: "40" and ":59", or "1:05" and ":12"; whole minutes alone without seconds. */
-function parts(secs: number, withSeconds: boolean): [string, string] {
+/**
+ * The large part and the small part: "40" and ":59", or "1:05" and ":12"; whole minutes alone without seconds, rounded
+ * the way the clock itself rounds: up for a countdown (it reads 50 until it has really begun), down for a stopwatch.
+ */
+function parts(secs: number, withSeconds: boolean, countdown: boolean): [string, string] {
   if (!withSeconds) {
-    const mins = Math.ceil(secs / 60);
+    const mins = countdown ? Math.ceil(secs / 60) : Math.floor(secs / 60);
     const h = Math.floor(mins / 60);
     return [h ? h + ':' + pad2(mins % 60) : String(mins), ''];
   }
@@ -121,7 +124,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
 
   const u = Math.min(width, height);
   const secs = shownSecondsOf(timer);
-  const [big, sec] = parts(secs, withSeconds);
+  const [big, sec] = parts(secs, withSeconds, timer.mode === 'countdown');
   // whole minutes under an hour carry "min"; "1:05" reads as hours and minutes on its own
   const unit = !withSeconds && !big.includes(':');
 

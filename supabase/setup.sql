@@ -1,4 +1,4 @@
--- Sturoids cloud backup. Run once in the Supabase SQL Editor of your project.
+-- Sturoids cloud backup. Run it in the Supabase SQL Editor of your project; running it again later is safe.
 -- Every user can only ever see and change their own backup.
 
 -- Attachments (photos, videos, files), at most 20 MB each, in a private bucket.
@@ -7,19 +7,23 @@ values ('backups', 'backups', false, 20971520)
 on conflict (id) do update set public = false, file_size_limit = 20971520;
 
 -- Files live under a folder named after the user's id: <user id>/att/<attachment id>.
+drop policy if exists "backups: read own files" on storage.objects;
 create policy "backups: read own files" on storage.objects
   for select to authenticated
   using (bucket_id = 'backups' and (storage.foldername(name))[1] = (select auth.uid())::text);
 
+drop policy if exists "backups: add own files" on storage.objects;
 create policy "backups: add own files" on storage.objects
   for insert to authenticated
   with check (bucket_id = 'backups' and (storage.foldername(name))[1] = (select auth.uid())::text);
 
+drop policy if exists "backups: replace own files" on storage.objects;
 create policy "backups: replace own files" on storage.objects
   for update to authenticated
   using (bucket_id = 'backups' and (storage.foldername(name))[1] = (select auth.uid())::text)
   with check (bucket_id = 'backups' and (storage.foldername(name))[1] = (select auth.uid())::text);
 
+drop policy if exists "backups: delete own files" on storage.objects;
 create policy "backups: delete own files" on storage.objects
   for delete to authenticated
   using (bucket_id = 'backups' and (storage.foldername(name))[1] = (select auth.uid())::text);
@@ -38,6 +42,7 @@ create table if not exists public.backups (
 
 alter table public.backups enable row level security;
 
+drop policy if exists "backups: own row" on public.backups;
 create policy "backups: own row" on public.backups
   for all to authenticated
   using ((select auth.uid()) = user_id)

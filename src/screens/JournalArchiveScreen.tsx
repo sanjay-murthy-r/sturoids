@@ -245,7 +245,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     <ScreenBG>
       <NeuHeader
         title="Journal"
-        right={<IconBtn name={stats ? 'stats-chart' : 'stats-chart-outline'} color={stats ? C.gold : C.textDim} onPress={() => setStats(!stats)} />}
+        right={<IconBtn name={stats ? 'stats-chart' : 'stats-chart-outline'} color={stats ? C.gold : C.textDim} onPress={() => setStats(!stats)} accessibilityLabel={stats ? 'Hide stats' : 'Show stats'} />}
       />
       <SectionList
         sections={sections}

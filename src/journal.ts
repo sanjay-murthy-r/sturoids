@@ -220,6 +220,20 @@ export const MOODS: { value: 1 | 2 | 3 | 4 | 5; label: string; icon: string }[] 
 
 // ---------- archive ----------
 
+/** The average rating of a day, averaged over days: a day with two rated entries counts once, at their mean. */
+function averagePerDay(rated: JournalEntry[]): number | null {
+  if (!rated.length) return null;
+  const byDay = new Map<string, number[]>();
+  for (const e of rated) {
+    const list = byDay.get(e.dateKey);
+    if (list) list.push(e.rating as number);
+    else byDay.set(e.dateKey, [e.rating as number]);
+  }
+  let sum = 0;
+  for (const list of byDay.values()) sum += list.reduce((a, r) => a + r, 0) / list.length;
+  return sum / byDay.size;
+}
+
 export function journalStats(entries: JournalEntry[]) {
   const days = [...new Set(entries.map((e) => e.dateKey))];
   const { current, best } = streaks(days);
@@ -232,7 +246,7 @@ export function journalStats(entries: JournalEntry[]) {
     best,
     /** days with at least one rated entry */
     ratedDays: new Set(rated.map((e) => e.dateKey)).size,
-    avgRating: rated.length ? rated.reduce((a, e) => a + (e.rating as number), 0) / rated.length : null,
+    avgRating: averagePerDay(rated),
   };
 }
 

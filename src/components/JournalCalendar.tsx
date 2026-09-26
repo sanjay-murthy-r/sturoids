@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, T } from '../theme';
 import { NeuIconBtn, useTheme } from './UI';
@@ -7,6 +7,7 @@ import { Bouncy, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
 import { keyToDate } from '../journal';
 import { todayKey } from '../utils';
+import { WIDE_AT } from '../layout';
 
 const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 const CELL = 40;
@@ -21,6 +22,7 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
 }) {
   useTheme(); // repaints on a new accent: the ring and the picked day read it
   const level = useAnimLevel();
+  const wideWin = useWindowDimensions().width >= WIDE_AT;
   const start = keyToDate(value || todayKey());
   const [ym, setYm] = React.useState({ y: start.getFullYear(), m: start.getMonth() });
   React.useEffect(() => {
@@ -59,13 +61,14 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
   while (cells.length % 7) cells.push(null);
 
   return (
-    <View style={st.root}>
+    <View style={wideWin ? st.root : undefined}>
       <View style={st.head}>
         <NeuIconBtn
           name="chevron-back" dim={36} size={17}
           color={atEarliestMonth ? C.textFaint : C.textDim}
           style={atEarliestMonth ? { opacity: 0.4 } : undefined}
           onPress={() => shift(-1)}
+          accessibilityLabel="Previous month"
         />
         <Animated.Text style={[T.title, { flex: 1, textAlign: 'center' }, monthStyle]}>
           {first.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
@@ -75,6 +78,7 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
           color={atLatestMonth ? C.textFaint : C.textDim}
           style={atLatestMonth ? { opacity: 0.4 } : undefined}
           onPress={() => shift(1)}
+          accessibilityLabel="Next month"
         />
       </View>
 
@@ -122,7 +126,7 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
 }
 
 const st = StyleSheet.create({
-  /** a month keeps a phone's proportions in a wide sheet */
+  /** a month keeps a phone's proportions in a wide sheet (a phone's month spans its sheet as it always has) */
   root: { width: '100%', maxWidth: 420, alignSelf: 'center' },
   head: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   row: { flexDirection: 'row' },

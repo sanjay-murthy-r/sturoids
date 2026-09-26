@@ -20,11 +20,14 @@ export const shownSecondsOf = (t: TimerState) => (t.mode === 'countdown' ? Math.
 export const COUNTDOWN_NOTIF_ID = 'sturoids-countdown-end';
 export const FINISH_NOTIF_ID = 'sturoids-finish-line';
 
-/** Re-renders its caller once per displayed second, aligned to the session's own second boundary. */
-export function useSessionTick(t: TimerState) {
+/**
+ * Re-renders its caller once per displayed second, aligned to the session's own second boundary. `hold` stops it for a
+ * clock nobody can see (the plate under the ambient screen); it shows the right time again the moment it is let go.
+ */
+export function useSessionTick(t: TimerState, hold = false) {
   const [, setN] = useState(0);
   useEffect(() => {
-    if (!t.running || !t.startTs) return undefined;
+    if (hold || !t.running || !t.startTs) return undefined;
     const anchor = t.startTs - t.accumSec * 1000;
     let iv: ReturnType<typeof setInterval> | undefined;
     const first = setTimeout(() => {
@@ -35,5 +38,5 @@ export function useSessionTick(t: TimerState) {
       clearTimeout(first);
       if (iv) clearInterval(iv);
     };
-  }, [t.running, t.startTs, t.accumSec]);
+  }, [t.running, t.startTs, t.accumSec, hold]);
 }

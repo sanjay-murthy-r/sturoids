@@ -26,7 +26,7 @@ import { journalDayFor } from '../../src/journal';
 import { indexScores, upcoming, groupSummary, fmtPct, fromToday } from '../../src/scores';
 import { appListAvailable, getInstalledApps, InstalledApp } from '../../modules/app-list';
 import { useNow } from '../../src/hooks/useNow';
-import { TWO_COL_AT, WIDE_AT, WIDE_MAX } from '../../src/layout';
+import { TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth } from '../../src/layout';
 
 // what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
 const NO_SESSIONS: FocusSession[] = [];
@@ -69,7 +69,11 @@ export default function Today() {
   const [installed, setInstalled] = useState<InstalledApp[]>([]);
   const [appsLoaded, setAppsLoaded] = useState(false);
   const [customLabel, setCustomLabel] = useState('');
-  const [areaW, setAreaW] = useState(0);
+  // the day's column, known ahead on a wide window (so two columns appear on the first frame), then measured
+  const { width: dayWinW } = useWindowDimensions();
+  const [areaW, setAreaW] = useState(() => columnWidth(dayWinW, true, WIDE_MAX));
+  // the quick-access grid is laid out before the list decides the columns, so it estimates with the same width rule
+  const twoColEst = areaW >= TWO_COL_AT;
   const now = useNow();
 
   const today = todayKey();
@@ -378,6 +382,7 @@ export default function Today() {
             onRemove={removeQuick}
             onReorder={reorderQuick}
             onAdd={openQaAdd}
+            estimateW={twoColEst ? (areaW - S.pad * 2 - 28) / 2 : areaW - S.pad * 2}
           />
         </Enter>
       </>
@@ -780,7 +785,7 @@ function QuickTile({ q, meta, index, rect, wide, rects, isDragging, onDragState,
               exiting={level === 'none' ? undefined : ZoomOut.duration(140)}
               style={st.qaX}
             >
-              <IconBtn name="close-circle" size={18} color={C.danger} pad={4} onPress={() => onRemove(q.id)} />
+              <IconBtn name="close-circle" size={18} color={C.danger} pad={4} onPress={() => onRemove(q.id)} accessibilityLabel={'Remove ' + q.label} />
             </Animated.View>
           ) : null}
         </Animated.View>
@@ -814,15 +819,17 @@ const TodayList = React.memo(function TodayList({ items, onToggleDaily, onToggle
   );
 });
 
-const QuickGrid = React.memo(function QuickGrid({ items, metas, edit, onRun, onRemove, onReorder, onAdd }: {
+const QuickGrid = React.memo(function QuickGrid({ items, metas, edit, onRun, onRemove, onReorder, onAdd, estimateW }: {
   items: QuickItem[]; metas: Record<string, string | null>; edit: boolean; onRun: (q: QuickItem) => void;
   onRemove: (id: string) => void; onReorder: (items: QuickItem[]) => void; onAdd: () => void;
+  /** the grid's width before it has measured itself: its column of Today */
+  estimateW?: number;
 }) {
   const { width: winW } = useWindowDimensions();
   const level = useAnimLevel();
   // the grid measures its own room (a column of Today on a wide window); until it has, it assumes the phone's
   const [boxW, setBoxW] = useState(0);
-  const avail = boxW || winW - S.pad * 2;
+  const avail = boxW || estimateW || winW - S.pad * 2;
   // a phone always has four columns; a wide window fits as many as keep the tiles in a phone's proportions
   const cols = winW >= WIDE_AT ? Math.max(QA_COLS, Math.floor((avail + QA_GAP) / (QA_MIN_W + QA_GAP))) : QA_COLS;
   const colW = (avail - QA_GAP * (cols - 1)) / cols;

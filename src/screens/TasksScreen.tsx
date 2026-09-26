@@ -119,6 +119,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
       name={settings.todoReminderEnabled || todoReminders.length ? 'notifications' : 'notifications-outline'}
       color={settings.todoReminderEnabled ? C.accent : C.textDim} size={24}
       onPress={() => { setSetupTime(settings.todoReminderTime); setRemindSheet(true); }}
+      accessibilityLabel="Reminders"
     />
   );
 
@@ -181,7 +182,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                     <ListRow key={t.id} style={{ paddingVertical: 10 }}>
                       <CheckCircle done={done} onPress={() => toggleDaily(t.id)} />
                       <StrikeText done={done} style={st.taskText} wrapStyle={st.taskWrap}>{t.title}</StrikeText>
-                      <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(t.title, () => removeDaily(t.id))} />
+                      <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(t.title, () => removeDaily(t.id))} accessibilityLabel={'Delete ' + t.title} />
                     </ListRow>
                   );
                 })}
@@ -217,7 +218,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                         <View style={[st.pill, { borderColor: pillColor + '55', backgroundColor: pillColor + '18' }]}>
                           <Text style={{ color: pillColor, fontSize: 11, fontFamily: F.semi, letterSpacing: 0.8 }}>{pillText}</Text>
                         </View>
-                        <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(m.title, () => removeMission(m.id))} />
+                        <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(m.title, () => removeMission(m.id))} accessibilityLabel={'Delete ' + m.title} />
                       </Row>
 
                       {/* the steps unfold, and the card grows around them */}
@@ -231,7 +232,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                             <Row key={sub.id} style={{ paddingVertical: 5 }}>
                               <CheckCircle done={sub.done} size={20} onPress={() => toggleSubtask(m.id, sub.id)} />
                               <StrikeText done={sub.done} style={st.stepText} wrapStyle={st.stepWrap}>{sub.title}</StrikeText>
-                              <IconBtn name="close" size={16} onPress={() => removeSubtask(m.id, sub.id)} />
+                              <IconBtn name="close" size={16} onPress={() => removeSubtask(m.id, sub.id)} accessibilityLabel={'Remove ' + sub.title} />
                             </Row>
                           ))}
                           <Row style={{ marginTop: 2 }}>
@@ -243,6 +244,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                             <IconBtn
                               name="add-circle" color={C.accent} size={28} style={{ marginLeft: 6 }}
                               onPress={() => { if (subDraft.trim()) { addSubtask(m.id, subDraft.trim()); setSubDraft(''); } }}
+                              accessibilityLabel="Add this step"
                             />
                           </Row>
                         </Animated.View>
@@ -308,7 +310,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <Row key={r.id} style={{ paddingVertical: 6 }}>
             <Text style={[T.body, { width: 62, fontVariant: ['tabular-nums'], color: C.accent }]}>{r.time}</Text>
             <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{r.label || 'ToDo check-in'}</Text>
-            <IconBtn name="close" size={17} onPress={async () => { removeTodoReminder(r.id); await applyReminders(); }} />
+            <IconBtn name="close" size={17} onPress={async () => { removeTodoReminder(r.id); await applyReminders(); }} accessibilityLabel={'Remove the reminder at ' + r.time} />
           </Row>
         ))}
         <Row style={{ marginTop: 4 }}>

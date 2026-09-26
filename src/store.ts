@@ -7,7 +7,7 @@ import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
 import { ToolKey, DEFAULT_SLOTS, DEFAULT_ARCHIVED, ROUTE_TO_TOOL, TOOLS, normaliseSlots, normaliseArchived, toolByKey } from './tools';
 import {
   ScoreNode, ScoreTag, Learning, sanitizeScores, sanitizeTags, sanitizeLearnings, indexScores, descendantIds,
-  canMove, duplicateStructure, nextTagColor, sameTagName,
+  canMove, duplicateStructure, nextTagColor, sameTagName, pruneScoreRefs,
 } from './scores';
 
 // ---------- types ----------
@@ -326,7 +326,7 @@ export interface AppState {
 
   addScoreNode: (n: Omit<ScoreNode, 'id' | 'createdAt' | 'updatedAt'>) => string;
   /** a field set to undefined in the patch is removed */
-  patchScoreNode: (id: string, patch: Partial<Omit<ScoreNode, 'id' | 'createdAt'>>) => void;
+  patchScoreNode: (id: string, patch: Partial<Omit<ScoreNode, 'id' | 'createdAt' | 'parentId' | 'kind'>>) => void;
   /** false when the move is not allowed (a group into an exam, or anything into itself) */
   moveScoreNode: (id: string, parentId: string | null) => boolean;
   /** removes the node, everything under it and their learnings, and returns them so an Undo can put them back */
@@ -545,7 +545,9 @@ export function migrateV5(p: any): any {
   out.journalTags = list(p?.journalTags).filter((t) => typeof t === 'string');
   out.scores = sanitizeScores(p?.scores);
   out.scoreTags = sanitizeTags(p?.scoreTags);
-  out.learnings = sanitizeLearnings(p?.learnings, out.scoreTags);
+  const tied = pruneScoreRefs(out.scores, out.scoreTags, sanitizeLearnings(p?.learnings, out.scoreTags));
+  out.scores = tied.nodes;
+  out.learnings = tied.learnings;
   return out;
 }
 
@@ -902,7 +904,13 @@ export const useStore = create<AppState>()(
       addScoreNode: (n) => {
         const id = uid();
         const now = Date.now();
-        set((s) => ({ scores: [...s.scores, withoutUndefined({ ...n, id, createdAt: now, updatedAt: now }) as ScoreNode] }));
+        set((s) => {
+          // a parent that has gone, or a group asked to live inside an exam, puts the new node at the top level
+          // instead: what was typed is never lost, and the tree never takes a shape the screens cannot show
+          const parent = n.parentId ? s.scores.find((x) => x.id === n.parentId) : undefined;
+          const parentId = parent && !(n.kind === 'group' && parent.kind === 'exam') ? parent.id : null;
+          return { scores: [...s.scores, withoutUndefined({ ...n, parentId, id, createdAt: now, updatedAt: now }) as ScoreNode] };
+        });
         return id;
       },
       patchScoreNode: (id, patch) =>
@@ -1038,7 +1046,9 @@ export const useStore = create<AppState>()(
         // damaged after that (a bad import, a half-written save) can never reach a screen
         merged.scores = sanitizeScores(merged.scores);
         merged.scoreTags = sanitizeTags(merged.scoreTags);
-        merged.learnings = sanitizeLearnings(merged.learnings, merged.scoreTags);
+        const tied = pruneScoreRefs(merged.scores, merged.scoreTags, sanitizeLearnings(merged.learnings, merged.scoreTags));
+        merged.scores = tied.nodes;
+        merged.learnings = tied.learnings;
         return merged;
       },
       // zustand reports a load that throws only here and never marks the store hydrated

@@ -192,7 +192,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
           {v.tags.length ? ' · ' + v.tags.map((t) => '#' + t).join(' ') : ''}
         </Text>
       </View>
-      <IconBtn name="ellipsis-vertical" size={17} onPress={() => setVideoMenu(v)} />
+      <IconBtn name="ellipsis-vertical" size={17} onPress={() => setVideoMenu(v)} accessibilityLabel={'More for ' + v.title} />
     </ListRow>
   );
 
@@ -214,8 +214,8 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 autoCapitalize="none" style={{ flex: 1, marginBottom: 0 }}
                 onSubmitEditing={() => { if (!adding && url.trim()) submit(url); }}
               />
-              <IconBtn name="clipboard-outline" color={C.pink} size={22} style={{ marginLeft: 4 }} onPress={paste} />
-              <NeuIconBtn name="add" color={adding ? C.textFaint : C.pink} dim={40} onPress={() => { if (!adding && url.trim()) submit(url); }} />
+              <IconBtn name="clipboard-outline" color={C.pink} size={22} style={{ marginLeft: 4 }} onPress={paste} accessibilityLabel="Paste a link" />
+              <NeuIconBtn name="add" color={adding ? C.textFaint : C.pink} dim={40} onPress={() => { if (!adding && url.trim()) submit(url); }} accessibilityLabel="Add video" />
             </Row>
             {adding && <Text style={[T.caption, { marginTop: 6 }]}>Fetching title…</Text>}
           </Card>
@@ -268,7 +268,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
                         <Ionicons name="folder" size={22} color={C.amber} />
                         <Text style={[T.title, { flex: 1, marginLeft: 12, fontSize: 15 }]} numberOfLines={1}>{f.name}</Text>
                         <Text style={T.caption}>{count}</Text>
-                        <IconBtn name="ellipsis-vertical" size={16} onPress={() => setFolderMenu(f)} />
+                        <IconBtn name="ellipsis-vertical" size={16} onPress={() => setFolderMenu(f)} accessibilityLabel={'More for ' + f.name} />
                       </ListRow>
                     );
                   })}
@@ -325,7 +325,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
                     </Text>
                     <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{x.video.title}</Text>
                   </View>
-                  <IconBtn name="ellipsis-vertical" size={17} onPress={() => setNoteMenu(x)} />
+                  <IconBtn name="ellipsis-vertical" size={17} onPress={() => setNoteMenu(x)} accessibilityLabel="More" />
                 </ListRow>
               </ListSlice>
             )}

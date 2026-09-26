@@ -335,12 +335,12 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         right={
           <Row>
             <IconBtn name={note.locked ? 'lock-closed' : 'lock-open-outline'} size={20} pad={6} color={note.locked ? C.gold : C.textDim}
-              onPress={toggleLock} />
+              onPress={toggleLock} accessibilityLabel={note.locked ? 'Unlock note' : 'Lock note'} />
             <IconBtn name={note.pinned ? 'pin' : 'pin-outline'} size={20} pad={6} color={note.pinned ? C.gold : C.textDim}
-              onPress={() => updateNote(note.id, { pinned: !note.pinned })} />
-            <IconBtn name="folder-outline" size={20} pad={6} onPress={() => setFolderSheet(true)} />
+              onPress={() => updateNote(note.id, { pinned: !note.pinned })} accessibilityLabel={note.pinned ? 'Unpin note' : 'Pin note'} />
+            <IconBtn name="folder-outline" size={20} pad={6} onPress={() => setFolderSheet(true)} accessibilityLabel="Move to folder" />
             {!note.locked && (
-              <IconBtn name="share-outline" size={20} pad={6} onPress={() => Share.share({ message: note.title + '\n\n' + note.body })} />
+              <IconBtn name="share-outline" size={20} pad={6} onPress={() => Share.share({ message: note.title + '\n\n' + note.body })} accessibilityLabel="Share note" />
             )}
             <IconBtn name="trash-outline" size={20} pad={6} color={C.danger}
               onPress={() =>
@@ -348,7 +348,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
                   { text: 'Cancel', style: 'cancel' },
                   { text: 'Delete', style: 'destructive', onPress: () => { deleteAttachmentFiles(deleteNote(note.id)); router.back(); } },
                 ])
-              } />
+              } accessibilityLabel="Delete note" />
           </Row>
         }
       />
@@ -390,6 +390,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
                   name="close-circle" size={20} color={C.danger}
                   style={{ position: 'absolute', top: -6, right: -6 }}
                   onPress={() => deleteAttachmentFiles(removeAttachment(note.id, a.id))}
+                  accessibilityLabel="Remove attachment"
                 />
               </View>
             ))}
@@ -427,18 +428,18 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       {/* editor toolbar */}
       <View style={[st.toolbar, { paddingBottom: 9 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: undefined }]}>
         <MicButton listening={listening} onPress={toggleVoice} />
-        <IconBtn name="ellipse-outline" size={20} pad={6} onPress={() => prefixLine('•  ')} />
-        <IconBtn name="checkbox-outline" size={20} pad={6} onPress={() => prefixLine('☐  ')} />
-        <IconBtn name="checkmark-done-outline" size={20} pad={6} onPress={() => setLineSheet(true)} />
+        <IconBtn name="ellipse-outline" size={20} pad={6} onPress={() => prefixLine('•  ')} accessibilityLabel="Bullet" />
+        <IconBtn name="checkbox-outline" size={20} pad={6} onPress={() => prefixLine('☐  ')} accessibilityLabel="Checkbox" />
+        <IconBtn name="checkmark-done-outline" size={20} pad={6} onPress={() => setLineSheet(true)} accessibilityLabel="Promote a line to a task" />
         <View style={{ flex: 1 }} />
         {narrow ? (
-          <NeuIconBtn name="ellipsis-horizontal" dim={40} size={19} color={C.textDim} onPress={() => setToolMenu(true)} />
+          <NeuIconBtn name="ellipsis-horizontal" dim={40} size={19} color={C.textDim} onPress={() => setToolMenu(true)} accessibilityLabel="More tools" />
         ) : (
           <>
-            <NeuIconBtn name="image-outline" dim={40} size={19} color={C.accent} onPress={pickMedia} />
-            <NeuIconBtn name="attach-outline" dim={40} size={19} color={C.accent} onPress={pickFile} />
-            <IconBtn name="arrow-undo-outline" size={20} pad={6} onPress={undo} />
-            <IconBtn name="arrow-redo-outline" size={20} pad={6} onPress={redo} />
+            <NeuIconBtn name="image-outline" dim={40} size={19} color={C.accent} onPress={pickMedia} accessibilityLabel="Add a photo or video" />
+            <NeuIconBtn name="attach-outline" dim={40} size={19} color={C.accent} onPress={pickFile} accessibilityLabel="Attach a file" />
+            <IconBtn name="arrow-undo-outline" size={20} pad={6} onPress={undo} accessibilityLabel="Undo" />
+            <IconBtn name="arrow-redo-outline" size={20} pad={6} onPress={redo} accessibilityLabel="Redo" />
           </>
         )}
       </View>

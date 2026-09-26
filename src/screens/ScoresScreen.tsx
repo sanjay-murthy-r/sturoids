@@ -12,12 +12,12 @@ import {
 import { todayKey } from '../utils';
 import {
   ScreenBG, Card, SectionTitle, EmptyState, ListCard, ListRow, NeuHeader, NeuIconBtn, DotMenu, Sheet, Hairline,
-  PillButton, Chip, useTheme,
+  PillButton, Chip, Field, useTheme,
 } from '../components/UI';
 import { Bouncy, Enter, useFocusKey } from '../components/Motion';
 import { Sparkline } from '../components/Sparkline';
 import { ScoreEditor, ScoreEditTarget } from '../components/ScoreEditor';
-import { TagRow, TagManagerSheet } from '../components/ScoreTags';
+import { TagDots, TagRow, TagManagerSheet } from '../components/ScoreTags';
 import { LearningSheet, LearningTarget } from '../components/LearningSheet';
 import { toast } from '../components/Toast';
 import { tap, tick } from '../haptics';
@@ -93,6 +93,13 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [learnMenu, setLearnMenu] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
   const [match, setMatch] = useState<TagMatch>('any');
+  const [find, setFind] = useState('');
+  // a tag deleted in the manager leaves the filter with it, so the notebook never filters by a tag that is gone
+  const tagIds = useStore((s) => s.scoreTags.map((t) => t.id).join(','));
+  useEffect(() => {
+    const live = new Set(tagIds ? tagIds.split(',') : []);
+    setPicked((cur) => (cur.every((id) => live.has(id)) ? cur : cur.filter((id) => live.has(id))));
+  }, [tagIds]);
 
   const here = cwd ? ix.byId.get(cwd) : undefined;
 
@@ -210,7 +217,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 />
               )}
               {here && !notebook ? (
-                <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => openMenu(here)} />
+                <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => openMenu(here)} accessibilityLabel="More" />
               ) : null}
             </View>
           )}
@@ -224,7 +231,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
         >
           {notebook ? (
             <Notebook
-              learnings={learnings} ix={ix} picked={picked} match={match}
+              learnings={learnings} ix={ix} picked={picked} match={match} find={find} onFind={setFind}
               onPick={(id) => { tick(); setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])); }}
               onMatch={() => { tick(); setMatch((m) => (m === 'all' ? 'any' : 'all')); }}
               onClear={() => { tick(); setPicked([]); setMatch('any'); }}
@@ -472,12 +479,22 @@ function ExamRow({ n, ix, today, onOpen, onMenu }: {
   const parts = (ix.children.get(n.id) || []).filter((k) => k.kind === 'exam').length;
   const delta = r ? deltaVsPrevious(n, ix) : null;
   const upcomingDay = !r && n.date && n.date >= today;
-  const caption = [n.date ? fmtExamDate(n.date) : '', parts ? plural(parts, 'subject') : ''].filter(Boolean).join('  ·  ');
+  const learned = useStore((s) => s.learnings.reduce((c, l) => c + (l.nodeId === n.id ? 1 : 0), 0));
+  const caption = [
+    n.date ? fmtExamDate(n.date) : '',
+    parts ? plural(parts, 'subject') : '',
+    learned ? plural(learned, 'learning') : '',
+  ].filter(Boolean).join('  ·  ');
   return (
     <ListRow onPress={() => onOpen(n.id)} onLongPress={() => onMenu(n)} style={{ paddingVertical: 12 }}>
       <View style={{ flex: 1 }}>
         <Text style={st.rowTitle} numberOfLines={1}>{n.title || 'Untitled exam'}</Text>
-        {caption ? <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{caption}</Text> : null}
+        {caption || n.tags?.length ? (
+          <View style={[st.sideRow, { marginTop: 3 }]}>
+            <TagDots ids={n.tags} />
+            <Text style={[T.caption, { flex: 1 }]} numberOfLines={1}>{caption}</Text>
+          </View>
+        ) : null}
       </View>
       {r ? (
         <View style={st.rowRight}>
@@ -608,6 +625,7 @@ function ExamView({
                         sub ? 'has subjects' : '',
                       ].filter(Boolean).join('  ·  ') || ' '}
                     </Text>
+                    <TagRow ids={p.tags} style={{ marginTop: 8, marginBottom: -10 }} />
                   </View>
                 </ListRow>
               );
@@ -674,17 +692,23 @@ function ExamView({
  * Every learning, from every exam, newest first. Picking tags narrows it: by default a learning shows when it carries
  * any of them, and "All tags" keeps only the ones carrying every tag picked, whatever else they carry too.
  */
-function Notebook({ learnings, ix, picked, match, onPick, onMatch, onClear, onOpen, onMenu, onManage }: {
-  learnings: Learning[]; ix: ScoreIndex; picked: string[]; match: TagMatch;
+function Notebook({ learnings, ix, picked, match, find, onFind, onPick, onMatch, onClear, onOpen, onMenu, onManage }: {
+  learnings: Learning[]; ix: ScoreIndex; picked: string[]; match: TagMatch; find: string; onFind: (v: string) => void;
   onPick: (id: string) => void; onMatch: () => void; onClear: () => void;
   onOpen: (l: Learning) => void; onMenu: (l: Learning) => void; onManage: () => void;
 }) {
   const tags = useStore((s) => s.scoreTags);
   const alive = React.useMemo(() => new Set(ix.byId.keys()), [ix]);
-  const shown = React.useMemo(
-    () => filterLearnings(learnings, picked, match, alive),
-    [learnings, picked, match, alive],
-  );
+  // where each learning came from, for its caption and for the search
+  const pathText = React.useCallback((l: Learning) => {
+    const from = ix.byId.get(l.nodeId);
+    return from ? [...pathOf(ix, from.id).map((n) => n.title || 'Untitled'), from.title || 'Untitled'].join('  /  ') : '';
+  }, [ix]);
+  const shown = React.useMemo(() => {
+    const q = find.trim().toLowerCase();
+    const byTags = filterLearnings(learnings, picked, match, alive);
+    return q ? byTags.filter((l) => l.text.toLowerCase().includes(q) || pathText(l).toLowerCase().includes(q)) : byTags;
+  }, [learnings, picked, match, alive, find, pathText]);
   const mine = learnings.filter((l) => alive.has(l.nodeId));
 
   if (!mine.length) {
@@ -699,8 +723,12 @@ function Notebook({ learnings, ix, picked, match, onPick, onMatch, onClear, onOp
 
   return (
     <>
-      {tags.length ? (
-        <Enter index={0}>
+      <Field
+        value={find} onChangeText={onFind} placeholder="Search learnings and exams"
+        autoCapitalize="none" returnKeyType="search" maxLength={80}
+      />
+      <Enter index={0}>
+        {tags.length ? (
           <View style={st.filterRow}>
             {tags.map((t) => (
               <Chip
@@ -709,25 +737,25 @@ function Notebook({ learnings, ix, picked, match, onPick, onMatch, onClear, onOp
               />
             ))}
           </View>
-          <View style={st.filterRow}>
-            {picked.length > 1 ? (
-              <Chip
-                small icon={match === 'all' ? 'checkmark-circle' : 'ellipse-outline'} label="All tags"
-                active={match === 'all'} onPress={onMatch}
-              />
-            ) : null}
-            {picked.length ? <Chip small icon="close" label="Clear" onPress={onClear} /> : null}
-            <Chip small icon="pricetags-outline" label="Manage tags" onPress={onManage} />
-          </View>
+        ) : null}
+        <View style={st.filterRow}>
           {picked.length > 1 ? (
-            <Text style={[T.caption, { marginBottom: 14 }]}>
-              {match === 'all'
-                ? 'Only learnings carrying every tag picked.'
-                : 'Learnings carrying any of the tags picked. Turn on All tags for the ones carrying every one.'}
-            </Text>
+            <Chip
+              small icon={match === 'all' ? 'checkmark-circle' : 'ellipse-outline'} label="All tags"
+              active={match === 'all'} onPress={onMatch}
+            />
           ) : null}
-        </Enter>
-      ) : null}
+          {picked.length ? <Chip small icon="close" label="Clear" onPress={onClear} /> : null}
+          <Chip small icon="pricetags-outline" label={tags.length ? 'Manage tags' : 'Make a tag'} onPress={onManage} />
+        </View>
+        {picked.length > 1 ? (
+          <Text style={[T.caption, { marginBottom: 14 }]}>
+            {match === 'all'
+              ? 'Only learnings carrying every tag picked.'
+              : 'Learnings carrying any of the tags picked. Turn on All tags for the ones carrying every one.'}
+          </Text>
+        ) : null}
+      </Enter>
 
       <Text style={[T.kicker, { marginBottom: 12 }]}>
         {shown.length === mine.length ? plural(mine.length, 'learning') : shown.length + ' of ' + mine.length}
@@ -737,14 +765,13 @@ function Notebook({ learnings, ix, picked, match, onPick, onMatch, onClear, onOp
         <Enter index={1}>
           <ListCard>
             {shown.map((l) => {
-              const from = ix.byId.get(l.nodeId);
-              const path = from ? [...pathOf(ix, from.id).map((n) => n.title || 'Untitled'), from.title || 'Untitled'] : [];
+              const path = pathText(l);
               return (
                 <ListRow key={l.id} onPress={() => onOpen(l)} onLongPress={() => onMenu(l)} style={{ paddingVertical: 12 }}>
                   <View style={{ flex: 1 }}>
                     <Text style={T.body}>{l.text}</Text>
                     <TagRow ids={l.tags} style={{ marginTop: 8, marginBottom: -6 }} />
-                    <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>{path.join('  /  ')}</Text>
+                    <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>{path}</Text>
                   </View>
                 </ListRow>
               );
@@ -753,8 +780,13 @@ function Notebook({ learnings, ix, picked, match, onPick, onMatch, onClear, onOp
         </Enter>
       ) : (
         <EmptyState
-          compact icon="filter-outline" title="Nothing with those tags"
-          body={match === 'all' ? 'No learning carries every tag picked. Turn All tags off to see any of them.' : 'Try another tag.'}
+          compact icon="filter-outline"
+          title={find.trim() && !picked.length ? 'Nothing matches that' : 'Nothing with those tags'}
+          body={find.trim() && !picked.length
+            ? 'Search looks through what each learning says and the exam it came from.'
+            : match === 'all' && picked.length > 1
+              ? 'No learning carries every tag picked. Turn All tags off to see any of them.'
+              : 'Try another tag, or clear the search.'}
         />
       )}
     </>

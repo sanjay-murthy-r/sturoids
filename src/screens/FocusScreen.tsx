@@ -183,6 +183,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setRunning(true);
   };
   const pause = () => {
+    // the block has run out and is wrapping up: pausing now would only stall the wrap-up
+    if (wrapTimer.current) return;
     if (startTs) setAccumSec((a) => a + (Date.now() - startTs) / 1000);
     setRunning(false); setStartTs(null);
   };
@@ -455,6 +457,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             onFinishLine={() => setFinishSheet(true)}
             onTickCurrent={() => { if (currentTask) markAttached(currentTask.key); }}
             clockStyle={pulseStyle}
+            hold={ambient}
           />
         </Animated.View>
       )}
@@ -476,7 +479,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               <Row key={a.key} style={{ paddingVertical: 7, paddingHorizontal: 4 }}>
                 <CheckCircle done={a.done} color={a.kind === 'mission' ? C.amber : C.green} onPress={() => markAttached(a.key)} />
                 <Text style={[st.taskText, a.done && st.taskDone]} numberOfLines={1}>{a.title}</Text>
-                <IconBtn name="close" size={16} onPress={() => setAttached((l) => l.filter((x) => x.key !== a.key))} />
+                <IconBtn name="close" size={16} onPress={() => setAttached((l) => l.filter((x) => x.key !== a.key))} accessibilityLabel={'Take ' + a.title + ' off this session'} />
               </Row>
             ))
           )}
@@ -580,6 +583,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <IconBtn
             name="add-circle" color={C.accent} size={30} style={{ marginLeft: 8, marginTop: 2 }}
             onPress={() => { if (customTask.trim()) { attach('custom', customTask.trim()); setCustomTask(''); } }}
+            accessibilityLabel="Attach this task"
           />
         </Row>
         {pickableDaily.length > 0 && <Text style={st.sheetSection}>Daily</Text>}

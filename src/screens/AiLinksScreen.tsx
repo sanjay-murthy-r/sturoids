@@ -109,10 +109,10 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{domainOf(l.url)}</Text>
                   {edit && (
                     <Row style={{ marginTop: 8 }}>
-                      <IconBtn name="chevron-back" size={18} onPress={() => move(i, -1)} />
-                      <IconBtn name="chevron-forward" size={18} onPress={() => move(i, 1)} />
+                      <IconBtn name="chevron-back" size={18} onPress={() => move(i, -1)} accessibilityLabel={'Move ' + l.label + ' earlier'} />
+                      <IconBtn name="chevron-forward" size={18} onPress={() => move(i, 1)} accessibilityLabel={'Move ' + l.label + ' later'} />
                       <IconBtn name="trash-outline" size={18} color={C.danger}
-                        onPress={() => setAiLinks(aiLinks.filter((x) => x.id !== l.id))} />
+                        onPress={() => setAiLinks(aiLinks.filter((x) => x.id !== l.id))} accessibilityLabel={'Remove ' + l.label} />
                     </Row>
                   )}
                 </View>

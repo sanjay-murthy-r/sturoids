@@ -387,15 +387,15 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     <ScreenBG guard={tabMode}>
       <Animated.View style={[st.head, { paddingTop: insets.top + (tabMode ? 14 : 8) }, headStyle]}>
         <View style={st.side}>
-          {tabMode ? null : <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={() => router.back()} />}
+          {tabMode ? null : <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={() => router.back()} accessibilityLabel="Back" />}
         </View>
         <Bouncy onPress={() => { tick(); setDateSheet(true); }} scaleTo={0.97} radius={14} style={st.dateBtn}>
           <Text style={st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
           <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
         </Bouncy>
         <View style={[st.side, { justifyContent: 'flex-end' }]}>
-          <NeuIconBtn name="albums-outline" dim={38} size={18} color={C.textDim} onPress={openArchive} />
-          <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => setMenu(true)} style={{ marginLeft: 8 }} />
+          <NeuIconBtn name="albums-outline" dim={38} size={18} color={C.textDim} onPress={openArchive} accessibilityLabel="Archive" />
+          <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => setMenu(true)} style={{ marginLeft: 8 }} accessibilityLabel="More" />
         </View>
       </Animated.View>
       {goal > 0 ? (
@@ -463,17 +463,17 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
             scaleTo={0.9}
             radius={17}
             style={[st.dayWell, (mood || rating || checkout) ? { backgroundColor: C.gold + '24' } : null]}
+            accessibilityRole="button"
+            accessibilityLabel={'How the day went' + (mood ? ', ' + MOODS.find((m) => m.value === mood)?.label : '') + (rating ? ', ' + rating + ' of 5 stars' : '')}
           >
-            <Ionicons
-              name={dayIcon as any}
-              size={18}
-              color={mood || rating ? C.gold : C.textFaint}
-              accessibilityLabel={'How the day went' + (mood ? ', ' + MOODS.find((m) => m.value === mood)?.label : '') + (rating ? ', ' + rating + ' of 5 stars' : '')}
-            />
+            <Ionicons name={dayIcon as any} size={18} color={mood || rating ? C.gold : C.textFaint} />
           </Bouncy>
-          <IconBtn name={tags.length ? 'pricetag' : 'pricetag-outline'} size={19} pad={8} color={tags.length ? C.gold : C.textDim} onPress={() => setTagSheet(true)} />
+          <IconBtn
+            name={tags.length ? 'pricetag' : 'pricetag-outline'} size={19} pad={8} color={tags.length ? C.gold : C.textDim}
+            onPress={() => setTagSheet(true)} accessibilityLabel={tags.length ? 'Tags, ' + tags.length : 'Add tags'}
+          />
           {tasksArchived ? null : (
-            <IconBtn name="checkbox-outline" size={19} pad={8} color={C.textDim} onPress={openTask} />
+            <IconBtn name="checkbox-outline" size={19} pad={8} color={C.textDim} onPress={openTask} accessibilityLabel="Add a task" />
           )}
         </Row>
         <View style={{ alignItems: 'flex-end' }}>

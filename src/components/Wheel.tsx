@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutChangeEvent, StyleSheet, TextStyle, View } from 'react-native';
+import { LayoutChangeEvent, StyleSheet, TextStyle, View, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   cancelAnimation, interpolateColor, runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring,
@@ -7,6 +7,7 @@ import Animated, {
 import type { SharedValue } from 'react-native-reanimated';
 import { useAnimLevel } from './Motion';
 import { tick } from '../haptics';
+import { WIDE_AT } from '../layout';
 
 /** critically damped: a glide settles without bouncing */
 const SPRING = { mass: 1, stiffness: 180, damping: 27 };
@@ -53,6 +54,8 @@ export function Wheel({
 }) {
   const level = useAnimLevel();
   const still = level === 'none';
+  // the width cap is for a wide window only: a phone's wheel spans its card exactly as it always has
+  const wideWin = useWindowDimensions().width >= WIDE_AT;
   const pos = useSharedValue(index);
   const start = useSharedValue(index);
   const width = useSharedValue(0);
@@ -162,7 +165,7 @@ export function Wheel({
   return (
     <GestureDetector gesture={gesture}>
       <View
-        style={{ height, overflow: 'hidden', width: '100%', maxWidth: MAX_W, alignSelf: 'center' }}
+        style={[{ height, overflow: 'hidden' }, wideWin && { width: '100%', maxWidth: MAX_W, alignSelf: 'center' }]}
         onLayout={(e: LayoutChangeEvent) => { width.value = e.nativeEvent.layout.width; }}
         accessible
         accessibilityRole="adjustable"
