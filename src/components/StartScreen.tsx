@@ -128,6 +128,9 @@ function beats(dateMs: number, late: boolean) {
  * only then does the pen write the signature in the place it ends up in either way, below them. It sinks into the
  * carve, the same slow shine crosses the plate and the signature, and the scene hands over as usual.
  */
+/** without the big signature the pen writes 1.55 times as fast: the signature comes last and should not keep Home waiting */
+const LOGO_PEN = 1.55;
+
 function logoBeats(dateMs: number, late: boolean) {
   const RISE = { at: 160, dur: 1250, settle: 260 };
   const GROOVES = { at: RISE.at + 950, dur: 520 };
@@ -136,15 +139,15 @@ function logoBeats(dateMs: number, late: boolean) {
   const CAPTION = { at: TEXT + 260, dur: 560 };
   /** the pen sets down as the caption finishes arriving */
   const penAt = TEXT + 680;
-  const signed = penAt + real(SIG.total);
-  const dateStart = late ? 0 : signed + DATE_LIFT;
-  const penDone = late ? signed : dateStart + dateMs;
+  const signed = penAt + real(SIG.total) / LOGO_PEN;
+  const dateStart = late ? 0 : signed + DATE_LIFT / LOGO_PEN;
+  const penDone = late ? signed : dateStart + dateMs / LOGO_PEN;
   /** the ink settles into the carve, where it stays */
   const SINK = { at: penDone + 260, dur: 620 };
   const SHINE = { at: SINK.at + 500, dur: 1900 };
   const shineEnd = SHINE.at + SHINE.dur;
   const lateStart = shineEnd + DATE_LIFT;
-  const LEAVE = late ? lateStart + dateMs + HOLD : shineEnd + 300;
+  const LEAVE = late ? lateStart + dateMs / LOGO_PEN + HOLD : shineEnd + 300;
   const HANDOFF = LEAVE + 300;
   return {
     penAt,
@@ -287,10 +290,10 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
         duration: L.CAPTION.dur, easing: Easing.linear,
       }));
       // beat 3: the pen writes below them, in the place the signature keeps, and today's date after it
-      tau.value = withDelay(L.penAt, withTiming(SIG.total, { duration: real(SIG.total), easing: Easing.linear }));
+      tau.value = withDelay(L.penAt, withTiming(SIG.total, { duration: real(SIG.total) / LOGO_PEN, easing: Easing.linear }));
       const writeDate = (delay: number, digits: string) => {
         const total = layoutDate(digits).total;
-        dateTau.value = withDelay(delay, withTiming(total, { duration: total / DATE_SPEED, easing: Easing.linear }));
+        dateTau.value = withDelay(delay, withTiming(total, { duration: total / DATE_SPEED / LOGO_PEN, easing: Easing.linear }));
       };
       writeDate(L.dateStart, dateRef.current);
       at(L.dateStart - 150, () => {

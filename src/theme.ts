@@ -139,8 +139,8 @@ export const C = {
   danger: '#E0958A',
   gold: '#D5C68E',
   slate: '#728AB7',
-  /** Deep Work ambient screen — a deliberate AOD-like near-black (user decision D-1) */
-  ambient: '#05070F',
+  /** Deep Work's ambient screen: true black, like an always-on display, so the glass itself goes dark */
+  ambient: '#000000',
   /** toggle knob when off */
   knob: '#414240',
   /** glyphs sitting ON an accent fill */

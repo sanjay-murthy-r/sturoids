@@ -16,7 +16,17 @@ import { useAnimLevel } from './Motion';
 import { ClockDigits, clockWidth } from './ClockDigits';
 
 /** the ambient screen never brightens a dim room: it only ever lowers the phone to this */
-const DIM_TO = 0.4;
+const DIM_TO = 0.25;
+/**
+ * The ambient screen's own inks, a step darker than the app's: dimmed digits, softer words and a fainter rule on true
+ * black, so a propped-up phone glows no more than it must.
+ */
+const INK = {
+  digit: 'rgba(250,249,245,0.82)',
+  soft: 'rgba(194,192,182,0.62)',
+  faint: 'rgba(156,154,146,0.5)',
+  track: 'rgba(250,249,245,0.07)',
+};
 /** burn-in care: the face visits these offsets, one step a minute, as shares of the screen's shorter side */
 const DRIFT: [number, number][] = [[0.022, -0.022], [-0.022, 0.022], [0.022, 0.022], [-0.022, -0.022], [0, 0]];
 
@@ -182,12 +192,12 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
 
       <View style={st.mid} pointerEvents="none">
         <Animated.View key={size} entering={resized ? FadeIn.duration(280) : undefined} style={st.time}>
-          <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} />
+          <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} color={INK.digit} />
           {withSeconds ? (
             <ClockDigits
               text={sec}
               size={size * SEC}
-              color={C.textDim}
+              color={INK.soft}
               style={{ marginTop: Math.round(size * SEC_TOP), marginLeft: size * SEC_GAP }}
             />
           ) : unit ? (
@@ -214,7 +224,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
           </Text>
         ) : null}
         <View style={[st.rule, { height: Math.max(1, u * 0.005), borderRadius: u * 0.005 }]}>
-          <View style={{ height: '100%', width: ruleW, backgroundColor: C.accent, transform: [{ translateX: (progress - 1) * ruleW }] }} />
+          <View style={{ height: '100%', width: ruleW, backgroundColor: C.accent, opacity: 0.75, transform: [{ translateX: (progress - 1) * ruleW }] }} />
         </View>
       </View>
     </>
@@ -323,14 +333,14 @@ export function AmbientView({ visible, onExit, ...rest }: AmbientProps) {
 const st = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.ambient },
   top: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
-  kicker: { color: C.accent, fontFamily: F.semi, textTransform: 'uppercase', maxWidth: '84%' },
-  faint: { color: C.textFaint, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
+  kicker: { color: C.accent, opacity: 0.8, fontFamily: F.semi, textTransform: 'uppercase', maxWidth: '84%' },
+  faint: { color: INK.faint, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   mid: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   time: { flexDirection: 'row', alignItems: 'flex-start' },
-  unit: { color: C.textDim, fontFamily: F.reg },
-  meta: { color: C.textDim, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
+  unit: { color: INK.soft, fontFamily: F.reg },
+  meta: { color: INK.soft, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   foot: { position: 'absolute' },
   task: { textAlign: 'center' },
-  rule: { backgroundColor: 'rgba(250,249,245,0.1)', overflow: 'hidden' },
-  hint: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: C.textFaint, fontFamily: F.reg },
+  rule: { backgroundColor: INK.track, overflow: 'hidden' },
+  hint: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: INK.faint, fontFamily: F.reg },
 });

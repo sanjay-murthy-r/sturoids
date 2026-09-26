@@ -10,6 +10,8 @@ import { toast } from '../components/Toast';
 import { Enter } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WIDE_AT, columnWidth } from '../layout';
+import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
+import { aiLogoFor } from '../aiLogos';
 
 /** between launchers on a wide window */
 const GRID_GAP = 14;
@@ -18,12 +20,33 @@ function domainOf(url: string): string {
   try { return new URL(url).hostname; } catch { return ''; }
 }
 
-/** Real site logo via favicon service; custom links get a generic badge. */
+/**
+ * The tool's own mark, drawn straight on the material with nothing behind it (a known tool, from src/aiLogos.ts); any
+ * other site shows its favicon, and a link with neither shows a sparkle.
+ */
 function LinkIcon({ link }: { link: AiLink }) {
   const theme = useTheme();
   const [failed, setFailed] = useState(false);
+  const logo = aiLogoFor(link.url);
   const domain = domainOf(link.url);
-  if (link.custom || failed || !domain) {
+  if (logo) {
+    return (
+      <View style={st.logoBox} accessible accessibilityLabel={link.label + ' logo'}>
+        <Svg width={34} height={34} viewBox="0 0 24 24">
+          {logo.gradient ? (
+            <Defs>
+              <LinearGradient id={'g' + link.id} x1="0" y1="0" x2="1" y2="1">
+                <Stop offset="0" stopColor={logo.gradient[0]} />
+                <Stop offset="1" stopColor={logo.gradient[1]} />
+              </LinearGradient>
+            </Defs>
+          ) : null}
+          <Path d={logo.d} fill={logo.gradient ? 'url(#g' + link.id + ')' : logo.color} />
+        </Svg>
+      </View>
+    );
+  }
+  if (failed || !domain) {
     return (
       <View
         style={[
@@ -143,6 +166,7 @@ const st = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   item: { width: '48%' },
   gridWide: { flexDirection: 'row', flexWrap: 'wrap', columnGap: GRID_GAP },
+  logoBox: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   fallbackIcon: {
     width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
   },

@@ -29,10 +29,6 @@ const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
   { key: 'minimal', label: 'Minimalistic', desc: 'High contrast, flat, maximum legibility' },
 ];
 
-const INTROS: { key: 'signed' | 'logo'; label: string; desc: string }[] = [
-  { key: 'signed', label: 'Signed first', desc: 'The signature is written large, then everything settles into place' },
-  { key: 'logo', label: 'Logo first', desc: 'The logo and the words arrive, then the signature is written below them' },
-];
 
 const ANIMS: { key: AnimLevel; label: string; desc: string }[] = [
   { key: 'none', label: 'Off', desc: 'No motion at all' },
@@ -482,11 +478,21 @@ export default function Settings() {
           <OptionPicker options={ANIMS} value={settings.animLevel} onPick={(k) => setSetting('animLevel', k)} />
         </Card>
 
-        <SectionTitle right={<InfoDot text="The start screen you see when the app opens cold. Both play the same four beats; they differ in when the signature is written. With animations off, neither plays." />}>
-          Start screen
-        </SectionTitle>
-        <Card pad={12}>
-          <OptionPicker options={INTROS} value={settings.introStyle} onPick={(k) => setSetting('introStyle', k)} />
+        <Card>
+          <Row style={{ justifyContent: 'space-between' }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[T.body, { fontFamily: F.med }]}>Disable the big signature</Text>
+              <Text style={[T.caption, { marginTop: 2 }]}>
+                The logo and the words come first; the signature is written below them, a little faster.
+              </Text>
+            </View>
+            <Toggle
+              value={settings.introStyle === 'logo'}
+              onChange={(v) => setSetting('introStyle', v ? 'logo' : 'signed')}
+              color={C.accent}
+              label="Disable the big signature"
+            />
+          </Row>
         </Card>
 
         <SectionTitle>Time & reminders</SectionTitle>
