@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T, BLOCK_COLORS } from '../theme';
 import { useStore, PlannerBlock, Habit } from '../store';
-import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks } from '../utils';
+import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours } from '../utils';
 import { useNow } from '../hooks/useNow';
 import {
   ScreenBG, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, CheckCircle, useTheme, NeuHeader,
@@ -274,11 +274,16 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
                     <IconBtn
                       name="trash-outline" size={18}
                       onPress={async () => {
-                        const index = useStore.getState().habits.findIndex((x) => x.id === h.id);
+                        const all = useStore.getState().habits;
+                        const before = all.slice(0, all.findIndex((x) => x.id === h.id)).map((x) => x.id);
                         removeHabit(h.id);
                         toast('Deleted ' + h.title, {
                           label: 'Undo',
-                          onPress: () => { restoreHabit(h, index); void rescheduleAllReminders(); },
+                          onPress: () => {
+                            // beside the neighbour it had, even if the list changed while the toast was up
+                            restoreHabit(h, indexAfterNeighbours(before, useStore.getState().habits.map((x) => x.id)));
+                            void rescheduleAllReminders();
+                          },
                         });
                         await rescheduleAllReminders();
                       }}

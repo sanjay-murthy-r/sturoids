@@ -596,7 +596,7 @@ export function Sheet({
         <Pressable style={{ flex: 1 }} onPress={onClose} />
       </Animated.View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <Animated.View style={[st.sheet, narrowPanel, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: undefined }, panelStyle]}>
+        <Animated.View style={[st.sheet, narrowPanel, theme === 'minimal' && { backgroundColor: MIN.card, boxShadow: SH.sheetPanelMin }, panelStyle]}>
           {/* minimal has no shadow to define the handle, so the FILL has to
               carry it — C.inset on MIN.card is all but invisible */}
           <GestureDetector gesture={pull}>
@@ -853,8 +853,8 @@ const st = StyleSheet.create({
   sheet: {
     backgroundColor: C.card, borderTopLeftRadius: 30, borderTopRightRadius: 30,
     padding: 24, paddingBottom: 40,
-    borderTopWidth: 1.5, borderColor: C.lite,
-    boxShadow: SH.sheetLift,
+    // the lit top rim rides the shadow, so it follows the rounded corners (see SH.sheetPanel)
+    boxShadow: SH.sheetPanel,
   },
   sheetWide: { width: '100%', maxWidth: 560, alignSelf: 'center' },
   sheetHandle: {

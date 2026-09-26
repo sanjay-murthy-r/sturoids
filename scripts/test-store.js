@@ -54,7 +54,8 @@ function boot(seed = {}, { gate } = {}) {
   const store = load(path.join(ROOT, 'src', 'store.ts'));
   const notices = [];
   store.subscribeLoadNotices((n) => notices.push(n));
-  return { store, storage, notices, state: () => store.useStore.getState() };
+  const utils = load(path.join(ROOT, 'src', 'utils.ts'));
+  return { store, utils, storage, notices, state: () => store.useStore.getState() };
 }
 
 async function settled(app) {
@@ -221,6 +222,32 @@ const scenarios = {
       assert.deepEqual(st.learnings.map((l) => l.id), ['l1'], 'v' + version + ': orphan, empty and id-less learnings dropped');
       assert.deepEqual(st.learnings[0].tags, ['t1']);
     }
+  },
+
+  async 'undone drops come back beside their neighbours, even after other edits'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    for (const t of ['A', 'B', 'C', 'D', 'E']) st().addDaily(t);
+    const ids = () => st().dailyTasks.map((t) => t.title).join('');
+    const titleId = (t) => st().dailyTasks.find((x) => x.title === t).id;
+    // what the leftovers card does: record what stood before each drop, then remove it
+    const drop = (t) => {
+      const list = st().dailyTasks;
+      const index = list.findIndex((x) => x.title === t);
+      const rec = { task: list[index], before: list.slice(0, index).map((x) => x.id) };
+      st().removeDaily(rec.task.id);
+      return rec;
+    };
+    const batch = [drop('C')];
+    st().removeDaily(titleId('A')); // deleted from the ToDo list itself while the toast is up
+    batch.push(drop('D'));
+    assert.equal(ids(), 'BE');
+    for (let i = batch.length - 1; i >= 0; i--) {
+      const now = st().dailyTasks.map((x) => x.id);
+      st().restoreDaily(batch[i].task, app.utils.indexAfterNeighbours(batch[i].before, now));
+    }
+    assert.equal(ids(), 'BCDE', 'each lands beside its old neighbour, in order');
   },
 
   async 'note folders rename and delete without losing a note'() {

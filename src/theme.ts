@@ -92,6 +92,13 @@ export const neuPressedInner = () => NEU.pressedInner as any;
 export const SH = Object.freeze({
   /** a bottom sheet lifting off the material */
   sheetLift: `0 -8px 20px ${darkSh(0.45)}`,
+  /**
+   * The sheet's lifted panel with its lit top rim. The rim is an inset shadow, not a top border: Android draws a border
+   * on one side of a rounded box as a straight band, which leaves square corners poking past the rounding.
+   */
+  sheetPanel: `0 -8px 20px ${darkSh(0.45)}, inset 0px 1.5px 0px ${liteSh(0.34)}`,
+  /** the minimal theme's sheet: no lift, a hairline rim that follows the corners the same way */
+  sheetPanelMin: `inset 0px 1px 0px ${liteSh(0.35)}`,
   /** the bar lifting off the screen edge */
   barLift: `0 -6px 14px ${darkSh(0.35)}`,
 });

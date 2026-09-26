@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore, DailyTask } from '../store';
-import { yesterdayKey, daysUntil, fmtShortDate, toMinutes } from '../utils';
+import { yesterdayKey, daysUntil, fmtShortDate, toMinutes, indexAfterNeighbours } from '../utils';
 import {
   ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, NeuHeader, useTheme,
   ListCard, ListRow, StrikeText,
@@ -75,7 +75,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   };
   // dropping is the triage's answer, so it asks nothing first; for a slip of the finger, the toast offers Undo. Drops
   // made one after another share one toast and one Undo, so the first is never lost when the next toast replaces it.
-  const drops = React.useRef<{ list: { task: DailyTask; index: number }[]; triageBefore: string; timer: ReturnType<typeof setTimeout> | null }>({
+  const drops = React.useRef<{ list: { task: DailyTask; before: string[] }[]; triageBefore: string; timer: ReturnType<typeof setTimeout> | null }>({
     list: [], triageBefore: '', timer: null,
   });
   React.useEffect(() => () => { if (drops.current.timer) clearTimeout(drops.current.timer); }, []);
@@ -87,7 +87,8 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const wasLast = leftovers.length <= 1;
     const batch = drops.current;
     if (!batch.list.length) batch.triageBefore = useStore.getState().lastTriage;
-    batch.list.push({ task, index });
+    // what stood before it, so Undo puts it back beside its neighbours even if the list changes meanwhile
+    batch.list.push({ task, before: list.slice(0, index).map((t) => t.id) });
     removeDaily(id);
     if (wasLast) setLastTriage(today);
     // the batch lasts as long as its toast
@@ -98,8 +99,11 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     toast(taken.length === 1 ? 'Dropped "' + task.title + '"' : 'Dropped ' + taken.length + ' ToDos', {
       label: 'Undo',
       onPress: () => {
-        // back in the reverse order they went, so each lands at its old place
-        for (let i = taken.length - 1; i >= 0; i--) restoreDaily(taken[i].task, taken[i].index);
+        // back in the reverse order they went, each beside the nearest neighbour it had that is still there
+        for (let i = taken.length - 1; i >= 0; i--) {
+          const now = useStore.getState().dailyTasks.map((t) => t.id);
+          restoreDaily(taken[i].task, indexAfterNeighbours(taken[i].before, now));
+        }
         // the leftovers come back undecided
         setLastTriage(triageBefore);
         batch.list = [];

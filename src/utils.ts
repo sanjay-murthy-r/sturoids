@@ -71,6 +71,18 @@ export function fmtMediaTime(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/**
+ * Where an item goes back into a list on Undo: straight after the nearest of the items that stood before it (when it
+ * was removed) that is still there, or at the start. A plain index would drift when the list changed in between.
+ */
+export function indexAfterNeighbours(beforeIds: readonly string[], currentIds: readonly string[]): number {
+  for (let i = beforeIds.length - 1; i >= 0; i--) {
+    const at = currentIds.indexOf(beforeIds[i]);
+    if (at >= 0) return at + 1;
+  }
+  return 0;
+}
+
 /** current + best streak from a set of YYYY-MM-DD keys */
 export function streaks(doneDates: string[]): { current: number; best: number } {
   if (!doneDates || doneDates.length === 0) return { current: 0, best: 0 };
