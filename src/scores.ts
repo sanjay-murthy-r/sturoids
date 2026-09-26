@@ -80,20 +80,19 @@ export function ownResult(n: ScoreNode): ScoreResult | null {
   return { pct: (n.score / n.outOf) * 100, score: n.score, outOf: n.outOf, from: 'own' };
 }
 
-/** What an exam's subjects add up to, ignoring its own marks. */
-export function partsResult(n: ScoreNode, ix: ScoreIndex, seen: Set<string> = new Set()): ScoreResult | null {
-  if (n.kind !== 'exam' || seen.has(n.id)) return null;
-  seen.add(n.id);
-  const parts = examKids(ix, n.id);
+/**
+ * How a set of subject results adds up: their marks summed (the default), or their percentages weighted. The exam's
+ * page and the exam form both use this, so the total the form shows is the one the exam will have.
+ */
+export function combineParts(parts: { r: ScoreResult | null; weight?: number }[], combine: 'sum' | 'weighted' = 'sum'): ScoreResult | null {
   if (!parts.length) return null;
-  const results = parts.map((p) => ({ p, r: resultOf(p, ix, seen) }));
-  const marked = results.filter((x) => x.r) as { p: ScoreNode; r: ScoreResult }[];
+  const marked = parts.filter((x) => x.r) as { r: ScoreResult; weight?: number }[];
   if (!marked.length) return null;
-  if ((n.combine || 'sum') === 'weighted') {
+  if (combine === 'weighted') {
     let sum = 0;
     let w = 0;
-    for (const { p, r } of marked) {
-      const wt = typeof p.weight === 'number' && p.weight > 0 ? p.weight : 1;
+    for (const { r, weight } of marked) {
+      const wt = typeof weight === 'number' && weight > 0 ? weight : 1;
       sum += r.pct * wt;
       w += wt;
     }
@@ -108,6 +107,14 @@ export function partsResult(n: ScoreNode, ix: ScoreIndex, seen: Set<string> = ne
   // a mix of marked and weighted parts cannot be summed as marks: fall back to the plain average
   const pct = marked.reduce((a, x) => a + x.r.pct, 0) / marked.length;
   return { pct, marked: marked.length, parts: parts.length, from: 'parts' };
+}
+
+/** What an exam's subjects add up to, ignoring its own marks. */
+export function partsResult(n: ScoreNode, ix: ScoreIndex, seen: Set<string> = new Set()): ScoreResult | null {
+  if (n.kind !== 'exam' || seen.has(n.id)) return null;
+  seen.add(n.id);
+  const parts = examKids(ix, n.id);
+  return combineParts(parts.map((p) => ({ r: resultOf(p, ix, seen), weight: p.weight })), n.combine || 'sum');
 }
 
 /** An exam's result: its own marks when it has them, otherwise what its subjects add up to. */
@@ -411,6 +418,11 @@ export interface ScoreTag {
   /** one of TAG_COLORS, or any hex a user picked from them */
   color: string;
   createdAt: number;
+  /**
+   * An exam category, like JEE Main mocks or Unit tests. An exam sits in one at most, carries it as a tag, and
+   * Analytics compares the exams inside each.
+   */
+  category?: boolean;
 }
 
 /** Something learned from an exam, kept with it and gathered in the notebook. */
@@ -453,16 +465,19 @@ export function tagsOf(ids: string[] | undefined, all: ScoreTag[]): ScoreTag[] {
 /** How a filter of several tags reads: any of them (the default), or every one of them. */
 export type TagMatch = 'any' | 'all';
 
-/** The learnings a filter keeps: newest first, and only from the exams that still exist. */
+/**
+ * The learnings a filter keeps: newest first, and only from the exams that still exist. `extra` adds tags a learning
+ * carries through its exam (the exam's category), so a category finds every learning from the exams inside it.
+ */
 export function filterLearnings(
-  learnings: Learning[], selected: string[], match: TagMatch, alive?: Set<string>,
+  learnings: Learning[], selected: string[], match: TagMatch, alive?: Set<string>, extra?: (l: Learning) => string[],
 ): Learning[] {
   const sel = selected.filter(Boolean);
   return learnings
     .filter((l) => (alive ? alive.has(l.nodeId) : true))
     .filter((l) => {
       if (!sel.length) return true;
-      const has = new Set(l.tags);
+      const has = new Set(extra ? [...l.tags, ...extra(l)] : l.tags);
       return match === 'all' ? sel.every((t) => has.has(t)) : sel.some((t) => has.has(t));
     })
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -514,10 +529,60 @@ export function sanitizeTags(raw: unknown): ScoreTag[] {
       label: label.slice(0, 40),
       color: typeof r.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(r.color) ? r.color : TAG_COLORS[out.length % TAG_COLORS.length],
       createdAt: finite(r.createdAt) ? r.createdAt : 0,
+      ...(r.category === true ? { category: true } : {}),
     });
   }
   return out;
 }
+
+/* ---------------- categories ---------------- */
+
+/** The categories, in the order they were made. */
+export const categoriesOf = (tags: ScoreTag[]) => tags.filter((t) => t.category);
+
+/** The tags that are not categories: what a tag picker offers. */
+export const plainTagsOf = (tags: ScoreTag[]) => tags.filter((t) => !t.category);
+
+/** The category an exam sits in: the first category among its tags, in the tag list's order. */
+export function categoryOf(n: ScoreNode | undefined, tags: ScoreTag[]): ScoreTag | null {
+  if (!n?.tags?.length) return null;
+  const mine = new Set(n.tags);
+  return tags.find((t) => t.category && mine.has(t.id)) || null;
+}
+
+/** An exam's tags with its category swapped for another (or taken off, with null); its plain tags stay as they are. */
+export function withCategory(ids: string[] | undefined, categoryId: string | null, tags: ScoreTag[]): string[] {
+  const cats = new Set(categoriesOf(tags).map((t) => t.id));
+  const kept = (ids || []).filter((id) => !cats.has(id));
+  return categoryId ? [categoryId, ...kept] : kept;
+}
+
+/** The exam a node belongs to at the top: an exam itself, or the exam a subject (at any depth) is part of. */
+export function rootExamOf(ix: ScoreIndex, id: string): ScoreNode | undefined {
+  let cur = ix.byId.get(id);
+  const seen = new Set<string>();
+  while (cur && cur.parentId && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const parent = ix.byId.get(cur.parentId);
+    if (!parent || parent.kind !== 'exam') break;
+    cur = parent;
+  }
+  return cur && cur.kind === 'exam' ? cur : undefined;
+}
+
+/** Whether an exam stands on its own (not a subject inside another exam). */
+export const isTopExam = (ix: ScoreIndex, n: ScoreNode) =>
+  n.kind === 'exam' && !(n.parentId && ix.byId.get(n.parentId)?.kind === 'exam');
+
+/** Every exam that stands on its own, anywhere in the tree. */
+export function topExams(ix: ScoreIndex): ScoreNode[] {
+  const out: ScoreNode[] = [];
+  for (const n of ix.byId.values()) if (isTopExam(ix, n)) out.push(n);
+  return out;
+}
+
+/** "  Physics " and "physics" are one subject across exams. */
+export const subjectKey = (title: string) => title.trim().replace(/\s+/g, ' ').toLowerCase();
 
 /** Drops anything that is not a learning, and tag ids that no longer exist. */
 export function sanitizeLearnings(raw: unknown, tags: ScoreTag[]): Learning[] {

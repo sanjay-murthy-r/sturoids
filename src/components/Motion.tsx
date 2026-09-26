@@ -163,13 +163,19 @@ export function Pop({ children, dep }: { children: React.ReactNode; dep: any }) 
 }
 
 /**
- * A whole number that counts to its new value instead of changing in place: quick for a step of one, longer for a
- * big jump, and instant with animations off. Anything after the number (a unit, a total) goes in as children.
+ * A number that counts to its new value instead of changing in place: quick for a small step, longer for a big jump,
+ * and instant with animations off. Whole numbers by default; `decimals` counts in tenths or hundredths, and `format`
+ * writes the figure (a percentage, say). With `from`, it counts up from there the first time it is drawn. Anything
+ * after the number (a unit, a total) goes in as children.
  */
-export function CountUp({ value, style, children }: { value: number; style?: any; children?: React.ReactNode }) {
+export function CountUp({ value, style, children, decimals = 0, format, from: start0 }: {
+  value: number; style?: any; children?: React.ReactNode; decimals?: number; format?: (n: number) => string; from?: number;
+}) {
   const level = useAnimLevel();
-  const [shown, setShown] = React.useState(value);
-  const shownRef = React.useRef(value);
+  const unit = Math.pow(10, decimals);
+  const first = start0 != null && level !== 'none' ? start0 : value;
+  const [shown, setShown] = React.useState(first);
+  const shownRef = React.useRef(first);
   React.useEffect(() => {
     const from = shownRef.current;
     if (from === value) return;
@@ -179,11 +185,11 @@ export function CountUp({ value, style, children }: { value: number; style?: any
       return;
     }
     const start = Date.now();
-    const duration = Math.min(700, 260 + Math.abs(value - from) * 30);
+    const duration = Math.min(760, 260 + Math.abs(value - from) * 30);
     let frame = 0;
     const step = () => {
       const t = Math.min(1, (Date.now() - start) / duration);
-      const n = Math.round(from + (value - from) * (1 - Math.pow(1 - t, 3)));
+      const n = t >= 1 ? Math.round(value * unit) / unit : Math.round((from + (value - from) * (1 - Math.pow(1 - t, 3))) * unit) / unit;
       if (n !== shownRef.current) {
         shownRef.current = n;
         setShown(n);
@@ -193,5 +199,5 @@ export function CountUp({ value, style, children }: { value: number; style?: any
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
   }, [value, level]);
-  return <Text style={style}>{shown}{children}</Text>;
+  return <Text style={style}>{format ? format(shown) : shown}{children}</Text>;
 }

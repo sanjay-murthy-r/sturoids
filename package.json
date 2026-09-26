@@ -8,7 +8,8 @@
     "lint:type": "node scripts/lint-type.js",
     "test:store": "node scripts/test-store.js",
     "test:backup": "node scripts/test-backup.js",
-    "test:scores": "node scripts/test-scores.js"
+    "test:scores": "node scripts/test-scores.js",
+    "test:analytics": "node scripts/test-analytics.js"
   },
   "dependencies": {
     "@expo-google-fonts/rubik": "^0.4.2",

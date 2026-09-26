@@ -7,7 +7,7 @@ import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
 import { ToolKey, DEFAULT_SLOTS, DEFAULT_ARCHIVED, ROUTE_TO_TOOL, TOOLS, normaliseSlots, normaliseArchived, toolByKey } from './tools';
 import {
   ScoreNode, ScoreTag, Learning, sanitizeScores, sanitizeTags, sanitizeLearnings, indexScores, descendantIds,
-  canMove, duplicateStructure, nextTagColor, sameTagName, pruneScoreRefs,
+  canMove, duplicateStructure, nextTagColor, sameTagName, pruneScoreRefs, withCategory,
 } from './scores';
 
 // ---------- types ----------
@@ -84,6 +84,18 @@ export interface JournalEntry {
 
 /** what a delete took away, and what an Undo puts back */
 export interface RemovedScores { nodes: ScoreNode[]; learnings: Learning[] }
+
+/** What the full-screen exam form saves in one go: the exam, its subjects, and the subjects taken out. */
+export interface ExamSave {
+  /** the exam being edited; a new exam when absent */
+  id?: string;
+  parentId: string | null;
+  fields: Partial<Omit<ScoreNode, 'id' | 'createdAt' | 'updatedAt' | 'parentId' | 'kind'>>;
+  /** in the order shown; a subject with an id is patched, one without is added */
+  subjects: { id?: string; title: string; score?: number; outOf?: number; weight?: number }[];
+  /** subjects the form took out; they go with everything under them and their learnings */
+  removeIds: string[];
+}
 
 export interface Settings {
   name: string;
@@ -343,10 +355,19 @@ export interface AppState {
   /** a copy of the node's structure without marks; returns the copy's id */
   duplicateScoreNode: (id: string) => string | null;
 
-  /** the id of the tag with this name, making it (in the next free colour) when it is new */
-  addScoreTag: (label: string) => string;
+  /**
+   * the id of the tag with this name, making it (in the next free colour) when it is new; asked for a category, a
+   * plain tag of that name becomes one
+   */
+  addScoreTag: (label: string, opts?: { category?: boolean }) => string;
   /** renaming to a name already in use is refused and returns false */
-  patchScoreTag: (id: string, patch: { label?: string; color?: string }) => boolean;
+  patchScoreTag: (id: string, patch: { label?: string; color?: string; category?: boolean }) => boolean;
+  /** saves the exam form as one change; returns the exam's id and what was taken out, for an Undo */
+  saveExam: (input: ExamSave) => { id: string; removed: RemovedScores };
+  /** puts exams in a category (or in none), keeping their other tags; returns their tags before, for an Undo */
+  setExamCategory: (ids: string[], categoryId: string | null) => Record<string, string[]>;
+  /** puts tags back as they were */
+  restoreExamTags: (before: Record<string, string[]>) => void;
   /** the tag goes from the list and from every exam and learning carrying it */
   removeScoreTag: (id: string) => void;
   addLearning: (l: { nodeId: string; text: string; tags?: string[] }) => string;
@@ -991,12 +1012,20 @@ export const useStore = create<AppState>()(
         return copy.rootId;
       },
 
-      addScoreTag: (label) => {
+      addScoreTag: (label, opts) => {
         const name = label.trim().slice(0, 40);
         const s = get();
         const already = s.scoreTags.find((t) => sameTagName(t.label, name));
-        if (!name || already) return already?.id || '';
-        const tag: ScoreTag = { id: uid(), label: name, color: nextTagColor(s.scoreTags), createdAt: Date.now() };
+        if (!name) return '';
+        if (already) {
+          if (opts?.category && !already.category) {
+            set({ scoreTags: s.scoreTags.map((t) => (t.id === already.id ? { ...t, category: true } : t)) });
+          }
+          return already.id;
+        }
+        const tag: ScoreTag = {
+          id: uid(), label: name, color: nextTagColor(s.scoreTags), createdAt: Date.now(), ...(opts?.category ? { category: true } : {}),
+        };
         set({ scoreTags: [...s.scoreTags, tag] });
         return tag.id;
       },
@@ -1006,9 +1035,13 @@ export const useStore = create<AppState>()(
         if (patch.label !== undefined && !name) return false;
         if (name && s.scoreTags.some((t) => t.id !== id && sameTagName(t.label, name))) return false;
         set({
-          scoreTags: s.scoreTags.map((t) => (t.id === id
-            ? { ...t, ...(name ? { label: name } : {}), ...(patch.color ? { color: patch.color } : {}) }
-            : t)),
+          scoreTags: s.scoreTags.map((t) => {
+            if (t.id !== id) return t;
+            const next: ScoreTag = { ...t, ...(name ? { label: name } : {}), ...(patch.color ? { color: patch.color } : {}) };
+            if (patch.category === true) next.category = true;
+            if (patch.category === false) delete next.category;
+            return next;
+          }),
         });
         return true;
       },
@@ -1018,6 +1051,81 @@ export const useStore = create<AppState>()(
           scores: s.scores.map((n) => (n.tags?.includes(id) ? { ...n, tags: n.tags.filter((t) => t !== id) } : n)),
           learnings: s.learnings.map((l) => (l.tags.includes(id) ? { ...l, tags: l.tags.filter((t) => t !== id) } : l)),
         })),
+      saveExam: ({ id, parentId, fields, subjects, removeIds }) => {
+        const s = get();
+        const now = Date.now();
+        const examId = id && s.scores.some((x) => x.id === id) ? id : uid();
+        const isNew = examId !== id;
+        // the subjects taken out go with everything under them, and their learnings, and can come back with an Undo
+        const ix = indexScores(s.scores);
+        const gone = new Set<string>();
+        for (const rid of removeIds) {
+          const n = ix.byId.get(rid);
+          if (!n || n.parentId !== examId) continue;
+          gone.add(rid);
+          for (const d of descendantIds(ix, rid)) gone.add(d);
+        }
+        const removed: RemovedScores = {
+          nodes: s.scores.filter((x) => gone.has(x.id)),
+          learnings: s.learnings.filter((l) => gone.has(l.nodeId)),
+        };
+        let scores = s.scores.filter((x) => !gone.has(x.id));
+        if (isNew) {
+          const parent = parentId ? scores.find((x) => x.id === parentId) : undefined;
+          const exam = withoutUndefined({
+            ...fields, kind: 'exam', parentId: parent ? parent.id : null, id: examId, createdAt: now, updatedAt: now,
+          }) as ScoreNode;
+          scores = [...scores, exam];
+        } else {
+          scores = scores.map((x) => (x.id === examId ? (withoutUndefined({ ...x, ...fields, updatedAt: now }) as ScoreNode) : x));
+        }
+        const byId = new Map(scores.map((x) => [x.id, x]));
+        const added: ScoreNode[] = [];
+        subjects.forEach((sub, i) => {
+          const patch = { title: sub.title, score: sub.score, outOf: sub.outOf, weight: sub.weight };
+          const had = sub.id ? byId.get(sub.id) : undefined;
+          if (had && had.parentId === examId) {
+            byId.set(had.id, withoutUndefined({ ...had, ...patch, updatedAt: now }) as ScoreNode);
+          } else {
+            // new subjects keep the order they were typed in: the exam's page lists subjects by when they were made
+            added.push(withoutUndefined({
+              ...patch, id: uid(), parentId: examId, kind: 'exam', createdAt: now + i, updatedAt: now,
+            }) as ScoreNode);
+          }
+        });
+        set({
+          scores: [...scores.map((x) => byId.get(x.id) as ScoreNode), ...added],
+          ...(removed.learnings.length ? { learnings: s.learnings.filter((l) => !gone.has(l.nodeId)) } : {}),
+        });
+        return { id: examId, removed };
+      },
+      setExamCategory: (ids, categoryId) => {
+        const s = get();
+        const want = new Set(ids);
+        const before: Record<string, string[]> = {};
+        const now = Date.now();
+        const scores = s.scores.map((n) => {
+          if (!want.has(n.id) || n.kind !== 'exam') return n;
+          before[n.id] = n.tags ? [...n.tags] : [];
+          const tags = withCategory(n.tags, categoryId, s.scoreTags);
+          const { tags: _drop, ...rest } = n;
+          return (tags.length ? { ...rest, tags, updatedAt: now } : { ...rest, updatedAt: now }) as ScoreNode;
+        });
+        set({ scores });
+        return before;
+      },
+      restoreExamTags: (before) =>
+        set((s) => {
+          const known = new Set(s.scoreTags.map((t) => t.id));
+          return {
+            scores: s.scores.map((n) => {
+              if (!(n.id in before)) return n;
+              const tags = before[n.id].filter((t) => known.has(t));
+              const { tags: _drop, ...rest } = n;
+              return (tags.length ? { ...rest, tags } : rest) as ScoreNode;
+            }),
+          };
+        }),
       addLearning: ({ nodeId, text, tags }) => {
         const body = text.trim();
         if (!body) return '';
