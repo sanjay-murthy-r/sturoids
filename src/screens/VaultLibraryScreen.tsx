@@ -21,14 +21,15 @@ import { columnWidth } from '../layout';
 
 const thumb = (videoId: string) => 'https://img.youtube.com/vi/' + videoId + '/mqdefault.jpg';
 
-async function fetchTitle(videoId: string): Promise<string> {
+/** The video's title from YouTube, or a stand-in when it cannot be had (offline, private, deleted, not embeddable). */
+async function fetchTitle(videoId: string): Promise<{ title: string; found: boolean }> {
   try {
     const r = await fetch('https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=' + videoId + '&format=json');
     if (!r.ok) throw new Error();
     const j = await r.json();
-    return j.title || 'Video ' + videoId;
+    return j.title ? { title: j.title, found: true } : { title: 'Video ' + videoId, found: false };
   } catch {
-    return 'Video ' + videoId;
+    return { title: 'Video ' + videoId, found: false };
   }
 }
 
@@ -148,15 +149,27 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
       .sort((a, b) => b.video.addedAt - a.video.addedAt || a.item.time - b.item.time);
   }, [videos, q]);
 
+  // one add at a time: Enter and the add key pressed together must not add the same video twice
+  const addingRef = useRef(false);
   const submit = async (raw: string) => {
+    if (addingRef.current) return;
     const id = parseYouTubeId(raw);
     if (!id) { toast('That is not a YouTube link. Paste the full video link.'); return; }
-    if (videos.some((v) => v.videoId === id)) { toast('That video is already in the Vault.'); return; }
+    if (useStore.getState().vaultVideos.some((v) => v.videoId === id)) { toast('That video is already in the Vault.'); return; }
+    addingRef.current = true;
     setAdding(true);
-    const title = await fetchTitle(id);
-    const vid = addVideo({ url: raw.trim(), videoId: id, title, folderId: cwd });
-    setAdding(false); setUrl('');
-    nav.openVideo(vid);
+    try {
+      const { title, found } = await fetchTitle(id);
+      // it may have been added from elsewhere while the title was on its way
+      if (useStore.getState().vaultVideos.some((v) => v.videoId === id)) { toast('That video is already in the Vault.'); return; }
+      const vid = addVideo({ url: raw.trim(), videoId: id, title, folderId: cwd });
+      setUrl('');
+      if (!found) toast('Added without its title: you may be offline, or the video is private or gone.');
+      nav.openVideo(vid);
+    } finally {
+      addingRef.current = false;
+      setAdding(false);
+    }
   };
 
   const paste = async () => {

@@ -3,7 +3,7 @@ import { Alert, Text, ScrollView, StyleSheet, FlatList, View } from 'react-nativ
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useToolNav } from '../toolNav';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, neuRaised } from '../theme';
+import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore, Note } from '../store';
 import { ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
 import { Bouncy } from '../components/Motion';
@@ -30,12 +30,19 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const addNoteFolder = useStore((s) => s.addNoteFolder);
   const updateNote = useStore((s) => s.updateNote);
   const deleteNote = useStore((s) => s.deleteNote);
+  const renameNoteFolder = useStore((s) => s.renameNoteFolder);
+  const deleteNoteFolder = useStore((s) => s.deleteNoteFolder);
 
   const [q, setQ] = useState('');
   const [folder, setFolder] = useState<string | null>(null);
   const [folderSheet, setFolderSheet] = useState(false);
   const [newFolder, setNewFolder] = useState('');
   const [menuNote, setMenuNote] = useState<Note | null>(null);
+  // hold a folder chip to rename or delete it; General always stays
+  const [folderMenu, setFolderMenu] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameTo, setRenameTo] = useState('');
+  const [renameProblem, setRenameProblem] = useState('');
 
   const filtered = useMemo(() => {
     const ql = q.trim().toLowerCase();
@@ -94,7 +101,10 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
             >
               <Chip label="All" active={!folder} onPress={() => setFolder(null)} />
               {folders.map((f) => (
-                <Chip key={f} label={f} active={folder === f} onPress={() => setFolder(f)} />
+                <Chip
+                  key={f} label={f} active={folder === f} onPress={() => setFolder(f)}
+                  onLongPress={f === 'General' ? undefined : () => setFolderMenu(f)}
+                />
               ))}
               <Chip icon="add" label="Folder" onPress={() => setFolderSheet(true)} />
             </ScrollView>
@@ -116,6 +126,8 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
             : { backgroundColor: C.card, ...neuRaised('high') },
         ]}
         onPress={() => { tap(); newNote(); }}
+        accessibilityRole="button"
+        accessibilityLabel="New note"
       >
         <Ionicons name="add" size={30} color={C.green} />
       </Bouncy>
@@ -141,6 +153,47 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
           },
         ] : []}
       />
+
+      <DotMenu
+        visible={!!folderMenu}
+        onClose={() => setFolderMenu(null)}
+        items={folderMenu ? [
+          { label: 'Rename', icon: 'create-outline', onPress: () => { setRenameTo(folderMenu); setRenameProblem(''); setRenaming(folderMenu); } },
+          {
+            label: 'Delete folder',
+            icon: 'trash-outline',
+            color: C.danger,
+            onPress: () => {
+              const name = folderMenu;
+              const inside = useStore.getState().notes.filter((n) => n.folder === name).length;
+              const go = () => { deleteNoteFolder(name); if (folder === name) setFolder(null); };
+              if (!inside) { go(); return; }
+              Alert.alert(
+                'Delete ' + name + '?',
+                (inside === 1 ? 'Its note moves' : 'Its ' + inside + ' notes move') + ' to General. No note is deleted.',
+                [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete folder', style: 'destructive', onPress: go }],
+              );
+            },
+          },
+        ] : []}
+      />
+
+      <Sheet visible={!!renaming} onClose={() => setRenaming(null)} title={'Rename ' + (renaming || 'folder')}>
+        <Field value={renameTo} onChangeText={(v) => { setRenameTo(v); setRenameProblem(''); }} placeholder="Folder name" autoFocus maxLength={40} />
+        {renameProblem ? <Text style={{ color: C.danger, ...T.caption, marginTop: -8, marginBottom: 12 }}>{renameProblem}</Text> : null}
+        <PillButton
+          label="Save"
+          onPress={() => {
+            if (!renaming) return;
+            const next = renameTo.trim();
+            if (!next) { setRenameProblem('Give the folder a name.'); return; }
+            if (next !== renaming && folders.includes(next)) { setRenameProblem('There is already a folder with that name.'); return; }
+            renameNoteFolder(renaming, next);
+            if (folder === renaming) setFolder(next);
+            setRenaming(null);
+          }}
+        />
+      </Sheet>
 
       <Sheet visible={folderSheet} onClose={() => setFolderSheet(false)} title="New folder">
         <Field value={newFolder} onChangeText={setNewFolder} placeholder="Folder name" autoFocus />

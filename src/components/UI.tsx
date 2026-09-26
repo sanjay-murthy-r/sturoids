@@ -227,13 +227,16 @@ export function SectionTitle({ children, right }: { children: React.ReactNode; r
  * raised pills reads as clutter, so the depth stays on the surfaces around them.
  */
 export function Chip({
-  label, active, color, onPress, small, icon,
-}: { label: string; active?: boolean; color?: string; onPress?: () => void; small?: boolean; icon?: any }) {
+  label, active, color, onPress, onLongPress, small, icon,
+}: {
+  label: string; active?: boolean; color?: string; onPress?: () => void; onLongPress?: () => void; small?: boolean; icon?: any;
+}) {
   const theme = useTheme();
   const c = color || C.accent;
   return (
     <Bouncy
       onPress={onPress}
+      onLongPress={onLongPress}
       scaleTo={0.94}
       radius={999}
       style={[

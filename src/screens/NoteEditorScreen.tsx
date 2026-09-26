@@ -29,16 +29,22 @@ import { ATT_DIR, deleteAttachmentFiles } from '../attachments';
 const LINE_H = 24;
 const FREE_LINES = 9; // keep ~8-10 lines of breathing room while dictating
 
-async function persistFile(uri: string, name: string): Promise<string> {
+/**
+ * Copies a picked file into the app's own attachments folder, where Android never clears it. When the copy fails (a
+ * full phone, usually) the note keeps the picker's copy for now and `kept` is false, so the user is told to re-attach
+ * it once there is room: the picker's copy lives in a cache Android may clear.
+ */
+async function persistFile(uri: string, name: string): Promise<{ uri: string; kept: boolean }> {
   try {
     await FileSystem.makeDirectoryAsync(ATT_DIR, { intermediates: true }).catch(() => {});
     const dest = ATT_DIR + uid() + '-' + name.replace(/[^\w.\-]/g, '_');
     await FileSystem.copyAsync({ from: uri, to: dest });
-    return dest;
+    return { uri: dest, kept: true };
   } catch {
-    return uri;
+    return { uri, kept: false };
   }
 }
+const NOT_KEPT = 'Attached, but the phone is too full to keep a copy. Free some space and attach it again.';
 
 /** Raised mic button — carves in while listening and breathes a pulse ring. */
 function MicButton({ listening, onPress }: { listening: boolean; onPress: () => void }) {
@@ -71,6 +77,8 @@ function MicButton({ listening, onPress }: { listening: boolean; onPress: () => 
         scaleTo={0.9}
         radius={22}
         hitSlop={6}
+        accessibilityRole="button"
+        accessibilityLabel={listening ? 'Stop dictation' : 'Dictate'}
         style={[
           st.micBtn,
           theme === 'minimal'
@@ -141,8 +149,9 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     voiceRef.current?.stop();
   }, []);
 
+  // a line offered as a task is its words: the bullet or box the toolbar put in front of it stays in the note
   const lines = useMemo(
-    () => (note?.body || '').split('\n').map((l) => l.trim()).filter((l) => l.length > 2),
+    () => (note?.body || '').split('\n').map((l) => l.trim().replace(/^[•☐☑✓]\s*/, '').trim()).filter((l) => l.length > 2),
     [note?.body]
   );
 
@@ -256,11 +265,14 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         selectionLimit: 5,
       });
       if (res.canceled) return;
+      let lost = false;
       for (const a of res.assets) {
         const name = a.fileName || (a.type === 'video' ? 'video.mp4' : 'image.jpg');
         const stored = await persistFile(a.uri, name);
-        addAttachment(note.id, { kind: a.type === 'video' ? 'video' : 'image', uri: stored, name });
+        if (!stored.kept) lost = true;
+        addAttachment(note.id, { kind: a.type === 'video' ? 'video' : 'image', uri: stored.uri, name });
       }
+      if (lost) toast(NOT_KEPT);
     } catch (e: any) {
       toast('Could not attach that file.');
     }
@@ -272,7 +284,8 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       if (res.canceled || !res.assets?.[0]) return;
       const f = res.assets[0];
       const stored = await persistFile(f.uri, f.name || 'file');
-      addAttachment(note.id, { kind: 'file', uri: stored, name: f.name || 'file' });
+      addAttachment(note.id, { kind: 'file', uri: stored.uri, name: f.name || 'file' });
+      if (!stored.kept) toast(NOT_KEPT);
     } catch (e: any) {
       toast('Could not attach that file.');
     }
@@ -375,7 +388,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
             {note.attachments.map((a) => (
               <View key={a.id}>
                 {a.kind === 'image' && (
-                  <CachedImage source={{ uri: a.uri }} style={{ width: mediaW, height: mediaW * 0.75, borderRadius: 14 }} contentFit="cover" cachePolicy="memory" transition={180} />
+                  <AttachedImage uri={a.uri} width={mediaW} />
                 )}
                 {a.kind === 'video' && <InlineVideo uri={a.uri} width={mediaW} />}
                 {a.kind === 'file' && (
@@ -493,6 +506,24 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       />
     </ScreenBG>
   );
+}
+
+/** An attached picture; when its file is gone, a carved placeholder says so instead of an empty box. */
+function AttachedImage({ uri, width }: { uri: string; width: number }) {
+  const [failed, setFailed] = React.useState(false);
+  const box = { width, height: width * 0.75, borderRadius: 14 };
+  if (failed) {
+    return (
+      <View
+        style={[box, { backgroundColor: C.inset, alignItems: 'center', justifyContent: 'center', ...NEU.insetLow }]}
+        accessible accessibilityLabel="This picture could not be found"
+      >
+        <Ionicons name="image-outline" size={22} color={C.textFaint} />
+        <Text style={[T.caption, { marginTop: 4 }]}>Could not be found</Text>
+      </View>
+    );
+  }
+  return <CachedImage source={{ uri }} style={box} contentFit="cover" cachePolicy="memory" transition={180} onError={() => setFailed(true)} />;
 }
 
 function InlineVideo({ uri, width }: { uri: string; width: number }) {

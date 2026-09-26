@@ -223,6 +223,27 @@ const scenarios = {
     }
   },
 
+  async 'note folders rename and delete without losing a note'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    st().addNoteFolder('Phyics');
+    st().addNoteFolder('Maths');
+    st().addNote({ title: 'Torque', body: '', folder: 'Phyics' });
+    st().renameNoteFolder('Phyics', 'Maths');
+    assert.ok(st().noteFolders.includes('Phyics'), 'a name already in use is refused');
+    st().renameNoteFolder('Phyics', 'Physics');
+    assert.deepEqual(st().noteFolders, ['General', 'Physics', 'Maths']);
+    assert.equal(st().notes[0].folder, 'Physics', 'the note moves with its folder');
+    st().renameNoteFolder('General', 'Misc');
+    st().deleteNoteFolder('General');
+    assert.ok(st().noteFolders.includes('General'), 'General always stays');
+    st().deleteNoteFolder('Physics');
+    assert.deepEqual(st().noteFolders, ['General', 'Maths']);
+    assert.equal(st().notes.length, 1, 'no note is deleted');
+    assert.equal(st().notes[0].folder, 'General', 'its notes move to General');
+  },
+
   async 'a v4 blob upgrades through the real persist migration'() {
     const app = boot({ [KEY]: JSON.stringify({ state: V4, version: 4 }) });
     await settled(app);

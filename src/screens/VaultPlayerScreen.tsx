@@ -143,6 +143,13 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       play={playing}
       videoId={video.videoId}
       onReady={onReady}
+      onError={(e: string) => toast(
+        e === 'embed_not_allowed' || e === 'HTML5_error'
+          ? 'This video cannot play inside the app. Your notes and bookmarks are still here.'
+          : e === 'video_not_found'
+            ? 'This video is private or no longer on YouTube. Your notes and bookmarks are still here.'
+            : 'The video would not load. Check your connection and open it again.',
+      )}
       onFullScreenChange={(f: boolean) => { fullscreen.current = f; }}
       onChangeState={(s: string) => {
         if (s === 'playing') setPlaying(true);

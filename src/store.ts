@@ -301,6 +301,10 @@ export interface AppState {
   /** returns the attachments it orphaned — the caller deletes the files it copied */
   deleteNote: (id: string) => Attachment[];
   addNoteFolder: (name: string) => void;
+  /** renames a folder and moves its notes with it (General keeps its name) */
+  renameNoteFolder: (from: string, to: string) => void;
+  /** deletes a folder; its notes move to General */
+  deleteNoteFolder: (name: string) => void;
   addAttachment: (noteId: string, a: Omit<Attachment, 'id'>) => void;
   /** returns the removed attachment so the caller can delete its file */
   removeAttachment: (noteId: string, attId: string) => Attachment | undefined;
@@ -790,6 +794,23 @@ export const useStore = create<AppState>()(
         set((s) => ({ notes: s.notes.filter((x) => x.id !== id) }));
         return orphaned;
       },
+      renameNoteFolder: (from, to) =>
+        set((s) => {
+          const name = to.trim();
+          if (!name || from === 'General' || name === from || !s.noteFolders.includes(from) || s.noteFolders.includes(name)) return {};
+          return {
+            noteFolders: s.noteFolders.map((f) => (f === from ? name : f)),
+            notes: s.notes.map((n) => (n.folder === from ? { ...n, folder: name } : n)),
+          };
+        }),
+      deleteNoteFolder: (name) =>
+        set((s) => {
+          if (name === 'General' || !s.noteFolders.includes(name)) return {};
+          return {
+            noteFolders: s.noteFolders.filter((f) => f !== name),
+            notes: s.notes.map((n) => (n.folder === name ? { ...n, folder: 'General' } : n)),
+          };
+        }),
       addNoteFolder: (name) =>
         set((s) => ({
           noteFolders: s.noteFolders.includes(name) ? s.noteFolders : [...s.noteFolders, name],
