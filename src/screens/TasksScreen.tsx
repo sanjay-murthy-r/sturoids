@@ -290,6 +290,7 @@ const MissionRow = React.memo(function MissionRow({ m, open, onToggle, onToggleO
   m: Mission; open: boolean;
   onToggle: (id: string) => void; onToggleOpen: (id: string) => void; onDelete: (m: Mission) => void;
 }) {
+  useTheme(); // a memo row: it follows a new accent itself, since its props do not change with one
   const level = useAnimLevel();
   const addSubtask = useStore((s) => s.addSubtask);
   const toggleSubtask = useStore((s) => s.toggleSubtask);

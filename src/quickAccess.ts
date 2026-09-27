@@ -28,6 +28,12 @@ export function siteHost(url: string): string {
   return m ? m[1].toLowerCase().replace(/^www\./, '') : '';
 }
 
+/** Whether two links are the same page: scheme, case, www. and a trailing slash aside. */
+export function sameSite(a: string, b: string): boolean {
+  const key = (u: string) => u.trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/+$/, '').toLowerCase();
+  return key(a) === key(b);
+}
+
 /** A short name for a site from its address: "khanacademy.org" becomes "Khanacademy". */
 export function siteName(url: string): string {
   const host = siteHost(url);

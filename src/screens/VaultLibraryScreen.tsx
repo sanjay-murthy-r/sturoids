@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Alert, BackHandler, useWindowDimensions, FlatList } from 'react-native';
 import Animated, {
@@ -8,7 +8,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T, NEU } from '../theme';
-import { useStore, VaultVideo, VaultFolder } from '../store';
+import { useStore, VaultVideo, VaultFolder, TimedNote, Bookmark } from '../store';
 import { parseYouTubeId, fmtMediaTime } from '../utils';
 import {
   ScreenBG, Card, Field, EmptyState, ListCard, ListRow, ListSlice, Row, Chip, Sheet, PillButton, IconBtn, NeuHeader,
@@ -16,7 +16,7 @@ import {
 } from '../components/UI';
 import { toast } from '../components/Toast';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Appear, EASE_OUT, shiftIn, useAnimLevel, useBuilt, useEntrance } from '../components/Motion';
+import { Appear, EASE_OUT, rowIn, shiftIn, useAnimLevel, useBuilt, useEntrance } from '../components/Motion';
 import { useToolNav } from '../toolNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as CachedImage } from 'expo-image';
@@ -40,6 +40,15 @@ async function fetchTitle(videoId: string): Promise<{ title: string; found: bool
 type ViewTab = 'library' | 'recent' | 'notes';
 /** the pager's pages, in order */
 const PAGES: ViewTab[] = ['library', 'recent', 'notes'];
+const PAGE_OPTIONS: { key: ViewTab; label: string }[] = [
+  { key: 'library', label: 'Library' },
+  { key: 'recent', label: 'Recent' },
+  { key: 'notes', label: 'All notes' },
+];
+
+/** A timed note or a bookmark, with the video it belongs to: a row of All notes, and what its menu and sheets act on. */
+type NoteHit = { video: VaultVideo; item: TimedNote | Bookmark; isBookmark: boolean };
+const hitText = (x: NoteHit) => (x.isBookmark ? (x.item as Bookmark).label : (x.item as TimedNote).text);
 
 /** A video's thumbnail, cached on the phone, with a carved play mark when it cannot load. */
 function Thumb({ videoId }: { videoId: string }) {
@@ -67,43 +76,105 @@ function useHeld<T>(value: T | null): T | null {
   return held.current;
 }
 
+/** How a card of a folder's page arrives: with the screen's first entrance, fading in later, or simply there. */
+type Arrival = 'enter' | 'appear' | 'still';
+
 /**
  * A folder's page, keyed on the folder by its caller, so it arrives as one piece from the side it was reached from.
- * `rise` tells its cards whether to rise in: with the screen's own first entrance (`fresh`), or when a card turns up
- * later in a page already shown (the first video in a folder). A page arriving from the side brings its cards with it.
+ * Its cards rise in with the screen's own first entrance (`fresh`); a page arriving from the side brings its cards with
+ * it; and a card that turns up later in a page already shown (the first video in a folder, a search that finds some)
+ * fades in where it stands.
  */
 function FolderPage({ entering, fresh, children }: {
-  entering: any; fresh: boolean; children: (rise: boolean) => React.ReactNode;
+  entering: any; fresh: boolean; children: (how: Arrival) => React.ReactNode;
 }) {
   const built = useBuilt();
-  return <Animated.View entering={entering}>{children(fresh || built.current)}</Animated.View>;
+  return <Animated.View entering={entering}>{children(built.current ? 'appear' : fresh ? 'enter' : 'still')}</Animated.View>;
 }
 
-/** A card's entrance, only when `on` holds as it mounts. */
-function Rise({ index, on, children }: { index: number; on: boolean; children: React.ReactNode }) {
-  const entrance = useEntrance(index, on);
-  return <Animated.View style={entrance}>{children}</Animated.View>;
+/**
+ * One card of a folder's page. How it arrives is settled as it mounts (the props of later renders never replay it).
+ * The fade sits on the outer layer and the entrance on the inner, so the two never fight.
+ */
+function Arrive({ index, how, children }: { index: number; how: Arrival; children: React.ReactNode }) {
+  const level = useAnimLevel();
+  const entrance = useEntrance(index, how === 'enter');
+  return (
+    <Animated.View entering={how === 'appear' ? rowIn(level) : undefined}>
+      <Animated.View style={entrance}>{children}</Animated.View>
+    </Animated.View>
+  );
 }
 
-/** One video in a list, memoised: typing a search or a link re-renders the rows whose video changed, not all of them. */
+/** The parts of a video's caption that say something: no "0 notes", no "0 marks". */
+function videoCaption(v: VaultVideo, folderName?: string) {
+  const parts: string[] = [];
+  if (folderName) parts.push(folderName);
+  if (v.notes.length) parts.push(v.notes.length + (v.notes.length === 1 ? ' note' : ' notes'));
+  if (v.bookmarks.length) parts.push(v.bookmarks.length + (v.bookmarks.length === 1 ? ' mark' : ' marks'));
+  if (v.tags.length) parts.push(v.tags.map((t) => '#' + t).join(' '));
+  return parts.join(' · ');
+}
+
+/** One video in a list, memoised: a search or a link being typed re-renders the rows whose video changed, not all of them. */
 const VideoRow = React.memo(function VideoRow({ v, folderName, onOpen, onMenu }: {
   v: VaultVideo;
   /** the folder's name, shown where videos from every folder mix (Recent) */
   folderName?: string;
   onOpen: (id: string) => void; onMenu: (v: VaultVideo) => void;
 }) {
+  const caption = videoCaption(v, folderName);
   return (
     <ListRow onPress={() => onOpen(v.id)} onLongPress={() => onMenu(v)} style={{ paddingVertical: 10 }}>
       <Thumb videoId={v.videoId} />
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={[T.body, { fontFamily: F.semi, fontSize: 14, lineHeight: 19 }]} numberOfLines={2}>{v.title}</Text>
-        <Text style={[T.caption, { marginTop: 3 }]} numberOfLines={1}>
-          {folderName ? folderName + ' · ' : ''}
-          {v.notes.length} {v.notes.length === 1 ? 'note' : 'notes'} · {v.bookmarks.length} {v.bookmarks.length === 1 ? 'mark' : 'marks'}
-          {v.tags.length ? ' · ' + v.tags.map((t) => '#' + t).join(' ') : ''}
-        </Text>
+        {caption ? <Text style={[T.caption, { marginTop: 3 }]} numberOfLines={1}>{caption}</Text> : null}
       </View>
       <IconBtn name="ellipsis-vertical" size={17} onPress={() => onMenu(v)} accessibilityLabel={'More for ' + v.title} />
+    </ListRow>
+  );
+});
+
+/** One folder of the page in view, memoised: it re-renders when its name or its count changes. */
+const FolderRow = React.memo(function FolderRow({ f, count, onOpen, onMenu }: {
+  f: VaultFolder; count: number; onOpen: (id: string) => void; onMenu: (f: VaultFolder) => void;
+}) {
+  return (
+    <ListRow onPress={() => onOpen(f.id)} onLongPress={() => onMenu(f)} style={{ paddingVertical: 10 }}>
+      <Ionicons name="folder" size={22} color={C.amber} />
+      <Text style={[T.title, { flex: 1, marginLeft: 12, fontSize: 15 }]} numberOfLines={1}>{f.name}</Text>
+      {/* an empty folder states no count of nothing */}
+      {count ? <Text style={T.caption}>{count}</Text> : null}
+      <IconBtn name="ellipsis-vertical" size={16} onPress={() => onMenu(f)} accessibilityLabel={'More for ' + f.name} />
+    </ListRow>
+  );
+});
+
+/**
+ * One timed note or bookmark of All notes, memoised on the note itself: a search re-renders the rows that change, not
+ * every row it keeps.
+ */
+const NoteRow = React.memo(function NoteRow({ video, item, isBookmark, onOpen, onMenu }: {
+  video: VaultVideo; item: TimedNote | Bookmark; isBookmark: boolean;
+  onOpen: (videoDbId: string, time: number) => void; onMenu: (x: NoteHit) => void;
+}) {
+  const tint = isBookmark ? C.pink : C.green;
+  return (
+    <ListRow onPress={() => onOpen(video.id, item.time)} onLongPress={() => onMenu({ video, item, isBookmark })} style={{ paddingVertical: 11 }}>
+      <View style={[st.timePill, { borderColor: tint + '66', backgroundColor: tint + '14' }]}>
+        <Ionicons name={isBookmark ? 'bookmark' : 'create-outline'} size={11} color={tint} />
+        <Text style={{ color: tint, fontSize: 11, fontFamily: F.semi, marginLeft: 4, fontVariant: ['tabular-nums'] }}>
+          {fmtMediaTime(item.time)}
+        </Text>
+      </View>
+      <View style={{ flex: 1, marginLeft: 10 }}>
+        <Text style={[T.body, { fontSize: 14 }]} numberOfLines={2}>
+          {isBookmark ? (item as Bookmark).label : (item as TimedNote).text}
+        </Text>
+        <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{video.title}</Text>
+      </View>
+      <IconBtn name="ellipsis-vertical" size={17} onPress={() => onMenu({ video, item, isBookmark })} accessibilityLabel="More" />
     </ListRow>
   );
 });
@@ -112,7 +183,7 @@ const VideoRow = React.memo(function VideoRow({ v, folderName, onOpen, onMenu }:
  * The link field and its add key. It keeps the link being typed or pasted to itself, so a keystroke re-renders this
  * card and not the three pages under it.
  */
-function AddCard({ cwd, folderName, onAdded }: {
+const AddCard = React.memo(function AddCard({ cwd, folderName, onAdded }: {
   cwd: string | null; folderName?: string; onAdded: (id: string) => void;
 }) {
   const addVideo = useStore((s) => s.addVideo);
@@ -159,7 +230,25 @@ function AddCard({ cwd, folderName, onAdded }: {
       {adding && <Appear><Text style={[T.caption, { marginTop: 6 }]}>Fetching title…</Text></Appear>}
     </Card>
   );
-}
+});
+
+/**
+ * The search field. The words being typed stay here, so a keystroke re-renders the field at once; the three pages
+ * filter in a transition behind it, which a faster keystroke interrupts.
+ */
+const SearchField = React.memo(function SearchField({ onQuery }: { onQuery: (q: string) => void }) {
+  const [text, setText] = useState('');
+  return (
+    <Field
+      value={text}
+      onChangeText={(v) => {
+        setText(v);
+        React.startTransition(() => onQuery(v));
+      }}
+      placeholder="Search titles, #tags, notes…"
+    />
+  );
+});
 
 export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const nav = useToolNav();
@@ -182,14 +271,15 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const [tab, setTab] = useState<ViewTab>('library');
   const [cwd, setCwdState] = useState<string | null>(null);
+  // the settled search: set in a transition by the field, which keeps the words being typed
   const [q, setQ] = useState('');
   const [folderSheet, setFolderSheet] = useState<{ mode: 'new' | 'rename'; folder?: VaultFolder } | null>(null);
   const [videoMenu, setVideoMenu] = useState<VaultVideo | null>(null);
   const [folderMenu, setFolderMenu] = useState<VaultFolder | null>(null);
   const [moveSheet, setMoveSheet] = useState<VaultVideo | null>(null);
-  const [noteMenu, setNoteMenu] = useState<any>(null);
-  const [editSheet, setEditSheet] = useState<any>(null);
-  const [previewSheet, setPreviewSheet] = useState<any>(null);
+  const [noteMenu, setNoteMenu] = useState<NoteHit | null>(null);
+  const [editSheet, setEditSheet] = useState<NoteHit | null>(null);
+  const [previewSheet, setPreviewSheet] = useState<NoteHit | null>(null);
   // every sheet and menu keeps its title and rows while it closes, instead of emptying or changing on its way out
   const heldFolderSheet = useHeld(folderSheet);
   const heldFolderMenu = useHeld(folderMenu);
@@ -274,8 +364,21 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     turn.current = b > a ? 1 : b < a ? -1 : 0;
     setCwdState(next);
   };
+  // rows and menus call the latest setCwd through one stable function, so the memoised rows never re-render for it
+  const setCwdRef = useRef(setCwd);
+  setCwdRef.current = setCwd;
+  const openFolder = useCallback((id: string | null) => setCwdRef.current(id), []);
   const folderIn = !built.current || level === 'none' ? undefined
     : level === 'full' && turn.current ? shiftIn(turn.current * 24) : FadeIn.duration(200).easing(EASE_OUT);
+
+  // a folder that is gone (a restored backup, say) is left for the top of the library, never shown as an empty page
+  // with no way up
+  React.useEffect(() => {
+    if (cwd && !folders.some((f) => f.id === cwd)) {
+      turn.current = 0;
+      setCwdState(null);
+    }
+  }, [cwd, folders]);
 
   // layered back: system back climbs sub-folder → folder → tool
   const cwdRef = useRef(cwdFolder); cwdRef.current = cwdFolder;
@@ -291,10 +394,8 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return () => sub.remove();
   }, [goUp]));
 
-  // typing stays immediate; the filtering runs on the settled text
-  const settledQ = React.useDeferredValue(q);
+  const ql = q.trim().toLowerCase();
   const match = (v: VaultVideo) => {
-    const ql = settledQ.trim().toLowerCase();
     if (!ql) return true;
     if (ql.startsWith('#')) return v.tags.some((t) => t.includes(ql.slice(1)));
     return v.title.toLowerCase().includes(ql) || v.tags.some((t) => t.includes(ql));
@@ -302,23 +403,25 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const hereVideos = useMemo(
     () => videos.filter((v) => v.folderId === cwd).filter(match).sort((a, b) => b.addedAt - a.addedAt),
-    [videos, cwd, settledQ]
+    [videos, cwd, ql]
   );
   const recentVideos = useMemo(
     () => [...videos].filter(match).sort((a, b) => b.addedAt - a.addedAt),
-    [videos, settledQ]
+    [videos, ql]
   );
   const allNotes = useMemo(() => {
-    const ql = settledQ.trim().toLowerCase();
-    const out: { video: VaultVideo; item: any; isBookmark: boolean }[] = [];
+    const out: NoteHit[] = [];
     for (const v of videos) {
       v.notes.forEach((n) => out.push({ video: v, item: n, isBookmark: false }));
       v.bookmarks.forEach((b) => out.push({ video: v, item: b, isBookmark: true }));
     }
     return out
-      .filter((x) => !ql || (x.isBookmark ? x.item.label : x.item.text).toLowerCase().includes(ql) || x.video.title.toLowerCase().includes(ql))
+      .filter((x) => !ql || hitText(x).toLowerCase().includes(ql) || x.video.title.toLowerCase().includes(ql))
       .sort((a, b) => b.video.addedAt - a.video.addedAt || a.item.time - b.item.time);
-  }, [videos, settledQ]);
+  }, [videos, ql]);
+  // an empty page says whether the search found nothing or there is nothing yet
+  const folderHasVideos = useMemo(() => videos.some((v) => v.folderId === cwd), [videos, cwd]);
+  const anyNotes = useMemo(() => videos.some((v) => v.notes.length > 0 || v.bookmarks.length > 0), [videos]);
 
   const submitFolder = (name: string) => {
     const n = name.trim();
@@ -336,17 +439,38 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     pagerRef.current?.scrollTo({ x: i * pageW, animated: true });
   };
 
-  const openAt = (videoDbId: string, time: number) =>
-    nav.openVideo(videoDbId, time);
-  const openVideo = React.useCallback((id: string) => nav.openVideo(id), [nav]);
+  const openAt = useCallback((videoDbId: string, time: number) => nav.openVideo(videoDbId, time), [nav]);
+  const openVideo = useCallback((id: string) => nav.openVideo(id), [nav]);
+  // the preview sheet is a window of its own: the video opens once it has gone, never under it
+  const openAfterPreview = useRef<NoteHit | null>(null);
   const recentCount = recentVideos.length;
-  const renderRecent = React.useCallback(({ item, index }: { item: VaultVideo; index: number }) => (
+  const renderRecent = useCallback(({ item, index }: { item: VaultVideo; index: number }) => (
     <ListSlice first={index === 0} last={index === recentCount - 1}>
       <VideoRow v={item} folderName={item.folderId ? folderNames.get(item.folderId) : undefined} onOpen={openVideo} onMenu={setVideoMenu} />
     </ListSlice>
   ), [recentCount, folderNames, openVideo]);
+  const notesCount = allNotes.length;
+  const renderNote = useCallback(({ item: x, index }: { item: NoteHit; index: number }) => (
+    <ListSlice first={index === 0} last={index === notesCount - 1}>
+      <NoteRow video={x.video} item={x.item} isBookmark={x.isBookmark} onOpen={openAt} onMenu={setNoteMenu} />
+    </ListSlice>
+  ), [notesCount, openAt]);
 
-  const pageStyle = { padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) };
+  const pageStyle = useMemo(
+    () => ({ padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }),
+    [mode, insets.bottom]
+  );
+  const pageBox = useMemo(() => ({ width: pageW }), [pageW]);
+  const searching = ql.length > 0;
+  const anyVideos = videos.length > 0;
+  const recentEmpty = useMemo(() => (anyVideos
+    ? <EmptyState key="match" icon="search-outline" title="No videos match" />
+    : <EmptyState key="none" icon="time-outline" title="Nothing added yet" body="Recently added videos land here, newest first." />
+  ), [anyVideos]);
+  const notesEmpty = useMemo(() => (anyNotes
+    ? <EmptyState key="match" icon="search-outline" title="No notes or bookmarks match" />
+    : <EmptyState key="none" icon="bookmark-outline" title="No notes or bookmarks yet" body="Timed notes and bookmarks from every video appear here. Tap one to jump to that moment." />
+  ), [anyNotes]);
 
   return (
     <ScreenBG guard={mode === 'tab'} fling={false}>
@@ -359,17 +483,13 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <View style={{ padding: S.pad, paddingBottom: 0 }}>
           <AddCard cwd={cwd} folderName={cwdFolder?.name} onAdded={openVideo} />
 
-          <Field value={q} onChangeText={setQ} placeholder="Search titles, #tags, notes…" />
+          <SearchField onQuery={setQ} />
 
           <SegmentedControl
             color={C.pink}
             stretch
             style={{ marginBottom: 10 }}
-            options={[
-              { key: 'library', label: 'Library' },
-              { key: 'recent', label: 'Recent' },
-              { key: 'notes', label: 'All notes' },
-            ]}
+            options={PAGE_OPTIONS}
             value={tab}
             onChange={(k) => goTab(k as ViewTab)}
           />
@@ -385,7 +505,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
           onScroll={onPager}
           scrollEventThrottle={16}
         >
-          <ScrollView style={{ width: pageW }} contentContainerStyle={pageStyle}>
+          <ScrollView style={pageBox} contentContainerStyle={pageStyle}>
             {/* the header already names the folder: this row only moves between folders and adds one */}
             <Row style={{ marginBottom: 10, flexWrap: 'wrap' }}>
               <Chip small icon="home-outline" label="All" active={cwd === null} color={C.pink} onPress={() => setCwd(null)} />
@@ -397,81 +517,60 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
             {/* a folder's contents are one piece, keyed on the folder: it arrives from the side it was reached from */}
             <FolderPage key={cwd ?? 'root'} entering={folderIn} fresh={!built.current}>
-              {(rise) => (<>
+              {(how) => (<>
               {subFolders.length > 0 && (
-                <Rise index={0} on={rise}>
+                <Arrive index={0} how={how}>
                   <ListCard>
                     {subFolders.map((f) => (
-                      <ListRow key={f.id} onPress={() => setCwd(f.id)} onLongPress={() => setFolderMenu(f)} style={{ paddingVertical: 10 }}>
-                        <Ionicons name="folder" size={22} color={C.amber} />
-                        <Text style={[T.title, { flex: 1, marginLeft: 12, fontSize: 15 }]} numberOfLines={1}>{f.name}</Text>
-                        {/* an empty folder states no count of nothing */}
-                        {counts.get(f.id) ? <Text style={T.caption}>{counts.get(f.id)}</Text> : null}
-                        <IconBtn name="ellipsis-vertical" size={16} onPress={() => setFolderMenu(f)} accessibilityLabel={'More for ' + f.name} />
-                      </ListRow>
+                      <FolderRow key={f.id} f={f} count={counts.get(f.id) || 0} onOpen={openFolder} onMenu={setFolderMenu} />
                     ))}
                   </ListCard>
-                </Rise>
+                </Arrive>
               )}
 
               {hereVideos.length > 0 && (
-                <Rise index={1} on={rise}>
+                <Arrive index={1} how={how}>
                   <ListCard>
                     {hereVideos.map((v) => <VideoRow key={v.id} v={v} onOpen={openVideo} onMenu={setVideoMenu} />)}
                   </ListCard>
-                </Rise>
+                </Arrive>
               )}
               {subFolders.length === 0 && hereVideos.length === 0 && (
-                <EmptyState
-                  icon={cwd ? 'folder-open-outline' : 'play-circle-outline'}
-                  title={cwd ? 'This folder is empty' : 'Your study-video library'}
-                  body={cwd ? undefined : 'Paste a lecture link above to start your library.'}
-                />
+                searching && folderHasVideos ? (
+                  <EmptyState key="match" icon="search-outline" title="No videos match" />
+                ) : (
+                  <EmptyState
+                    key="none"
+                    icon={cwd ? 'folder-open-outline' : 'play-circle-outline'}
+                    title={cwd ? 'This folder is empty' : 'Your study-video library'}
+                    body={cwd ? undefined : 'Paste a lecture link above to start your library.'}
+                  />
+                )
               )}
               </>)}
             </FolderPage>
           </ScrollView>
 
           <FlatList
-            style={{ width: pageW }}
+            style={pageBox}
             contentContainerStyle={pageStyle}
             data={recentVideos}
             keyExtractor={(v) => v.id}
             initialNumToRender={8}
             windowSize={7}
             renderItem={renderRecent}
-            ListEmptyComponent={<EmptyState icon="time-outline" title="Nothing added yet" body="Recently added videos land here, newest first." />}
+            ListEmptyComponent={recentEmpty}
           />
 
           <FlatList
-            style={{ width: pageW }}
+            style={pageBox}
             contentContainerStyle={pageStyle}
             data={allNotes}
             keyExtractor={(x) => (x.isBookmark ? 'b' : 'n') + x.item.id}
             initialNumToRender={10}
             windowSize={7}
-            renderItem={({ item: x, index: i }) => (
-              <ListSlice first={i === 0} last={i === allNotes.length - 1}>
-                <ListRow onPress={() => openAt(x.video.id, x.item.time)} onLongPress={() => setNoteMenu(x)} style={{ paddingVertical: 11 }}>
-                  <View style={[st.timePill, { borderColor: (x.isBookmark ? C.pink : C.green) + '66', backgroundColor: (x.isBookmark ? C.pink : C.green) + '14' }]}>
-                    <Ionicons name={x.isBookmark ? 'bookmark' : 'create-outline'} size={11} color={x.isBookmark ? C.pink : C.green} />
-                    <Text style={{ color: x.isBookmark ? C.pink : C.green, fontSize: 11, fontFamily: F.semi, marginLeft: 4, fontVariant: ['tabular-nums'] }}>
-                      {fmtMediaTime(x.item.time)}
-                    </Text>
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <Text style={[T.body, { fontSize: 14 }]} numberOfLines={2}>
-                      {x.isBookmark ? x.item.label : x.item.text}
-                    </Text>
-                    <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{x.video.title}</Text>
-                  </View>
-                  <IconBtn name="ellipsis-vertical" size={17} onPress={() => setNoteMenu(x)} accessibilityLabel="More" />
-                </ListRow>
-              </ListSlice>
-            )}
-            ListEmptyComponent={
-              <EmptyState icon="bookmark-outline" title="No notes or bookmarks yet" body="Timed notes and bookmarks from every video appear here. Tap one to jump to that moment." />
-            }
+            renderItem={renderNote}
+            ListEmptyComponent={notesEmpty}
           />
         </Animated.ScrollView>
       </View>
@@ -554,7 +653,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         visible={!!editSheet}
         onClose={() => setEditSheet(null)}
         title={'Edit @ ' + fmtMediaTime(heldEdit?.item?.time || 0)}
-        initial={heldEdit ? (heldEdit.isBookmark ? heldEdit.item.label : heldEdit.item.text) : ''}
+        initial={heldEdit ? hitText(heldEdit) : ''}
         multiline minHeight={60} label="Save"
         onSave={(text) => {
           if (!editSheet) return;
@@ -564,7 +663,15 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         }}
       />
 
-      <Sheet visible={!!previewSheet} onClose={() => setPreviewSheet(null)}>
+      <Sheet
+        visible={!!previewSheet}
+        onClose={() => setPreviewSheet(null)}
+        onClosed={() => {
+          const p = openAfterPreview.current;
+          openAfterPreview.current = null;
+          if (p) openAt(p.video.id, p.item.time);
+        }}
+      >
         {heldPreview && (
           <View>
             <CachedImage
@@ -578,7 +685,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
             </Text>
             <PillButton
               label="Watch from here" color={C.pink} style={{ marginTop: 14 }}
-              onPress={() => { const p = heldPreview; setPreviewSheet(null); openAt(p.video.id, p.item.time); }}
+              onPress={() => { openAfterPreview.current = heldPreview; setPreviewSheet(null); }}
             />
           </View>
         )}

@@ -390,7 +390,8 @@ function SubjectLayer({ s, x, y, w, height, dim }: {
             fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
           />
         ) : null))}
-        {s.values.map((v, i) => (v == null ? null : <Circle key={i} cx={x(i)} cy={y(v)} r={2.5} fill={s.color} />))}
+        {/* past thirty exams the dots crowd into the line, and cost a node each */}
+          {s.values.length <= 30 ? s.values.map((v, i) => (v == null ? null : <Circle key={i} cx={x(i)} cy={y(v)} r={2.5} fill={s.color} />)) : null}
       </Svg>
     </Animated.View>
   );

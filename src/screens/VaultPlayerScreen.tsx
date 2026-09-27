@@ -10,7 +10,7 @@ import {
   ScreenBG, Card, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, DotMenu, NeuHeader,
 } from '../components/UI';
 import { toast } from '../components/Toast';
-import { glide, rowOut, useAnimLevel, useEntrance } from '../components/Motion';
+import { glide, rowIn, rowOut, useAnimLevel, useBuilt, useEntrance } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { READ_MAX, TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth, frame } from '../layout';
 
@@ -40,7 +40,13 @@ export function DraftSheet({
   onSave: (text: string) => void;
 }) {
   const [draft, setDraft] = useState(initial);
-  React.useEffect(() => { if (visible) setDraft(initial); }, [visible, initial]);
+  // each opening starts from `initial`, set in the same render that opens the sheet, so the field never shows the
+  // last opening's words for a frame
+  const [open, setOpen] = useState(visible);
+  if (open !== visible) {
+    setOpen(visible);
+    if (visible) setDraft(initial);
+  }
   return (
     <Sheet visible={visible} onClose={onClose} title={title}>
       <Field
@@ -54,18 +60,21 @@ export function DraftSheet({
 }
 
 /**
- * A bookmark or a timed note. It rises in the first time it is seen; one removed fades as it goes while the rest glide
- * up into its place. The glide sits on the outer layer and the entrance on the inner, so the two never fight.
+ * A bookmark or a timed note. The rows the page is built with rise in with it, the first time it is seen; one saved
+ * later fades in where it lands, and one removed fades as it goes, while the rest glide into their places. The glide
+ * and the fades sit on the outer layer and the entrance on the inner, so the two never fight.
  */
-const ItemRow = React.memo(function ItemRow({ item, isBookmark, index, onSeek, onMenu }: {
+const ItemRow = React.memo(function ItemRow({ item, isBookmark, index, live, onSeek, onMenu }: {
   item: TimedNote | Bookmark; isBookmark: boolean; index: number;
+  /** true for a row that arrives after the page was built: it fades in instead of rising with the page */
+  live: boolean;
   onSeek: (sec: number) => void; onMenu: (m: { item: TimedNote | Bookmark; isBookmark: boolean }) => void;
 }) {
   const level = useAnimLevel();
-  const entrance = useEntrance(Math.min(index, 6));
+  const entrance = useEntrance(Math.min(index, 6), !live);
   const tint = isBookmark ? C.pink : C.green;
   return (
-    <Animated.View exiting={rowOut(level)} layout={glide(level)}>
+    <Animated.View entering={live ? rowIn(level) : undefined} exiting={rowOut(level)} layout={glide(level)}>
       <Animated.View style={entrance}>
         <Card pad={12} onPress={() => onSeek(item.time)}>
           <Row>
@@ -89,6 +98,8 @@ const ItemRow = React.memo(function ItemRow({ item, isBookmark, index, onSeek, o
 export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const level = useAnimLevel();
+  // what arrives after the first paint (a saved note, a new tag) fades in; what the page is built with is simply there
+  const built = useBuilt();
   const { id, t } = useLocalSearchParams<{ id: string; t?: string }>();
   const { width, height } = useWindowDimensions();
   const wide = width >= WIDE_AT;
@@ -188,10 +199,11 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const openMenu = useCallback((m: { item: TimedNote | Bookmark; isBookmark: boolean }) => setMenu(m), []);
 
   if (!video) {
+    // the text face, like every other empty page (a bare Text fell back to the system font)
     return (
       <ScreenBG>
         <NeuHeader title="YT Vault" />
-        <Text style={{ color: C.textDim, textAlign: 'center', marginTop: 60 }}>Video not found.</Text>
+        <EmptyState icon="play-circle-outline" title="Video not found" body="It may have been removed from the Vault." />
       </ScreenBG>
     );
   }
@@ -221,11 +233,16 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     <>
       <Text style={T.title}>{video.title}</Text>
 
+      {/* a tag added fades in and one removed fades out, while the chips after it glide along the row */}
       <Row style={{ flexWrap: 'wrap', marginTop: 10 }}>
         {video.tags.map((x) => (
-          <Chip key={x} small label={'#' + x} color={C.teal} active onPress={() => removeVideoTag(video.id, x)} />
+          <Animated.View key={x} entering={built.current ? rowIn(level) : undefined} exiting={rowOut(level)} layout={glide(level)}>
+            <Chip small label={'#' + x} color={C.teal} active onPress={() => removeVideoTag(video.id, x)} />
+          </Animated.View>
         ))}
-        <Chip small label="+ tag" onPress={() => setTagSheet(true)} />
+        <Animated.View layout={glide(level)}>
+          <Chip small label="+ tag" onPress={() => setTagSheet(true)} />
+        </Animated.View>
       </Row>
 
       <Row style={{ marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
@@ -239,29 +256,31 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     </>
   );
 
-  // the titles and the empty notes glide with the rows around them, so nothing jumps while a row folds away
+  // the titles and the empty notes glide with the rows around them, so nothing jumps while a row folds away; an empty
+  // note fades out as the first row fades in over its place
+  const live = built.current;
   const lists = (
     <>
       <Animated.View layout={glide(level)}>
         <SectionTitle>Bookmarks</SectionTitle>
       </Animated.View>
       {video.bookmarks.length === 0 ? (
-        <Animated.View layout={glide(level)}>
+        <Animated.View layout={glide(level)} exiting={rowOut(level)}>
           <EmptyState compact icon="bookmark-outline" title="No bookmarks yet" body="Mark key moments, then tap one to jump there." />
         </Animated.View>
       ) : (
-        video.bookmarks.map((b, i) => <ItemRow key={b.id} item={b} isBookmark index={i} onSeek={seek} onMenu={openMenu} />)
+        video.bookmarks.map((b, i) => <ItemRow key={b.id} item={b} isBookmark index={i} live={live} onSeek={seek} onMenu={openMenu} />)
       )}
 
       <Animated.View layout={glide(level)}>
         <SectionTitle>Timed notes</SectionTitle>
       </Animated.View>
       {video.notes.length === 0 ? (
-        <Animated.View layout={glide(level)}>
+        <Animated.View layout={glide(level)} exiting={rowOut(level)}>
           <EmptyState compact icon="create-outline" title="No timed notes yet" body='Pin a note to a moment, like "why does this step work?" at 12:34.' />
         </Animated.View>
       ) : (
-        video.notes.map((n, i) => <ItemRow key={n.id} item={n} isBookmark={false} index={i} onSeek={seek} onMenu={openMenu} />)
+        video.notes.map((n, i) => <ItemRow key={n.id} item={n} isBookmark={false} index={i} live={live} onSeek={seek} onMenu={openMenu} />)
       )}
     </>
   );
@@ -313,12 +332,14 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         onSave={(text) => { if (text.trim()) { addVideoTag(video.id, text); setTagSheet(false); } }}
       />
 
+      {/* the same chips as the library's own move sheet: an icon, not a text glyph, and a subfolder named with its parent */}
       <Sheet visible={folderSheet} onClose={() => setFolderSheet(false)} title="Move to folder">
         <Row style={{ flexWrap: 'wrap' }}>
-          <Chip label="⌂ No folder" color={C.pink} active={video.folderId === null}
+          <Chip icon="home-outline" label="No folder" color={C.pink} active={video.folderId === null}
             onPress={() => { updateVideo(video.id, { folderId: null }); setFolderSheet(false); }} />
           {folders.map((f) => (
-            <Chip key={f.id} label={f.parentId ? '· ' + f.name : f.name} color={C.pink} active={video.folderId === f.id}
+            <Chip key={f.id} icon="folder-outline" color={C.pink} active={video.folderId === f.id}
+              label={f.parentId ? (folders.find((p) => p.id === f.parentId)?.name || '') + ' / ' + f.name : f.name}
               onPress={() => { updateVideo(video.id, { folderId: f.id }); setFolderSheet(false); }} />
           ))}
         </Row>

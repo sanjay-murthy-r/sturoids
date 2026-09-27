@@ -258,7 +258,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
             {visible.length} {visible.length === 1 ? 'entry' : 'entries'}{summary ? ', ' + summary : ''}
           </Text>
           <Bouncy onPress={clearAll} scaleTo={0.92} radius={8} hitSlop={8} accessibilityRole="button" style={st.linkBox}>
-            <Text style={st.link}>Clear</Text>
+            <Text style={[st.link, { color: C.accent }]}>Clear</Text>
           </Bouncy>
         </Row>
       ) : null}
@@ -430,7 +430,7 @@ function Glance({ value, label }: { value: number; label: string }) {
 }
 
 const st = StyleSheet.create({
-  link: { color: C.accent, fontFamily: F.semi, fontSize: 13 },
+  link: { fontFamily: F.semi, fontSize: 13 },
   linkBox: { marginLeft: 12, paddingHorizontal: 2 },
   rate: { flexDirection: 'row', alignItems: 'center', marginLeft: 6 },
   rateText: { color: C.gold, fontFamily: F.semi, fontSize: 12, marginLeft: 2, fontVariant: ['tabular-nums'] },

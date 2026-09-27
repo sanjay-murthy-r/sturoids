@@ -72,7 +72,7 @@ export function pickGreeting(c: GreetingContext): Greeting {
     return { parts: say('Good to see you', 'Welcome back.') };
   }
   if (c.prevOpenedAt != null && todayKey(new Date(c.prevOpenedAt)) === todayKey(c.now)) {
-    return { parts: c.name ? [{ text: c.name, name: true }, { text: ' returns!' }] : [{ text: 'Back again.' }] };
+    return { parts: say('Back again') };
   }
   return { parts: say("Let's go") };
 }

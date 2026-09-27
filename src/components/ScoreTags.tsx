@@ -3,7 +3,8 @@ import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T } from '../theme';
 import { useStore } from '../store';
-import { ScoreTag, TAG_COLORS, categoriesOf, plainTagsOf, tagUse, tagsOf } from '../scores';
+import { ScoreTag, TAG_COLORS, categoriesOf, plainTagsOf, promoteToCategory, tagUse, tagsOf } from '../scores';
+import { toast } from './Toast';
 import { Chip, Field, IconBtn, PillButton, Row, Sheet, Hairline, Toggle } from './UI';
 import { tick } from '../haptics';
 
@@ -198,7 +199,19 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
           <Toggle
             value={!!edit?.category}
             label="Exam category"
-            onChange={(v) => { if (edit) { tick(); patchScoreTag(edit.id, { category: v }); setEdit({ ...edit, category: v || undefined }); } }}
+            onChange={(v) => {
+              if (!edit) return;
+              tick();
+              const st0 = useStore.getState();
+              const dropped = v && !edit.category ? promoteToCategory(st0.scores, st0.scoreTags, edit.id).dropped : 0;
+              patchScoreTag(edit.id, { category: v });
+              setEdit({ ...edit, category: v || undefined });
+              if (dropped) {
+                toast(dropped === 1
+                  ? 'One exam was already in another category. It stays there, without ' + edit.label + '.'
+                  : dropped + ' exams were already in another category. They stay there, without ' + edit.label + '.');
+              }
+            }}
           />
         </Row>
         <Text style={[st.label, { marginTop: 14 }]}>Colour</Text>

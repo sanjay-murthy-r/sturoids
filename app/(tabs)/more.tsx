@@ -3,14 +3,73 @@ import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, neuInset } from '../../src/theme';
+import { C, F, MIN, S, T, ThemeMode, neuInset } from '../../src/theme';
 import { ScreenBG, ListCard, ListRow, SectionTitle, DotMenu, useTheme } from '../../src/components/UI';
-import { Enter, useFocusKey } from '../../src/components/Motion';
+import { Enter, FadeSwap, useFocusKey } from '../../src/components/Motion';
 import { ToolArchiveSheet } from '../../src/components/ToolArchiveSheet';
 import { toast } from '../../src/components/Toast';
 import { useStore } from '../../src/store';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots } from '../../src/tools';
 import { openTool } from '../../src/toolNav';
+
+/** the icon sits in a carved well: a raised boss on a raised card doubled the depth */
+const wellFor = (theme: ThemeMode) =>
+  (theme === 'minimal'
+    ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
+    : { backgroundColor: C.inset, ...neuInset('low') });
+
+/**
+ * One tool of the list, memoised: a count changing elsewhere re-renders its own row, not the list. It follows the
+ * theme and the accent itself (a tool's colour can be the accent), since a memoised row is not repainted by the page.
+ */
+const ToolRow = React.memo(function ToolRow({ tool, count, locked, onOpen, onMenu }: {
+  tool: Tool; count: number; locked: boolean; onOpen: (key: ToolKey) => void; onMenu: (tool: Tool) => void;
+}) {
+  const theme = useTheme();
+  return (
+    <ListRow onPress={() => onOpen(tool.key)} onLongPress={() => onMenu(tool)} style={st.row}>
+      <View style={[st.iconWell, wellFor(theme)]}>
+        <Ionicons name={tool.icon as any} size={22} color={colorOf(tool.colorKey)} />
+      </View>
+      <View style={{ flex: 1, marginLeft: 14 }}>
+        <Text style={st.title} numberOfLines={1}>{tool.label}</Text>
+        <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{tool.desc}</Text>
+      </View>
+      {locked ? (
+        <Ionicons name="lock-closed-outline" size={15} color={C.textFaint} style={{ marginRight: 8 }} />
+      ) : null}
+      {count ? <Text style={st.count}>{count}</Text> : null}
+      <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+    </ListRow>
+  );
+});
+
+/**
+ * The row behind which the archived tools wait. Restoring one from its sheet (which leaves this row in view above it)
+ * changes the names and the count in place, so they dip out and come back as the new words.
+ */
+const ArchivedRow = React.memo(function ArchivedRow({ names, count, onPress }: {
+  names: string; count: number; onPress: () => void;
+}) {
+  const theme = useTheme();
+  return (
+    <ListRow onPress={onPress} style={st.row}>
+      <View style={[st.iconWell, wellFor(theme)]}>
+        <Ionicons name="archive-outline" size={21} color={C.textDim} />
+      </View>
+      <View style={{ flex: 1, marginLeft: 14 }}>
+        <Text style={st.title}>Archived</Text>
+        <FadeSwap swapKey={names} style={{ marginTop: 2 }}>
+          <Text style={T.caption} numberOfLines={1}>{names}</Text>
+        </FadeSwap>
+      </View>
+      <FadeSwap swapKey={String(count)}>
+        <Text style={st.count}>{count}</Text>
+      </FadeSwap>
+      <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+    </ListRow>
+  );
+});
 
 /**
  * Every tool that is neither in a bar slot nor archived, then the archived ones behind one row, then Settings. A tool
@@ -31,8 +90,8 @@ export default function More() {
   const setToolArchived = useStore((s) => s.setToolArchived);
   const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
   const archived = React.useMemo(() => normaliseArchived(rawArchived, slots), [rawArchived, slots]);
-  const tools = TOOLS.filter((t) => !slots.includes(t.key) && !archived.includes(t.key));
-  const archivedTools = TOOLS.filter((t) => archived.includes(t.key));
+  const tools = React.useMemo(() => TOOLS.filter((t) => !slots.includes(t.key) && !archived.includes(t.key)), [slots, archived]);
+  const archivedTools = React.useMemo(() => TOOLS.filter((t) => archived.includes(t.key)), [archived]);
   // the menu keeps its tool while it closes, so its rows never empty out mid-animation
   const [menuFor, setMenuFor] = React.useState<Tool | null>(null);
   const [menuOpen, setMenuOpen] = React.useState(false);
@@ -42,11 +101,8 @@ export default function More() {
     notes: notesLocked ? 0 : notes, vault: videos, journal: journalLocked ? 0 : journalCount,
   };
   const lockedTool = (key: ToolKey) => (key === 'journal' && journalLocked) || (key === 'notes' && notesLocked);
-  // the icon sits in a carved well: a raised boss on a raised card doubled the depth
-  const well =
-    theme === 'minimal'
-      ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
-      : { backgroundColor: C.inset, ...neuInset('low') };
+  const openMenu = React.useCallback((t: Tool) => { setMenuFor(t); setMenuOpen(true); }, []);
+  const openArchive = React.useCallback(() => setArchiveSheet(true), []);
 
   const archive = (t: Tool) => {
     if (setToolArchived(t.key, true)) toast(t.label + ' archived. Restore it from Archived at the end of this list.');
@@ -59,39 +115,20 @@ export default function More() {
         <Text style={T.kicker}>Toolbox</Text>
         <Text style={[T.display, { marginTop: 4, marginBottom: 16 }]}>More</Text>
 
+        {/* a tool archived or restored folds out of or into the card, and the rows after it glide (ListCard) */}
         <Enter index={0}>
           <ListCard>
-            {tools.map((t) => {
-              const count = counts[t.key];
-              return (
-                <ListRow key={t.key} onPress={() => openTool(t.key)} onLongPress={() => { setMenuFor(t); setMenuOpen(true); }} style={{ paddingVertical: 12 }}>
-                  <View style={[st.iconWell, well]}>
-                    <Ionicons name={t.icon as any} size={22} color={colorOf(t.colorKey)} />
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 14 }}>
-                    <Text style={st.title} numberOfLines={1}>{t.label}</Text>
-                    <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{t.desc}</Text>
-                  </View>
-                  {lockedTool(t.key) ? (
-                    <Ionicons name="lock-closed-outline" size={15} color={C.textFaint} style={{ marginRight: 8 }} />
-                  ) : null}
-                  {count ? <Text style={st.count}>{count}</Text> : null}
-                  <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
-                </ListRow>
-              );
-            })}
+            {tools.map((t) => (
+              <ToolRow
+                key={t.key} tool={t} count={counts[t.key] || 0} locked={lockedTool(t.key)}
+                onOpen={openTool} onMenu={openMenu}
+              />
+            ))}
             {archivedTools.length ? (
-              <ListRow key="archived" onPress={() => setArchiveSheet(true)} style={{ paddingVertical: 12 }}>
-                <View style={[st.iconWell, well]}>
-                  <Ionicons name="archive-outline" size={21} color={C.textDim} />
-                </View>
-                <View style={{ flex: 1, marginLeft: 14 }}>
-                  <Text style={st.title}>Archived</Text>
-                  <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{archivedTools.map((t) => t.label).join(', ')}</Text>
-                </View>
-                <Text style={st.count}>{archivedTools.length}</Text>
-                <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
-              </ListRow>
+              <ArchivedRow
+                key="archived" names={archivedTools.map((t) => t.label).join(', ')} count={archivedTools.length}
+                onPress={openArchive}
+              />
             ) : null}
           </ListCard>
         </Enter>
@@ -100,8 +137,8 @@ export default function More() {
         <SectionTitle>System</SectionTitle>
         <Enter index={1}>
           <ListCard>
-            <ListRow key="settings" onPress={() => router.push('/settings')} style={{ paddingVertical: 12 }}>
-              <View style={[st.iconWell, well]}>
+            <ListRow key="settings" onPress={() => router.push('/settings')} style={st.row}>
+              <View style={[st.iconWell, wellFor(theme)]}>
                 <Ionicons name="settings-outline" size={21} color={C.accent} />
               </View>
               <View style={{ flex: 1, marginLeft: 14 }}>
@@ -128,6 +165,7 @@ export default function More() {
 }
 
 const st = StyleSheet.create({
+  row: { paddingVertical: 12 },
   iconWell: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1 },
   count: { color: C.textFaint, fontFamily: F.med, fontSize: 13, marginRight: 8, fontVariant: ['tabular-nums'] },

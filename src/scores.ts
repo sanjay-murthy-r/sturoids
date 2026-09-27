@@ -543,11 +543,43 @@ export const categoriesOf = (tags: ScoreTag[]) => tags.filter((t) => t.category)
 /** The tags that are not categories: what a tag picker offers. */
 export const plainTagsOf = (tags: ScoreTag[]) => tags.filter((t) => !t.category);
 
-/** The category an exam sits in: the first category among its tags, in the tag list's order. */
+/**
+ * The category an exam sits in: the first category among its own tags. Every way of setting a category puts it
+ * first, so an exam that somehow carries two still reads as the one it was put in.
+ */
 export function categoryOf(n: ScoreNode | undefined, tags: ScoreTag[]): ScoreTag | null {
   if (!n?.tags?.length) return null;
-  const mine = new Set(n.tags);
-  return tags.find((t) => t.category && mine.has(t.id)) || null;
+  const cats = new Map(tags.filter((t) => t.category).map((t) => [t.id, t]));
+  for (const id of n.tags) {
+    const t = cats.get(id);
+    if (t) return t;
+  }
+  return null;
+}
+
+/**
+ * What making a plain tag a category does to the exams carrying it: an exam in no category moves into it (the tag
+ * goes first), and an exam already in another category keeps that one and lets the tag go, so no exam ever sits in
+ * two. Returns the new list and how many exams let the tag go. Nothing is rebuilt when nothing changes.
+ */
+export function promoteToCategory(nodes: ScoreNode[], tags: ScoreTag[], id: string): { nodes: ScoreNode[]; dropped: number } {
+  const cats = new Set(tags.filter((t) => t.category || t.id === id).map((t) => t.id));
+  let dropped = 0;
+  let changed = false;
+  const out = nodes.map((n) => {
+    if (n.kind !== 'exam' || !n.tags?.includes(id)) return n;
+    if (n.tags.some((t) => t !== id && cats.has(t))) {
+      dropped++;
+      changed = true;
+      const kept = n.tags.filter((t) => t !== id);
+      const { tags: _drop, ...rest } = n;
+      return (kept.length ? { ...rest, tags: kept } : rest) as ScoreNode;
+    }
+    if (n.tags[0] === id) return n;
+    changed = true;
+    return { ...n, tags: [id, ...n.tags.filter((t) => t !== id)] };
+  });
+  return { nodes: changed ? out : nodes, dropped };
 }
 
 /** An exam's tags with its category swapped for another (or taken off, with null); its plain tags stay as they are. */

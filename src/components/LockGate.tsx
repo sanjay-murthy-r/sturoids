@@ -229,7 +229,8 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
             {row.map((k) => {
               const kind = k === 'side' ? (stage === 'legacy' ? 'ok' : screenKey ? 'bio' : '') : k;
               if (!kind) return <View key={k} style={{ width: key, height: key }} />;
-              const off = kind === 'ok' && digits.length < LEGACY_MIN;
+              // the resting pad already dims every key; the OK key only adds its own dim when the pad is live
+              const off = !resting && kind === 'ok' && digits.length < LEGACY_MIN;
               return (
                 <Bouncy
                   key={k}

@@ -17,7 +17,7 @@ import {
 } from '../../src/components/UI';
 import { CountUp, EASE_OUT, Enter, Bouncy, FadeSwap, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { tap } from '../../src/haptics';
-import { ROUTE_CATALOG, launchExternal, siteHost, siteName, siteUrl } from '../../src/quickAccess';
+import { ROUTE_CATALOG, launchExternal, sameSite, siteHost, siteName, siteUrl } from '../../src/quickAccess';
 import { ToolKey, colorOf, toolByKey } from '../../src/tools';
 import { openTool } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
@@ -534,7 +534,7 @@ function QuickAddSheet({ visible, onClose, archived }: { visible: boolean; onClo
   }, [visible]);
   const addQuick = (item: Omit<QuickItem, 'id'>) => {
     const list = useStore.getState().quickAccess;
-    if (list.some((q) => q.kind === item.kind && q.target === item.target)) return false;
+    if (list.some((q) => q.kind === item.kind && (q.kind === 'url' ? sameSite(q.target, item.target) : q.target === item.target))) return false;
     setQuickAccess([...list, { ...item, id: uid() }]);
     return true;
   };

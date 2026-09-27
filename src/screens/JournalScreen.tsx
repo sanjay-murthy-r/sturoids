@@ -556,7 +556,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
               {saveFailed ? 'Not saved, tap to retry' : words ? words + (words === 1 ? ' word' : ' words') : ' '}
             </Text>
           </FadeSwap>
-          <Animated.View style={[st.tick, tickStyle]} />
+          <Animated.View style={[st.tick, { backgroundColor: C.accent }, tickStyle]} />
         </View>
       </Animated.View>
 
@@ -694,7 +694,7 @@ const st = StyleSheet.create({
   page: { flex: 1 },
   dateWords: { alignItems: 'center', alignSelf: 'stretch' },
   words: { color: C.textFaint, fontFamily: F.med, fontSize: 12, fontVariant: ['tabular-nums'] },
-  tick: { width: 16, height: 2, borderRadius: 1, backgroundColor: C.accent, marginTop: 4 },
+  tick: { width: 16, height: 2, borderRadius: 1, marginTop: 4 },
   prefLabel: { ...T.label, marginTop: 10, marginBottom: 8 },
   prefRow: { paddingVertical: 10 },
 });

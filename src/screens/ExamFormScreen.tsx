@@ -189,11 +189,12 @@ export function ExamFormScreen() {
     setD((x) => ({ ...x, subjects: x.subjects.filter((r) => r.key !== key) }));
   };
 
-  // a new exam that changes category takes that category's subjects, as long as none have been typed into yet
+  // a new exam that changes category takes that category's subjects, as long as nothing has been typed into the
+  // subjects or the whole exam's marks yet
   const pickCategory = (id: string | null, toggle = true) => {
     tick();
     const next = toggle && d.category === id ? null : id;
-    if (editing || touched) {
+    if (editing || touched || d.score.trim() || (d.outOf.trim() && d.outOf !== init.draft.outOf)) {
       set({ category: next });
       return;
     }

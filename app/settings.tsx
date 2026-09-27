@@ -1,16 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, Linking } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, ScrollView, StyleSheet, Alert, Linking, AppState } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, ThemeMode, AnimLevel, ACCENT_CHOICES, neuInset, neuRaised } from '../src/theme';
-import { useStore, exportSnapshot, importSnapshot, readRecoveryCopy, deleteRecoveryCopy } from '../src/store';
+import { useStore, exportSnapshot, importSnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves } from '../src/store';
 import { compareVersions, todayKey } from '../src/utils';
-import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, Chip, InfoDot, NeuHeader, Sheet, useTheme } from '../src/components/UI';
+import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, useTheme } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
-import { Bouncy, Pop } from '../src/components/Motion';
+import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt } from '../src/components/Motion';
 import { tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
 import { PinSheet } from '../src/components/LockGate';
@@ -18,7 +19,7 @@ import { journalForBackup, restoreBodies } from '../src/journal';
 import { estimateBackupBytes, openBackup, restoredPath, writeBackup } from '../src/backup';
 import { deviceAuthAvailable, isOpen, markOpen, pinStatus, removePin } from '../src/lock';
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
-import { TOOLS, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../src/tools';
+import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../src/tools';
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
@@ -33,76 +34,390 @@ const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
 const ANIMS: { key: AnimLevel; label: string; desc: string }[] = [
   { key: 'none', label: 'Off', desc: 'No motion at all' },
   { key: 'some', label: 'Some', desc: 'Feedback only: taps and state changes' },
-  { key: 'full', label: 'Everything', desc: 'Bouncy springs on all the things' },
+  { key: 'full', label: 'Everything', desc: 'Entrances, pages and lists move too' },
 ];
+
+const GRACE_OPTIONS = [{ key: '0', label: 'Immediately' }, { key: '90', label: '90 s' }, { key: '300', label: '5 min' }];
+
+/** how long typing may pause before the words reach the store */
+const DRAFT_PAUSE_MS = 300;
+
+/** The last value that was not null, so a sheet keeps what it shows while it closes. */
+function useHeld<T>(value: T | null): T | null {
+  const held = useRef(value);
+  if (value != null) held.current = value;
+  return held.current;
+}
+
+/**
+ * A setting typed as words. They stay in the field while they are typed and reach the store after a short pause, as
+ * the field is left, as the page closes and as the app goes to the background, so a keystroke re-renders the field
+ * and never the whole page (or Today behind it). A change made elsewhere (Today's name sheet, a restored backup)
+ * shows here, unless words are still on their way.
+ */
+function useSettingDraft(key: 'name' | 'githubRepo') {
+  const stored = useStore((s) => s.settings[key]);
+  const [draft, setDraft] = useState(stored);
+  const draftRef = useRef(stored);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const commit = useCallback(() => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    const s = useStore.getState();
+    if (s.settings[key] !== draftRef.current) s.setSetting(key, draftRef.current);
+  }, [key]);
+  useEffect(() => {
+    if (timer.current || stored === draftRef.current) return;
+    draftRef.current = stored;
+    setDraft(stored);
+  }, [stored]);
+  // the page closing mid-word still keeps the word; leaving the app writes it at once
+  useEffect(() => commit, [commit]);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active' && timer.current) {
+        commit();
+        flushSaves();
+      }
+    });
+    return () => sub.remove();
+  }, [commit]);
+  const change = useCallback((v: string) => {
+    draftRef.current = v;
+    setDraft(v);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(commit, DRAFT_PAUSE_MS);
+  }, [commit]);
+  return { draft, change, commit };
+}
+
+/**
+ * The chosen option's dot. It comes up out of its well as it is chosen (a spring at full motion: the one thing under
+ * the finger), and the dot it replaces fades back into its own well instead of vanishing. Drawn in its state on its
+ * first paint, so opening Settings pops nothing.
+ */
+function RadioDot({ active, minimal }: { active: boolean; minimal: boolean }) {
+  const level = useAnimLevel();
+  const on = useSharedValue(active ? 1 : 0);
+  const scale = useSharedValue(1);
+  const was = useRef(active);
+  useEffect(() => {
+    if (was.current === active) return;
+    was.current = active;
+    if (level === 'none') {
+      on.value = active ? 1 : 0;
+      scale.value = 1;
+      return;
+    }
+    if (active) {
+      on.value = withTiming(1, CHANGE);
+      if (level === 'full') {
+        scale.value = 0.7;
+        scale.value = withSpring(1, { damping: 16, stiffness: 300, mass: 0.6 });
+      } else {
+        scale.value = 0.85;
+        scale.value = withTiming(1, { duration: 180, easing: EASE_OUT });
+      }
+    } else {
+      on.value = withTiming(0, { duration: 160, easing: EASE_OUT });
+    }
+  }, [active, level]);
+  const aStyle = useAnimatedStyle(() => ({ opacity: on.value, transform: [{ scale: scale.value }] }));
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[st.radioDot, { backgroundColor: C.accent }, minimal ? null : (neuRaised('low') as object), aStyle]}
+    />
+  );
+}
+
+/** One option of a radio list, memoised: a pick re-renders the two rows it changes. */
+const OptionRow = React.memo(function OptionRow({ k, label, desc, active, first, onPick }: {
+  k: string; label: string; desc: string; active: boolean; first: boolean; onPick: (k: string) => void;
+}) {
+  // the dot and the minimal well's rim are in the accent: the row follows a new accent and theme itself
+  const theme = useTheme();
+  return (
+    <View>
+      {first ? null : <Hairline />}
+      <Bouncy
+        onPress={() => { tick(); onPick(k); }} scaleTo={0.98} radius={S.radiusSm} style={st.optRow}
+        accessibilityRole="button" accessibilityState={{ selected: active }}
+      >
+        <View
+          style={[
+            st.radioWell,
+            theme === 'minimal'
+              ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: active ? C.accent : MIN.border }
+              : { backgroundColor: C.inset, ...neuInset('low') },
+          ]}
+        >
+          <RadioDot active={active} minimal={theme === 'minimal'} />
+        </View>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={[T.body, { fontFamily: active ? F.semi : F.med }]}>{label}</Text>
+          <Text style={[T.caption, { marginTop: 1 }]}>{desc}</Text>
+        </View>
+      </Bouncy>
+    </View>
+  );
+});
 
 /**
  * Radio list. Declared at module scope: a component defined inside Settings'
  * render would be a NEW component type every render, remounting the whole list
  * (and every press/pop animation in it) on each settings change.
  */
-function OptionPicker<K extends string>({
+function OptionPickerBase<K extends string>({
   options, value, onPick,
 }: { options: { key: K; label: string; desc: string }[]; value: K; onPick: (k: K) => void }) {
-  const theme = useTheme();
   return (
     <View>
-      {options.map((o, i) => {
-        const active = value === o.key;
-        return (
-          <View key={o.key}>
-            {i > 0 && <Hairline />}
-            <Bouncy onPress={() => { tick(); onPick(o.key); }} scaleTo={0.98} radius={S.radiusSm} style={st.optRow}>
-              <View
-                style={[
-                  st.radioWell,
-                  theme === 'minimal'
-                    ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: active ? C.accent : MIN.border }
-                    : { backgroundColor: C.inset, ...neuInset('low') },
-                ]}
-              >
-                {active && (
-                  <Pop dep={value}>
-                    <View
-                      style={[
-                        st.radioDot,
-                        { backgroundColor: C.accent },
-                        theme === 'minimal' ? null : (neuRaised('low') as object),
-                      ]}
-                    />
-                  </Pop>
-                )}
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={[T.body, { fontFamily: active ? F.semi : F.med }]}>{o.label}</Text>
-                <Text style={[T.caption, { marginTop: 1 }]}>{o.desc}</Text>
-              </View>
-            </Bouncy>
-          </View>
-        );
-      })}
+      {options.map((o, i) => (
+        <OptionRow
+          key={o.key} k={o.key} label={o.label} desc={o.desc} active={value === o.key} first={i === 0}
+          onPick={onPick as (k: string) => void}
+        />
+      ))}
     </View>
   );
 }
+const OptionPicker = React.memo(OptionPickerBase) as typeof OptionPickerBase;
 
-export default function Settings() {
-  const theme = useTheme();
-  const settings = useStore((s) => s.settings);
+/**
+ * One accent. Flat: a ring in its own colour marks the chosen one, and the ring and the tick cross over as the choice
+ * moves, instead of jumping.
+ */
+const Swatch = React.memo(function Swatch({ choice, active, onPick }: {
+  choice: { key: string; label: string; color: string }; active: boolean; onPick: (color: string) => void;
+}) {
+  const level = useAnimLevel();
+  const on = useSharedValue(active ? 1 : 0);
+  useEffect(() => {
+    on.value = level === 'none' ? (active ? 1 : 0) : withTiming(active ? 1 : 0, CHANGE);
+  }, [active, level]);
+  const ringStyle = useAnimatedStyle(() => ({ opacity: on.value }));
+  const markStyle = useAnimatedStyle(() => ({ opacity: on.value, transform: [{ scale: 0.6 + 0.4 * on.value }] }));
+  return (
+    <Bouncy
+      onPress={() => { tick(); onPick(choice.color); }}
+      scaleTo={0.85}
+      radius={22}
+      style={st.swatchWell}
+      accessibilityRole="button" accessibilityLabel={choice.label} accessibilityState={{ selected: active }}
+    >
+      <Animated.View pointerEvents="none" style={[st.swatchRing, { borderColor: choice.color }, ringStyle]} />
+      <View style={[st.swatchDisc, { backgroundColor: choice.color }]}>
+        <Animated.View style={markStyle}>
+          <Ionicons name="checkmark" size={14} color={C.onAccent} />
+        </Animated.View>
+      </View>
+    </Bouncy>
+  );
+});
+
+/** The accent swatches and the line naming the one in use, which dips and comes back with the new name. */
+const AccentCard = React.memo(function AccentCard() {
+  const accent = useStore((s) => s.settings.accent);
   const setSetting = useStore((s) => s.setSetting);
-  const [checking, setChecking] = useState(false);
+  const pick = useCallback((color: string) => setSetting('accent', color), [setSetting]);
+  const name = ACCENT_CHOICES.find((a) => a.color === accent)?.label || 'Custom';
+  return (
+    <Card>
+      <Row style={{ flexWrap: 'wrap', gap: 12 }}>
+        {ACCENT_CHOICES.map((a) => (
+          <Swatch key={a.key} choice={a} active={accent === a.color} onPick={pick} />
+        ))}
+      </Row>
+      <FadeSwap swapKey={name}>
+        <Text style={st.hint}>{name}. Recolours highlights, links and controls everywhere.</Text>
+      </FadeSwap>
+    </Card>
+  );
+});
 
+/** The name the greeting uses. What is typed stays in this card until a pause (see useSettingDraft). */
+const ProfileCard = React.memo(function ProfileCard() {
+  const name = useSettingDraft('name');
+  return (
+    <Card>
+      <Text style={st.label}>Name (used in the greeting)</Text>
+      <Field value={name.draft} onChangeText={name.change} onBlur={name.commit} placeholder="Your name" />
+    </Card>
+  );
+});
+
+/** One bar slot, memoised: a new tool in it dips in where the old one was. */
+const SlotRow = React.memo(function SlotRow({ index, toolKey, onOpen }: {
+  index: number; toolKey: ToolKey; onOpen: (i: number) => void;
+}) {
+  useTheme(); // a tool's colour can be the accent
+  const tool = toolByKey(toolKey);
+  return (
+    <View>
+      {index > 0 && <Hairline />}
+      <Bouncy onPress={() => { tick(); onOpen(index); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}>
+        <Text style={st.slotIndex}>Slot {index + 1}</Text>
+        <FadeSwap swapKey={toolKey} style={st.slotTool}>
+          <Ionicons name={(tool?.icon || 'ellipse-outline') as any} size={19} color={colorOf(tool?.colorKey)} />
+          <Text style={[T.body, { flex: 1, marginLeft: 10, fontFamily: F.med }]} numberOfLines={1}>{tool?.label}</Text>
+        </FadeSwap>
+        <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
+      </Bouncy>
+    </View>
+  );
+});
+
+/** One tool a slot can hold, memoised. */
+const PickRow = React.memo(function PickRow({ tool, first, active, elsewhere, archived, onPick }: {
+  tool: Tool; first: boolean; active: boolean;
+  /** the slot it is in now, or -1 */
+  elsewhere: number;
+  archived: boolean;
+  onPick: (key: ToolKey) => void;
+}) {
+  useTheme(); // the tick and a tool's colour can be the accent
+  return (
+    <View>
+      {first ? null : <Hairline />}
+      <Bouncy onPress={() => onPick(tool.key)} scaleTo={0.98} radius={S.radiusSm} style={st.pickRow}>
+        <Ionicons name={tool.icon as any} size={20} color={colorOf(tool.colorKey)} />
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={[T.body, { fontFamily: active ? F.semi : F.med }]}>{tool.label}</Text>
+          <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>
+            {elsewhere >= 0 && !active
+              ? 'Now in slot ' + (elsewhere + 1) + '. Picking it swaps the two.'
+              : archived ? 'Archived. Picking it restores it.' : tool.desc}
+          </Text>
+        </View>
+        {active ? <Ionicons name="checkmark" size={18} color={C.accent} /> : null}
+      </Bouncy>
+    </View>
+  );
+});
+
+/**
+ * The bar's three slots, what is archived, and the sheets that change them. It follows the slots itself, so a pick
+ * re-renders this section and not the whole page.
+ */
+const ToolsSection = React.memo(function ToolsSection() {
+  const rawSlots = useStore((s) => s.settings.tabSlots);
+  const rawArchived = useStore((s) => s.settings.archivedTools);
   const setTabSlots = useStore((s) => s.setTabSlots);
-  const slots = normaliseSlots(settings.tabSlots);
-  const archived = normaliseArchived(settings.archivedTools, slots);
+  const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
+  const archived = React.useMemo(() => normaliseArchived(rawArchived, slots), [rawArchived, slots]);
   const [slotPicker, setSlotPicker] = useState<number | null>(null);
   const [archiveSheet, setArchiveSheet] = useState(false);
-  const setSlot = (i: number, key: ToolKey) => {
-    const next = [...slots];
-    const j = next.indexOf(key);
-    if (j >= 0 && j !== i) next[j] = next[i]; // swap so no destination repeats
-    next[i] = key;
-    setTabSlots(next); // a slotted tool is restored if it was archived
+  // the picker keeps what it showed while it closes (the slot, its tick, the captions), so a pick never reshuffles the
+  // list on its way out: the slot row behind it takes the new tool
+  const view = useHeld(slotPicker !== null ? { slot: slotPicker, slots, archived } : null);
+  // the slot being chosen for, read when a row is tapped; a second tap while the sheet leaves changes nothing
+  const pickerRef = useRef<number | null>(null);
+  pickerRef.current = slotPicker;
+  const openSlot = useCallback((i: number) => setSlotPicker(i), []);
+  const closePicker = useCallback(() => setSlotPicker(null), []);
+  const pick = useCallback((key: ToolKey) => {
+    const i = pickerRef.current;
+    if (i === null) return;
+    pickerRef.current = null;
+    const next = normaliseSlots(useStore.getState().settings.tabSlots);
+    if (next[i] !== key) {
+      tick();
+      const j = next.indexOf(key);
+      if (j >= 0 && j !== i) next[j] = next[i]; // swap so no destination repeats
+      next[i] = key;
+      setTabSlots(next); // a slotted tool is restored if it was archived
+    }
+    setSlotPicker(null);
+  }, [setTabSlots]);
+  const archivedLine = archived.length ? archived.map((k) => toolByKey(k)?.label).join(', ') : 'Nothing archived';
+
+  return (
+    <>
+      <SectionTitle right={<InfoDot text="Today and More stay fixed. Tools placed in a slot open as tabs; the rest live in More. Archived tools stay out of sight until you restore them." />}>
+        Tools
+      </SectionTitle>
+      <Card pad={6}>
+        {slots.map((key, i) => <SlotRow key={i} index={i} toolKey={key} onOpen={openSlot} />)}
+        <Hairline />
+        <Bouncy onPress={() => { tick(); setArchiveSheet(true); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}>
+          <Text style={st.slotIndex}>Archived</Text>
+          <Ionicons name="archive-outline" size={19} color={C.textDim} />
+          <FadeSwap swapKey={archivedLine} style={st.archivedLine}>
+            <Text style={[T.body, { fontFamily: F.med }]} numberOfLines={1}>{archivedLine}</Text>
+          </FadeSwap>
+          <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
+        </Bouncy>
+      </Card>
+      <ToolArchiveSheet manage visible={archiveSheet} onClose={() => setArchiveSheet(false)} />
+      <Sheet visible={slotPicker !== null} onClose={closePicker} title="Choose a tool">
+        {view ? TOOLS.map((t, k) => (
+          <PickRow
+            key={t.key} tool={t} first={k === 0} active={view.slots[view.slot] === t.key}
+            elsewhere={view.slots.indexOf(t.key)} archived={view.archived.includes(t.key)} onPick={pick}
+          />
+        )) : null}
+      </Sheet>
+    </>
+  );
+});
+
+/** The update check, with the repo it reads typed in place (see useSettingDraft). */
+const UpdatesCard = React.memo(function UpdatesCard() {
+  const repoDraft = useSettingDraft('githubRepo');
+  const [checking, setChecking] = useState(false);
+
+  const checkUpdate = async () => {
+    // what is in the field is what is checked, and it is kept, even if the pause has not come yet
+    repoDraft.commit();
+    const repo = repoDraft.draft.trim();
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+      toast('Enter the repo as owner/repo first.');
+      return;
+    }
+    setChecking(true);
+    try {
+      const r = await fetch('https://api.github.com/repos/' + repo + '/releases/latest');
+      if (!r.ok) throw new Error('GitHub said ' + r.status);
+      const j = await r.json();
+      const latest = String(j.tag_name || '');
+      if (compareVersions(latest, APP_VERSION) > 0) {
+        Alert.alert(latest + ' available', 'Download the new APK from GitHub?', [
+          { text: 'Later', style: 'cancel' },
+          { text: 'Open', onPress: () => Linking.openURL(j.html_url) },
+        ]);
+      } else {
+        toast('Up to date: v' + APP_VERSION + ' is the newest release.');
+      }
+    } catch (e: any) {
+      Alert.alert('Check failed', String(e?.message || e));
+    } finally {
+      setChecking(false);
+    }
   };
+
+  return (
+    <Card>
+      <Text style={st.label}>GitHub repo (owner/repo)</Text>
+      <Field value={repoDraft.draft} onChangeText={repoDraft.change} onBlur={repoDraft.commit}
+        placeholder="e.g. sanjay/sturoids" autoCapitalize="none" />
+      <PillButton label={checking ? 'Checking…' : 'Check for updates'} icon="cloud-download-outline" onPress={checkUpdate} />
+    </Card>
+  );
+});
+
+export default function Settings() {
+  useTheme(); // a new accent or theme repaints the page's toggles and pills, which take the accent as a prop
+  const level = useAnimLevel();
+  // parts that turn up after the first paint (the screen-lock choices, a kept copy, Remove PIN) fade in where they
+  // stand. They leave at once: this page's cards do not glide, so a fading ghost would lie over the lines moving up
+  const built = useBuilt();
+  const settings = useStore((s) => s.settings);
+  const setSetting = useStore((s) => s.setSetting);
+  const pickTheme = useCallback((k: ThemeMode) => setSetting('theme', k), [setSetting]);
+  const pickAnim = useCallback((k: AnimLevel) => setSetting('animLevel', k), [setSetting]);
 
   const toggleReminders = async (v: boolean) => {
     if (v) {
@@ -289,13 +604,18 @@ export default function Settings() {
   // ---- privacy: what is locked, what may open it, the app PIN, and how soon an open lock closes again ----
   const lockedNotes = useStore((s) => s.notes.filter((n) => n.locked).length);
   const [pinState, setPinState] = useState<'set' | 'legacy' | 'none'>('none');
+  // until the PIN's state has been read, its line is shown as it was; only a later change dips and swaps it
+  const [pinKnown, setPinKnown] = useState(false);
   const [deviceLock, setDeviceLock] = useState(false);
   /** what a PIN step is for decides what happens once it is done */
   type PinFor = 'journal-on' | 'notes-on' | 'journal-off' | 'notes-off' | 'journal-screen' | 'notes-screen'
     | 'change' | 'remove' | 'export';
   const [pinStep, setPinStep] = useState<null | { mode: 'enter' | 'set'; for: PinFor }>(null);
   const refreshLockInfo = () => {
-    pinStatus().then(setPinState);
+    pinStatus().then((s) => {
+      setPinState(s);
+      setPinKnown(true);
+    });
     deviceAuthAvailable().then(setDeviceLock);
   };
   useEffect(refreshLockInfo, []);
@@ -344,138 +664,37 @@ export default function Settings() {
   };
   const pinTint = pinStep?.for.startsWith('journal') ? C.gold : pinStep?.for.startsWith('notes') ? C.green : C.accent;
   const pinInUse = settings.journalLocked || settings.notesLocked === true || lockedNotes > 0;
-
-  const checkUpdate = async () => {
-    const repo = settings.githubRepo.trim();
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-      toast('Enter the repo as owner/repo first.');
-      return;
-    }
-    setChecking(true);
-    try {
-      const r = await fetch('https://api.github.com/repos/' + repo + '/releases/latest');
-      if (!r.ok) throw new Error('GitHub said ' + r.status);
-      const j = await r.json();
-      const latest = String(j.tag_name || '');
-      if (compareVersions(latest, APP_VERSION) > 0) {
-        Alert.alert(latest + ' available', 'Download the new APK from GitHub?', [
-          { text: 'Later', style: 'cancel' },
-          { text: 'Open', onPress: () => Linking.openURL(j.html_url) },
-        ]);
-      } else {
-        toast('Up to date: v' + APP_VERSION + ' is the newest release.');
-      }
-    } catch (e: any) {
-      Alert.alert('Check failed', String(e?.message || e));
-    } finally {
-      setChecking(false);
-    }
-  };
+  const pinLine = (
+    <Text style={[T.caption, { marginTop: 2 }]}>
+      {pinState === 'set'
+        ? 'Four digits. It opens everything that locks.'
+        : pinState === 'legacy'
+          ? 'Your older PIN or passcode works once more; then you choose a 4-digit PIN.'
+          : 'Chosen the first time something locks.'}
+    </Text>
+  );
+  const arrive = built.current ? rowIn(level) : undefined;
 
   return (
     <ScreenBG>
       <NeuHeader title="Settings" />
       <ScrollView contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 }}>
         <SectionTitle>Profile</SectionTitle>
-        <Card>
-          <Text style={st.label}>Name (used in the greeting)</Text>
-          <Field value={settings.name} onChangeText={(v) => setSetting('name', v)} placeholder="Your name" />
-        </Card>
+        <ProfileCard />
 
         <SectionTitle>Appearance</SectionTitle>
         <Card pad={12}>
-          <OptionPicker options={THEMES} value={settings.theme} onPick={(k) => setSetting('theme', k)} />
+          <OptionPicker options={THEMES} value={settings.theme} onPick={pickTheme} />
         </Card>
 
         <SectionTitle>Accent colour</SectionTitle>
-        <Card>
-          <Row style={{ flexWrap: 'wrap', gap: 12 }}>
-            {ACCENT_CHOICES.map((a) => {
-              const active = settings.accent === a.color;
-              return (
-                <Bouncy
-                  key={a.key}
-                  onPress={() => { tick(); setSetting('accent', a.color); }}
-                  scaleTo={0.85}
-                  radius={22}
-                  style={[st.swatchWell, { borderColor: active ? a.color : 'transparent' }]}
-                >
-                  <View style={[st.swatchDisc, { backgroundColor: a.color }]}>
-                    {active && <Ionicons name="checkmark" size={14} color={C.onAccent} />}
-                  </View>
-                </Bouncy>
-              );
-            })}
-          </Row>
-          <Text style={st.hint}>
-            {ACCENT_CHOICES.find((a) => a.color === settings.accent)?.label || 'Custom'}. Recolours highlights, links and controls everywhere.
-          </Text>
-        </Card>
+        <AccentCard />
 
-        <SectionTitle right={<InfoDot text="Today and More stay fixed. Tools placed in a slot open as tabs; the rest live in More. Archived tools stay out of sight until you restore them." />}>
-          Tools
-        </SectionTitle>
-        <Card pad={6}>
-          {slots.map((key, i) => {
-            const tool = toolByKey(key);
-            return (
-              <View key={i}>
-                {i > 0 && <Hairline />}
-                <Bouncy onPress={() => { tick(); setSlotPicker(i); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}>
-                  <Text style={st.slotIndex}>Slot {i + 1}</Text>
-                  <Ionicons name={(tool?.icon || 'ellipse-outline') as any} size={19} color={colorOf(tool?.colorKey)} />
-                  <Text style={[T.body, { flex: 1, marginLeft: 10, fontFamily: F.med }]} numberOfLines={1}>{tool?.label}</Text>
-                  <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
-                </Bouncy>
-              </View>
-            );
-          })}
-          <Hairline />
-          <Bouncy onPress={() => { tick(); setArchiveSheet(true); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}>
-            <Text style={st.slotIndex}>Archived</Text>
-            <Ionicons name="archive-outline" size={19} color={C.textDim} />
-            <Text style={[T.body, { flex: 1, marginLeft: 10, fontFamily: F.med }]} numberOfLines={1}>
-              {archived.length ? archived.map((k) => toolByKey(k)?.label).join(', ') : 'Nothing archived'}
-            </Text>
-            <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
-          </Bouncy>
-        </Card>
-        <ToolArchiveSheet manage visible={archiveSheet} onClose={() => setArchiveSheet(false)} />
-        <Sheet visible={slotPicker !== null} onClose={() => setSlotPicker(null)} title="Choose a tool">
-          {TOOLS.map((t, k) => {
-            const active = slotPicker !== null && slots[slotPicker] === t.key;
-            const elsewhere = slots.indexOf(t.key);
-            return (
-              <View key={t.key}>
-                {k > 0 && <Hairline />}
-                <Bouncy
-                  onPress={() => {
-                    if (slotPicker !== null && !active) { tick(); setSlot(slotPicker, t.key); }
-                    setSlotPicker(null);
-                  }}
-                  scaleTo={0.98}
-                  radius={S.radiusSm}
-                  style={st.pickRow}
-                >
-                  <Ionicons name={t.icon as any} size={20} color={colorOf(t.colorKey)} />
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={[T.body, { fontFamily: active ? F.semi : F.med }]}>{t.label}</Text>
-                    <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>
-                      {elsewhere >= 0 && !active
-                        ? 'Now in slot ' + (elsewhere + 1) + '. Picking it swaps the two.'
-                        : archived.includes(t.key) ? 'Archived. Picking it restores it.' : t.desc}
-                    </Text>
-                  </View>
-                  {active ? <Ionicons name="checkmark" size={18} color={C.accent} /> : null}
-                </Bouncy>
-              </View>
-            );
-          })}
-        </Sheet>
+        <ToolsSection />
 
         <SectionTitle>Animations</SectionTitle>
         <Card pad={12}>
-          <OptionPicker options={ANIMS} value={settings.animLevel} onPick={(k) => setSetting('animLevel', k)} />
+          <OptionPicker options={ANIMS} value={settings.animLevel} onPick={pickAnim} />
         </Card>
 
         <Card>
@@ -543,15 +762,17 @@ export default function Settings() {
           <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
             <View style={{ flex: 1, paddingRight: 12 }}>
               <Text style={[T.body, { fontFamily: F.med }]}>Lock Notes</Text>
-              <Text style={[T.caption, { marginTop: 2 }]}>
-                {'The whole tool. A single note locks from inside the note'
-                  + (lockedNotes ? '; ' + lockedNotes + (lockedNotes === 1 ? ' is locked now.' : ' are locked now.') : '.')}
-              </Text>
+              <FadeSwap swapKey={String(lockedNotes)}>
+                <Text style={[T.caption, { marginTop: 2 }]}>
+                  {'The whole tool. A single note locks from inside the note'
+                    + (lockedNotes ? '; ' + lockedNotes + (lockedNotes === 1 ? ' is locked now.' : ' are locked now.') : '.')}
+                </Text>
+              </FadeSwap>
             </View>
             <Toggle value={settings.notesLocked === true} onChange={(v) => setToolLock('notes', v)} color={C.green} label="Lock Notes" />
           </Row>
           {deviceLock ? (
-            <>
+            <Animated.View entering={arrive}>
               <Hairline />
               <Text style={[st.label, { marginTop: 10, marginBottom: 4 }]}>Your screen lock can also open</Text>
               <Row style={{ justifyContent: 'space-between', marginTop: 6 }}>
@@ -566,19 +787,13 @@ export default function Settings() {
                 Fingerprint, face or the phone's own PIN, as well as the app PIN. A locked single note always asks for the
                 app PIN.
               </Text>
-            </>
+            </Animated.View>
           ) : null}
           <Hairline />
           <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
             <View style={{ flex: 1, paddingRight: 12 }}>
               <Text style={[T.body, { fontFamily: F.med }]}>App PIN</Text>
-              <Text style={[T.caption, { marginTop: 2 }]}>
-                {pinState === 'set'
-                  ? 'Four digits. It opens everything that locks.'
-                  : pinState === 'legacy'
-                    ? 'Your older PIN or passcode works once more; then you choose a 4-digit PIN.'
-                    : 'Chosen the first time something locks.'}
-              </Text>
+              {pinKnown ? <FadeSwap swapKey={pinState}>{pinLine}</FadeSwap> : pinLine}
             </View>
             <PillButton
               small outline label={pinState === 'none' ? 'Set PIN' : 'Change PIN'}
@@ -586,10 +801,9 @@ export default function Settings() {
             />
           </Row>
           {pinState !== 'none' && !pinInUse ? (
-            <PillButton
-              small outline color={C.danger} label="Remove PIN" onPress={() => setPinStep({ mode: 'enter', for: 'remove' })}
-              style={{ marginTop: 10, alignSelf: 'flex-end' }}
-            />
+            <Animated.View entering={arrive} style={{ marginTop: 10, alignSelf: 'flex-end' }}>
+              <PillButton small outline color={C.danger} label="Remove PIN" onPress={() => setPinStep({ mode: 'enter', for: 'remove' })} />
+            </Animated.View>
           ) : null}
           <Hairline />
           <Text style={[st.label, { marginTop: 10, marginBottom: 8 }]}>Re-lock after</Text>
@@ -598,7 +812,7 @@ export default function Settings() {
             stretch
             value={String(settings.lockGraceSec)}
             onChange={(k) => setSetting('lockGraceSec', Number(k))}
-            options={[{ key: '0', label: 'Immediately' }, { key: '90', label: '90 s' }, { key: '300', label: '5 min' }]}
+            options={GRACE_OPTIONS}
           />
           <Text style={[T.caption, { marginTop: 14 }]}>
             Locks hide pages, they do not encrypt them. Backups still include everything, so keep them somewhere safe.
@@ -622,7 +836,7 @@ export default function Settings() {
             icon="push-outline" color={C.amber} outline onPress={importData}
           />
           {recovery ? (
-            <View style={st.recovery}>
+            <Animated.View entering={arrive} style={st.recovery}>
               <Text style={st.recoveryTitle}>A copy of data that could not be opened</Text>
               <Text style={st.recoveryBody}>
                 It was set aside so nothing is lost. Share it to keep it safe, or restore it after updating the app.
@@ -630,19 +844,14 @@ export default function Settings() {
               <PillButton label="Share copy" icon="share-outline" outline onPress={shareRecovery} style={{ marginTop: 12 }} />
               <PillButton label="Restore copy" icon="refresh-outline" color={C.amber} outline onPress={restoreRecovery} style={{ marginTop: 10 }} />
               <PillButton label="Delete copy" icon="trash-outline" color={C.danger} outline onPress={discardRecovery} style={{ marginTop: 10 }} />
-            </View>
+            </Animated.View>
           ) : null}
         </Card>
 
         <SectionTitle right={<InfoDot text="Sideloaded APKs don't auto-update. This checks the GitHub Releases of the repo below for a newer version tag and links you to the download." />}>
           Updates
         </SectionTitle>
-        <Card>
-          <Text style={st.label}>GitHub repo (owner/repo)</Text>
-          <Field value={settings.githubRepo} onChangeText={(v) => setSetting('githubRepo', v)}
-            placeholder="e.g. sanjay/sturoids" autoCapitalize="none" />
-          <PillButton label={checking ? 'Checking…' : 'Check for updates'} icon="cloud-download-outline" onPress={checkUpdate} />
-        </Card>
+        <UpdatesCard />
 
         <Text style={[T.caption, { textAlign: 'center', marginTop: 16 }]}>
           Sturoids v{APP_VERSION} · local-first · made for focused work
@@ -661,6 +870,9 @@ const st = StyleSheet.create({
   recoveryBody: { ...T.caption, marginTop: 4 },
   slotRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 10 },
   slotIndex: { width: 58, color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2 },
+  /** a slot's tool (its icon and its name), which dips and comes back as a new tool takes the slot */
+  slotTool: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  archivedLine: { flex: 1, marginLeft: 10 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 4 },
   label: { color: C.textDim, fontFamily: F.med, fontSize: 13, marginBottom: 8 },
   hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, marginTop: 10, lineHeight: 17 },
@@ -673,9 +885,10 @@ const st = StyleSheet.create({
   radioDot: { width: 10, height: 10, borderRadius: 5 },
   // flat: a ring in the swatch's own colour marks the chosen one
   swatchWell: {
-    width: 44, height: 44, borderRadius: 22, borderWidth: 2,
+    width: 44, height: 44, borderRadius: 22,
     alignItems: 'center', justifyContent: 'center',
   },
+  swatchRing: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 22, borderWidth: 2 },
   swatchDisc: {
     width: 26, height: 26, borderRadius: 13,
     alignItems: 'center', justifyContent: 'center',

@@ -677,7 +677,18 @@ export function Sheet({
     return undefined;
   }, [visible]);
   const onPanelLayout = React.useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
-    panelH.value = e.nativeEvent.layout.height;
+    const h = e.nativeEvent.layout.height;
+    const p = prog.value;
+    if (!waiting.current && p > 0 && p < 1 && !leaving.current && Math.abs(h - panelH.value) > 1) {
+      // the real height landed mid-rise (after the fallback or a turn-round started it on a guess): keep the panel
+      // where it is on screen and rise the rest of the way, instead of jumping
+      const off = (1 - p) * (panelH.value + 24);
+      panelH.value = h;
+      prog.value = Math.max(0, Math.min(1, 1 - off / (h + 24)));
+      prog.value = withTiming(1, SHEET_OPEN);
+      return;
+    }
+    panelH.value = h;
     if (waiting.current) rise();
   }, []);
   // the backdrop comes and goes with the panel, and thins a little as a pull takes the panel down

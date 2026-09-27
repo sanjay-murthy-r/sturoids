@@ -7,7 +7,7 @@ import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
 import { ToolKey, DEFAULT_SLOTS, DEFAULT_ARCHIVED, ROUTE_TO_TOOL, TOOLS, normaliseSlots, normaliseArchived, toolByKey } from './tools';
 import {
   ScoreNode, ScoreTag, Learning, sanitizeScores, sanitizeTags, sanitizeLearnings, indexScores, descendantIds,
-  canMove, duplicateStructure, nextTagColor, sameTagName, pruneScoreRefs, withCategory,
+  canMove, duplicateStructure, nextTagColor, sameTagName, pruneScoreRefs, withCategory, promoteToCategory,
 } from './scores';
 
 // ---------- types ----------
@@ -1019,7 +1019,11 @@ export const useStore = create<AppState>()(
         if (!name) return '';
         if (already) {
           if (opts?.category && !already.category) {
-            set({ scoreTags: s.scoreTags.map((t) => (t.id === already.id ? { ...t, category: true } : t)) });
+            // a plain tag of that name becomes the category, and no exam carrying it ends up in two
+            set({
+              scoreTags: s.scoreTags.map((t) => (t.id === already.id ? { ...t, category: true } : t)),
+              scores: promoteToCategory(s.scores, s.scoreTags, already.id).nodes,
+            });
           }
           return already.id;
         }
@@ -1042,6 +1046,10 @@ export const useStore = create<AppState>()(
             if (patch.category === false) delete next.category;
             return next;
           }),
+          // a tag made a category never puts an exam in two categories
+          ...(patch.category === true && !s.scoreTags.find((t) => t.id === id)?.category
+            ? { scores: promoteToCategory(s.scores, s.scoreTags, id).nodes }
+            : {}),
         });
         return true;
       },

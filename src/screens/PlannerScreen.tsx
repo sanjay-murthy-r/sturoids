@@ -276,6 +276,7 @@ function DayBlocks({ day, blocks, hour24, nowMin, onEdit, onDelete }: {
 const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, onEdit, onDelete }: {
   b: PlannerBlock; hour24: boolean; isNow: boolean; onEdit: (b: PlannerBlock) => void; onDelete: (b: PlannerBlock) => void;
 }) {
+  useTheme(); // a memo row: it follows a new accent itself, since its props do not change with one
   return (
     <ListRow onPress={() => openTool('focus', { subject: b.subject })} style={{ paddingVertical: 12 }}>
       <View style={[st.colorBar, { backgroundColor: b.color }]} />
@@ -304,6 +305,7 @@ const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, onEdit, onDele
 const HabitRow = React.memo(function HabitRow({ h, today, onToggle, onRemind, onDelete }: {
   h: Habit; today: string; onToggle: (id: string) => void; onRemind: (h: Habit) => void; onDelete: (h: Habit) => void;
 }) {
+  useTheme(); // a memo row: it follows a new accent itself, since its props do not change with one
   const { current, best } = useMemo(() => streaks(h.doneDates), [h.doneDates]);
   const done = h.doneDates.includes(today);
   const streakText = [current > 0 ? current + ' current' : '', best > 0 ? best + ' best' : ''].filter(Boolean).join(' · ');

@@ -74,6 +74,27 @@ const checks = {
     assert.equal(S.categoryOf(i.byId.get('x1'), TAGS), null);
     assert.equal(S.categoryOf(i.byId.get('m1p'), TAGS), null, 'a subject carries no category of its own');
   },
+  'an exam reads as the category it carries first, whatever order the categories were made in'() {
+    const tags = [TAGS[1], TAGS[0], TAGS[2]];
+    assert.equal(S.categoryOf({ ...TREE[1], tags: ['jee', 'unit'] }, tags).id, 'jee');
+  },
+  'a tag made a category never puts an exam in two'() {
+    const tags = [...TAGS];
+    const nodes = [
+      node('a', null, 'exam', { tags: ['jee', 'careless'] }),
+      node('b', null, 'exam', { tags: ['careless'] }),
+      node('c', null, 'exam', { tags: ['other'] }),
+    ];
+    const out = S.promoteToCategory(nodes, tags, 'careless');
+    assert.equal(out.dropped, 1);
+    assert.deepEqual(out.nodes[0].tags, ['jee'], 'an exam already in a category keeps it and lets the tag go');
+    assert.deepEqual(out.nodes[1].tags, ['careless'], 'an exam in none moves into it');
+    assert.equal(out.nodes[2], nodes[2], 'others are untouched');
+    const moved = S.promoteToCategory([node('d', null, 'exam', { tags: ['x', 'careless'] })], tags, 'careless');
+    assert.deepEqual(moved.nodes[0].tags, ['careless', 'x'], 'the new category goes first');
+    const same = [node('e', null, 'exam', { tags: ['x'] })];
+    assert.equal(S.promoteToCategory(same, tags, 'careless').nodes, same, 'nothing rebuilt when nothing changes');
+  },
   'swapping a category keeps the plain tags'() {
     assert.deepEqual(S.withCategory(['careless', 'jee'], 'unit', TAGS), ['unit', 'careless']);
     assert.deepEqual(S.withCategory(['careless', 'jee'], null, TAGS), ['careless']);
