@@ -138,7 +138,12 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
         percentile: percentile.value,
         grade: d.grade.trim() || undefined,
         note: d.note.trim() || undefined,
-        tags: d.tags.length ? d.tags : undefined,
+        // the picker offers plain tags only, so a category the node carries is kept as it was
+        tags: (() => {
+          const cats = new Set(useStore.getState().scoreTags.filter((t) => t.category).map((t) => t.id));
+          const all = [...(node?.tags || []).filter((t) => cats.has(t)), ...d.tags.filter((t) => !cats.has(t))];
+          return all.length ? all : undefined;
+        })(),
       };
     if (shown?.mode === 'edit' && node) patchScoreNode(node.id, fields);
     else addScoreNode({ ...(fields as any), kind, parentId });

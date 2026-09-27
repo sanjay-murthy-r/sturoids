@@ -1,12 +1,13 @@
 import React from 'react';
 import { Pressable, Text, ViewStyle } from 'react-native';
 import Animated, {
+  FadeIn, FadeOut, LinearTransition, runOnJS,
   useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming, Easing,
 } from 'react-native-reanimated';
-import { useIsFocused } from '@react-navigation/native';
+import { NavigationContext, useIsFocused } from '@react-navigation/native';
 import { useStore } from '../store';
 import { useIntro } from '../intro';
-import { C, neuPressedInner } from '../theme';
+import { AnimLevel, C, neuPressedInner } from '../theme';
 
 /**
  * The key for a screen's content container. Entrances play once, when a screen first mounts: every tab is
@@ -32,6 +33,11 @@ export const useAnimLevel = () => {
 export const SINK_IN = { duration: 90, easing: Easing.out(Easing.quad) };
 export const RISE_OUT = { damping: 20, stiffness: 240, mass: 0.8 };
 
+/** The curve every state change eases out on: quick to answer, soft to land. */
+export const EASE_OUT = Easing.out(Easing.cubic);
+/** A state change in place: a tint, a fill, a colour crossing over. */
+export const CHANGE = { duration: 200, easing: EASE_OUT };
+
 const ENTER = { duration: 540, easing: Easing.out(Easing.cubic) };
 
 /** A panel that takes another's place rises a short way into it as it comes up to full strength. */
@@ -43,6 +49,106 @@ export const riseIn = () => {
     animations: { opacity: withTiming(1, ease), transform: [{ translateY: withTiming(0, ease) }] },
   };
 };
+
+/**
+ * A panel that replaces another from one side (the next day after a day) comes in from that side, a short way, and
+ * up from a faint start. `dx` is where it starts: positive from the right.
+ */
+export const shiftIn = (dx: number) => () => {
+  'worklet';
+  const ease = { duration: 280, easing: Easing.out(Easing.cubic) };
+  return {
+    initialValues: { opacity: 0.25, transform: [{ translateX: dx }] },
+    animations: { opacity: withTiming(1, ease), transform: [{ translateX: withTiming(0, ease) }] },
+  };
+};
+
+/** A row arriving in a list after the list was built: it fades in where it stands. Nothing with motion off. */
+export const rowIn = (level: AnimLevel) =>
+  (level === 'none' ? undefined : FadeIn.duration(level === 'full' ? 240 : 180).easing(EASE_OUT));
+
+/** A row leaving a list: it fades as it goes, a little quicker than one arrives. */
+export const rowOut = (level: AnimLevel) =>
+  (level === 'none' ? undefined : FadeOut.duration(160).easing(Easing.in(Easing.quad)));
+
+/**
+ * The rows a fold moves glide to their new places: an eased timing, never a spring (springs across siblings
+ * overshoot against each other and read as a wobble), and only with every animation on.
+ */
+export const glide = (level: AnimLevel) =>
+  (level === 'full' ? LinearTransition.duration(260).easing(EASE_OUT) : undefined);
+
+/**
+ * False while a component paints for the first time, true after: what arrives later animates, what it was built
+ * with is simply there.
+ */
+export function useBuilt() {
+  const built = React.useRef(false);
+  React.useEffect(() => { built.current = true; }, []);
+  return built;
+}
+
+/**
+ * A part that turns up on a state change (an empty list's note, a section that opens) fades in where it stands. It
+ * plays only when it arrives on a screen already in view; one built with its screen, or out of sight, arrives with
+ * the screen's own entrance instead. Opacity only, so it never adds a second rise to an entrance around it. Returns
+ * the style to put on the part.
+ */
+export function useAppear() {
+  const level = useAnimLevel();
+  const nav = React.useContext(NavigationContext);
+  const [live] = React.useState(
+    () => level !== 'none' && (nav ? nav.isFocused() : true) && useIntro.getState().phase !== 'playing'
+  );
+  const shown = useSharedValue(live ? 0 : 1);
+  React.useEffect(() => {
+    if (live) shown.value = withTiming(1, { duration: level === 'full' ? 280 : 200, easing: EASE_OUT });
+  }, []);
+  return useAnimatedStyle(() => ({ opacity: shown.value }));
+}
+
+/** A wrapper for a part that turns up on a state change: see useAppear. */
+export function Appear({ children, style }: { children: React.ReactNode; style?: ViewStyle | ViewStyle[] }) {
+  const appear = useAppear();
+  return <Animated.View style={[style as any, appear]}>{children}</Animated.View>;
+}
+
+/**
+ * Words that change in place (a greeting, a title, a line of help) dip out and come back as the new words, instead
+ * of swapping in one frame. `swapKey` names what is shown; while it stays the same the children update directly. The
+ * first paint is never animated, and with motion off the words simply change.
+ */
+export function FadeSwap({ swapKey, children, style }: {
+  swapKey: string; children: React.ReactNode; style?: ViewStyle | ViewStyle[];
+}) {
+  const level = useAnimLevel();
+  const [held, setHeld] = React.useState<{ key: string; node: React.ReactNode }>({ key: swapKey, node: children });
+  const latest = React.useRef(children);
+  latest.current = children;
+  const o = useSharedValue(1);
+  const land = React.useCallback((key: string) => {
+    setHeld({ key, node: latest.current });
+    o.value = withTiming(1, { duration: 220, easing: EASE_OUT });
+  }, []);
+  React.useEffect(() => {
+    if (swapKey === held.key) {
+      // back to the words already held (a change undone mid-dip): they come back up
+      if (o.value < 1) o.value = withTiming(1, { duration: 160, easing: EASE_OUT });
+      return;
+    }
+    if (level === 'none') {
+      setHeld({ key: swapKey, node: latest.current });
+      o.value = 1;
+      return;
+    }
+    o.value = withTiming(0, { duration: 110, easing: Easing.in(Easing.quad) }, (fin) => {
+      if (fin) runOnJS(land)(swapKey);
+    });
+  }, [swapKey]);
+  const aStyle = useAnimatedStyle(() => ({ opacity: o.value }));
+  // the held words stay up while they dip out; once the new key has landed, the children render live again
+  return <Animated.View style={[style as any, aStyle]}>{swapKey === held.key ? children : held.node}</Animated.View>;
+}
 
 /**
  * A surface's entrance: it rises a short way out of the material and comes up to full strength, once, the first time
@@ -149,12 +255,20 @@ export function Bouncy({
   );
 }
 
-/** Gentle pop for state changes (checkmarks etc.) — eases, doesn't bounce hard. */
+/**
+ * Gentle pop for a single thing a tap just chose (a radio dot): it springs up from a little smaller. With only some
+ * motion it eases instead of springing.
+ */
 export function Pop({ children, dep }: { children: React.ReactNode; dep: any }) {
   const level = useAnimLevel();
   const scale = useSharedValue(1);
   React.useEffect(() => {
     if (level === 'none') return;
+    if (level === 'some') {
+      scale.value = 0.85;
+      scale.value = withTiming(1, { duration: 180, easing: EASE_OUT });
+      return;
+    }
     scale.value = 0.7;
     scale.value = withSpring(1, { damping: 16, stiffness: 300, mass: 0.6 });
   }, [dep]);

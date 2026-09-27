@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
-  FadeIn, FadeOut, ZoomIn, ZoomOut, runOnJS, useAnimatedStyle, useSharedValue, withSpring,
+  FadeIn, FadeOut, ZoomIn, ZoomOut, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -15,7 +15,7 @@ import {
   ScreenBG, Card, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Hairline, Chip, IconBtn,
   ListCard, ListRow, ProgressBar, StrikeText, useTheme,
 } from '../../src/components/UI';
-import { CountUp, Enter, Bouncy, Pop, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
+import { CountUp, EASE_OUT, Enter, Bouncy, FadeSwap, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { tap } from '../../src/haptics';
 import { ROUTE_CATALOG, launchExternal, siteHost, siteName, siteUrl } from '../../src/quickAccess';
 import { ToolKey, colorOf, toolByKey } from '../../src/tools';
@@ -42,7 +42,6 @@ export default function Today() {
   const router = useRouter();
   const theme = useTheme();
   const settings = useStore((s) => s.settings);
-  const setSetting = useStore((s) => s.setSetting);
   const dailyTasks = useStore((s) => s.dailyTasks);
   const toggleDaily = useStore((s) => s.toggleDaily);
   const missions = useStore((s) => s.missions);
@@ -60,12 +59,8 @@ export default function Today() {
   const setQuickAccess = useStore((s) => s.setQuickAccess);
 
   const [nameSheet, setNameSheet] = useState(false);
-  const [nameDraft, setNameDraft] = useState(settings.name);
   const [qaEdit, setQaEdit] = useState(false);
   const [qaAddSheet, setQaAddSheet] = useState(false);
-  const [siteDraft, setSiteDraft] = useState('');
-  const [siteLabel, setSiteLabel] = useState('');
-  const [siteError, setSiteError] = useState('');
   // the day's column, known ahead on a wide window (so two columns appear on the first frame), then measured
   const { width: dayWinW } = useWindowDimensions();
   const [areaW, setAreaW] = useState(() => columnWidth(dayWinW, true, WIDE_MAX));
@@ -124,7 +119,8 @@ export default function Today() {
       out.push({ label: DAY_NAMES[(d.getDay() + 6) % 7][0], mins });
     }
     return out;
-  }, [sessions]);
+    // the day is part of the answer: past midnight the seven days move on even when no session has been logged
+  }, [sessions, today]);
   const maxMins = Math.max(30, ...weekBars.map((b) => b.mins));
   const weekTotal = weekBars.reduce((a, b) => a + b.mins, 0);
 
@@ -226,30 +222,7 @@ export default function Today() {
     let i = 0;
     setQuickAccess(full.map((q) => (hiddenTile(q, hidden) ? q : nextVisible[i++])));
   }, [setQuickAccess]);
-  const openQaAdd = useCallback(() => {
-    setSiteDraft('');
-    setSiteLabel('');
-    setSiteError('');
-    setQaAddSheet(true);
-  }, []);
-  const addQuick = (item: Omit<QuickItem, 'id'>) => {
-    if (quickAccess.some((q) => q.kind === item.kind && q.target === item.target)) return false;
-    setQuickAccess([...quickAccess, { ...item, id: uid() }]);
-    return true;
-  };
-  const addSite = () => {
-    const url = siteUrl(siteDraft);
-    if (!url) {
-      setSiteError(siteDraft.trim() ? 'That is not a web address. Try something like khanacademy.org' : "Type the site's address first.");
-      return;
-    }
-    if (!addQuick({ label: siteLabel.trim() || siteName(url), icon: 'globe-outline', color: 'teal', kind: 'url', target: url })) {
-      setSiteError('That site is already in quick access.');
-      return;
-    }
-    setSiteDraft(''); setSiteLabel(''); setSiteError('');
-    setQaAddSheet(false);
-  };
+  const openQaAdd = useCallback(() => setQaAddSheet(true), []);
 
   // once the intro has gone and the screen is still, the other tabs are built one at a time, so a first visit
   // never waits for a screen to be made and nothing is built out of sight while the intro plays
@@ -280,16 +253,20 @@ export default function Today() {
   }, [introDone]);
 
   // the sections, placed in one column on a phone (and a tablet held upright), in two on a wide window
+  // a greeting that changes while Today is open (a new part of the day, the list done) dips out and back as the new words
+  const greetingKey = greeting.parts.map((part) => part.text).join('') + '|' + (greeting.sub || '');
   const greetingBlock = (
         <Enter index={0}>
-          <Pressable onPress={() => { setNameDraft(settings.name); setNameSheet(true); }}>
+          <Pressable onPress={() => setNameSheet(true)}>
             <Text style={T.kicker}>{fmtDate(now)}</Text>
-            <Text style={[T.display, { marginTop: 8, marginBottom: greeting.sub ? 6 : 24 }]}>
-              {greeting.parts.map((part, i) => (
-                <Text key={i} style={part.name ? { color: C.accent } : undefined}>{part.text}</Text>
-              ))}
-            </Text>
-            {greeting.sub ? <Text style={[T.label, { marginBottom: 24 }]}>{greeting.sub}</Text> : null}
+            <FadeSwap swapKey={greetingKey}>
+              <Text style={[T.display, { marginTop: 8, marginBottom: greeting.sub ? 6 : 24 }]}>
+                {greeting.parts.map((part, i) => (
+                  <Text key={i} style={part.name ? { color: C.accent } : undefined}>{part.text}</Text>
+                ))}
+              </Text>
+              {greeting.sub ? <Text style={[T.label, { marginBottom: 24 }]}>{greeting.sub}</Text> : null}
+            </FadeSwap>
           </Pressable>
         </Enter>
   );
@@ -300,11 +277,13 @@ export default function Today() {
         {nextBlock && !hidePlanner && (
           <Enter index={1}>
             <Card hero pad={16} onPress={() => openTool('planner')}>
+              {/* when one block ends and the next takes the card, the old one dips out and the new one comes up */}
+              <FadeSwap swapKey={nextBlockKey}>
               <Row style={{ justifyContent: 'space-between' }}>
                 <Row style={{ flex: 1 }}>
                   <View style={[st.blockBar, { backgroundColor: nextBlock.block.color }]} />
                   <View style={{ flex: 1 }}>
-                    <Text style={T.title} numberOfLines={1}>{nextBlock.block.subject}</Text>
+                    <Text style={T.head} numberOfLines={1}>{nextBlock.block.subject}</Text>
                     <Text style={[T.caption, { marginTop: 2, fontVariant: ['tabular-nums'] }]}>
                       {fmtClockTime(toMinutes(nextBlock.block.start), settings.hour24)} – {fmtClockTime(toMinutes(nextBlock.block.end), settings.hour24)}
                     </Text>
@@ -314,6 +293,7 @@ export default function Today() {
                   <Text style={[st.tagText, { color: C.accent }]}>{nextBlock.tag}</Text>
                 </View>
               </Row>
+              </FadeSwap>
             </Card>
           </Enter>
         )}
@@ -361,7 +341,9 @@ export default function Today() {
           <SectionTitle
             right={
               <Pressable onPress={() => setQaEdit(!qaEdit)} hitSlop={8}>
-                <Text style={[st.link, { color: C.accent }]}>{qaEdit ? 'Done' : 'Edit'}</Text>
+                <FadeSwap swapKey={qaEdit ? 'done' : 'edit'}>
+                  <Text style={[st.link, { color: C.accent }]}>{qaEdit ? 'Done' : 'Edit'}</Text>
+                </FadeSwap>
               </Pressable>
             }
           >
@@ -461,14 +443,15 @@ export default function Today() {
                     <WeekBar key={i} label={b.label} mins={b.mins} maxMins={maxMins} isToday={i === 6} />
                   ))}
                 </Row>
-                <Hairline />
-                <Text style={[T.caption, { textAlign: 'center', marginTop: 10 }]}>
-                  {weekTotal > 0 ? (
-                    <>
+                {/* a week with no focus says nothing about it: the empty troughs say it */}
+                {weekTotal > 0 ? (
+                  <>
+                    <Hairline />
+                    <Text style={[T.caption, { textAlign: 'center', marginTop: 10 }]}>
                       <CountUp value={weekTotal} style={{ color: C.accent, fontFamily: F.semi }}> min</CountUp> focused in the last 7 days
-                    </>
-                  ) : 'No focus logged this week yet.'}
-                </Text>
+                    </Text>
+                  </>
+                ) : null}
               </Card>
             </Enter>
           </>
@@ -512,37 +495,99 @@ export default function Today() {
         )}
       </ScrollView>
 
-      <Sheet visible={nameSheet} onClose={() => setNameSheet(false)} title="Your name">
-        <Field value={nameDraft} onChangeText={setNameDraft} placeholder="What should the greeting call you?" autoFocus />
-        <PillButton label="Save" onPress={() => { setSetting('name', nameDraft.trim()); setNameSheet(false); }} />
-      </Sheet>
+      <NameSheet visible={nameSheet} onClose={() => setNameSheet(false)} />
+      <QuickAddSheet visible={qaAddSheet} onClose={() => setQaAddSheet(false)} archived={archived} />
+    </ScreenBG>
+  );
+}
 
-      <Sheet visible={qaAddSheet} onClose={() => setQaAddSheet(false)} title="Add to quick access">
-        <Text style={st.sheetSection}>In-app</Text>
-        <Row style={{ flexWrap: 'wrap' }}>
-          {ROUTE_CATALOG.filter((r) => !(r.kind === 'tool' && archived.has(r.target)) && !quickAccess.some((q) => q.kind === r.kind && q.target === r.target)).map((r) => (
-            <Chip key={r.kind + r.target} label={r.label} color={colorOf(r.color)} onPress={() => addQuick(r)} />
-          ))}
-        </Row>
-        <Text style={st.sheetSection}>A website</Text>
+/** The greeting's name. What is typed lives here, so a keystroke re-renders the sheet alone, never the whole day. */
+function NameSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const setSetting = useStore((s) => s.setSetting);
+  const [draft, setDraft] = useState('');
+  // each opening starts from the saved name
+  useEffect(() => { if (visible) setDraft(useStore.getState().settings.name); }, [visible]);
+  return (
+    <Sheet visible={visible} onClose={onClose} title="Your name">
+      <Field value={draft} onChangeText={setDraft} placeholder="What should the greeting call you?" autoFocus />
+      <PillButton label="Save" onPress={() => { setSetting('name', draft.trim()); onClose(); }} />
+    </Sheet>
+  );
+}
+
+/**
+ * Adding a shortcut: an in-app page, or a website. The address and name being typed live here, so a keystroke
+ * re-renders the sheet alone.
+ */
+function QuickAddSheet({ visible, onClose, archived }: { visible: boolean; onClose: () => void; archived: ReadonlySet<string> }) {
+  const quickAccess = useStore((s) => s.quickAccess);
+  const setQuickAccess = useStore((s) => s.setQuickAccess);
+  const [siteDraft, setSiteDraft] = useState('');
+  const [siteLabel, setSiteLabel] = useState('');
+  const [siteError, setSiteError] = useState('');
+  // each opening starts blank
+  useEffect(() => {
+    if (!visible) return;
+    setSiteDraft('');
+    setSiteLabel('');
+    setSiteError('');
+  }, [visible]);
+  const addQuick = (item: Omit<QuickItem, 'id'>) => {
+    const list = useStore.getState().quickAccess;
+    if (list.some((q) => q.kind === item.kind && q.target === item.target)) return false;
+    setQuickAccess([...list, { ...item, id: uid() }]);
+    return true;
+  };
+  const addSite = () => {
+    const url = siteUrl(siteDraft);
+    if (!url) {
+      setSiteError(siteDraft.trim() ? 'That is not a web address. Try something like khanacademy.org' : "Type the site's address first.");
+      return;
+    }
+    if (!addQuick({ label: siteLabel.trim() || siteName(url), icon: 'globe-outline', color: 'teal', kind: 'url', target: url })) {
+      setSiteError('That site is already in quick access.');
+      return;
+    }
+    onClose();
+  };
+  const catalog = ROUTE_CATALOG.filter(
+    (r) => !(r.kind === 'tool' && archived.has(r.target)) && !quickAccess.some((q) => q.kind === r.kind && q.target === r.target)
+  );
+  const typedUrl = siteUrl(siteDraft);
+  return (
+    <Sheet visible={visible} onClose={onClose} title="Add to quick access">
+      {/* once every in-app page is a shortcut, the section goes rather than standing empty */}
+      {catalog.length > 0 ? (
+        <>
+          <Text style={st.sheetSection}>In-app</Text>
+          <Row style={{ flexWrap: 'wrap' }}>
+            {catalog.map((r) => (
+              <Chip key={r.kind + r.target} label={r.label} color={colorOf(r.color)} onPress={() => addQuick(r)} />
+            ))}
+          </Row>
+        </>
+      ) : null}
+      <Text style={st.sheetSection}>A website</Text>
+      <Field
+        label="Address" value={siteDraft} autoCapitalize="none" autoCorrect={false} keyboardType="url"
+        onChangeText={(t) => { setSiteDraft(t); if (siteError) setSiteError(''); }}
+        placeholder="khanacademy.org"
+      />
+      <Row style={{ alignItems: 'flex-end' }}>
         <Field
-          label="Address" value={siteDraft} autoCapitalize="none" autoCorrect={false} keyboardType="url"
-          onChangeText={(t) => { setSiteDraft(t); if (siteError) setSiteError(''); }}
-          placeholder="khanacademy.org"
+          label="Name" value={siteLabel} onChangeText={setSiteLabel}
+          placeholder={typedUrl ? siteName(typedUrl) : 'Optional'}
+          style={{ flex: 1, marginBottom: 0 }} returnKeyType="done" onSubmitEditing={addSite}
         />
-        <Row style={{ alignItems: 'flex-end' }}>
-          <Field
-            label="Name" value={siteLabel} onChangeText={setSiteLabel}
-            placeholder={siteUrl(siteDraft) ? siteName(siteUrl(siteDraft) as string) : 'Optional'}
-            style={{ flex: 1, marginBottom: 0 }} returnKeyType="done" onSubmitEditing={addSite}
-          />
-          <PillButton small label="Add" style={{ marginLeft: 12 }} onPress={addSite} />
-        </Row>
+        <PillButton small label="Add" style={{ marginLeft: 12 }} onPress={addSite} />
+      </Row>
+      {/* the help line and a problem with the address cross over rather than swapping in one frame */}
+      <FadeSwap swapKey={siteError}>
         <Text style={[T.caption, { marginTop: 10, color: siteError ? C.danger : C.textFaint }]}>
           {siteError || 'Opens in your default browser.'}
         </Text>
-      </Sheet>
-    </ScreenBG>
+      </FadeSwap>
+    </Sheet>
   );
 }
 
@@ -562,8 +607,10 @@ function Glance({ value, total, label, color, suffix }: { value: number; total?:
   );
 }
 
-/** Carved vertical trough with a sprung fill rising from the bottom. */
-const BAR_SPRING = { damping: 20, stiffness: 240, mass: 0.8 };
+/** Carved vertical trough with a fill that eases up from the bottom: seven bars moving together must never bounce. */
+const BAR_EASE = { duration: 360, easing: EASE_OUT };
+/** tiles making way for a new, moved or removed shortcut */
+const REFLOW = { duration: 280, easing: EASE_OUT };
 
 /* ---------------- quick access: a bento of wide and small tiles, hold to drag ---------------- */
 const QA_COLS = 4;
@@ -643,16 +690,25 @@ function QuickTile({ q, meta, index, rect, wide, rects, isDragging, onDragState,
   const dropStable = React.useCallback(() => dropRef.current(), []);
   const dragStable = React.useCallback((id: string) => dragStateRef.current(id), []);
 
+  const wasDragging = React.useRef(false);
   React.useEffect(() => {
     // while dragging, the finger owns the tile: its place and its width both hold still until it lands, so a tile
     // that is about to change span never grows under the finger
-    if (isDragging) return;
+    if (isDragging) { wasDragging.current = true; return; }
+    const dropped = wasDragging.current;
+    wasDragging.current = false;
     if (level === 'none') {
       x.value = rect.x; y.value = rect.y; w.value = rect.w;
-    } else {
+    } else if (dropped) {
+      // the tile the finger lets go of settles into its slot: one tile answering a touch may spring
       x.value = withSpring(rect.x, RISE_OUT);
       y.value = withSpring(rect.y, RISE_OUT);
       w.value = withSpring(rect.w, RISE_OUT);
+    } else {
+      // the others make way on an eased glide: springs across a whole grid overshoot against each other
+      x.value = withTiming(rect.x, REFLOW);
+      y.value = withTiming(rect.y, REFLOW);
+      w.value = withTiming(rect.w, REFLOW);
     }
   }, [rect.x, rect.y, rect.w, isDragging, level]);
 
@@ -763,20 +819,32 @@ const TodayList = React.memo(function TodayList({ items, onToggleDaily, onToggle
   return (
     <ListCard>
       {items.map((t) => (
-        <ListRow key={t.kind + t.id}>
-          <CheckCircle
-            done={t.done}
-            color={t.kind === 'mission' ? C.amber : C.green}
-            onPress={() => (t.kind === 'daily' ? onToggleDaily(t.id) : onToggleMission(t.id))}
-            label={t.title}
-          />
-          <StrikeText done={t.done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{t.title}</StrikeText>
-          {t.kind === 'mission' && (
-            <View style={st.missionPill}><Text style={st.missionPillText}>DUE</Text></View>
-          )}
-        </ListRow>
+        <TodayRow
+          key={t.kind + t.id} kind={t.kind} id={t.id} title={t.title} done={t.done}
+          onToggleDaily={onToggleDaily} onToggleMission={onToggleMission}
+        />
       ))}
     </ListCard>
+  );
+});
+
+/** One of today's rows. Memoised on plain values, so ticking one re-renders that row alone. */
+const TodayRow = React.memo(function TodayRow({ kind, id, title, done, onToggleDaily, onToggleMission }: TodayItem & {
+  onToggleDaily: (id: string) => void; onToggleMission: (id: string) => void;
+}) {
+  return (
+    <ListRow>
+      <CheckCircle
+        done={done}
+        color={kind === 'mission' ? C.amber : C.green}
+        onPress={() => (kind === 'daily' ? onToggleDaily(id) : onToggleMission(id))}
+        label={title}
+      />
+      <StrikeText done={done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{title}</StrikeText>
+      {kind === 'mission' && (
+        <View style={st.missionPill}><Text style={st.missionPillText}>DUE</Text></View>
+      )}
+    </ListRow>
   );
 });
 
@@ -853,18 +921,15 @@ function WeekBar({ label, mins, maxMins, isToday }: {
   const target = Math.max(4, (mins / maxMins) * 56);
   const h = useSharedValue(target);
   React.useEffect(() => {
-    h.value = level === 'none' ? target : withSpring(target, BAR_SPRING);
+    h.value = level === 'none' ? target : withTiming(target, BAR_EASE);
   }, [target, level]);
   // a full-height fill rises from the trough floor: a transform, never a height
   const fillStyle = useAnimatedStyle(() => ({ transform: [{ translateY: 56 - h.value }] }));
   const fillColor = isToday ? C.accent : C.slate + '73';
   return (
     <View style={{ alignItems: 'center', flex: 1 }}>
-      {mins > 0 && (
-        <Pop dep={mins}>
-          <Text style={st.barValue}>{mins}</Text>
-        </Pop>
-      )}
+      {/* the figure counts to its new value as the fill rises; it no longer pops on the first paint, out of sight */}
+      {mins > 0 && <CountUp value={mins} style={st.barValue} />}
       <View
         style={[
           st.barTrough,

@@ -1,10 +1,10 @@
 import React from 'react';
-import { Pressable, Text, View, ViewStyle } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { Pressable, View, ViewStyle } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, neuInset, neuRaised } from '../theme';
 import { useTheme } from './UI';
-import { RISE_OUT, useAnimLevel } from './Motion';
+import { CHANGE, RISE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
 
 /**
@@ -101,13 +101,48 @@ export function SegmentedControl<K extends string>({
               flex: stretch ? 1 : undefined,
             }}
           >
-            {o.icon ? <Ionicons name={o.icon} size={fontSize + 1} color={active ? c : C.textFaint} /> : null}
-            <Text numberOfLines={1} style={{ fontFamily: F.med, fontSize, letterSpacing: 0.1, color: active ? c : C.textFaint }}>
-              {o.label}
-            </Text>
+            <SegLabel active={active} label={o.label} icon={o.icon} color={c} size={fontSize} />
           </Pressable>
         );
       })}
     </View>
   );
 }
+
+/**
+ * A segment's name and icon: the muted and the chosen inks cross over while the thumb travels, instead of the new
+ * segment lighting up the moment it is tapped. Both inks share one face, so they lie exactly over each other.
+ */
+function SegLabel({ active, label, icon, color, size }: {
+  active: boolean; label: string; icon?: any; color: string; size: number;
+}) {
+  const level = useAnimLevel();
+  const on = useSharedValue(active ? 1 : 0);
+  React.useEffect(() => {
+    on.value = level === 'none' ? (active ? 1 : 0) : withTiming(active ? 1 : 0, CHANGE);
+  }, [active, level]);
+  const lit = useAnimatedStyle(() => ({ opacity: on.value }));
+  const unlit = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
+  const text = { fontFamily: F.med, fontSize: size, letterSpacing: 0.1 };
+  return (
+    <>
+      {icon ? (
+        <View>
+          <Animated.View style={unlit}><Ionicons name={icon} size={size + 1} color={C.textFaint} /></Animated.View>
+          <Animated.View style={[ink, lit]}><Ionicons name={icon} size={size + 1} color={color} /></Animated.View>
+        </View>
+      ) : null}
+      <View style={{ flexShrink: 1 }}>
+        <Animated.Text numberOfLines={1} style={[text, { color: C.textFaint }, unlit]}>{label}</Animated.Text>
+        <Animated.Text
+          numberOfLines={1} style={[text, ink, { color }, lit]}
+          importantForAccessibility="no" accessibilityElementsHidden
+        >
+          {label}
+        </Animated.Text>
+      </View>
+    </>
+  );
+}
+
+const ink = { position: 'absolute' as const, top: 0, left: 0, right: 0 };

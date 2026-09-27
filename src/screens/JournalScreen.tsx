@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T } from '../theme';
 import { useStore, JournalEntry } from '../store';
 import { todayKey } from '../utils';
@@ -12,7 +12,7 @@ import {
   Chip, DotMenu, Field, Hairline, IconBtn, NeuHeader, NeuIconBtn, PillButton, ProgressBar, Row, ScreenBG, Sheet, Toggle, useTheme,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Bouncy, useAnimLevel } from '../components/Motion';
+import { Bouncy, EASE_OUT, FadeSwap, shiftIn, useAnimLevel } from '../components/Motion';
 import { PinSheet, ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
@@ -57,8 +57,6 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const settings = useStore((s) => s.settings);
   const setSetting = useStore((s) => s.setSetting);
   const journal = useStore((s) => s.journal);
-  const journalTags = useStore((s) => s.journalTags);
-  const setJournalTags = useStore((s) => s.setJournalTags);
   const patchJournalEntry = useStore((s) => s.patchJournalEntry);
 
   const [dateKey, setDateKey] = React.useState(() => journalDayFor(new Date(), settings.journalCutoffHour));
@@ -79,10 +77,11 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const [dateSheet, setDateSheet] = React.useState(false);
   const [menu, setMenu] = React.useState(false);
   const [tagSheet, setTagSheet] = React.useState(false);
-  const [tagDraft, setTagDraft] = React.useState('');
   const [prefs, setPrefs] = React.useState(false);
-  const [remindDraft, setRemindDraft] = React.useState(settings.journalReminderTime || '21:30');
   const [pinFlow, setPinFlow] = React.useState(false);
+  // each page loaded is a new page: it counts up so the page can arrive with its own entrance
+  const [page, setPage] = React.useState(0);
+  const turnDir = React.useRef<0 | 1 | -1>(0);
 
   const draft = React.useRef<Draft>({
     id: null, dateKey, title: '', body: '', mood: undefined, rating: undefined, checkoutSkipped: false, tags: [], dirty: false,
@@ -107,21 +106,17 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const tickStyle = useAnimatedStyle(() => ({ opacity: saved.value }));
   const markTyping = () => {
     if (level === 'none') return;
-    dim.value = withTiming(1, { duration: 220 });
+    dim.value = withTiming(1, { duration: 220, easing: EASE_OUT });
     if (idle.current) clearTimeout(idle.current);
-    idle.current = setTimeout(() => { dim.value = withTiming(0, { duration: 420 }); }, 1400);
+    idle.current = setTimeout(() => { dim.value = withTiming(0, { duration: 420, easing: Easing.inOut(Easing.quad) }); }, 1400);
   };
 
-  // ---- the page turns the way time runs: a later day arrives from the right, an earlier one from the left ----
-  const pageX = useSharedValue(0);
-  const pageFade = useSharedValue(1);
-  const pageStyle = useAnimatedStyle(() => ({ opacity: pageFade.value, transform: [{ translateX: pageX.value * 22 }] }));
-  const turnPage = React.useCallback((dir: 1 | -1) => {
-    if (level === 'none') return;
-    const enter = { duration: 300, easing: Easing.out(Easing.cubic) };
-    pageX.value = withSequence(withTiming(dir, { duration: 0 }), withTiming(0, enter));
-    pageFade.value = withSequence(withTiming(0.2, { duration: 0 }), withTiming(1, enter));
-  }, [level]);
+  // ---- the page turns the way time runs: a later day arrives from the right, an earlier one from the left. The page
+  // is keyed on its load, so the entrance runs as the new words mount (setting shared values beforehand moved the old
+  // page for a frame before the new one had rendered) ----
+  const pageEnter = level === 'none' ? undefined
+    : level === 'some' ? FadeIn.duration(180).easing(EASE_OUT)
+      : turnDir.current ? shiftIn(turnDir.current * 22) : FadeIn.duration(240).easing(EASE_OUT);
 
   // ---- saving: serialised, so two flushes can never create the same entry twice ----
   const runFlush = React.useCallback(async () => {
@@ -147,7 +142,12 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         setEntryId(id);
       }
       setSaveFailed(false);
-      if (level !== 'none') saved.value = withSequence(withTiming(1, { duration: 160 }), withDelay(700, withTiming(0, { duration: 300 })));
+      if (level !== 'none') {
+        saved.value = withSequence(
+          withTiming(1, { duration: 160, easing: EASE_OUT }),
+          withDelay(700, withTiming(0, { duration: 300, easing: Easing.in(Easing.quad) })),
+        );
+      }
     } catch {
       d.dirty = true;
       setSaveFailed(true);
@@ -160,15 +160,18 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     return queue.current;
   }, [runFlush]);
 
-  const schedule = () => {
+  const schedule = React.useCallback(() => {
     draft.current.dirty = true;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { flush(); }, SAVE_DEBOUNCE_MS);
-  };
+  }, [flush]);
 
-  const loadEntry = React.useCallback(async (key: string, id: string | null) => {
+  /** Loads a page. `dir` is the way the page turns: 1 for a later day, -1 for an earlier one, 0 in place. */
+  const loadEntry = React.useCallback(async (key: string, id: string | null, dir: 0 | 1 | -1 = 0) => {
     const meta = id ? useStore.getState().journal.find((e) => e.id === id) : undefined;
     const text = meta ? await readBody(meta.id) : '';
+    turnDir.current = dir;
+    setPage((n) => n + 1);
     draft.current = {
       id: meta?.id ?? null, dateKey: key, title: meta?.title ?? '', body: text,
       mood: meta?.mood, rating: meta?.rating, checkoutSkipped: !!meta?.checkoutSkipped,
@@ -192,9 +195,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     await flush();
     const from = draft.current.dateKey;
     const day = useStore.getState().journal.filter((e) => e.dateKey === key).sort((a, b) => a.createdAt - b.createdAt);
-    await loadEntry(key, id === undefined ? day[0]?.id ?? null : id);
-    if (key !== from) turnPage(key > from ? 1 : -1);
-  }, [flush, loadEntry, turnPage]);
+    await loadEntry(key, id === undefined ? day[0]?.id ?? null : id, key > from ? 1 : key < from ? -1 : 0);
+  }, [flush, loadEntry]);
 
   useFocusEffect(React.useCallback(() => {
     const req = takeJournalOpenRequest();
@@ -262,20 +264,13 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     draft.current.checkoutSkipped = true;
     schedule();
   };
-  const toggleTag = (t: string) => {
+  const toggleTag = React.useCallback((t: string) => {
     tap();
     const next = draft.current.tags.includes(t) ? draft.current.tags.filter((x) => x !== t) : [...draft.current.tags, t];
     setTags(next);
     draft.current.tags = next;
     schedule();
-  };
-  const addTag = () => {
-    const t = tagDraft.trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-');
-    if (!t) return;
-    if (!journalTags.includes(t)) setJournalTags([...journalTags, t].sort());
-    if (!draft.current.tags.includes(t)) toggleTag(t);
-    setTagDraft('');
-  };
+  }, [schedule]);
 
   const prompt = promptFor(dateKey);
   const showPrompt = loaded && settings.journalPromptsOn && !body.trim();
@@ -287,7 +282,10 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   };
 
   const today = todayKey();
-  const dayEntries = journal.filter((e) => e.dateKey === dateKey).sort((a, b) => a.createdAt - b.createdAt);
+  const dayEntries = React.useMemo(
+    () => journal.filter((e) => e.dateKey === dateKey).sort((a, b) => a.createdAt - b.createdAt),
+    [journal, dateKey],
+  );
   const at = entryId ? dayEntries.findIndex((e) => e.id === entryId) : -1;
   const words = countWords(body);
   const goal = settings.journalWordGoal;
@@ -335,10 +333,12 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   };
 
   const openArchive = async () => { tick(); await flush(); nav.openArchive(); };
-  const pickDay = (key: string) => { setDateSheet(false); autoDay.current = false; openDay(key); };
+  const pickDay = React.useCallback((key: string) => { setDateSheet(false); autoDay.current = false; openDay(key); }, [openDay]);
 
+  // the menu reads the page when an action runs, so typing never rebuilds it
   const shareText = () => {
-    const text = [formatJournalDate(dateKey), title.trim(), body.trim()].filter(Boolean).join('\n\n');
+    const d = draft.current;
+    const text = [formatJournalDate(d.dateKey), d.title.trim(), d.body.trim()].filter(Boolean).join('\n\n');
     Share.share({ message: text });
   };
   const confirmDelete = () => {
@@ -360,7 +360,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     ]);
   };
 
-  const setLock = async (on: boolean) => {
+  const setLock = React.useCallback(async (on: boolean) => {
     // the page is open, so the PIN has already been given: turning the lock off here asks nothing more
     if (!on) {
       setSetting('journalLocked', false);
@@ -373,15 +373,79 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     }
     // no PIN on this phone yet, or only an older code: one is chosen first
     setPinFlow(true);
-  };
-  const saveReminder = async (on: boolean) => {
-    if (on) {
-      if (!HHMM.test(remindDraft)) { Alert.alert('Use 24h HH:MM, e.g. 21:30'); return; }
-      if (!(await ensurePermission())) { Alert.alert('Permission needed', 'Allow notifications in system settings first.'); return; }
-    }
-    setSetting('journalReminderTime', on ? remindDraft : '');
-    setTimeout(rescheduleAllReminders, 150);
-  };
+  }, [setSetting]);
+
+  // ---- the day button's tint eases over instead of switching ----
+  const dayLit = !!(mood || rating || checkout);
+  const tint = useSharedValue(dayLit ? 1 : 0);
+  React.useEffect(() => {
+    tint.value = level === 'none' ? (dayLit ? 1 : 0) : withTiming(dayLit ? 1 : 0, { duration: 200, easing: EASE_OUT });
+  }, [dayLit, level]);
+  const tintStyle = useAnimatedStyle(() => ({ opacity: tint.value }));
+
+  const hasText = !!(title.trim() || body.trim());
+  const pinned = !!current?.pinned;
+  const currentId = current?.id;
+  // the sheets and the menu are built only when what they show changes, never on a keystroke
+  const menuSheet = React.useMemo(() => (
+    <DotMenu
+      visible={menu}
+      onClose={() => setMenu(false)}
+      items={[
+        ...(entryId ? [{ label: 'New entry for this day', icon: 'add-outline', onPress: async () => { await flush(); loadEntry(dateKey, null); } }] : []),
+        ...(dayEntries.length > 1 && at >= 0 ? [{ label: 'Next entry on this day', icon: 'swap-horizontal-outline', onPress: async () => { await flush(); loadEntry(dateKey, dayEntries[(at + 1) % dayEntries.length].id); } }] : []),
+        ...(currentId ? [{ label: pinned ? 'Unpin' : 'Pin', icon: pinned ? 'pin' : 'pin-outline', onPress: () => patchJournalEntry(currentId, { pinned: !pinned }) }] : []),
+        ...(hasText ? [
+          { label: 'Share as text', icon: 'share-outline', onPress: shareText },
+          {
+            label: 'Copy text', icon: 'copy-outline',
+            onPress: () => Clipboard.setStringAsync([draft.current.title.trim(), draft.current.body.trim()].filter(Boolean).join('\n\n')),
+          },
+        ] : []),
+        { label: 'Journal settings', icon: 'options-outline', onPress: () => setPrefs(true) },
+        ...(entryId ? [{ label: 'Delete entry', icon: 'trash-outline', color: C.danger, onPress: confirmDelete }] : []),
+      ]}
+    />
+  ), [menu, entryId, dateKey, dayEntries, at, currentId, pinned, hasText, flush, loadEntry]);
+  const dateSheetEl = React.useMemo(() => (
+    <Sheet visible={dateSheet} onClose={() => setDateSheet(false)} title="Which day?">
+      <Row style={{ marginBottom: 12 }}>
+        <Chip label="Yesterday" icon="arrow-undo-outline" active={dateKey === shiftKey(today, -1)} onPress={() => pickDay(shiftKey(today, -1))} />
+        <Chip label="Today" icon="today-outline" active={dateKey === today} onPress={() => pickDay(today)} />
+      </Row>
+      <JournalCalendar value={dateKey} onPick={pickDay} marked={marked} maxKey={today} />
+    </Sheet>
+  ), [dateSheet, dateKey, today, marked, pickDay]);
+  const tagSheetEl = React.useMemo(() => (
+    <TagSheet visible={tagSheet} onClose={() => setTagSheet(false)} tags={tags} onToggle={toggleTag} />
+  ), [tagSheet, tags, toggleTag]);
+  const prefsEl = React.useMemo(() => (
+    <JournalPrefs visible={prefs} onClose={() => setPrefs(false)} onLock={setLock} />
+  ), [prefs, setLock]);
+  const taskSheetEl = React.useMemo(() => (
+    <QuickTaskSheet
+      visible={taskSheet}
+      onClose={() => setTaskSheet(false)}
+      onClosed={() => {
+        if (refocus.current) setTimeout(() => bodyRef.current?.focus(), 80);
+        refocus.current = false;
+      }}
+      initialTitle={taskTitle}
+    />
+  ), [taskSheet, taskTitle]);
+  const pinSheetEl = React.useMemo(() => (
+    <PinSheet
+      visible={pinFlow}
+      mode="set"
+      tint={C.gold}
+      onClose={() => setPinFlow(false)}
+      onDone={() => {
+        setPinFlow(false);
+        setSetting('journalLocked', true);
+        markOpen('journal');
+      }}
+    />
+  ), [pinFlow, setSetting]);
 
   return (
     <ScreenBG guard={tabMode}>
@@ -390,8 +454,11 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           {tabMode ? null : <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={() => router.back()} accessibilityLabel="Back" />}
         </View>
         <Bouncy onPress={() => { tick(); setDateSheet(true); }} scaleTo={0.97} radius={14} style={st.dateBtn}>
-          <Text style={st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
-          <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
+          {/* a new day's date dips out and comes back with the page, instead of changing under it in one frame */}
+          <FadeSwap swapKey={dateKey + '|' + sub} style={st.dateWords}>
+            <Text style={st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
+            <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
+          </FadeSwap>
         </Bouncy>
         <View style={[st.side, { justifyContent: 'flex-end' }]}>
           <NeuIconBtn name="albums-outline" dim={38} size={18} color={C.textDim} onPress={openArchive} accessibilityLabel="Archive" />
@@ -404,45 +471,46 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         </View>
       ) : null}
 
-      <Animated.ScrollView
-        style={pageStyle}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingHorizontal: S.pad + 4, paddingTop: 8, paddingBottom: 40 }}
-      >
-        <TextInput
-          value={title}
-          onChangeText={onTitle}
-          editable={loaded}
-          placeholder="Title, if you want one"
-          placeholderTextColor={C.textFaint}
-          style={st.title}
-          maxLength={120}
-          returnKeyType="next"
-          blurOnSubmit={false}
-          onSubmitEditing={() => bodyRef.current?.focus()}
-        />
-        {showPrompt ? (
-          <Bouncy onPress={usePrompt} scaleTo={0.98} radius={12} style={st.prompt}>
-            <Ionicons name="bulb-outline" size={15} color={C.gold} />
-            <Text style={st.promptText}>{prompt.text}</Text>
-          </Bouncy>
-        ) : null}
-        <TextInput
-          ref={bodyRef}
-          value={body}
-          onChangeText={onBody}
-          onSelectionChange={(e) => { selection.current = e.nativeEvent.selection; }}
-          onFocus={() => { bodyFocused.current = true; }}
-          onBlur={() => { bodyFocused.current = false; }}
-          editable={loaded}
-          placeholder="Start writing"
-          placeholderTextColor={C.textFaint}
-          multiline
-          scrollEnabled={false}
-          textAlignVertical="top"
-          style={st.body}
-        />
-      </Animated.ScrollView>
+      <Animated.View key={page} entering={pageEnter} style={st.page}>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ paddingHorizontal: S.pad + 4, paddingTop: 8, paddingBottom: 40 }}
+        >
+          <TextInput
+            value={title}
+            onChangeText={onTitle}
+            editable={loaded}
+            placeholder="Title, if you want one"
+            placeholderTextColor={C.textFaint}
+            style={st.title}
+            maxLength={120}
+            returnKeyType="next"
+            blurOnSubmit={false}
+            onSubmitEditing={() => bodyRef.current?.focus()}
+          />
+          {showPrompt ? (
+            <Bouncy onPress={usePrompt} scaleTo={0.98} radius={12} style={st.prompt}>
+              <Ionicons name="bulb-outline" size={15} color={C.gold} />
+              <Text style={st.promptText}>{prompt.text}</Text>
+            </Bouncy>
+          ) : null}
+          <TextInput
+            ref={bodyRef}
+            value={body}
+            onChangeText={onBody}
+            onSelectionChange={(e) => { selection.current = e.nativeEvent.selection; }}
+            onFocus={() => { bodyFocused.current = true; }}
+            onBlur={() => { bodyFocused.current = false; }}
+            editable={loaded}
+            placeholder="Start writing"
+            placeholderTextColor={C.textFaint}
+            multiline
+            scrollEnabled={false}
+            textAlignVertical="top"
+            style={st.body}
+          />
+        </ScrollView>
+      </Animated.View>
 
       {checkout ? (
         <DayCheckout
@@ -462,10 +530,11 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
             onPress={() => { tick(); setCheckout(checkout ? null : 'asked'); }}
             scaleTo={0.9}
             radius={17}
-            style={[st.dayWell, (mood || rating || checkout) ? { backgroundColor: C.gold + '24' } : null]}
+            style={st.dayWell}
             accessibilityRole="button"
             accessibilityLabel={'How the day went' + (mood ? ', ' + MOODS.find((m) => m.value === mood)?.label : '') + (rating ? ', ' + rating + ' of 5 stars' : '')}
           >
+            <Animated.View pointerEvents="none" style={[st.dayTint, { backgroundColor: C.gold + '24' }, tintStyle]} />
             <Ionicons name={dayIcon as any} size={18} color={mood || rating ? C.gold : C.textFaint} />
           </Bouncy>
           <IconBtn
@@ -477,128 +546,131 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           )}
         </Row>
         <View style={{ alignItems: 'flex-end' }}>
-          <Text
-            style={[st.words, saveFailed && { color: C.danger }]}
-            onPress={saveFailed ? () => { flush(); } : undefined}
-            suppressHighlighting
-          >
-            {saveFailed ? 'Not saved, tap to retry' : words + (words === 1 ? ' word' : ' words')}
-          </Text>
+          <FadeSwap swapKey={saveFailed ? 'failed' : 'count'}>
+            <Text
+              style={[st.words, saveFailed && { color: C.danger }]}
+              onPress={saveFailed ? () => { flush(); } : undefined}
+              suppressHighlighting
+            >
+              {/* an empty page states no count at all */}
+              {saveFailed ? 'Not saved, tap to retry' : words ? words + (words === 1 ? ' word' : ' words') : ' '}
+            </Text>
+          </FadeSwap>
           <Animated.View style={[st.tick, tickStyle]} />
         </View>
       </Animated.View>
 
-      <Sheet visible={dateSheet} onClose={() => setDateSheet(false)} title="Which day?">
-        <Row style={{ marginBottom: 12 }}>
-          <Chip label="Yesterday" icon="arrow-undo-outline" active={dateKey === shiftKey(today, -1)} onPress={() => pickDay(shiftKey(today, -1))} />
-          <Chip label="Today" icon="today-outline" active={dateKey === today} onPress={() => pickDay(today)} />
-        </Row>
-        <JournalCalendar value={dateKey} onPick={pickDay} marked={marked} maxKey={today} />
-      </Sheet>
-
-      <DotMenu
-        visible={menu}
-        onClose={() => setMenu(false)}
-        items={[
-          ...(entryId ? [{ label: 'New entry for this day', icon: 'add-outline', onPress: async () => { await flush(); loadEntry(dateKey, null); } }] : []),
-          ...(dayEntries.length > 1 && at >= 0 ? [{ label: 'Next entry on this day', icon: 'swap-horizontal-outline', onPress: async () => { await flush(); loadEntry(dateKey, dayEntries[(at + 1) % dayEntries.length].id); } }] : []),
-          ...(current ? [{ label: current.pinned ? 'Unpin' : 'Pin', icon: current.pinned ? 'pin' : 'pin-outline', onPress: () => patchJournalEntry(current.id, { pinned: !current.pinned }) }] : []),
-          ...(title.trim() || body.trim() ? [
-            { label: 'Share as text', icon: 'share-outline', onPress: shareText },
-            { label: 'Copy text', icon: 'copy-outline', onPress: () => Clipboard.setStringAsync([title.trim(), body.trim()].filter(Boolean).join('\n\n')) },
-          ] : []),
-          { label: 'Journal settings', icon: 'options-outline', onPress: () => { setRemindDraft(settings.journalReminderTime || '21:30'); setPrefs(true); } },
-          ...(entryId ? [{ label: 'Delete entry', icon: 'trash-outline', color: C.danger, onPress: confirmDelete }] : []),
-        ]}
-      />
-
-      <Sheet visible={tagSheet} onClose={() => setTagSheet(false)} title="Tags">
-        {journalTags.length ? (
-          <Row style={{ flexWrap: 'wrap', marginBottom: 8 }}>
-            {journalTags.map((t) => <Chip key={t} small label={t} active={tags.includes(t)} color={C.gold} onPress={() => toggleTag(t)} />)}
-          </Row>
-        ) : (
-          <Text style={[T.caption, { marginBottom: 10 }]}>Tags group entries, like exams, family or sport.</Text>
-        )}
-        <Field value={tagDraft} onChangeText={setTagDraft} placeholder="New tag" autoCapitalize="none" onSubmitEditing={addTag} returnKeyType="done" />
-        <PillButton label="Add tag" icon="add-outline" color={C.gold} onPress={addTag} />
-      </Sheet>
-
-      <Sheet visible={prefs} onClose={() => setPrefs(false)} title="Journal settings">
-        <Text style={st.prefLabel}>Day starts at</Text>
-        <SegmentedControl
-          size="sm" stretch
-          options={[9, 10, 11, 12].map((h) => ({ key: String(h), label: h + ':00' }))}
-          value={String(settings.journalCutoffHour)}
-          onChange={(k) => setSetting('journalCutoffHour', Number(k))}
-        />
-        <Text style={[T.caption, { marginTop: 6 }]}>Before this time, the Journal opens on yesterday's page.</Text>
-        <Hairline />
-        <Row style={st.prefRow}>
-          <Text style={[T.body, { flex: 1 }]}>Daily prompt</Text>
-          <Toggle value={settings.journalPromptsOn} onChange={(v) => setSetting('journalPromptsOn', v)} color={C.gold} label="Writing prompts" />
-        </Row>
-        <Hairline />
-        <Row style={st.prefRow}>
-          <Text style={[T.body, { flex: 1 }]}>Ask how the day went</Text>
-          <Toggle value={settings.journalCheckout} onChange={(v) => setSetting('journalCheckout', v)} color={C.gold} label="Ask how the day went" />
-        </Row>
-        <Text style={[T.caption, { marginBottom: 6 }]}>
-          After you write, a quiet card asks for a mood and a star rating. Skip is always there, and the sun button in the corner opens it any time.
-        </Text>
-        <Hairline />
-        <Text style={st.prefLabel}>Word goal</Text>
-        <SegmentedControl
-          size="sm" stretch
-          options={[0, 150, 300, 500].map((n) => ({ key: String(n), label: n ? String(n) : 'Off' }))}
-          value={String(goal)}
-          onChange={(k) => setSetting('journalWordGoal', Number(k))}
-        />
-        <Hairline />
-        <Row style={st.prefRow}>
-          <Text style={[T.body, { flex: 1 }]}>Reminder</Text>
-          <Toggle value={!!settings.journalReminderTime} onChange={saveReminder} color={C.gold} label="Daily journal reminder" />
-        </Row>
-        {settings.remindersEnabled ? (
-          <Field value={remindDraft} onChangeText={setRemindDraft} placeholder="21:30" keyboardType="numbers-and-punctuation" maxLength={5} onEndEditing={() => { if (settings.journalReminderTime && HHMM.test(remindDraft)) saveReminder(true); }} />
-        ) : (
-          <Text style={[T.caption, { marginBottom: 6 }]}>Turn on reminders in Settings first.</Text>
-        )}
-        <Hairline />
-        <Row style={st.prefRow}>
-          <Text style={[T.body, { flex: 1 }]}>Lock journal</Text>
-          <Toggle value={settings.journalLocked} onChange={setLock} color={C.gold} label="Lock the journal" />
-        </Row>
-        <Text style={[T.caption, { marginBottom: 6 }]}>
-          {settings.journalLocked
-            ? settings.journalScreenLock ? 'Your app PIN opens it, and so does your screen lock.' : 'Your app PIN opens it.'
-            : 'Your 4-digit app PIN will open it.'}
-          {' '}Settings, under Privacy, changes the PIN and whether your screen lock can open the journal.
-        </Text>
-      </Sheet>
-
-      <QuickTaskSheet
-        visible={taskSheet}
-        onClose={() => setTaskSheet(false)}
-        onClosed={() => {
-          if (refocus.current) setTimeout(() => bodyRef.current?.focus(), 80);
-          refocus.current = false;
-        }}
-        initialTitle={taskTitle}
-      />
-
-      <PinSheet
-        visible={pinFlow}
-        mode="set"
-        tint={C.gold}
-        onClose={() => setPinFlow(false)}
-        onDone={() => {
-          setPinFlow(false);
-          setSetting('journalLocked', true);
-          markOpen('journal');
-        }}
-      />
+      {dateSheetEl}
+      {menuSheet}
+      {tagSheetEl}
+      {prefsEl}
+      {taskSheetEl}
+      {pinSheetEl}
     </ScreenBG>
+  );
+}
+
+/** The tags sheet keeps its own draft, so typing a new tag re-renders only the sheet. */
+function TagSheet({ visible, onClose, tags, onToggle }: {
+  visible: boolean; onClose: () => void; tags: string[]; onToggle: (t: string) => void;
+}) {
+  const journalTags = useStore((s) => s.journalTags);
+  const setJournalTags = useStore((s) => s.setJournalTags);
+  const [draft, setDraft] = React.useState('');
+  const addTag = () => {
+    const t = draft.trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-');
+    if (!t) return;
+    if (!journalTags.includes(t)) setJournalTags([...journalTags, t].sort());
+    if (!tags.includes(t)) onToggle(t);
+    setDraft('');
+  };
+  return (
+    <Sheet visible={visible} onClose={onClose} title="Tags">
+      {journalTags.length ? (
+        <Row style={{ flexWrap: 'wrap', marginBottom: 8 }}>
+          {journalTags.map((t) => <Chip key={t} small label={t} active={tags.includes(t)} color={C.gold} onPress={() => onToggle(t)} />)}
+        </Row>
+      ) : (
+        <Text style={[T.caption, { marginBottom: 10 }]}>Tags group entries, like exams, family or sport.</Text>
+      )}
+      <Field value={draft} onChangeText={setDraft} placeholder="New tag" autoCapitalize="none" onSubmitEditing={addTag} returnKeyType="done" />
+      <PillButton label="Add tag" icon="add-outline" color={C.gold} onPress={addTag} />
+    </Sheet>
+  );
+}
+
+/** The journal's own settings, with the reminder time's draft kept here rather than on the page. */
+function JournalPrefs({ visible, onClose, onLock }: {
+  visible: boolean; onClose: () => void; onLock: (on: boolean) => void;
+}) {
+  const settings = useStore((s) => s.settings);
+  const setSetting = useStore((s) => s.setSetting);
+  const [remindDraft, setRemindDraft] = React.useState(settings.journalReminderTime || '21:30');
+  // each opening starts from the saved time
+  React.useEffect(() => {
+    if (visible) setRemindDraft(useStore.getState().settings.journalReminderTime || '21:30');
+  }, [visible]);
+  const saveReminder = async (on: boolean) => {
+    if (on) {
+      if (!HHMM.test(remindDraft)) { Alert.alert('Use 24h HH:MM, e.g. 21:30'); return; }
+      if (!(await ensurePermission())) { Alert.alert('Permission needed', 'Allow notifications in system settings first.'); return; }
+    }
+    setSetting('journalReminderTime', on ? remindDraft : '');
+    setTimeout(rescheduleAllReminders, 150);
+  };
+  return (
+    <Sheet visible={visible} onClose={onClose} title="Journal settings">
+      <Text style={st.prefLabel}>Day starts at</Text>
+      <SegmentedControl
+        size="sm" stretch
+        options={[9, 10, 11, 12].map((h) => ({ key: String(h), label: h + ':00' }))}
+        value={String(settings.journalCutoffHour)}
+        onChange={(k) => setSetting('journalCutoffHour', Number(k))}
+      />
+      <Text style={[T.caption, { marginTop: 6 }]}>Before this time, the Journal opens on yesterday's page.</Text>
+      <Hairline />
+      <Row style={st.prefRow}>
+        <Text style={[T.body, { flex: 1 }]}>Daily prompt</Text>
+        <Toggle value={settings.journalPromptsOn} onChange={(v) => setSetting('journalPromptsOn', v)} color={C.gold} label="Writing prompts" />
+      </Row>
+      <Hairline />
+      <Row style={st.prefRow}>
+        <Text style={[T.body, { flex: 1 }]}>Ask how the day went</Text>
+        <Toggle value={settings.journalCheckout} onChange={(v) => setSetting('journalCheckout', v)} color={C.gold} label="Ask how the day went" />
+      </Row>
+      <Text style={[T.caption, { marginBottom: 6 }]}>
+        After you write, a quiet card asks for a mood and a star rating. Skip is always there, and the sun button in the corner opens it any time.
+      </Text>
+      <Hairline />
+      <Text style={st.prefLabel}>Word goal</Text>
+      <SegmentedControl
+        size="sm" stretch
+        options={[0, 150, 300, 500].map((n) => ({ key: String(n), label: n ? String(n) : 'Off' }))}
+        value={String(settings.journalWordGoal)}
+        onChange={(k) => setSetting('journalWordGoal', Number(k))}
+      />
+      <Hairline />
+      <Row style={st.prefRow}>
+        <Text style={[T.body, { flex: 1 }]}>Reminder</Text>
+        <Toggle value={!!settings.journalReminderTime} onChange={saveReminder} color={C.gold} label="Daily journal reminder" />
+      </Row>
+      {settings.remindersEnabled ? (
+        <Field value={remindDraft} onChangeText={setRemindDraft} placeholder="21:30" keyboardType="numbers-and-punctuation" maxLength={5} onEndEditing={() => { if (settings.journalReminderTime && HHMM.test(remindDraft)) saveReminder(true); }} />
+      ) : (
+        <Text style={[T.caption, { marginBottom: 6 }]}>Turn on reminders in Settings first.</Text>
+      )}
+      <Hairline />
+      <Row style={st.prefRow}>
+        <Text style={[T.body, { flex: 1 }]}>Lock journal</Text>
+        <Toggle value={settings.journalLocked} onChange={onLock} color={C.gold} label="Lock the journal" />
+      </Row>
+      <Text style={[T.caption, { marginBottom: 6 }]}>
+        {settings.journalLocked
+          ? settings.journalScreenLock ? 'Your app PIN opens it, and so does your screen lock.' : 'Your app PIN opens it.'
+          : 'Your 4-digit app PIN will open it.'}
+        {' '}Settings, under Privacy, changes the PIN and whether your screen lock can open the journal.
+      </Text>
+    </Sheet>
   );
 }
 
@@ -606,7 +678,7 @@ const st = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 8 },
   side: { width: 84, flexDirection: 'row', alignItems: 'center' },
   dateBtn: { flex: 1, alignItems: 'center', paddingVertical: 4 },
-  date: { color: C.text, fontFamily: F.bold, fontSize: 20, letterSpacing: -0.3 },
+  date: { color: C.text, fontFamily: F.head, fontSize: 21, lineHeight: 27, letterSpacing: -0.3 },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1, paddingVertical: 8 },
   prompt: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, marginBottom: 2 },
   promptText: { flex: 1, color: C.textDim, fontFamily: F.reg, fontSize: 14, lineHeight: 20 },
@@ -616,6 +688,11 @@ const st = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,
   },
   dayWell: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 4 },
+  /** the day button's gold tint, a layer that fades in and out under the icon */
+  dayTint: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 17 },
+  /** the page, keyed on each load so it arrives with its own entrance */
+  page: { flex: 1 },
+  dateWords: { alignItems: 'center', alignSelf: 'stretch' },
   words: { color: C.textFaint, fontFamily: F.med, fontSize: 12, fontVariant: ['tabular-nums'] },
   tick: { width: 16, height: 2, borderRadius: 1, backgroundColor: C.accent, marginTop: 4 },
   prefLabel: { ...T.label, marginTop: 10, marginBottom: 8 },

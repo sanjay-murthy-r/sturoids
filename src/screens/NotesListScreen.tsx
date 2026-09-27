@@ -1,12 +1,14 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Text, ScrollView, StyleSheet, FlatList, View } from 'react-native';
+import { Alert, Text, ScrollView, StyleSheet, View } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import type { SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useToolNav } from '../toolNav';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore, Note } from '../store';
 import { ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
-import { Bouncy } from '../components/Motion';
+import { Bouncy, EASE_OUT, glide, useAnimLevel } from '../components/Motion';
 import { tap } from '../haptics';
 import { deleteAttachmentFiles } from '../attachments';
 import { ToolGate } from '../components/LockGate';
@@ -20,10 +22,79 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
   );
 }
 
+/** The last value that was not null, so a sheet or a menu keeps what it shows while it closes. */
+function useHeld<T>(value: T | null): T | null {
+  const held = React.useRef(value);
+  if (value != null) held.current = value;
+  return held.current;
+}
+
+/**
+ * A folder's name: a new one, or a new name for one. It keeps its own draft, so typing re-renders the sheet and not
+ * the list under it; `check` names what is wrong with a name ('' when it is fine).
+ */
+function FolderNameSheet({ visible, onClose, title, initial, label, check, onSave }: {
+  visible: boolean; onClose: () => void; title: string; initial: string; label: string;
+  check: (name: string) => string; onSave: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  const [problem, setProblem] = useState('');
+  React.useEffect(() => {
+    if (!visible) return;
+    setDraft(initial);
+    setProblem('');
+  }, [visible, initial]);
+  const save = () => {
+    const name = draft.trim();
+    const wrong = check(name);
+    if (wrong) { setProblem(wrong); return; }
+    onSave(name);
+  };
+  return (
+    <Sheet visible={visible} onClose={onClose} title={title}>
+      <Field
+        value={draft} onChangeText={(v) => { setDraft(v); setProblem(''); }} placeholder="Folder name" autoFocus maxLength={40}
+        onSubmitEditing={save}
+      />
+      {/* the caption token carries a colour of its own, so the danger ink goes after it */}
+      {problem ? <Text style={{ ...T.caption, color: C.danger, marginTop: -8, marginBottom: 12 }}>{problem}</Text> : null}
+      <PillButton label={label} onPress={save} />
+    </Sheet>
+  );
+}
+
+/** One note in the list, memoised: a change to one note re-renders its own row, not the screenful. */
+const NoteRow = React.memo(function NoteRow({ note: n, first, last, enter, dip, onOpen, onMenu }: {
+  note: Note; first: boolean; last: boolean; enter: boolean; dip: SharedValue<number>;
+  onOpen: (id: string) => void; onMenu: (n: Note) => void;
+}) {
+  const dipStyle = useAnimatedStyle(() => ({ opacity: dip.value }));
+  return (
+    <ListSlice first={first} last={last} enter={enter}>
+      <Animated.View style={dipStyle}>
+        <ListRow onPress={() => onOpen(n.id)} onLongPress={() => onMenu(n)} style={st.note}>
+          <View style={{ flex: 1 }}>
+            <Row>
+              <Text style={st.noteTitle} numberOfLines={1}>{n.title || 'Untitled'}</Text>
+              {n.pinned && <Ionicons name="pin" size={14} color={C.amber} style={{ marginLeft: 6 }} />}
+              {n.locked && <Ionicons name="lock-closed" size={13} color={C.textFaint} style={{ marginLeft: 6 }} />}
+            </Row>
+            {!!n.body && !n.locked && <Text style={st.noteBody} numberOfLines={2}>{n.body}</Text>}
+            <Text style={st.noteMeta} numberOfLines={1}>
+              {n.folder}{n.subject ? ` · ${n.subject}` : ''} · {new Date(n.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+            </Text>
+          </View>
+        </ListRow>
+      </Animated.View>
+    </ListSlice>
+  );
+});
+
 function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const nav = useToolNav();
   const insets = useSafeAreaInsets();
   const theme = useTheme();
+  const level = useAnimLevel();
   const notes = useStore((s) => s.notes);
   const folders = useStore((s) => s.noteFolders);
   const addNote = useStore((s) => s.addNote);
@@ -36,55 +107,71 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const [q, setQ] = useState('');
   const [folder, setFolder] = useState<string | null>(null);
   const [folderSheet, setFolderSheet] = useState(false);
-  const [newFolder, setNewFolder] = useState('');
   const [menuNote, setMenuNote] = useState<Note | null>(null);
   // hold a folder chip to rename or delete it; General always stays
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [renameTo, setRenameTo] = useState('');
-  const [renameProblem, setRenameProblem] = useState('');
+  // the menus and the rename sheet keep what they show while they close, instead of emptying on the way out
+  const heldNote = useHeld(menuNote);
+  const heldFolder = useHeld(folderMenu);
+  const heldRenaming = useHeld(renaming);
 
+  // typing stays immediate; the search over every note runs on the settled text
+  const settledQ = React.useDeferredValue(q);
   const filtered = useMemo(() => {
-    const ql = q.trim().toLowerCase();
+    const ql = settledQ.trim().toLowerCase();
     return notes
       .filter((n) => (folder ? n.folder === folder : true))
       // a locked note is found by its title only: its text never surfaces outside the note
       .filter((n) => !ql || n.title.toLowerCase().includes(ql) || (!n.locked && n.body.toLowerCase().includes(ql)))
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
-  }, [notes, q, folder]);
+  }, [notes, settledQ, folder]);
 
   // the first screenful rises as one card; rows that mount later (scrolling, searching) appear at once
   const firstPaint = React.useRef(true);
   React.useEffect(() => { firstPaint.current = false; }, []);
 
+  // a pin, an unpin or a delete moves rows within the same list: they glide to their new places. A new search or
+  // folder is a different list, so its rows are simply there (a glide would send every row sliding at once)
+  const filterKey = (folder ?? '') + '|' + settledQ;
+  const lastFilter = React.useRef(filterKey);
+  const sameList = lastFilter.current === filterKey;
+  React.useEffect(() => { lastFilter.current = filterKey; });
+  // another folder's notes come up from a faint start, so the change reads as one step instead of a jump
+  const dip = useSharedValue(1);
+  const shownFolder = React.useRef(folder);
+  React.useEffect(() => {
+    if (shownFolder.current === folder) return;
+    shownFolder.current = folder;
+    if (level === 'none') return;
+    dip.value = 0.3;
+    dip.value = withTiming(1, { duration: 240, easing: EASE_OUT });
+  }, [folder, level]);
+
   const newNote = () => {
     const id = addNote({ folder: folder || 'General' });
     nav.openNote(id);
   };
+  const openNote = React.useCallback((id: string) => nav.openNote(id), [nav]);
+  const openMenu = React.useCallback((n: Note) => { tap(); setMenuNote(n); }, []);
+  const count = filtered.length;
+  const renderItem = React.useCallback(({ item, index }: { item: Note; index: number }) => (
+    <NoteRow
+      note={item} first={index === 0} last={index === count - 1} enter={firstPaint.current}
+      dip={dip} onOpen={openNote} onMenu={openMenu}
+    />
+  ), [count, openNote, openMenu]);
 
   return (
     <ScreenBG guard={mode === 'tab'}>
       <NeuHeader title="Notes" variant={mode === 'tab' ? 'tab' : 'page'} />
-      <FlatList
+      <Animated.FlatList
         data={filtered}
         keyExtractor={(n) => n.id}
-        renderItem={({ item: n, index: i }) => (
-          <ListSlice first={i === 0} last={i === filtered.length - 1} enter={firstPaint.current}>
-            <ListRow onPress={() => nav.openNote(n.id)} onLongPress={() => { tap(); setMenuNote(n); }} style={st.note}>
-              <View style={{ flex: 1 }}>
-                <Row>
-                  <Text style={st.noteTitle} numberOfLines={1}>{n.title || 'Untitled'}</Text>
-                  {n.pinned && <Ionicons name="pin" size={14} color={C.amber} style={{ marginLeft: 6 }} />}
-                  {n.locked && <Ionicons name="lock-closed" size={13} color={C.textFaint} style={{ marginLeft: 6 }} />}
-                </Row>
-                {!!n.body && !n.locked && <Text style={st.noteBody} numberOfLines={2}>{n.body}</Text>}
-                <Text style={st.noteMeta} numberOfLines={1}>
-                  {n.folder}{n.subject ? ` · ${n.subject}` : ''} · {new Date(n.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                </Text>
-              </View>
-            </ListRow>
-          </ListSlice>
-        )}
+        renderItem={renderItem}
+        itemLayoutAnimation={sameList ? glide(level) : undefined}
+        // Reanimated's list asks for a scroll event every frame unless told otherwise: the list only needs the default
+        scrollEventThrottle={50}
         contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 110 + (mode === 'tab' ? 0 : insets.bottom) }}
         keyboardShouldPersistTaps="handled"
         initialNumToRender={10}
@@ -111,7 +198,12 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
           </>
         }
         ListEmptyComponent={
-          <EmptyState icon="document-text-outline" title="No notes here yet" body="Folders, pins, search, voice, photos and files all live inside a note." actionLabel="New note" onAction={newNote} />
+          settledQ.trim() ? (
+            // a search that finds nothing says so, instead of offering a new note as if the folder were empty
+            <EmptyState icon="search-outline" title="No notes match that search" body="Search looks through titles, and through the text of notes that are not locked." />
+          ) : (
+            <EmptyState icon="document-text-outline" title="No notes here yet" body="Folders, pins, search, voice, photos and files all live inside a note." actionLabel="New note" onAction={newNote} />
+          )
         }
       />
 
@@ -135,11 +227,11 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
       <DotMenu
         visible={!!menuNote}
         onClose={() => setMenuNote(null)}
-        items={menuNote ? [
+        items={heldNote ? [
           {
-            label: menuNote.pinned ? 'Unpin' : 'Pin to top',
-            icon: menuNote.pinned ? 'pin' : 'pin-outline',
-            onPress: () => updateNote(menuNote.id, { pinned: !menuNote.pinned }),
+            label: heldNote.pinned ? 'Unpin' : 'Pin to top',
+            icon: heldNote.pinned ? 'pin' : 'pin-outline',
+            onPress: () => updateNote(heldNote.id, { pinned: !heldNote.pinned }),
           },
           {
             label: 'Delete note',
@@ -148,7 +240,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
             onPress: () =>
               Alert.alert('Delete note', 'This cannot be undone.', [
                 { text: 'Cancel', style: 'cancel' },
-                { text: 'Delete', style: 'destructive', onPress: () => deleteAttachmentFiles(deleteNote(menuNote.id)) },
+                { text: 'Delete', style: 'destructive', onPress: () => deleteAttachmentFiles(deleteNote(heldNote.id)) },
               ]),
           },
         ] : []}
@@ -157,14 +249,14 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
       <DotMenu
         visible={!!folderMenu}
         onClose={() => setFolderMenu(null)}
-        items={folderMenu ? [
-          { label: 'Rename', icon: 'create-outline', onPress: () => { setRenameTo(folderMenu); setRenameProblem(''); setRenaming(folderMenu); } },
+        items={heldFolder ? [
+          { label: 'Rename', icon: 'create-outline', onPress: () => setRenaming(heldFolder) },
           {
             label: 'Delete folder',
             icon: 'trash-outline',
             color: C.danger,
             onPress: () => {
-              const name = folderMenu;
+              const name = heldFolder;
               const inside = useStore.getState().notes.filter((n) => n.folder === name).length;
               const go = () => { deleteNoteFolder(name); if (folder === name) setFolder(null); };
               if (!inside) { go(); return; }
@@ -178,30 +270,31 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
         ] : []}
       />
 
-      <Sheet visible={!!renaming} onClose={() => setRenaming(null)} title={'Rename ' + (renaming || 'folder')}>
-        <Field value={renameTo} onChangeText={(v) => { setRenameTo(v); setRenameProblem(''); }} placeholder="Folder name" autoFocus maxLength={40} />
-        {renameProblem ? <Text style={{ color: C.danger, ...T.caption, marginTop: -8, marginBottom: 12 }}>{renameProblem}</Text> : null}
-        <PillButton
-          label="Save"
-          onPress={() => {
-            if (!renaming) return;
-            const next = renameTo.trim();
-            if (!next) { setRenameProblem('Give the folder a name.'); return; }
-            if (next !== renaming && folders.includes(next)) { setRenameProblem('There is already a folder with that name.'); return; }
-            renameNoteFolder(renaming, next);
-            if (folder === renaming) setFolder(next);
-            setRenaming(null);
-          }}
-        />
-      </Sheet>
+      <FolderNameSheet
+        visible={!!renaming}
+        onClose={() => setRenaming(null)}
+        title={'Rename ' + (heldRenaming || 'folder')}
+        initial={heldRenaming || ''}
+        label="Save"
+        check={(next) => (!next ? 'Give the folder a name.'
+          : next !== renaming && folders.includes(next) ? 'There is already a folder with that name.' : '')}
+        onSave={(next) => {
+          if (!renaming) return;
+          renameNoteFolder(renaming, next);
+          if (folder === renaming) setFolder(next);
+          setRenaming(null);
+        }}
+      />
 
-      <Sheet visible={folderSheet} onClose={() => setFolderSheet(false)} title="New folder">
-        <Field value={newFolder} onChangeText={setNewFolder} placeholder="Folder name" autoFocus />
-        <PillButton
-          label="Create"
-          onPress={() => { if (newFolder.trim()) { addNoteFolder(newFolder.trim()); setNewFolder(''); setFolderSheet(false); } }}
-        />
-      </Sheet>
+      <FolderNameSheet
+        visible={folderSheet}
+        onClose={() => setFolderSheet(false)}
+        title="New folder"
+        initial=""
+        label="Create"
+        check={(name) => (!name ? 'Give the folder a name.' : folders.includes(name) ? 'There is already a folder with that name.' : '')}
+        onSave={(name) => { addNoteFolder(name); setFolderSheet(false); }}
+      />
     </ScreenBG>
   );
 }

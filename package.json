@@ -12,6 +12,8 @@
     "test:analytics": "node scripts/test-analytics.js"
   },
   "dependencies": {
+    "@expo-google-fonts/geist": "^0.4.2",
+    "@expo-google-fonts/newsreader": "^0.4.1",
     "@expo-google-fonts/rubik": "^0.4.2",
     "@expo/vector-icons": "^14.1.0",
     "@react-native-async-storage/async-storage": "2.1.2",

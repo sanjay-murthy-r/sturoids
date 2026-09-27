@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { Text, StyleSheet } from 'react-native';
 import { C, F, T } from '../theme';
 import { useStore } from '../store';
 import { todayKey } from '../utils';
@@ -8,6 +8,7 @@ import { fmtExamDate } from '../scores';
 import { Sheet, Field, PillButton, Chip, Row } from './UI';
 import { SegmentedControl } from './SegmentedControl';
 import { JournalCalendar } from './JournalCalendar';
+import { Appear, FadeSwap } from './Motion';
 import { toast } from './Toast';
 
 export type TaskKind = 'daily' | 'mission';
@@ -16,6 +17,8 @@ const DUE: { days: number; label: string }[] = [
   { days: 0, label: 'Today' }, { days: 1, label: 'Tomorrow' }, { days: 3, label: 'In 3 days' },
   { days: 7, label: 'In a week' }, { days: 14, label: 'In 2 weeks' },
 ];
+
+const KINDS: { key: TaskKind; label: string }[] = [{ key: 'daily', label: 'ToDo' }, { key: 'mission', label: 'Long-term' }];
 
 /**
  * Adding a task from anywhere: a ToDo for today's list, or a long-term task with a deadline picked from a few
@@ -53,7 +56,6 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
     onClose();
   };
 
-  const today = todayKey();
   return (
     <Sheet
       visible={visible}
@@ -75,13 +77,15 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
         size="sm"
         stretch
         style={{ marginBottom: 8 }}
-        options={[{ key: 'daily', label: 'ToDo' }, { key: 'mission', label: 'Long-term' }]}
+        options={KINDS}
         value={kind}
-        onChange={(k) => setKind(k as TaskKind)}
+        onChange={(k) => setKind(k)}
       />
-      <Text style={[T.caption, { marginBottom: 12 }]}>
-        {kind === 'daily' ? "Goes on today's list." : 'Stays until it is done, with a deadline.'}
-      </Text>
+      <FadeSwap swapKey={kind}>
+        <Text style={[T.caption, { marginBottom: 12 }]}>
+          {kind === 'daily' ? "Goes on today's list." : 'Stays until it is done, with a deadline.'}
+        </Text>
+      </FadeSwap>
       <Field
         value={title}
         onChangeText={setTitle}
@@ -92,27 +96,40 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
         maxLength={140}
       />
       {kind === 'mission' ? (
-        <>
-          <Text style={st.label}>Due</Text>
-          <Row style={{ flexWrap: 'wrap' }}>
-            {DUE.map((x) => {
-              const key = shiftKey(today, x.days);
-              return <Chip key={x.days} small label={x.label} active={!calendar && due === key} onPress={() => { setDue(key); setCalendar(false); }} />;
-            })}
-            <Chip small icon="calendar-outline" label="Pick a day" active={calendar} onPress={() => setCalendar(!calendar)} />
-          </Row>
-          <Text style={[T.caption, { marginBottom: calendar ? 10 : 14 }]}>Due {fmtExamDate(due, true)}</Text>
-          {calendar ? (
-            <View style={{ marginBottom: 14 }}>
-              <JournalCalendar value={due} minKey={today} onPick={(k) => { setDue(k); setCalendar(false); }} />
-            </View>
-          ) : null}
-        </>
+        <DuePicker due={due} calendar={calendar} onDue={setDue} onCalendar={setCalendar} />
       ) : null}
       <PillButton label="Add" icon="add-outline" onPress={add} />
     </Sheet>
   );
 }
+
+/**
+ * The deadline: a few chips and a calendar. Its own memoised part, so typing the title never re-renders the chips,
+ * and it fades in when Long-term is chosen.
+ */
+const DuePicker = React.memo(function DuePicker({ due, calendar, onDue, onCalendar }: {
+  due: string; calendar: boolean; onDue: (k: string) => void; onCalendar: (open: boolean) => void;
+}) {
+  const today = todayKey();
+  return (
+    <Appear>
+      <Text style={st.label}>Due</Text>
+      <Row style={{ flexWrap: 'wrap' }}>
+        {DUE.map((x) => {
+          const key = shiftKey(today, x.days);
+          return <Chip key={x.days} small label={x.label} active={!calendar && due === key} onPress={() => { onDue(key); onCalendar(false); }} />;
+        })}
+        <Chip small icon="calendar-outline" label="Pick a day" active={calendar} onPress={() => onCalendar(!calendar)} />
+      </Row>
+      <Text style={[T.caption, { marginBottom: calendar ? 10 : 14 }]}>Due {fmtExamDate(due, true)}</Text>
+      {calendar ? (
+        <Appear style={{ marginBottom: 14 }}>
+          <JournalCalendar value={due} minKey={today} onPick={(k) => { onDue(k); onCalendar(false); }} />
+        </Appear>
+      ) : null}
+    </Appear>
+  );
+});
 
 const st = StyleSheet.create({
   label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2, marginLeft: 2, marginBottom: 8 },

@@ -8,6 +8,7 @@ import { useStore } from '../store';
 import {
   ScoreNode, ScoreIndex, Learning, TagMatch, indexScores, resultOf, partsMismatch, groupSummary, examsUnder, upcoming,
   deltaVsPrevious, pathOf, descendantIds, canMove, fmtPct, fmtMark, fmtExamDate, fromToday, whenOf, filterLearnings,
+  categoriesOf, categoryOf, plainTagsOf, rootExamOf, isTopExam,
 } from '../scores';
 import { todayKey } from '../utils';
 import {
@@ -15,8 +16,9 @@ import {
   PillButton, Chip, Field, useTheme,
 } from '../components/UI';
 import { Bouncy, Enter, useFocusKey } from '../components/Motion';
-import { Sparkline } from '../components/Sparkline';
 import { ScoreEditor, ScoreEditTarget } from '../components/ScoreEditor';
+import { ScoreAnalytics, AnalyticsTeaser } from '../components/ScoreAnalytics';
+import { useScoresNav, takeScoreNode } from '../scoresNav';
 import { TagDots, TagRow, TagManagerSheet } from '../components/ScoreTags';
 import { LearningSheet, LearningTarget } from '../components/LearningSheet';
 import { toast } from '../components/Toast';
@@ -55,8 +57,9 @@ function Bar({ pct }: { pct: number }) {
 
 /**
  * Exam scores: groups hold groups and exams, an exam holds its subjects, and every exam keeps what it taught you.
- * The page walks the tree in place (hardware back
- * climbs one level), so it works the same in a tab slot and as a full page.
+ * Categories group exams of a kind across the tree, and Analytics compares the exams inside each. The page walks the
+ * tree in place (hardware back climbs one level), so it works the same in a tab slot and as a full page. Adding or
+ * editing an exam opens the full-screen form (app/exam.tsx); groups and subjects keep their sheet.
  */
 export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
@@ -71,6 +74,9 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const restoreScoreNodes = useStore((s) => s.restoreScoreNodes);
   const duplicateScoreNode = useStore((s) => s.duplicateScoreNode);
   const moveScoreNode = useStore((s) => s.moveScoreNode);
+  const setExamCategory = useStore((s) => s.setExamCategory);
+  const restoreExamTags = useStore((s) => s.restoreExamTags);
+  const scoreTags = useStore((s) => s.scoreTags);
   const ix = useMemo(() => indexScores(scores), [scores]);
   const learnedBy = useMemo(() => {
     const m = new Map<string, number>();
@@ -92,6 +98,13 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [areaW, setAreaW] = useState(0);
   // the notebook is the tool's other half: every learning, from every exam, filtered by the same tags
   const [notebook, setNotebook] = useState(false);
+  // Analytics: every marked exam, compared within its category
+  const [analytics, setAnalytics] = useState(false);
+  // the group whose exams are being put in a category
+  const [catGroup, setCatGroup] = useState<ScoreNode | null>(null);
+  const [catOpen, setCatOpen] = useState(false);
+  const [catDraft, setCatDraft] = useState('');
+  const catDone = useRef<null | { text: string; undo: () => void }>(null);
   const [tagsOpen, setTagsOpen] = useState(false);
   const [learn, setLearn] = useState<LearningTarget | null>(null);
   const [learnNode, setLearnNode] = useState<Learning | null>(null);
@@ -125,9 +138,15 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   hereRef.current = here;
   const notebookRef = useRef(notebook);
   notebookRef.current = notebook;
+  const analyticsRef = useRef(analytics);
+  analyticsRef.current = analytics;
   const goUp = React.useCallback(() => {
     if (notebookRef.current) {
       setNotebook(false);
+      return true;
+    }
+    if (analyticsRef.current) {
+      setAnalytics(false);
       return true;
     }
     const cur = hereRef.current;
@@ -140,7 +159,39 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return () => sub.remove();
   }, [goUp]));
 
+  // the exam form asks, after adding an exam, for its page to open here
+  const pendingOpen = useScoresNav((s) => s.open);
+  useEffect(() => {
+    if (!pendingOpen || !ix.byId.has(pendingOpen)) return;
+    const id = takeScoreNode();
+    if (!id) return;
+    setNotebook(false);
+    setAnalytics(false);
+    setCwd(id);
+  }, [pendingOpen, ix]);
+
   const openMenu = (n: ScoreNode) => { setMenuNode(n); setMenuOpen(true); };
+  // an exam that stands on its own is added and edited on the full-screen form; a subject and a group keep the sheet
+  const newExam = (parentId: string | null) => router.push({ pathname: '/exam', params: parentId ? { parent: parentId } : {} } as any);
+  const editNode = (n: ScoreNode, addSubject = false) => {
+    if (isTopExam(ix, n)) router.push({ pathname: '/exam', params: addSubject ? { id: n.id, subject: '1' } : { id: n.id } } as any);
+    else if (addSubject) setEditor({ mode: 'new', kind: 'exam', parentId: n.id });
+    else setEditor({ mode: 'edit', id: n.id });
+  };
+  const openCategoryFor = (g: ScoreNode) => { setCatGroup(g); setCatDraft(''); setCatOpen(true); };
+  const putInCategory = (categoryId: string | null, label: string) => {
+    if (!catGroup) return;
+    const ids = examsUnder(ix, catGroup.id).filter((n) => isTopExam(ix, n)).map((n) => n.id);
+    if (!ids.length) { setCatOpen(false); return; }
+    const before = setExamCategory(ids, categoryId);
+    tick();
+    const n = Object.keys(before).length;
+    catDone.current = {
+      text: categoryId ? 'Put ' + plural(n, 'exam') + ' in ' + label : 'Took ' + plural(n, 'exam') + ' out of their category',
+      undo: () => restoreExamTags(before),
+    };
+    setCatOpen(false);
+  };
 
   const confirmDelete = (n: ScoreNode) => {
     const below = [...descendantIds(ix, n.id)].map((id) => ix.byId.get(id)).filter(Boolean) as ScoreNode[];
@@ -181,7 +232,10 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const menuItems = (n: ScoreNode, open: boolean) => [
     ...(open ? [{ label: 'Open', icon: 'open-outline', onPress: () => setCwd(n.id) }] : []),
-    { label: n.kind === 'group' ? 'Rename' : 'Edit', icon: 'create-outline', onPress: () => setEditor({ mode: 'edit', id: n.id }) },
+    { label: n.kind === 'group' ? 'Rename' : 'Edit', icon: 'create-outline', onPress: () => editNode(n) },
+    ...(n.kind === 'group' && examsUnder(ix, n.id).length
+      ? [{ label: 'Category for its exams', icon: 'albums-outline', onPress: () => openCategoryFor(n) }]
+      : []),
     { label: 'Duplicate without marks', icon: 'copy-outline', onPress: () => duplicate(n) },
     { label: 'Move to…', icon: 'return-down-forward-outline', onPress: () => { setMoveNode(n); setMoveOpen(true); } },
     { label: 'Delete', icon: 'trash-outline', color: C.danger, onPress: () => confirmDelete(n) },
@@ -200,20 +254,26 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const titleOf = (n: ScoreNode | undefined) => (n ? n.title || (n.kind === 'group' ? 'Untitled group' : 'Untitled exam') : 'Scores');
   const fabRight = areaW > READ_MAX ? (areaW - READ_MAX) / 2 + 20 : 20;
   const inExam = here?.kind === 'exam';
+  const aside = notebook || analytics;
+  // a learning also carries its exam's category, so a category chip finds every learning from the exams inside it
+  const learningCats = React.useCallback((l: Learning) => {
+    const cat = categoryOf(rootExamOf(ix, l.nodeId), scoreTags);
+    return cat ? [cat.id] : [];
+  }, [ix, scoreTags]);
 
   return (
     <ScreenBG guard={mode === 'tab'}>
       <View style={{ flex: 1 }} onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}>
         <NeuHeader
-          title={notebook ? 'Learnings' : titleOf(here)}
-          variant={mode === 'tab' && !here && !notebook ? 'tab' : 'page'}
+          title={notebook ? 'Learnings' : analytics ? 'Analytics' : titleOf(here)}
+          variant={mode === 'tab' && !here && !aside ? 'tab' : 'page'}
           onBack={() => { if (!goUp()) router.back(); }}
           right={(
             <View style={st.headRight}>
-              {notebook ? (
+              {aside ? (
                 <NeuIconBtn
                   name="pricetags-outline" dim={38} size={18} color={C.textDim} onPress={() => setTagsOpen(true)}
-                  accessibilityLabel="Manage tags"
+                  accessibilityLabel={analytics ? 'Manage categories' : 'Manage tags'}
                 />
               ) : (
                 <NeuIconBtn
@@ -221,22 +281,27 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   accessibilityLabel="Learnings notebook"
                 />
               )}
-              {here && !notebook ? (
+              {here && !aside ? (
                 <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => openMenu(here)} accessibilityLabel="More" />
               ) : null}
             </View>
           )}
         />
         <ScrollView
-          key={fk + ':' + (notebook ? 'notebook' : cwd || 'top')}
+          key={fk + ':' + (notebook ? 'notebook' : analytics ? 'analytics' : cwd || 'top')}
           contentContainerStyle={[
             frame(READ_MAX),
-            { padding: S.pad, paddingTop: 4, paddingBottom: (inExam || notebook ? 40 : 120) + (mode === 'tab' ? 0 : insets.bottom) },
+            { padding: S.pad, paddingTop: 4, paddingBottom: (inExam || aside ? 40 : 120) + (mode === 'tab' ? 0 : insets.bottom) },
           ]}
         >
-          {notebook ? (
+          {analytics ? (
+            <ScoreAnalytics
+              onOpenExam={(id) => { setAnalytics(false); setCwd(id); }}
+              onManageCategories={() => setTagsOpen(true)}
+            />
+          ) : notebook ? (
             <Notebook
-              learnings={learnings} ix={ix} picked={picked} match={match} find={find} onFind={setFind}
+              learnings={learnings} ix={ix} picked={picked} match={match} find={find} onFind={setFind} extra={learningCats}
               onPick={(id) => { tick(); setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])); }}
               onMatch={() => { tick(); setMatch((m) => (m === 'all' ? 'any' : 'all')); }}
               onClear={() => { tick(); setPicked([]); setMatch('any'); }}
@@ -254,8 +319,8 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           {inExam && here ? (
             <ExamView
               exam={here} ix={ix} today={today} onOpen={setCwd} onMenu={openMenu}
-              onEdit={() => setEditor({ mode: 'edit', id: here.id })}
-              onAddPart={() => setEditor({ mode: 'new', kind: 'exam', parentId: here.id })}
+              onEdit={() => editNode(here)}
+              onAddPart={() => editNode(here, true)}
               learnings={learnings.filter((l) => l.nodeId === here.id)}
               onAddLearning={() => setLearn({ mode: 'new', nodeId: here.id })}
               onLearningMenu={openLearning}
@@ -265,7 +330,8 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
               groupId={here?.id ?? null} group={here} ix={ix} today={today} sort={sort}
               onSort={() => { tick(); setSort(SORTS[(SORTS.findIndex((x) => x.key === sort) + 1) % SORTS.length].key); }}
               onOpen={setCwd} onMenu={openMenu}
-              onAdd={() => setEditor({ mode: 'new', kind: 'exam', parentId: here?.id ?? null })}
+              onAdd={() => newExam(here?.id ?? null)}
+              onAnalytics={() => setAnalytics(true)}
               learnedBy={learnedBy}
             />
           )}
@@ -273,7 +339,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           )}
         </ScrollView>
 
-        {!inExam && !notebook ? (
+        {!inExam && !aside ? (
           <Bouncy
             radius={999}
             scaleTo={0.9}
@@ -295,7 +361,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
         visible={addOpen}
         onClose={() => setAddOpen(false)}
         items={[
-          { label: here ? 'New exam in ' + titleOf(here) : 'New exam', icon: 'ribbon-outline', onPress: () => setEditor({ mode: 'new', kind: 'exam', parentId: here?.id ?? null }) },
+          { label: here ? 'New exam in ' + titleOf(here) : 'New exam', icon: 'ribbon-outline', onPress: () => newExam(here?.id ?? null) },
           { label: here ? 'New group in ' + titleOf(here) : 'New group', icon: 'folder-outline', onPress: () => setEditor({ mode: 'new', kind: 'group', parentId: here?.id ?? null }) },
         ]}
       />
@@ -336,6 +402,59 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <Text style={[T.caption, { marginTop: 12 }]}>To make an exam part of another one, add it there as a subject.</Text>
         ) : null}
       </Sheet>
+      <Sheet
+        visible={catOpen}
+        onClose={() => setCatOpen(false)}
+        onClosed={() => {
+          const done = catDone.current;
+          catDone.current = null;
+          if (done) toast(done.text, { label: 'Undo', onPress: done.undo });
+        }}
+        title={catGroup ? 'Category for ' + titleOf(catGroup) : 'Category'}
+      >
+        <Text style={[T.caption, { marginBottom: 12 }]}>
+          Every exam in this group goes in the category you pick, and keeps its other tags. Subjects are not changed.
+        </Text>
+        {categoriesOf(scoreTags).map((c, i) => (
+          <View key={c.id}>
+            {i > 0 && <Hairline />}
+            <Bouncy onPress={() => putInCategory(c.id, c.label)} scaleTo={0.98} radius={S.radiusSm} style={st.moveRow}>
+              <View style={[st.catDot, { backgroundColor: c.color + '2E', borderColor: c.color + '99' }]} />
+              <Text style={[T.body, { flex: 1, marginLeft: 12, fontFamily: F.med }]} numberOfLines={1}>{c.label}</Text>
+            </Bouncy>
+          </View>
+        ))}
+        {categoriesOf(scoreTags).length ? (
+          <>
+            <Hairline />
+            <Bouncy onPress={() => putInCategory(null, '')} scaleTo={0.98} radius={S.radiusSm} style={st.moveRow}>
+              <Ionicons name="remove-circle-outline" size={19} color={C.textFaint} />
+              <Text style={[T.body, { flex: 1, marginLeft: 12, color: C.textDim }]}>No category</Text>
+            </Bouncy>
+          </>
+        ) : null}
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: 12 }}>
+          <Field
+            value={catDraft} onChangeText={setCatDraft} placeholder="New category" maxLength={40}
+            style={{ flex: 1, marginBottom: 0 }} returnKeyType="done"
+            onSubmitEditing={() => {
+              const name = catDraft.trim();
+              if (!name) return;
+              const id = useStore.getState().addScoreTag(name, { category: true });
+              if (id) putInCategory(id, name);
+            }}
+          />
+          <PillButton
+            small label="Add" style={{ marginLeft: 12 }}
+            onPress={() => {
+              const name = catDraft.trim();
+              if (!name) return;
+              const id = useStore.getState().addScoreTag(name, { category: true });
+              if (id) putInCategory(id, name);
+            }}
+          />
+        </View>
+      </Sheet>
       <DotMenu
         visible={learnMenu}
         onClose={() => setLearnMenu(false)}
@@ -362,9 +481,10 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 /* ---------------- a group, or the top level ---------------- */
 
-function GroupView({ groupId, group, ix, today, sort, onSort, onOpen, onMenu, onAdd, learnedBy }: {
+function GroupView({ groupId, ix, today, sort, onSort, onOpen, onMenu, onAdd, onAnalytics, learnedBy }: {
   groupId: string | null; group?: ScoreNode; ix: ScoreIndex; today: string; sort: Sort;
   onSort: () => void; onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void; onAdd: () => void;
+  onAnalytics: () => void;
   /** how many learnings each exam keeps */
   learnedBy: Map<string, number>;
 }) {
@@ -379,7 +499,6 @@ function GroupView({ groupId, group, ix, today, sort, onSort, onOpen, onMenu, on
     if (sort === 'az') return list.sort((a, b) => a.title.localeCompare(b.title));
     return list.sort((a, b) => byWhen(b, a));
   }, [kids, sort, ix]);
-  const summary = groupSummary(ix, groupId);
   const soon = upcoming(ix, groupId, today).slice(0, 4);
   let enter = 0;
 
@@ -397,36 +516,9 @@ function GroupView({ groupId, group, ix, today, sort, onSort, onOpen, onMenu, on
 
   return (
     <>
-      {summary ? (
-        <Enter index={enter++}>
-          <Card hero pad={20} style={{ marginBottom: S.gap }}>
-            <View style={st.heroRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={T.kicker}>Average</Text>
-                <Text style={st.heroPct}>{fmtPct(summary.average)}</Text>
-                <Text style={T.caption}>
-                  across {plural(summary.marked, 'marked exam')}
-                  {group?.target != null ? '  ·  target ' + fmtPct(group.target) : ''}
-                </Text>
-              </View>
-              <View style={st.heroSide}>
-                <Text style={T.caption}>Best</Text>
-                <Text style={st.sideVal}>{fmtPct(summary.best.pct)}</Text>
-                <Text style={[T.caption, { marginTop: 8 }]}>Latest</Text>
-                <View style={st.sideRow}>
-                  <Text style={st.sideVal}>{fmtPct(summary.latest.pct)}</Text>
-                  {summary.latest.delta != null ? <Delta value={summary.latest.delta} style={{ marginLeft: 6 }} /> : null}
-                </View>
-              </View>
-            </View>
-            {summary.series.length > 1 ? (
-              <View style={{ marginTop: 16 }}>
-                <Sparkline values={summary.series.map((x) => x.pct)} target={group?.target} />
-              </View>
-            ) : null}
-          </Card>
-        </Enter>
-      ) : null}
+      <Enter index={enter++}>
+        <AnalyticsTeaser onPress={onAnalytics} />
+      </Enter>
 
       {soon.length ? (
         <Enter index={enter++}>
@@ -466,7 +558,7 @@ function GroupView({ groupId, group, ix, today, sort, onSort, onOpen, onMenu, on
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={st.rowTitle} numberOfLines={1}>{g.title || 'Untitled group'}</Text>
                   <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>
-                    {count ? plural(count, 'exam') + (s ? '  ·  ' + fmtPct(s.average) + ' average' : '') : 'Empty'}
+                    {count ? plural(count, 'exam') + (s ? '  ·  latest ' + fmtPct(s.latest.pct) : '') : 'Empty'}
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
@@ -702,12 +794,15 @@ function ExamView({
  * Every learning, from every exam, newest first. Picking tags narrows it: by default a learning shows when it carries
  * any of them, and "All tags" keeps only the ones carrying every tag picked, whatever else they carry too.
  */
-function Notebook({ learnings, ix, picked, match, find, onFind, onPick, onMatch, onClear, onOpen, onMenu, onManage }: {
+function Notebook({ learnings, ix, picked, match, find, onFind, onPick, onMatch, onClear, onOpen, onMenu, onManage, extra }: {
   learnings: Learning[]; ix: ScoreIndex; picked: string[]; match: TagMatch; find: string; onFind: (v: string) => void;
+  /** the tags a learning carries through its exam: its category */
+  extra: (l: Learning) => string[];
   onPick: (id: string) => void; onMatch: () => void; onClear: () => void;
   onOpen: (l: Learning) => void; onMenu: (l: Learning) => void; onManage: () => void;
 }) {
-  const tags = useStore((s) => s.scoreTags);
+  const all = useStore((s) => s.scoreTags);
+  const tags = React.useMemo(() => [...categoriesOf(all), ...plainTagsOf(all)], [all]);
   const alive = React.useMemo(() => new Set(ix.byId.keys()), [ix]);
   // where each learning came from, for its caption and for the search
   const pathText = React.useCallback((l: Learning) => {
@@ -716,9 +811,9 @@ function Notebook({ learnings, ix, picked, match, find, onFind, onPick, onMatch,
   }, [ix]);
   const shown = React.useMemo(() => {
     const q = find.trim().toLowerCase();
-    const byTags = filterLearnings(learnings, picked, match, alive);
+    const byTags = filterLearnings(learnings, picked, match, alive, extra);
     return q ? byTags.filter((l) => l.text.toLowerCase().includes(q) || pathText(l).toLowerCase().includes(q)) : byTags;
-  }, [learnings, picked, match, alive, find, pathText]);
+  }, [learnings, picked, match, alive, find, pathText, extra]);
   const mine = learnings.filter((l) => alive.has(l.nodeId));
 
   if (!mine.length) {
@@ -809,12 +904,9 @@ const st = StyleSheet.create({
   fab: {
     position: 'absolute', width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center',
   },
-  heroRow: { flexDirection: 'row', alignItems: 'flex-start' },
   heroPct: { ...T.numDisplay, lineHeight: 52, letterSpacing: -1, marginTop: 6 },
   heroMarks: { ...T.numStat, color: C.textDim, fontSize: 17, lineHeight: 22, letterSpacing: 0 },
   unmarked: { color: C.textDim, fontFamily: F.semi, fontSize: 24, lineHeight: 30, marginTop: 10 },
-  heroSide: { alignItems: 'flex-end', marginLeft: 16 },
-  sideVal: { ...T.numStat, fontSize: 17, lineHeight: 22, letterSpacing: 0, marginTop: 2 },
   sideRow: { flexDirection: 'row', alignItems: 'center' },
   facts: { color: C.textDim, fontFamily: F.med, fontSize: 13, fontVariant: ['tabular-nums'] },
   rowTitle: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: -0.1 },
@@ -830,4 +922,5 @@ const st = StyleSheet.create({
   barFill: { height: 6, borderRadius: 3 },
   hintRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 4, marginBottom: 6 },
   moveRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 4 },
+  catDot: { width: 20, height: 20, borderRadius: 10, borderWidth: 1 },
 });

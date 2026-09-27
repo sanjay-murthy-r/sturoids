@@ -505,10 +505,10 @@ const st = StyleSheet.create({
   clip: { overflow: 'hidden' },
   word: {
     height: WORD_H, lineHeight: WORD_H, textAlign: 'center',
-    color: C.text, fontFamily: F.semi, fontSize: 22,
+    color: C.text, fontFamily: F.brand, fontSize: 22,
   },
   caption: {
     height: CAPTION_H, lineHeight: CAPTION_H, marginTop: GAP_CAPTION, textAlign: 'center',
-    color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: 2.2, paddingLeft: 2.2,
+    color: C.textFaint, fontFamily: F.brandMed, fontSize: 11, letterSpacing: 2.2, paddingLeft: 2.2,
   },
 });

@@ -1,29 +1,54 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import Animated from 'react-native-reanimated';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
-import { useStore, DailyTask } from '../store';
+import { useStore, DailyTask, Mission } from '../store';
 import { yesterdayKey, daysUntil, fmtShortDate, toMinutes, indexAfterNeighbours } from '../utils';
 import {
   ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, NeuHeader, useTheme,
   ListCard, ListRow, StrikeText,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Enter, Bouncy, useAnimLevel, useFocusKey } from '../components/Motion';
+import {
+  Enter, Bouncy, FadeSwap, glide, riseIn, rowIn, rowOut, useAnimLevel, useBuilt, useFocusKey,
+} from '../components/Motion';
 import { tap } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
 import { toast } from '../components/Toast';
 import { useToday } from '../hooks/useNow';
 import { QuickTaskSheet } from '../components/QuickTaskSheet';
 
+type Tab = 'daily' | 'missions';
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'daily', label: 'ToDos · daily' },
+  { key: 'missions', label: 'Tasks · long-term' },
+];
+
+const confirmDelete = (what: string, fn: () => void) =>
+  Alert.alert('Delete', 'Remove "' + what + '"?', [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Delete', style: 'destructive', onPress: fn },
+  ]);
+
+/** Turns reminders on (asking for permission) if they are off, then lays out every reminder again. */
+async function applyReminders() {
+  if (!useStore.getState().settings.remindersEnabled) {
+    const ok = await ensurePermission();
+    if (ok) useStore.getState().setSetting('remindersEnabled', true);
+  }
+  setTimeout(rescheduleAllReminders, 200);
+}
+
 export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const fk = useFocusKey();
   const theme = useTheme();
   const level = useAnimLevel();
-  const [tab, setTab] = useState<'daily' | 'missions'>('daily');
+  const built = useBuilt();
+  const [tab, setTab] = useState<Tab>('daily');
 
   const dailyTasks = useStore((s) => s.dailyTasks);
   const toggleDaily = useStore((s) => s.toggleDaily);
@@ -35,24 +60,14 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const missions = useStore((s) => s.missions);
   const toggleMission = useStore((s) => s.toggleMission);
   const removeMission = useStore((s) => s.removeMission);
-  const addSubtask = useStore((s) => s.addSubtask);
-  const toggleSubtask = useStore((s) => s.toggleSubtask);
-  const removeSubtask = useStore((s) => s.removeSubtask);
 
-  const settings = useStore((s) => s.settings);
-  const setSetting = useStore((s) => s.setSetting);
-  const todoReminders = useStore((s) => s.todoReminders);
-  const addTodoReminder = useStore((s) => s.addTodoReminder);
-  const removeTodoReminder = useStore((s) => s.removeTodoReminder);
+  const reminderOn = useStore((s) => s.settings.todoReminderEnabled);
+  const hasCheckIns = useStore((s) => s.todoReminders.length > 0);
 
   const [addSheet, setAddSheet] = useState(false);
   const [remindSheet, setRemindSheet] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [subDraft, setSubDraft] = useState('');
   const [triaged, setTriaged] = useState<string[]>([]);
-  const [setupTime, setSetupTime] = useState(settings.todoReminderTime);
-  const [remTime, setRemTime] = useState('');
-  const [remLabel, setRemLabel] = useState('');
 
   const today = useToday();
   // the triage is a DAILY ritual — lastTriage expires with the date, so this
@@ -99,7 +114,8 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     toast(taken.length === 1 ? 'Dropped "' + task.title + '"' : 'Dropped ' + taken.length + ' ToDos', {
       label: 'Undo',
       onPress: () => {
-        // back in the reverse order they went, each beside the nearest neighbour it had that is still there
+        // back in the reverse order they went, each beside the nearest neighbour it had that is still there; each
+        // comes back as a new row, so it fades in there while the rows below it glide down to make room
         for (let i = taken.length - 1; i >= 0; i--) {
           const now = useStore.getState().dailyTasks.map((t) => t.id);
           restoreDaily(taken[i].task, indexAfterNeighbours(taken[i].before, now));
@@ -117,30 +133,33 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     [missions]
   );
 
-  const confirmDelete = (what: string, fn: () => void) =>
-    Alert.alert('Delete', 'Remove "' + what + '"?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: fn },
-    ]);
+  // the rows' callbacks keep their identity, so ticking one row re-renders that row alone
+  const askDeleteDaily = useCallback((t: DailyTask) => confirmDelete(t.title, () => removeDaily(t.id)), [removeDaily]);
+  const askDeleteMission = useCallback((m: Mission) => confirmDelete(m.title, () => removeMission(m.id)), [removeMission]);
+  const toggleOpen = useCallback((id: string) => setExpanded((x) => (x === id ? null : id)), []);
 
-  const applyReminders = async () => {
-    if (!settings.remindersEnabled) {
-      const ok = await ensurePermission();
-      if (ok) setSetting('remindersEnabled', true);
-    }
-    setTimeout(rescheduleAllReminders, 200);
-  };
+  const doneToday = useMemo(() => dailyTasks.filter((t) => t.doneOn === today).length, [dailyTasks, today]);
+  const openCount = useMemo(() => missions.filter((m) => !m.done).length, [missions]);
+  // the line above the title never states a zero: an empty list says what the list is for instead
+  const kicker = tab === 'daily'
+    ? (dailyTasks.length === 0 ? 'Resets each morning'
+      : doneToday === 0 ? dailyTasks.length + ' left today'
+        : doneToday + '/' + dailyTasks.length + ' done today')
+    : (missions.length === 0 ? 'With deadlines' : openCount === 0 ? 'All done' : openCount + ' open');
 
-  const doneToday = dailyTasks.filter((t) => t.doneOn === today).length;
   const tabMode = mode === 'tab';
   const reminderButton = (
     <IconBtn
-      name={settings.todoReminderEnabled || todoReminders.length ? 'notifications' : 'notifications-outline'}
-      color={settings.todoReminderEnabled ? C.accent : C.textDim} size={24}
-      onPress={() => { setSetupTime(settings.todoReminderTime); setRemindSheet(true); }}
+      name={reminderOn || hasCheckIns ? 'notifications' : 'notifications-outline'}
+      color={reminderOn ? C.accent : C.textDim} size={24}
+      onPress={() => setRemindSheet(true)}
       accessibilityLabel="Reminders"
     />
   );
+
+  const empty = tab === 'daily' ? dailyTasks.length === 0 : sortedMissions.length === 0;
+  // switching lists, or a list filling or emptying, brings the new body up into the old one's place
+  const bodyKey = tab + (empty ? ':empty' : ':list');
 
   return (
     <ScreenBG guard={tabMode}>
@@ -151,135 +170,81 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         showsVerticalScrollIndicator={false}
       >
         <Row style={{ justifyContent: 'space-between' }}>
-          <View>
-            <Text style={T.kicker}>
-              {tab === 'daily' ? doneToday + '/' + dailyTasks.length + ' done today' : missions.filter((m) => !m.done).length + ' open'}
-            </Text>
+          <FadeSwap swapKey={tab}>
+            <Text style={T.kicker}>{kicker}</Text>
             {tabMode && <Text style={[T.display, { marginTop: 4 }]}>{tab === 'daily' ? 'ToDos' : 'Tasks'}</Text>}
-          </View>
+          </FadeSwap>
           {tabMode && reminderButton}
         </Row>
 
         <SegmentedControl
-          options={[
-            { key: 'daily', label: 'ToDos · daily' },
-            { key: 'missions', label: 'Tasks · long-term' },
-          ]}
+          options={TABS}
           value={tab}
           onChange={(k) => setTab(k)}
           stretch
           style={{ marginTop: 16, marginBottom: 16 }}
         />
 
-        {tab === 'daily' && leftovers.length > 0 && (
-          <Enter index={0}>
-            <Card pad={16}>
-              <Text style={st.triageTitle}>Yesterday's leftovers</Text>
-              {leftovers.map((t) => (
-                <Row key={t.id} style={{ paddingVertical: 6 }}>
-                  <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{t.title}</Text>
-                  <PillButton small label="Keep" color={C.green} onPress={() => keepOne(t.id)} style={{ marginRight: 6 }} />
-                  <PillButton small label="Drop" color={C.danger} outline onPress={() => dropOne(t.id)} />
-                </Row>
-              ))}
-              <Pressable onPress={() => setLastTriage(today)} hitSlop={8}>
-                <Text style={[T.caption, { textAlign: 'center', marginTop: 8 }]}>Keep all & dismiss</Text>
-              </Pressable>
-            </Card>
-          </Enter>
-        )}
-
-        {tab === 'daily' &&
-          (dailyTasks.length === 0 ? (
-            <EmptyState icon="sunny-outline" title="Your daily list resets each morning" body='Tap the bell for a daily "plan your day" nudge.' />
-          ) : (
-            <Enter index={0}>
-              <ListCard>
-                {dailyTasks.map((t) => {
-                  const done = t.doneOn === today;
-                  return (
-                    <ListRow key={t.id} style={{ paddingVertical: 10 }}>
-                      <CheckCircle done={done} onPress={() => toggleDaily(t.id)} label={t.title} />
-                      <StrikeText done={done} style={st.taskText} wrapStyle={st.taskWrap}>{t.title}</StrikeText>
-                      <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(t.title, () => removeDaily(t.id))} accessibilityLabel={'Delete ' + t.title} />
-                    </ListRow>
-                  );
-                })}
-              </ListCard>
-            </Enter>
-          ))}
-
-        {tab === 'missions' &&
-          (sortedMissions.length === 0 ? (
-            <EmptyState icon="flag-outline" title="Deadline-bound work lives here" body="Mock tests, revision targets, projects." />
-          ) : (
-            <Enter index={0}>
-              <ListCard>
-                {sortedMissions.map((m) => {
-                  const d = daysUntil(m.deadline);
-                  const pillText = m.done ? 'DONE' : d < 0 ? -d + 'D OVER' : d === 0 ? 'TODAY' : 'D-' + d;
-                  const pillColor = m.done ? C.green : d < 0 ? C.danger : d <= 2 ? C.amber : C.accent;
-                  const open = expanded === m.id;
-                  const subDone = m.subtasks.filter((x) => x.done).length;
-                  return (
-                    <View key={m.id} style={st.missionRow}>
-                      <Row>
-                        <CheckCircle done={m.done} color={C.amber} onPress={() => toggleMission(m.id)} label={m.title} />
-                        {/* one subDraft serves every mission's step field, so it has to be
-                            dropped here or a half-typed step follows you to the next mission */}
-                        <Pressable style={st.taskWrap} onPress={() => { setSubDraft(''); setExpanded(open ? null : m.id); }}>
-                          <StrikeText done={m.done} style={st.taskText}>{m.title}</StrikeText>
-                          <Text style={[T.caption, { marginTop: 2 }]}>
-                            {fmtShortDate(m.deadline)}
-                            {m.subtasks.length > 0 ? ', ' + subDone + '/' + m.subtasks.length + ' steps' : ', tap for steps'}
-                          </Text>
-                        </Pressable>
-                        <View style={[st.pill, { borderColor: pillColor + '55', backgroundColor: pillColor + '18' }]}>
-                          <Text style={{ color: pillColor, fontSize: 11, fontFamily: F.semi, letterSpacing: 0.8 }}>{pillText}</Text>
-                        </View>
-                        <IconBtn name="trash-outline" size={18} onPress={() => confirmDelete(m.title, () => removeMission(m.id))} accessibilityLabel={'Delete ' + m.title} />
-                      </Row>
-
-                      {/* the steps unfold, and the card grows around them */}
-                      {open && (
-                        <Animated.View
-                          entering={level === 'none' ? undefined : FadeIn.duration(220)}
-                          exiting={level === 'none' ? undefined : FadeOut.duration(140)}
-                          style={st.steps}
-                        >
-                          {m.subtasks.map((sub) => (
-                            <Row key={sub.id} style={{ paddingVertical: 5 }}>
-                              <CheckCircle done={sub.done} size={20} onPress={() => toggleSubtask(m.id, sub.id)} label={sub.title} />
-                              <StrikeText done={sub.done} style={st.stepText} wrapStyle={st.stepWrap}>{sub.title}</StrikeText>
-                              <IconBtn name="close" size={16} onPress={() => removeSubtask(m.id, sub.id)} accessibilityLabel={'Remove ' + sub.title} />
-                            </Row>
-                          ))}
-                          <Row style={{ marginTop: 2 }}>
-                            <Field
-                              value={subDraft} onChangeText={setSubDraft} placeholder="Add a step"
-                              style={{ flex: 1, marginBottom: 0 }}
-                              onSubmitEditing={() => { if (subDraft.trim()) { addSubtask(m.id, subDraft.trim()); setSubDraft(''); } }}
-                            />
-                            <IconBtn
-                              name="add-circle" color={C.accent} size={28} style={{ marginLeft: 6 }}
-                              onPress={() => { if (subDraft.trim()) { addSubtask(m.id, subDraft.trim()); setSubDraft(''); } }}
-                              accessibilityLabel="Add this step"
-                            />
+        <Enter index={0}>
+          <Animated.View key={bodyKey} entering={built.current && level !== 'none' ? riseIn : undefined}>
+            {tab === 'daily' ? (
+              <>
+                {leftovers.length > 0 && (
+                  // the card fades away once the last leftover is decided, and the list below glides up
+                  <Animated.View exiting={rowOut(level)}>
+                    <Card pad={16}>
+                      <Text style={st.triageTitle}>Yesterday's leftovers</Text>
+                      {leftovers.map((t) => (
+                        <Animated.View key={t.id} exiting={rowOut(level)} layout={glide(level)}>
+                          <Row style={{ paddingVertical: 6 }}>
+                            <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{t.title}</Text>
+                            <PillButton small label="Keep" color={C.green} onPress={() => keepOne(t.id)} style={{ marginRight: 6 }} />
+                            <PillButton small label="Drop" color={C.danger} outline onPress={() => dropOne(t.id)} />
                           </Row>
                         </Animated.View>
-                      )}
-                    </View>
-                  );
-                })}
+                      ))}
+                      <Animated.View layout={glide(level)}>
+                        <Pressable onPress={() => setLastTriage(today)} hitSlop={8}>
+                          <Text style={[T.caption, { textAlign: 'center', marginTop: 8 }]}>Keep all & dismiss</Text>
+                        </Pressable>
+                      </Animated.View>
+                    </Card>
+                  </Animated.View>
+                )}
+                {dailyTasks.length === 0 ? (
+                  <EmptyState icon="sunny-outline" title="Your daily list resets each morning" body='Tap the bell for a daily "plan your day" nudge.' />
+                ) : (
+                  <Animated.View layout={glide(level)}>
+                    <ListCard>
+                      {dailyTasks.map((t) => (
+                        <DailyRow key={t.id} task={t} done={t.doneOn === today} onToggle={toggleDaily} onDelete={askDeleteDaily} />
+                      ))}
+                    </ListCard>
+                  </Animated.View>
+                )}
+              </>
+            ) : sortedMissions.length === 0 ? (
+              <EmptyState icon="flag-outline" title="Deadline-bound work lives here" body="Mock tests, revision targets, projects." />
+            ) : (
+              <ListCard>
+                {sortedMissions.map((m) => (
+                  <MissionRow
+                    key={m.id} m={m} today={today} open={expanded === m.id}
+                    onToggle={toggleMission} onToggleOpen={toggleOpen} onDelete={askDeleteMission}
+                  />
+                ))}
               </ListCard>
-            </Enter>
-          ))}
+            )}
+          </Animated.View>
+        </Enter>
       </ScrollView>
 
       <Bouncy
         onPress={() => { tap(); setAddSheet(true); }}
         scaleTo={0.9}
         radius={999}
+        accessibilityLabel={tab === 'daily' ? 'Add a ToDo' : 'Add a task'}
+        accessibilityRole="button"
         style={[
           st.fab,
           { bottom: tabMode ? 24 : insets.bottom + 20 },
@@ -297,62 +262,184 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         initialKind={tab === 'daily' ? 'daily' : 'mission'}
       />
 
-      <Sheet visible={remindSheet} onClose={() => setRemindSheet(false)} title="ToDo reminders">
-        <Row style={{ justifyContent: 'space-between', marginBottom: 8 }}>
-          <Text style={T.body}>Daily "plan your ToDos" nudge</Text>
-          <Toggle
-            value={settings.todoReminderEnabled}
-            color={C.green}
-            label="Daily plan your ToDos nudge"
-            onChange={async (v) => {
-              setSetting('todoReminderEnabled', v);
-              await applyReminders();
-            }}
-          />
-        </Row>
-        <Row>
-          <Field
-            value={setupTime} onChangeText={setSetupTime}
-            placeholder="07:00" keyboardType="numbers-and-punctuation" style={{ flex: 1, marginBottom: 0 }}
-          />
-          <PillButton
-            small label="Set time" style={{ marginLeft: 8 }}
-            onPress={async () => {
-              if (toMinutes(setupTime.trim()) < 0) { Alert.alert('Time format', 'Use 24h HH:MM, e.g. 07:00'); return; }
-              setSetting('todoReminderTime', setupTime.trim());
-              await applyReminders();
-            }}
-          />
-        </Row>
-
-        <Text style={st.sheetSection}>Check-ins during the day</Text>
-        {todoReminders.map((r) => (
-          <Row key={r.id} style={{ paddingVertical: 6 }}>
-            <Text style={[T.body, { width: 62, fontVariant: ['tabular-nums'], color: C.accent }]}>{r.time}</Text>
-            <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{r.label || 'ToDo check-in'}</Text>
-            <IconBtn name="close" size={17} onPress={async () => { removeTodoReminder(r.id); await applyReminders(); }} accessibilityLabel={'Remove the reminder at ' + r.time} />
-          </Row>
-        ))}
-        <Row style={{ marginTop: 4 }}>
-          <Field value={remTime} onChangeText={setRemTime} placeholder="16:30" keyboardType="numbers-and-punctuation" style={{ width: 90, marginBottom: 0 }} />
-          <Field value={remLabel} onChangeText={setRemLabel} placeholder="Label (optional)" style={{ flex: 1, marginHorizontal: 8, marginBottom: 0 }} />
-          <PillButton
-            small label="Add"
-            onPress={async () => {
-              if (toMinutes(remTime.trim()) < 0) { Alert.alert('Time format', 'Use 24h HH:MM'); return; }
-              addTodoReminder(remTime.trim(), remLabel.trim());
-              setRemTime(''); setRemLabel('');
-              await applyReminders();
-            }}
-          />
-        </Row>
-        {!settings.remindersEnabled && (
-          <Text style={[T.caption, { marginTop: 10 }]}>
-            Reminders are off in Settings. Turning one on here asks for notification permission and switches them on.
-          </Text>
-        )}
-      </Sheet>
+      <RemindersSheet visible={remindSheet} onClose={() => setRemindSheet(false)} />
     </ScreenBG>
+  );
+}
+
+/** One ToDo. Its own memoised row, so ticking it leaves every other row alone. */
+const DailyRow = React.memo(function DailyRow({ task, done, onToggle, onDelete }: {
+  task: DailyTask; done: boolean; onToggle: (id: string) => void; onDelete: (t: DailyTask) => void;
+}) {
+  return (
+    <ListRow style={{ paddingVertical: 10 }}>
+      <CheckCircle done={done} onPress={() => onToggle(task.id)} label={task.title} />
+      <StrikeText done={done} style={st.taskText} wrapStyle={st.taskWrap}>{task.title}</StrikeText>
+      <IconBtn name="trash-outline" size={18} onPress={() => onDelete(task)} accessibilityLabel={'Delete ' + task.title} />
+    </ListRow>
+  );
+});
+
+/**
+ * One long-term task, with its steps folding out beneath it. The step being typed lives here, so a keystroke
+ * re-renders this row only, and a half-typed step never follows you to another task.
+ */
+const MissionRow = React.memo(function MissionRow({ m, open, onToggle, onToggleOpen, onDelete }: {
+  /** only compared, never read: a new day re-renders the row, so its countdown turns over at midnight */
+  today: string;
+  m: Mission; open: boolean;
+  onToggle: (id: string) => void; onToggleOpen: (id: string) => void; onDelete: (m: Mission) => void;
+}) {
+  const level = useAnimLevel();
+  const addSubtask = useStore((s) => s.addSubtask);
+  const toggleSubtask = useStore((s) => s.toggleSubtask);
+  const removeSubtask = useStore((s) => s.removeSubtask);
+  const [draft, setDraft] = useState('');
+  // folding the steps away drops the half-typed step with them
+  React.useEffect(() => { if (!open) setDraft(''); }, [open]);
+
+  const d = daysUntil(m.deadline);
+  const pillText = m.done ? 'DONE' : d < 0 ? -d + 'D OVER' : d === 0 ? 'TODAY' : 'D-' + d;
+  const pillColor = m.done ? C.green : d < 0 ? C.danger : d <= 2 ? C.amber : C.accent;
+  const subDone = m.subtasks.filter((x) => x.done).length;
+  const addStep = () => {
+    const t = draft.trim();
+    if (!t) return;
+    addSubtask(m.id, t);
+    setDraft('');
+  };
+  return (
+    <View style={st.missionRow}>
+      <Row>
+        <CheckCircle done={m.done} color={C.amber} onPress={() => onToggle(m.id)} label={m.title} />
+        <Pressable style={st.taskWrap} onPress={() => onToggleOpen(m.id)}>
+          <StrikeText done={m.done} style={st.taskText}>{m.title}</StrikeText>
+          <Text style={[T.caption, { marginTop: 2 }]}>
+            {fmtShortDate(m.deadline)}
+            {m.subtasks.length > 0 ? ', ' + subDone + '/' + m.subtasks.length + ' steps' : ', tap for steps'}
+          </Text>
+        </Pressable>
+        <View style={[st.pill, { borderColor: pillColor + '55', backgroundColor: pillColor + '18' }]}>
+          <Text style={[st.pillText, { color: pillColor }]}>{pillText}</Text>
+        </View>
+        <IconBtn name="trash-outline" size={18} onPress={() => onDelete(m)} accessibilityLabel={'Delete ' + m.title} />
+      </Row>
+
+      {/* the steps unfold, and the card grows around them */}
+      {open && (
+        <Animated.View entering={rowIn(level)} exiting={rowOut(level)} style={st.steps}>
+          <Steps m={m} onToggle={toggleSubtask} onRemove={removeSubtask} />
+          <Animated.View layout={glide(level)}>
+            <Row style={{ marginTop: 2 }}>
+              <Field
+                value={draft} onChangeText={setDraft} placeholder="Add a step"
+                style={{ flex: 1, marginBottom: 0 }}
+                onSubmitEditing={addStep}
+              />
+              <IconBtn name="add-circle" color={C.accent} size={28} style={{ marginLeft: 6 }} onPress={addStep} accessibilityLabel="Add this step" />
+            </Row>
+          </Animated.View>
+        </Animated.View>
+      )}
+    </View>
+  );
+});
+
+/** A task's steps: the ones there when it opens unfold with it; a step added or removed later fades in or out alone. */
+function Steps({ m, onToggle, onRemove }: {
+  m: Mission; onToggle: (missionId: string, subId: string) => void; onRemove: (missionId: string, subId: string) => void;
+}) {
+  const level = useAnimLevel();
+  const built = useBuilt();
+  return (
+    <>
+      {m.subtasks.map((sub) => (
+        <Animated.View key={sub.id} entering={built.current ? rowIn(level) : undefined} exiting={rowOut(level)} layout={glide(level)}>
+          <Row style={{ paddingVertical: 5 }}>
+            <CheckCircle done={sub.done} size={20} onPress={() => onToggle(m.id, sub.id)} label={sub.title} />
+            <StrikeText done={sub.done} style={st.stepText} wrapStyle={st.stepWrap}>{sub.title}</StrikeText>
+            <IconBtn name="close" size={16} onPress={() => onRemove(m.id, sub.id)} accessibilityLabel={'Remove ' + sub.title} />
+          </Row>
+        </Animated.View>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The reminders sheet. Its times and labels are typed here, so a keystroke re-renders the sheet alone, never the
+ * whole list behind it.
+ */
+function RemindersSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const enabled = useStore((s) => s.settings.todoReminderEnabled);
+  const time = useStore((s) => s.settings.todoReminderTime);
+  const remindersEnabled = useStore((s) => s.settings.remindersEnabled);
+  const setSetting = useStore((s) => s.setSetting);
+  const todoReminders = useStore((s) => s.todoReminders);
+  const addTodoReminder = useStore((s) => s.addTodoReminder);
+  const removeTodoReminder = useStore((s) => s.removeTodoReminder);
+  const [setupTime, setSetupTime] = useState(time);
+  const [remTime, setRemTime] = useState('');
+  const [remLabel, setRemLabel] = useState('');
+  // each opening starts from the saved time
+  React.useEffect(() => { if (visible) setSetupTime(useStore.getState().settings.todoReminderTime); }, [visible]);
+
+  return (
+    <Sheet visible={visible} onClose={onClose} title="ToDo reminders">
+      <Row style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+        <Text style={T.body}>Daily "plan your ToDos" nudge</Text>
+        <Toggle
+          value={enabled}
+          color={C.green}
+          label="Daily plan your ToDos nudge"
+          onChange={async (v) => {
+            setSetting('todoReminderEnabled', v);
+            await applyReminders();
+          }}
+        />
+      </Row>
+      <Row>
+        <Field
+          value={setupTime} onChangeText={setSetupTime}
+          placeholder="07:00" keyboardType="numbers-and-punctuation" style={{ flex: 1, marginBottom: 0 }}
+        />
+        <PillButton
+          small label="Set time" style={{ marginLeft: 8 }}
+          onPress={async () => {
+            if (toMinutes(setupTime.trim()) < 0) { Alert.alert('Time format', 'Use 24h HH:MM, e.g. 07:00'); return; }
+            setSetting('todoReminderTime', setupTime.trim());
+            await applyReminders();
+          }}
+        />
+      </Row>
+
+      <Text style={st.sheetSection}>Check-ins during the day</Text>
+      {todoReminders.map((r) => (
+        <Row key={r.id} style={{ paddingVertical: 6 }}>
+          <Text style={[T.body, { width: 62, fontVariant: ['tabular-nums'], color: C.accent }]}>{r.time}</Text>
+          <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{r.label || 'ToDo check-in'}</Text>
+          <IconBtn name="close" size={17} onPress={async () => { removeTodoReminder(r.id); await applyReminders(); }} accessibilityLabel={'Remove the reminder at ' + r.time} />
+        </Row>
+      ))}
+      <Row style={{ marginTop: 4 }}>
+        <Field value={remTime} onChangeText={setRemTime} placeholder="16:30" keyboardType="numbers-and-punctuation" style={{ width: 90, marginBottom: 0 }} />
+        <Field value={remLabel} onChangeText={setRemLabel} placeholder="Label (optional)" style={{ flex: 1, marginHorizontal: 8, marginBottom: 0 }} />
+        <PillButton
+          small label="Add"
+          onPress={async () => {
+            if (toMinutes(remTime.trim()) < 0) { Alert.alert('Time format', 'Use 24h HH:MM'); return; }
+            addTodoReminder(remTime.trim(), remLabel.trim());
+            setRemTime(''); setRemLabel('');
+            await applyReminders();
+          }}
+        />
+      </Row>
+      {!remindersEnabled && (
+        <Text style={[T.caption, { marginTop: 10 }]}>
+          Reminders are off in Settings. Turning one on here asks for notification permission and switches them on.
+        </Text>
+      )}
+    </Sheet>
   );
 }
 
@@ -365,6 +452,7 @@ const st = StyleSheet.create({
   stepWrap: { flex: 1, marginLeft: 10 },
   stepText: { color: C.textDim, fontFamily: F.reg, fontSize: 14, lineHeight: 20 },
   pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginHorizontal: 6 },
+  pillText: { fontSize: 11, fontFamily: F.semi, letterSpacing: 0.8 },
   fab: {
     position: 'absolute', right: 20, bottom: 24, width: 58, height: 58, borderRadius: 29,
     alignItems: 'center', justifyContent: 'center',

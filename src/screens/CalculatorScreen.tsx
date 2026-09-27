@@ -1,13 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, useWindowDimensions } from 'react-native';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, withTiming } from 'react-native-reanimated';
 import { create, all } from 'mathjs';
 import * as Clipboard from 'expo-clipboard';
 import { C, F, MIN, NEU, S, T, neuRaised } from '../theme';
 import { useStore } from '../store';
 import { ScreenBG, Sheet, Row, PillButton, Inset, Chip, IconBtn, NeuHeader, useTheme } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Bouncy, useAnimLevel } from '../components/Motion';
+import { toast } from '../components/Toast';
+import { Bouncy, EASE_OUT, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useBuilt } from '../components/Motion';
 import { tick } from '../haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RAIL_W, TWO_COL_AT, WIDE_AT, WIDE_MAX } from '../layout';
@@ -64,6 +65,17 @@ const SCI: string[][] = [
   ['ln(', 'log(', 'π', 'e'],
   ['!', '×10^', 'abs(', 'mod'],
 ];
+const OPS = ['÷', '×', '−', '+'];
+
+/** On equals, the answer lifts from the preview line into the main one, the way the old rise did. */
+const answerIn = (travel: boolean) => () => {
+  'worklet';
+  const ease = { duration: travel ? 320 : 200, easing: Easing.out(Easing.cubic) };
+  return {
+    initialValues: { opacity: 0.6, transform: [{ translateY: travel ? 24 : 0 }] },
+    animations: { opacity: withTiming(1, ease), transform: [{ translateY: withTiming(0, ease) }] },
+  };
+};
 
 export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
@@ -87,13 +99,11 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const errTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (errTimer.current) clearTimeout(errTimer.current); }, []);
 
-  // on equals, the answer lifts from the preview line into the main one
+  // on equals, the answer lifts from the preview line into the main one. The line is keyed on each answer, so the rise
+  // runs as the answer mounts (a shared value set beforehand moved the old sum for a frame first)
   const level = useAnimLevel();
-  const rise = useSharedValue(0);
-  const riseStyle = useAnimatedStyle(() => ({
-    opacity: 1 - 0.4 * rise.value,
-    transform: [{ translateY: 24 * rise.value }],
-  }));
+  const built = useBuilt();
+  const [answers, setAnswers] = useState(0);
 
   const fmt = (v: any) =>
     math.format(v, sciNotation ? { notation: 'exponential', precision: 12 } : { precision: 14 });
@@ -141,10 +151,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       pushCalc(expr, out);
       setExpr(out);
       setJustEvaluated(true);
-      if (level !== 'none') {
-        rise.value = 1;
-        rise.value = withTiming(0, { duration: 320, easing: Easing.out(Easing.cubic) });
-      }
+      setAnswers((n) => n + 1);
     } catch {
       // no "Error" row in the history: the expression stays, and the preview line explains
       setJustEvaluated(false);
@@ -166,13 +173,29 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     ? Math.floor(Math.max(KEY_MIN, Math.min(KEY_MAX, (pad.w - 24) / 4, (pad.h - gaps - eqH - 10) / rows)))
     : undefined;
 
+  // every key goes through one stable handler, so a keypress re-renders the display and not the thirty keys
+  const pressRef = useRef(press);
+  pressRef.current = press;
+  const onKey = useCallback((k: string) => pressRef.current(k), []);
+  const clearAll = useCallback(() => { tick(); setExpr(''); setJustEvaluated(false); }, []);
+
   const display = (
     // display — carved into the material
     <Inset pad={16} style={{ borderRadius: S.radius, marginBottom: 12, overflow: 'visible' }}>
       <ScrollView style={{ maxHeight: split ? 140 : 90 }} contentContainerStyle={{ justifyContent: 'flex-end' }}>
-        <Animated.Text style={[st.expr, riseStyle]} selectable>{expr || '0'}</Animated.Text>
+        <Animated.Text
+          key={answers}
+          entering={answers > 0 && level !== 'none' ? answerIn(level === 'full') : undefined}
+          style={st.expr}
+          selectable
+        >
+          {expr || '0'}
+        </Animated.Text>
       </ScrollView>
-      <Text style={[st.preview, { color: evalError ? C.danger : C.accent }]} numberOfLines={1}>{evalError ? "Can't evaluate" : justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
+      {/* "Can't evaluate" dips in over the preview and back out, instead of flashing */}
+      <FadeSwap swapKey={evalError ? 'error' : 'preview'}>
+        <Text style={[st.preview, { color: evalError ? C.danger : C.accent }]} numberOfLines={1}>{evalError ? "Can't evaluate" : justEvaluated ? ' ' : preview ? `= ${preview}` : ' '}</Text>
+      </FadeSwap>
     </Inset>
   );
 
@@ -199,23 +222,28 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const cramped = wide && pad.h > 0 && (pad.h - gaps - eqH - 10) / rows < KEY_MIN;
   const keyRows = (
     <>
-      {sci && SCI.map((row, i) => (
-        <Row key={`s${i}`} style={{ gap: 8, marginBottom: 6 }}>
-          {row.map((k) => (
-            <Key
-              key={k} label={k.replace('(', '')} pad={8} small onPress={() => press(k)} color={C.accent}
-              height={keyH ? Math.round(keyH * SCI_SHARE) : undefined}
-            />
+      {/* the functions come up in their own rows as they open; the number keys stay where they are */}
+      {sci && (
+        <Animated.View entering={built.current && level !== 'none' ? FadeIn.duration(level === 'full' ? 240 : 180).easing(EASE_OUT) : undefined}>
+          {SCI.map((row, i) => (
+            <Row key={`s${i}`} style={{ gap: 8, marginBottom: 6 }}>
+              {row.map((k) => (
+                <Key
+                  key={k} label={k.replace('(', '')} value={k} pad={8} small onKey={onKey} color={C.accent}
+                  height={keyH ? Math.round(keyH * SCI_SHARE) : undefined}
+                />
+              ))}
+            </Row>
           ))}
-        </Row>
-      ))}
+        </Animated.View>
+      )}
       {BASIC.map((row, i) => (
         <Row key={i} style={{ gap: 8, marginBottom: sci ? 6 : 8 }}>
           {row.map((k) => (
             <Key
-              key={k} label={k} pad={sci ? 11 : 16} onPress={() => press(k)}
-              onLongPress={k === '⌫' ? () => { tick(); setExpr(''); setJustEvaluated(false); } : undefined}
-              color={['÷', '×', '−', '+'].includes(k) ? C.accent : ['C', '⌫'].includes(k) ? C.danger : C.text}
+              key={k} label={k} value={k} pad={sci ? 11 : 16} onKey={onKey}
+              onLongPress={k === '⌫' ? clearAll : undefined}
+              color={OPS.includes(k) ? C.accent : k === 'C' || k === '⌫' ? C.danger : C.text}
               height={keyH}
             />
           ))}
@@ -225,7 +253,11 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
         onPress={() => { tick(); equals(); }}
         onLongPress={async () => {
           const out = justEvaluated ? expr : preview;
-          if (out) { await Clipboard.setStringAsync(out); tick(); }
+          if (!out) return;
+          await Clipboard.setStringAsync(out);
+          tick();
+          // a haptic only answers at full motion: the copy says so in words too
+          toast('Copied ' + out);
         }}
         radius={16}
         scaleTo={0.96}
@@ -261,17 +293,8 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     </View>
   );
 
-  const historyRows = history.map((h) => (
-    <Bouncy
-      key={h.id} style={st.histRow} radius={14} scaleTo={0.98}
-      onPress={() => { if (h.result !== 'Error') { setExpr((e) => e + h.result); setHistSheet(false); } }}
-    >
-      <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13 }} numberOfLines={1}>{h.expr}</Text>
-      <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, fontFamily: F.semi }} numberOfLines={1}>
-        = {h.result}
-      </Text>
-    </Bouncy>
-  ));
+  const reuse = useCallback((result: string) => { setExpr((e) => e + result); setHistSheet(false); }, []);
+  const historyRows = <HistoryRows history={history} onPick={reuse} />;
   const historyEmpty = (
     <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 13 }}>Past calculations appear here. Tap one to reuse its result.</Text>
   );
@@ -289,7 +312,9 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
             <View style={st.histHead}>
               <Text style={T.kicker}>History</Text>
               {history.length > 0 ? (
-                <Text style={st.histClear} onPress={clearCalcHistory} accessibilityRole="button">Clear</Text>
+                <Bouncy onPress={clearCalcHistory} scaleTo={0.92} radius={8} hitSlop={8} accessibilityRole="button">
+                  <Text style={st.histClear}>Clear</Text>
+                </Bouncy>
               ) : null}
             </View>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 8 }}>
@@ -317,16 +342,48 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   );
 }
 
-/** Raised neumorphic key — sinks + carves in on press, with a haptic tick. */
-function Key({ label, onPress, onLongPress, color, small, pad, height }: {
-  label: string; onPress: () => void; onLongPress?: () => void; color: string; small?: boolean; pad?: number;
+/**
+ * Past sums, newest first. One that arrives while the list is in view (a split screen's history) fades in above the
+ * rest as they glide down; clearing lets them fade together. A list that opens (the sheet) is simply there.
+ */
+const HistoryRows = React.memo(function HistoryRows({ history, onPick }: {
+  history: { id: string; expr: string; result: string }[]; onPick: (result: string) => void;
+}) {
+  const level = useAnimLevel();
+  const built = useBuilt();
+  const enter = built.current ? rowIn(level) : undefined;
+  return (
+    <>
+      {history.map((h) => (
+        <Animated.View key={h.id} entering={enter} exiting={rowOut(level)} layout={glide(level)}>
+          <Bouncy
+            style={st.histRow} radius={14} scaleTo={0.98}
+            onPress={() => { if (h.result !== 'Error') onPick(h.result); }}
+          >
+            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13 }} numberOfLines={1}>{h.expr}</Text>
+            <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, fontFamily: F.semi }} numberOfLines={1}>
+              = {h.result}
+            </Text>
+          </Bouncy>
+        </Animated.View>
+      ))}
+    </>
+  );
+});
+
+/** Raised neumorphic key — sinks + carves in on press, with a haptic tick. Memoised: a keypress re-renders no key. */
+const Key = React.memo(function Key({ label, value, onKey, onLongPress, color, small, pad, height }: {
+  label: string;
+  /** what the key types, handed to `onKey` */
+  value: string;
+  onKey: (k: string) => void; onLongPress?: () => void; color: string; small?: boolean; pad?: number;
   /** a wide window's key height, fitted to the room; a phone's key takes its height from its padding */
   height?: number;
 }) {
   const theme = useTheme();
   return (
     <Bouncy
-      onPress={() => { tick(); onPress(); }}
+      onPress={() => { tick(); onKey(value); }}
       onLongPress={onLongPress}
       radius={16}
       scaleTo={0.94}
@@ -341,7 +398,7 @@ function Key({ label, onPress, onLongPress, color, small, pad, height }: {
       <Text style={{ color, fontSize: small ? 15 : 22, fontFamily: F.med }}>{label}</Text>
     </Bouncy>
   );
-}
+});
 
 const st = StyleSheet.create({
   expr: { color: C.text, fontSize: 34, fontFamily: F.semi, textAlign: 'right', fontVariant: ['tabular-nums'] },

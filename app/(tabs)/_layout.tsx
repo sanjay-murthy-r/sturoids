@@ -1,12 +1,28 @@
 import React from 'react';
-import { useWindowDimensions } from 'react-native';
+import { Easing, useWindowDimensions } from 'react-native';
 import { Tabs } from 'expo-router';
+import type { BottomTabNavigationOptions } from '@react-navigation/bottom-tabs';
 import { WIDE_AT } from '../../src/layout';
 import { bgFor } from '../../src/theme';
 import { useStore } from '../../src/store';
 import { NeuTabBar } from '../../src/components/NeuTabBar';
 import { useAnimLevel } from '../../src/components/Motion';
 import { useRegisterNavigation } from '../../src/toolNav';
+
+/**
+ * A tab slides a short way in from its side of the bar. The tab you leave is gone within the first stretch of the
+ * move while the one you open eases up behind it, so the two never sit over each other half faded (the stock shift
+ * fades both evenly, and its midpoint showed two screens at once).
+ */
+const SHIFT: Pick<BottomTabNavigationOptions, 'transitionSpec' | 'sceneStyleInterpolator'> = {
+  transitionSpec: { animation: 'timing', config: { duration: 260, easing: Easing.out(Easing.cubic) } },
+  sceneStyleInterpolator: ({ current }) => ({
+    sceneStyle: {
+      opacity: current.progress.interpolate({ inputRange: [-1, -0.6, 0, 0.6, 1], outputRange: [0, 0, 1, 0, 0] }),
+      transform: [{ translateX: current.progress.interpolate({ inputRange: [-1, 0, 1], outputRange: [-28, 0, 28] }) }],
+    },
+  }),
+};
 
 /**
  * The bar's five routes never change: Today, three slots, More. Each slot is a Stack whose root shows
@@ -29,6 +45,7 @@ export default function TabLayout() {
         sceneStyle: { backgroundColor: bgFor(theme) },
         // a tab slides a short way in from its side of the bar
         animation: level === 'none' ? 'none' : 'shift',
+        ...(level === 'none' ? null : SHIFT),
         // only Today is built with the app; Today prepares the other tabs one by one once the intro has gone and
         // the screen is still, so a first visit never waits and nothing is built out of sight during the intro.
         // Tabs are never frozen: catching up a frozen tab's missed updates is what made a switch stutter.

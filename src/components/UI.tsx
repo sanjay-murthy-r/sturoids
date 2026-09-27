@@ -7,12 +7,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
-  Easing, FadeIn, FadeOut, LinearTransition, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
+  Easing, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming,
 } from 'react-native-reanimated';
+import type { SharedValue } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, SH, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
 import { useStore } from '../store';
-import { Bouncy, Pop, RISE_OUT, useAnimLevel, useEntrance } from './Motion';
+import {
+  Bouncy, CHANGE, EASE_OUT, RISE_OUT, glide, rowIn, rowOut, useAnimLevel, useAppear, useEntrance,
+} from './Motion';
 import { tap, tick } from '../haptics';
 import { stepTab } from '../toolNav';
 import { READ_MAX, WIDE_AT } from '../layout';
@@ -103,7 +106,7 @@ export function NeuHeader({ title, right, onBack, variant = 'page', compact = fa
       ) : null}
       <Text
         numberOfLines={1}
-        style={{ flex: 1, marginLeft: page ? 12 : 0, color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1 }}
+        style={[T.head, { flex: 1, marginLeft: page ? 12 : 0 }]}
       >
         {title}
       </Text>
@@ -232,26 +235,40 @@ export function Chip({
   label: string; active?: boolean; color?: string; onPress?: () => void; onLongPress?: () => void; small?: boolean; icon?: any;
 }) {
   const theme = useTheme();
+  const level = useAnimLevel();
   const c = color || C.accent;
+  // the resting edge and the tint cross over, and so do the two inks, so a choice eases in and out instead of swapping
+  const on = useSharedValue(active ? 1 : 0);
+  React.useEffect(() => {
+    on.value = level === 'none' ? (active ? 1 : 0) : withTiming(active ? 1 : 0, CHANGE);
+  }, [active, level]);
+  const litStyle = useAnimatedStyle(() => ({ opacity: on.value }));
+  const restStyle = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
+  const textStyle = [st.chipText, small && { fontSize: 12 }, active && { fontFamily: F.semi }];
+  const iconSize = small ? 13 : 15;
   return (
     <Bouncy
       onPress={onPress}
       onLongPress={onLongPress}
       scaleTo={0.94}
       radius={999}
-      style={[
-        st.chip,
-        small && { paddingVertical: 4, paddingHorizontal: 10 },
-        active
-          ? { backgroundColor: c + '1F', borderColor: c + '66' }
-          : { borderColor: theme === 'minimal' ? MIN.border : C.outline },
-      ]}
+      style={[st.chip, small && st.chipSmall]}
     >
+      <Animated.View pointerEvents="none" style={[st.chipEdge, { borderColor: theme === 'minimal' ? MIN.border : C.outline }, restStyle]} />
+      <Animated.View pointerEvents="none" style={[st.chipEdge, { backgroundColor: c + '1F', borderColor: c + '66' }, litStyle]} />
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         {icon ? (
-          <Ionicons name={icon} size={small ? 13 : 15} color={active ? c : C.textFaint} style={{ marginRight: 6 }} />
+          <View style={{ marginRight: 6 }}>
+            <Animated.View style={restStyle}><Ionicons name={icon} size={iconSize} color={C.textFaint} /></Animated.View>
+            <Animated.View style={[st.ink, litStyle]}><Ionicons name={icon} size={iconSize} color={c} /></Animated.View>
+          </View>
         ) : null}
-        <Text style={[st.chipText, small && { fontSize: 12 }, active && { color: c, fontFamily: F.semi }]}>{label}</Text>
+        <View>
+          <Animated.Text style={[textStyle, restStyle]}>{label}</Animated.Text>
+          <Animated.Text style={[textStyle, st.ink, { color: c }, litStyle]} importantForAccessibility="no" accessibilityElementsHidden>
+            {label}
+          </Animated.Text>
+        </View>
       </View>
     </Bouncy>
   );
@@ -309,7 +326,14 @@ export function NeuIconBtn({ name, onPress, color, size = 20, dim = 44, active, 
   active?: boolean; style?: ViewStyle; accessibilityLabel?: string;
 }) {
   const theme = useTheme();
+  const level = useAnimLevel();
   const c = color || C.accent;
+  // turning on carves the button in over a moment, and turning off lets it rise back, instead of a one-frame swap
+  const carve = useSharedValue(active ? 1 : 0);
+  React.useEffect(() => {
+    carve.value = level === 'none' ? (active ? 1 : 0) : withTiming(active ? 1 : 0, CHANGE);
+  }, [active, level]);
+  const carveStyle = useAnimatedStyle(() => ({ opacity: carve.value }));
   return (
     <Bouncy
       onPress={onPress}
@@ -325,13 +349,16 @@ export function NeuIconBtn({ name, onPress, color, size = 20, dim = 44, active, 
         style,
       ]}
     >
-      {active && theme !== 'minimal' ? (
-        <View
+      {theme !== 'minimal' && active !== undefined ? (
+        <Animated.View
           pointerEvents="none"
-          style={{
-            position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-            borderRadius: dim / 2, backgroundColor: C.inset, ...neuPressedInner(),
-          }}
+          style={[
+            {
+              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+              borderRadius: dim / 2, backgroundColor: C.inset, ...neuPressedInner(),
+            },
+            carveStyle,
+          ]}
         />
       ) : null}
       <Ionicons name={name} size={size} color={c} />
@@ -339,23 +366,56 @@ export function NeuIconBtn({ name, onPress, color, size = 20, dim = 44, active, 
   );
 }
 
+/**
+ * A tick: ticking fills the ring with its colour, which grows out of the centre and settles; unticking lets the fill
+ * fade back into the ring. It is drawn in its state on its first paint, so a list never pops every check as it arrives.
+ */
 export function CheckCircle({ done, onPress, color = C.green, size = 26, label }: {
   done: boolean; onPress: () => void; color?: string; size?: number;
   /** what is being ticked, for a screen reader */
   label?: string;
 }) {
+  const level = useAnimLevel();
+  const fill = useSharedValue(done ? 1 : 0);
+  const settle = useSharedValue(1);
+  const was = React.useRef(done);
+  React.useEffect(() => {
+    if (was.current === done) return;
+    was.current = done;
+    if (level === 'none') {
+      fill.value = done ? 1 : 0;
+      settle.value = 1;
+      return;
+    }
+    if (done) {
+      fill.value = withTiming(1, { duration: 200, easing: EASE_OUT });
+      // a small settle past full size and back, eased both ways: never a spring's wobble
+      settle.value = level === 'full'
+        ? withSequence(withTiming(1.1, { duration: 140, easing: EASE_OUT }), withTiming(1, { duration: 180, easing: Easing.inOut(Easing.quad) }))
+        : 1;
+    } else {
+      fill.value = withTiming(0, { duration: 150, easing: EASE_OUT });
+      settle.value = 1;
+    }
+  }, [done, level]);
+  const ringStyle = useAnimatedStyle(() => ({ opacity: 1 - fill.value }));
+  const fillStyle = useAnimatedStyle(() => ({
+    opacity: fill.value,
+    transform: [{ scale: (0.6 + 0.4 * fill.value) * settle.value }],
+  }));
   return (
     <Bouncy
       onPress={onPress} scaleTo={0.82} style={{ padding: 2 }}
       accessibilityRole="checkbox" accessibilityState={{ checked: done }} accessibilityLabel={label}
     >
-      <Pop dep={done}>
-        <Ionicons
-          name={done ? 'checkmark-circle' : 'ellipse-outline'}
-          size={size}
-          color={done ? color : C.textFaint}
-        />
-      </Pop>
+      <View>
+        <Animated.View style={ringStyle}>
+          <Ionicons name="ellipse-outline" size={size} color={C.textFaint} />
+        </Animated.View>
+        <Animated.View style={[st.ink, fillStyle]}>
+          <Ionicons name="checkmark-circle" size={size} color={color} />
+        </Animated.View>
+      </View>
     </Bouncy>
   );
 }
@@ -386,6 +446,8 @@ export function Toggle({ value, onChange, color, label }: {
     x.value = level === 'none' ? (value ? 1 : 0) : withSpring(value ? 1 : 0, RISE_OUT);
   }, [value, level]);
   const thumbStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value * KNOB_TRAVEL }] }));
+  // the accent fills the knob as it travels, instead of flipping colour the moment it is tapped
+  const knobFill = useAnimatedStyle(() => ({ opacity: Math.min(1, Math.max(0, x.value)) }));
   return (
     <Pressable
       onPress={() => { tick(); onChange(!value); }} hitSlop={8}
@@ -404,11 +466,13 @@ export function Toggle({ value, onChange, color, label }: {
           <Animated.View
             style={[
               st.thumb,
-              { backgroundColor: value ? c : C.knob },
+              { backgroundColor: C.knob },
               theme === 'minimal' && { boxShadow: undefined },
               thumbStyle,
             ]}
-          />
+          >
+            <Animated.View pointerEvents="none" style={[st.knobFill, { backgroundColor: c }, knobFill]} />
+          </Animated.View>
         </View>
       </View>
     </Pressable>
@@ -464,8 +528,10 @@ export function EmptyState({ icon, title, body, actionLabel, onAction, compact }
   icon: any; title: string; body?: string; actionLabel?: string; onAction?: () => void; compact?: boolean;
 }) {
   const theme = useTheme();
+  // a list that empties while you look at it fades its note in; one that is empty when its screen is built needs no more
+  const appear = useAppear();
   return (
-    <View style={[st.emptyWrap, compact && { marginVertical: 14 }]}>
+    <Animated.View style={[st.emptyWrap, compact && { marginVertical: 14 }, appear]}>
       <View
         style={[
           st.emptyWell,
@@ -479,11 +545,11 @@ export function EmptyState({ icon, title, body, actionLabel, onAction, compact }
       <Text style={st.emptyTitle}>{title}</Text>
       {body ? <Text style={st.emptyBody}>{body}</Text> : null}
       {actionLabel && onAction ? <PillButton small outline label={actionLabel} onPress={onAction} style={{ marginTop: 14 }} /> : null}
-    </View>
+    </Animated.View>
   );
 }
 
-/** A carved hairline track with a sprung accent fill. No glow: one accent, lit by the material. */
+/** A carved hairline track with an eased accent fill. No glow: one accent, lit by the material. */
 export function ProgressBar({ value, color, height = 8 }: { value: number; color?: string; height?: number }) {
   const theme = useTheme();
   const level = useAnimLevel();
@@ -525,7 +591,11 @@ export function Hairline() {
   return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: C.hairline, marginVertical: 2 }} />;
 }
 
-/** Bottom sheet — backdrop fades while the panel springs up from the material. */
+/** a sheet rises on a decelerating ease, quick off the mark and soft to land, and leaves on a short accelerating one */
+const SHEET_OPEN = { duration: 320, easing: EASE_OUT };
+const SHEET_CLOSE = { duration: 210, easing: Easing.in(Easing.quad) };
+
+/** Bottom sheet: the backdrop fades while the panel rises from below the screen's edge, its whole height. */
 export function Sheet({
   visible, onClose, onClosed, title, children,
 }: {
@@ -543,35 +613,81 @@ export function Sheet({
   // off the screen — a flat 540 pushed the primary button below a short display
   const scrollMax = Math.min(540, Math.max(220, winH * 0.72 - 120));
   const [render, setRender] = React.useState(visible);
-  const prog = useSharedValue(visible ? 1 : 0);
+  // a sheet built already open still rises into view, so it starts below the edge unless motion is off
+  const prog = useSharedValue(visible && level === 'none' ? 1 : 0);
   const drag = useSharedValue(0);
+  // the panel's own height, so it can start wholly below the edge; a screen's height until it has measured, so its
+  // first frame is always out of sight
+  const panelH = useSharedValue(winH);
+  // set while a fresh panel waits for its first layout: the rise starts once its height is known
+  const waiting = React.useRef(false);
+  // set while the panel is on its way out, so opening it again turns it round instead of starting over
+  const leaving = React.useRef(false);
+  // whether the modal is (or is about to be) up: read in place of `render`, which can lag a quick open and close
+  const mounted = React.useRef(visible);
   const closedRef = React.useRef(onClosed);
   closedRef.current = onClosed;
   const finishClose = React.useCallback(() => {
+    leaving.current = false;
+    mounted.current = false;
     setRender(false);
     closedRef.current?.();
+  }, []);
+  const rise = React.useCallback(() => {
+    waiting.current = false;
+    prog.value = withTiming(1, SHEET_OPEN);
   }, []);
   React.useEffect(() => {
     if (visible) {
       drag.value = 0;
-      setRender(true);
       tap();
-      if (level === 'none') { prog.value = 1; }
-      else { prog.value = 0; prog.value = withSpring(1, RISE_OUT); }
-    } else if (render) {
+      if (level === 'none') {
+        leaving.current = false;
+        mounted.current = true;
+        prog.value = 1;
+        setRender(true);
+        return undefined;
+      }
+      if (leaving.current) {
+        // opened again while it was still leaving: it turns round from where it is
+        leaving.current = false;
+        rise();
+        return undefined;
+      }
+      prog.value = 0;
+      panelH.value = winH;
+      waiting.current = true;
+      mounted.current = true;
+      setRender(true);
+      // a panel that never reports its layout (or reported it before this ran) still rises
+      const fallback = setTimeout(() => { if (waiting.current) rise(); }, 120);
+      return () => clearTimeout(fallback);
+    }
+    // closed before it had risen: it must not rise once its layout arrives
+    waiting.current = false;
+    if (mounted.current) {
       if (level === 'none') { prog.value = 0; finishClose(); }
       else {
-        prog.value = withTiming(0, { duration: 200 }, (fin) => {
+        leaving.current = true;
+        prog.value = withTiming(0, SHEET_CLOSE, (fin) => {
           if (fin) runOnJS(finishClose)();
         });
       }
     }
+    return undefined;
   }, [visible]);
-  const backdropStyle = useAnimatedStyle(() => ({ opacity: Math.min(1, prog.value) }));
+  const onPanelLayout = React.useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
+    panelH.value = e.nativeEvent.layout.height;
+    if (waiting.current) rise();
+  }, []);
+  // the backdrop comes and goes with the panel, and thins a little as a pull takes the panel down
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity: Math.min(1, prog.value) * (1 - 0.5 * Math.min(1, drag.value / Math.max(1, panelH.value))),
+  }));
   // NOTE: the panel keeps full opacity — only the slide is animated. (An
   // animated panel opacity read as a "transparent popup" bug on device.)
   const panelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: (1 - prog.value) * 64 + drag.value }],
+    transform: [{ translateY: (1 - prog.value) * (panelH.value + 24) + drag.value }],
   }));
   // a pull on the handle or the title follows the finger; far enough, or flicked, it closes the sheet
   const closeRef = React.useRef(onClose);
@@ -582,7 +698,8 @@ export function Sheet({
     .onUpdate((e) => { drag.value = Math.max(0, e.translationY); })
     .onEnd((e) => {
       if (e.translationY > 90 || e.velocityY > 900) runOnJS(requestClose)();
-      else drag.value = withSpring(0, RISE_OUT);
+      // an ease back, not a spring: a spring's overshoot would lift the panel off the screen's edge
+      else drag.value = withTiming(0, { duration: 220, easing: EASE_OUT });
     }), [requestClose]);
   if (!render) return null;
   // statusBarTranslucent: app.json runs a translucent status bar, so the modal's
@@ -596,7 +713,10 @@ export function Sheet({
         <Pressable style={{ flex: 1 }} onPress={onClose} />
       </Animated.View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <Animated.View style={[st.sheet, narrowPanel, theme === 'minimal' && { backgroundColor: MIN.card, boxShadow: SH.sheetPanelMin }, panelStyle]}>
+        <Animated.View
+          onLayout={onPanelLayout}
+          style={[st.sheet, narrowPanel, theme === 'minimal' && { backgroundColor: MIN.card, boxShadow: SH.sheetPanelMin }, panelStyle]}
+        >
           {/* minimal has no shadow to define the handle, so the FILL has to
               carry it — C.inset on MIN.card is all but invisible */}
           <GestureDetector gesture={pull}>
@@ -632,16 +752,29 @@ export function DotMenu({
   return (
     <Sheet visible={visible} onClose={onClose} onClosed={() => { const run = pending.current; pending.current = null; run?.(); }}>
       {items.map((it, i) => (
-        <Bouncy
-          key={i}
-          onPress={() => { pending.current = it.onPress; onClose(); }}
-          style={st.menuRow}
-        >
-          <Ionicons name={it.icon} size={19} color={it.color || C.textDim} />
-          <Text style={[T.body, { marginLeft: 14, color: it.color || C.text }]}>{it.label}</Text>
-        </Bouncy>
+        <MenuItem key={i} index={i} item={it} onPick={() => { pending.current = it.onPress; onClose(); }} />
       ))}
     </Sheet>
+  );
+}
+
+/** One action of a menu: the actions come up in turn behind the rising sheet, a short way and quickly. */
+function MenuItem({ index, item, onPick }: {
+  index: number; item: { label: string; icon: any; color?: string }; onPick: () => void;
+}) {
+  const level = useAnimLevel();
+  const shown = useSharedValue(level === 'full' ? 0 : 1);
+  React.useEffect(() => {
+    if (level === 'full') shown.value = withDelay(70 + Math.min(index, 6) * 35, withTiming(1, { duration: 240, easing: EASE_OUT }));
+  }, []);
+  const aStyle = useAnimatedStyle(() => ({ opacity: shown.value, transform: [{ translateY: 6 * (1 - shown.value) }] }));
+  return (
+    <Animated.View style={aStyle}>
+      <Bouncy onPress={onPick} style={st.menuRow}>
+        <Ionicons name={item.icon} size={19} color={item.color || C.textDim} />
+        <Text style={[T.body, { marginLeft: 14, color: item.color || C.text }]}>{item.label}</Text>
+      </Bouncy>
+    </Animated.View>
   );
 }
 
@@ -668,7 +801,9 @@ export function ListCard({ children, style }: { children: React.ReactNode; style
   const built = React.useRef(false);
   React.useEffect(() => { built.current = true; }, []);
   // an eased glide, not a spring: nested springs overshoot against each other and read as a wobble
-  const layout = level === 'full' ? LinearTransition.duration(260).easing(Easing.out(Easing.cubic)) : undefined;
+  const layout = glide(level);
+  const enter = built.current ? rowIn(level) : undefined;
+  const exit = rowOut(level);
   return (
     <Animated.View
       layout={layout}
@@ -683,8 +818,8 @@ export function ListCard({ children, style }: { children: React.ReactNode; style
       {rows.map((row, i) => (
         <Animated.View
           key={(row as React.ReactElement).key ?? i}
-          entering={level === 'none' || !built.current ? undefined : FadeIn.duration(220)}
-          exiting={level === 'none' ? undefined : FadeOut.duration(150)}
+          entering={enter}
+          exiting={exit}
           layout={layout}
         >
           {i > 0 ? <View style={lst.hair} /> : null}
@@ -749,23 +884,45 @@ export function ListRow({ children, onPress, onLongPress, style }: {
   );
 }
 
-/** Text whose strike-through draws across it, line by line, when `done` turns on, and lifts away when it turns off. */
+/**
+ * Text whose strike-through draws across it, line after line like one pen stroke, as the words fade to the muted
+ * ink, when `done` turns on; turning it off lifts the line and the ink away together. Drawn in its state on its
+ * first paint.
+ */
 export function StrikeText({ done, style, wrapStyle, numberOfLines, children }: {
   done: boolean; style?: any; wrapStyle?: ViewStyle; numberOfLines?: number; children: React.ReactNode;
 }) {
   const level = useAnimLevel();
   const [lines, setLines] = React.useState<{ x: number; y: number; width: number; height: number }[]>([]);
-  const p = useSharedValue(done ? 1 : 0);
+  const count = Math.max(1, lines.length);
+  // how far the pen has travelled, in lines: line i is drawn over [i, i + 1]
+  const draw = useSharedValue(done ? count : 0);
+  // the line's ink and the words' muted colour
+  const ink = useSharedValue(done ? 1 : 0);
+  const was = React.useRef(done);
   React.useEffect(() => {
-    p.value = level === 'none'
-      ? (done ? 1 : 0)
-      : withTiming(done ? 1 : 0, { duration: done ? 340 : 180, easing: Easing.out(Easing.cubic) });
-  }, [done, level]);
-  const drawn = useAnimatedStyle(() => ({ opacity: p.value > 0.001 ? 1 : 0, transform: [{ scaleX: p.value }] }));
+    const changed = was.current !== done;
+    was.current = done;
+    if (level === 'none' || !changed) {
+      // no motion, or only the wrapping changed: the finished state, at once
+      draw.value = done ? count : 0;
+      ink.value = done ? 1 : 0;
+      return;
+    }
+    if (done) {
+      draw.value = 0;
+      draw.value = withTiming(count, { duration: Math.min(560, 300 + 110 * (count - 1)), easing: EASE_OUT });
+      ink.value = withTiming(1, { duration: 300, easing: EASE_OUT });
+    } else {
+      ink.value = withTiming(0, { duration: 180, easing: EASE_OUT });
+    }
+  }, [done, level, count]);
+  const plainStyle = useAnimatedStyle(() => ({ opacity: 1 - ink.value }));
+  const mutedStyle = useAnimatedStyle(() => ({ opacity: ink.value }));
   return (
     <View style={wrapStyle}>
-      <Text
-        style={[style, done && { color: C.textFaint }]}
+      <Animated.Text
+        style={[style, plainStyle]}
         numberOfLines={numberOfLines}
         onTextLayout={(e) => {
           const next = e.nativeEvent.lines.map((l) => ({ x: l.x, y: l.y, width: l.width, height: l.height }));
@@ -773,16 +930,31 @@ export function StrikeText({ done, style, wrapStyle, numberOfLines, children }: 
         }}
       >
         {children}
-      </Text>
+      </Animated.Text>
+      {/* the same words in the muted ink, laid exactly over the first, crossing over as the task is ticked */}
+      <Animated.Text
+        style={[style, lst.overText, { color: C.textFaint }, mutedStyle]}
+        numberOfLines={numberOfLines}
+        importantForAccessibility="no"
+        accessibilityElementsHidden
+      >
+        {children}
+      </Animated.Text>
       {lines.map((l, i) => (
-        <Animated.View
-          key={i}
-          pointerEvents="none"
-          style={[lst.strike, { left: l.x, top: l.y + l.height * 0.54, width: l.width }, drawn]}
-        />
+        <StrikeLine key={i} index={i} draw={draw} ink={ink} left={l.x} top={l.y + l.height * 0.54} width={l.width} />
       ))}
     </View>
   );
+}
+
+function StrikeLine({ index, draw, ink, left, top, width }: {
+  index: number; draw: SharedValue<number>; ink: SharedValue<number>; left: number; top: number; width: number;
+}) {
+  const aStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, draw.value - index));
+    return { opacity: p > 0.001 ? ink.value : 0, transform: [{ scaleX: p }] };
+  });
+  return <Animated.View pointerEvents="none" style={[lst.strike, { left, top, width }, aStyle]} />;
 }
 
 const lst = StyleSheet.create({
@@ -792,6 +964,7 @@ const lst = StyleSheet.create({
   surface: { position: 'absolute', left: S.pad, right: S.pad },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 12, borderRadius: 14 },
   strike: { position: 'absolute', height: 1.5, borderRadius: 1, backgroundColor: C.textFaint, transformOrigin: 'left' },
+  overText: { position: 'absolute', top: 0, left: 0, right: 0 },
 });
 
 const st = StyleSheet.create({
@@ -808,12 +981,18 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginTop: S.section, marginBottom: 14, paddingHorizontal: 2,
   },
+  // the chip's hairline edge is drawn by its two layers (see chipEdge), so the padding takes the edge's point
   chip: {
-    paddingVertical: 7, paddingHorizontal: 13, borderRadius: 999, borderWidth: 1,
+    paddingVertical: 8, paddingHorizontal: 14, borderRadius: 999,
     marginRight: 10, marginBottom: 10,
     overflow: 'hidden',
   },
+  chipSmall: { paddingVertical: 5, paddingHorizontal: 11 },
+  /** the resting outline, or the chosen tint with its coloured edge: two layers that cross over */
+  chipEdge: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999, borderWidth: 1 },
   chipText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: 0.1 },
+  /** a second ink laid exactly over the first, for colours that cross over */
+  ink: { position: 'absolute', top: 0, left: 0, right: 0 },
   pill: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     paddingVertical: 13, paddingHorizontal: 20, borderRadius: 999,
@@ -834,6 +1013,7 @@ const st = StyleSheet.create({
     width: KNOB, height: KNOB, borderRadius: KNOB / 2, marginLeft: 3,
     ...neuRaised('low'),
   },
+  knobFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: KNOB / 2 },
   fieldLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2, marginLeft: 2, marginBottom: 2 },
   fieldInner: {
     color: C.text, fontFamily: F.reg, paddingHorizontal: 2, paddingVertical: 10, fontSize: 15,
@@ -862,7 +1042,7 @@ const st = StyleSheet.create({
     backgroundColor: C.inset, marginBottom: 18,
     ...neuInset('hairline'),
   },
-  sheetTitle: { color: C.text, fontFamily: F.bold, fontSize: 22, letterSpacing: -0.3, marginBottom: 18 },
+  sheetTitle: { color: C.text, fontFamily: F.head, fontSize: 22, lineHeight: 28, letterSpacing: -0.3, marginBottom: 18 },
   menuRow: {
     flexDirection: 'row', alignItems: 'center', paddingVertical: 15, paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.hairline,

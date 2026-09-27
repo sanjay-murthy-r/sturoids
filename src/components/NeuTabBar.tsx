@@ -142,9 +142,15 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
   const focusIndex = routeNames.indexOf(focusedName as string);
   const [slotW, setSlotW] = React.useState(0);
   const dotAt = useSharedValue(Math.max(0, focusIndex));
+  const lastIndex = React.useRef(focusIndex);
   React.useEffect(() => {
     if (focusIndex < 0) return;
-    dotAt.value = level === 'none' || (!vertical && slotW === 0) ? focusIndex : withTiming(focusIndex, SWITCH);
+    // a longer way takes a little longer, so a hop to the far end glides at the same calm pace as a step
+    const hops = Math.abs(focusIndex - (lastIndex.current < 0 ? focusIndex : lastIndex.current));
+    lastIndex.current = focusIndex;
+    dotAt.value = level === 'none' || (!vertical && slotW === 0)
+      ? focusIndex
+      : withTiming(focusIndex, { duration: Math.min(320, 170 + 40 * hops), easing: SWITCH.easing });
   }, [focusIndex, level]);
   const dotStyle = useAnimatedStyle(() => (vertical
     ? { transform: [{ translateY: dotAt.value * RAIL_PITCH }] }

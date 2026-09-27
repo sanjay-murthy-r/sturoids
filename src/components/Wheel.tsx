@@ -30,8 +30,9 @@ export interface WheelLabel {
  * A horizontal wheel for a day or a length. Its position is continuous: while you drag, every label keeps its place in
  * one smooth size gradient, large and bright at the centre, smaller and fainter outward. A release, or a tap on a
  * label beside the centre, glides to a value on a critically damped spring, with one light tick per value passed.
+ * Memoised: a screen that re-renders around it (a typed subject) leaves the wheel alone when its props hold still.
  */
-export function Wheel({
+export const Wheel = React.memo(function Wheel({
   count, index, onChange, label, spacing, minScale, loop = false, colorOn, colorOff, height, textStyle,
   accessibilityLabel, onPressCenter,
 }: {
@@ -183,7 +184,7 @@ export function Wheel({
       </View>
     </GestureDetector>
   );
-}
+});
 
 function WheelItem({ k, pos, lab, spacing, minScale, colorOn, colorOff, textStyle }: {
   k: number; pos: SharedValue<number>; lab: WheelLabel; spacing: number; minScale: number;

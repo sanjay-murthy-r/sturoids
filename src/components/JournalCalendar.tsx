@@ -1,9 +1,9 @@
 import React from 'react';
 import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { C, F, T } from '../theme';
 import { NeuIconBtn, useTheme } from './UI';
-import { Bouncy, useAnimLevel } from './Motion';
+import { Bouncy, EASE_OUT, shiftIn, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
 import { keyToDate } from '../journal';
 import { todayKey } from '../utils';
@@ -28,32 +28,34 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
   React.useEffect(() => {
     if (!value) return;
     const d = keyToDate(value);
-    setYm({ y: d.getFullYear(), m: d.getMonth() });
+    dir.current = 0;
+    setYm((cur) => (cur.y === d.getFullYear() && cur.m === d.getMonth() ? cur : { y: d.getFullYear(), m: d.getMonth() }));
   }, [value]);
 
-  const slide = useSharedValue(0);
-  const fade = useSharedValue(1);
-  const monthStyle = useAnimatedStyle(() => ({ opacity: fade.value, transform: [{ translateX: slide.value * 24 }] }));
+  // the side the new month was reached from; 0 when it was set from outside (it is simply there)
+  const dir = React.useRef<0 | 1 | -1>(0);
 
   const max = maxKey ? keyToDate(maxKey) : null;
   const min = minKey ? keyToDate(minKey) : null;
   const atLatestMonth = !!max && (ym.y > max.getFullYear() || (ym.y === max.getFullYear() && ym.m >= max.getMonth()));
   const atEarliestMonth = !!min && (ym.y < min.getFullYear() || (ym.y === min.getFullYear() && ym.m <= min.getMonth()));
-  const shift = (dir: 1 | -1) => {
-    if (dir === 1 && atLatestMonth) return;
-    if (dir === -1 && atEarliestMonth) return;
+  const shift = (step: 1 | -1) => {
+    if (step === 1 && atLatestMonth) return;
+    if (step === -1 && atEarliestMonth) return;
     tick();
+    dir.current = step;
     setYm(({ y, m }) => {
-      const d = new Date(y, m + dir, 1);
+      const d = new Date(y, m + step, 1);
       return { y: d.getFullYear(), m: d.getMonth() };
     });
-    if (level === 'none') return;
-    const enter = { duration: 280, easing: Easing.out(Easing.cubic) };
-    slide.value = withSequence(withTiming(dir, { duration: 0 }), withTiming(0, enter));
-    fade.value = withSequence(withTiming(0.25, { duration: 0 }), withTiming(1, enter));
   };
+  // the month is keyed, so its entrance runs as the new days mount: setting shared values beforehand slid the old
+  // month for a frame before the new one had rendered
+  const monthIn = level === 'none' || !dir.current ? undefined
+    : level === 'full' ? shiftIn(dir.current * 24) : FadeIn.duration(180).easing(EASE_OUT);
 
   const first = new Date(ym.y, ym.m, 1);
+  const monthKey = ym.y * 12 + ym.m;
   const lead = (first.getDay() + 6) % 7; // Monday first
   const days = new Date(ym.y, ym.m + 1, 0).getDate();
   const today = todayKey();
@@ -70,7 +72,7 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
           onPress={() => shift(-1)}
           accessibilityLabel="Previous month"
         />
-        <Animated.Text style={[T.title, { flex: 1, textAlign: 'center' }, monthStyle]}>
+        <Animated.Text key={monthKey} entering={monthIn} style={[T.title, { flex: 1, textAlign: 'center' }]}>
           {first.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
         </Animated.Text>
         <NeuIconBtn
@@ -90,7 +92,7 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
         ))}
       </View>
 
-      <Animated.View style={[st.row, { flexWrap: 'wrap' }, monthStyle]}>
+      <Animated.View key={monthKey} entering={monthIn} style={[st.row, { flexWrap: 'wrap' }]}>
         {cells.map((day, i) => {
           if (day == null) return <View key={i} style={st.cellBox} />;
           const key = todayKey(new Date(ym.y, ym.m, day));

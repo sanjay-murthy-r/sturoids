@@ -16,6 +16,7 @@ npm run lint:type
 npm run test:store
 npm run test:backup
 npm run test:scores
+npm run test:analytics
 node scripts/build-signature.js --check
 node scripts/build-handwriting.js --check
 ```
@@ -25,6 +26,8 @@ node scripts/build-handwriting.js --check
 `test:store` boots the real store in Node over an in-memory storage and checks a fresh install, the upgrade from a v4 blob, malformed data, backup round trips, and every load-failure path (an unreadable blob, an older copy already kept, storage that answers late).
 
 `test:scores` checks the exam tree: sums, weighted averages and nested results, partial marking, an exam's own marks winning over its parts, negative marks, deltas and what is coming up, duplicating a mock with its number moved on, and repairing orphans and cycles (twice, with no change the second time).
+
+`test:analytics` checks the Analytics maths and categories: scopes and ranges, mean, median and spread, the fitted trend and its projection (never outside 0 to 100), streaks, targets met, rank and percentile, subjects matched by name across exams with gaps where one was not sat, where marks are lost, the category overview, and a category finding learnings through their exam.
 
 `test:backup` runs the backup writer and reader in Node over a real folder standing in for the phone: base64 at every awkward length, data read back exactly, every attachment restored byte for byte (including files read in short pieces), and a backup cut short keeping what came before the cut.
 
@@ -40,15 +43,17 @@ node scripts/build-handwriting.js --check
 
 **Locks.** One app PIN of four digits opens everything that locks: the journal, the Notes tool as a whole, and single notes, which lock from inside the note. Each locked note opens on its own, so giving the PIN for one leaves the others locked; the PIN given at the Notes tool's own lock opens them all. The journal and Notes can also open with the phone's own screen lock, each only if that is turned on in Settings, under Privacy; a single locked note always asks for the PIN. There is no lock on the whole app. The PIN is kept only as a salted SHA-256 in the keystore, with five tries and then a cooldown that survives restarts, so a forgotten PIN cannot be brought back; a PIN or passcode from before four digits works once more, then a new one is chosen. Locks hide content; they do not encrypt it. While locked content is open, Android keeps it out of screenshots and the recent apps preview, and making a backup while anything is locked asks for the PIN first.
 
-**Deep Work.** A running session survives the app being closed. Its length is a wheel in five minute steps, with the number itself open for typing an exact one. Once started, the session is one raised plate (the Slab, picked in the Focus Lab): the subject, large minutes with small rolling seconds, a carved progress rule with the start and end times, and End, Pause and Ambient in the plate, with five more minutes and the current task below it. A countdown shows its full length at the start and posts an alert when it ends with the phone away. Ambient mode (the Monolith) is a dimmed, always-on clock with the minutes as large as the screen allows, sized from its shorter side; it drifts a little each minute, and holding anywhere leaves it. Seconds and the time of day on it are settings.
+**Deep Work.** A running session survives the app being closed. Its length is a wheel in five minute steps, with the number itself open for typing an exact one. Once started, the session is one raised plate (the Slab, picked in the Focus Lab): the subject, large minutes with small rolling seconds, a carved progress rule with the start and end times, and End, Pause and Ambient in the plate, with five more minutes and the current task below it. A countdown shows its full length at the start and posts an alert when it ends with the phone away. Ambient mode (the Monolith) is a true-black, dimmed, always-on clock with the minutes as large as the screen allows, sized from its shorter side; it drifts a little each minute, and holding anywhere leaves it. Seconds and the time of day on it are settings.
 
-**Scores.** Exams nest as deep as they need: groups hold groups and exams, and an exam holds its subjects (none is fine, when one total is the whole story). An exam's own marks win; otherwise its subjects add up, or average by weight. Negative marks, a target, rank, percentile and a grade are all optional. A group shows its average, best and latest with the change from the one before, and what is coming up; "Duplicate without marks" repeats a mock's structure with its number moved on. The tree is repaired on every load (`src/scores.ts`), so a damaged backup can never stop the app opening.
+**Scores.** Exams nest as deep as they need: groups hold groups and exams, and an exam holds its subjects (none is fine, when one total is the whole story). An exam's own marks win; otherwise its subjects add up, or average by weight (`combineParts`, the one place they add up). Negative marks, a target, rank, percentile and a grade are all optional. Adding or editing an exam opens a full-screen form (`app/exam.tsx`): name, category, date, every subject with its score and total, the total adding up as marks are typed, then tags and the details a mock report carries. A new exam starts from the latest exam in its category, its subjects and totals already in place with the marks blank, and offers the series' next title. A group shows what is coming up; "Duplicate without marks" repeats a mock's structure with its number moved on. The tree is repaired on every load (`src/scores.ts`), so a damaged backup can never stop the app opening.
 
-**Tags and learnings.** Exams, subjects and learnings share one set of tags, each with its own colour, managed from the notebook. An exam keeps what it taught you: as many learnings as you like, each tagged, and all of them gather in the Learnings notebook. Picking tags there keeps a learning that carries any of them; "All tags" keeps only the ones carrying every tag picked, whatever else they carry too. A search box looks through what each learning says and the exam it came from. Deleting an exam takes its learnings with it, and Undo brings them both back.
+**Categories and Analytics.** A category (JEE Main mocks, unit tests) is a tag marked as a category: an exam sits in one at most and carries it as a tag, and a group's exams can be put in one at once, with Undo. Analytics (`src/analytics.ts`, drawn by `src/components/ScoreAnalytics.tsx`) compares the exams inside a category, or all of them: average and median, the trend with its moving average and target line, spread, streaks, targets met, a projection for the next one, the spread of results, rank and percentile, and subject by subject: strongest and weakest, improving and slipping, where the marks are lost, a heatmap of recent exams and each subject's line. Subjects are matched across exams by name.
+
+**Tags and learnings.** Exams, subjects and learnings share one set of tags, each with its own colour, managed with the categories from the notebook or Analytics. A learning also counts as carrying its exam's category, so a category chip in the notebook finds every learning from the exams inside it. An exam keeps what it taught you: as many learnings as you like, each tagged, and all of them gather in the Learnings notebook. Picking tags there keeps a learning that carries any of them; "All tags" keeps only the ones carrying every tag picked, whatever else they carry too. A search box looks through what each learning says and the exam it came from. Deleting an exam takes its learnings with it, and Undo brings them both back.
 
 **Undo.** Nothing is lost to one tap: deleting an exam, a learning or a habit, dropping yesterday's leftovers (several in a row share one Undo), copying a day and applying a week template all offer Undo, and an undone item goes back beside its old neighbours even if the list changed meanwhile. Deleting a tag in use, a note folder with notes or a template asks first.
 
-**Intro.** Four unhurried beats, each finishing before the next: the signature is written from a real pen recording, and today's date after it in the owner's own handwritten digits, a little quicker (or, when the Handwriting Lab places the date before the outro, cut into the carve after the shine); both shift into place as the logo rises; the wordmark and caption arrive while one slow light crosses the plate and the signature together; then the scene settles back into the material and Home rises in its place, the tab bar last. Settings, Start screen offers Logo first instead: the plate and the words arrive, then the signature is written in the place it keeps below them. The date is the phone's own, read again just before it is written, and the app is built in the still moment after it, so building never shows as a stutter.
+**Intro.** Four unhurried beats, each finishing before the next: the signature is written from a real pen recording, and today's date after it in the owner's own handwritten digits, a little quicker (or, when the Handwriting Lab places the date before the outro, cut into the carve after the shine); both shift into place as the logo rises; the wordmark and caption arrive while one slow light crosses the plate and the signature together; then the scene settles back into the material and Home rises in its place, the tab bar last. Settings, "Disable the big signature" plays it logo first instead: the plate and the words arrive, then the signature is written in the place it keeps below them, the pen 1.55 times as fast. The date is the phone's own, read again just before it is written, and the app is built in the still moment after it, so building never shows as a stutter.
 
 **Planner.** The day is a wheel: drag it and every day keeps its place in one size gradient, large and bright at the centre and smaller outward, or tap a day beside it. There is one tick per day passed, the blocks arrive from the side the new day came from, and away from today a Today link comes back.
 
@@ -67,7 +72,7 @@ Everything visual comes from `src/theme.ts`.
 - **Depth where it counts.** Cards, buttons, keys, toggles, fields and segmented controls are neumorphic. The tab bar and rows of small choices are flat: chips, colour swatches, calendar days, moods, and the planner's day wheel.
 - **One card per list.** A list is one raised card with hairlines between its rows. A long list that scrolls a row at a time draws the same card in slices, each clipped where it meets the next, so the list still reads as one object with no seams. Rows fold in and out, and a ticked task has its strike-through drawn across it.
 - **Fields are lines.** A text field is a label above a line, and an accent line grows across that line while you type.
-- **Quick access is a bento.** A shortcut with something useful to say takes a wide tile and says it, the rest stay small, and no row of four ends with a hole. The tiles are neutral, with the colour left in the icon.
+- **Quick access is a bento.** A shortcut with something useful to say takes a wide tile and says it, the rest stay small, and no row of four ends with a hole. The tiles are neutral, with the colour left in the icon. Besides the tools, a shortcut can be any website (typed as `khanacademy.org` or a full link), opened in the default browser.
 
 ## Re-recording the signature
 
@@ -102,11 +107,12 @@ src/lock.ts           lock sessions, the app PIN, the optional screen lock
 src/intro.ts          the intro's phase, which the app's own entrance follows
 src/handDate.ts       generated: the handwritten digits and where the date sits
 src/deepWork.ts       session timing shared by Focus and ambient
-src/scores.ts         the exam tree: results, summaries, repair
+src/scores.ts         the exam tree: results, summaries, categories, repair
+src/analytics.ts      everything the Scores Analytics page shows
+src/aiLogos.ts        brand marks for the known AI tools (Simple Icons, CC0)
 src/layout.ts         window widths, columns and the rail
 src/theme.ts          palette, NEU shadows, type scale
 src/components/       UI kit, tab bar, sheets, toasts, lock gate, ambient view, intro
-scripts/              signature and handwriting builders, type lint, store, backup and scores tests
-modules/app-list/     native installed-apps module
+scripts/              signature and handwriting builders, type lint, store, backup, scores and analytics tests
 supabase/setup.sql    the cloud backup schema, for the project's SQL editor
 ```

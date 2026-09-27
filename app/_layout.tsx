@@ -6,13 +6,17 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
-// each face from its own file: the package's index would carry all eighteen Rubik files into the app
+// each face from its own file: a package's index would carry every one of its files into the app. Geist speaks,
+// Newsreader heads, Rubik Light counts, and the intro keeps Rubik (the Font Lab v2 pick)
 import { useFonts } from '@expo-google-fonts/rubik/useFonts';
 import { Rubik_300Light } from '@expo-google-fonts/rubik/300Light';
-import { Rubik_400Regular } from '@expo-google-fonts/rubik/400Regular';
 import { Rubik_500Medium } from '@expo-google-fonts/rubik/500Medium';
 import { Rubik_600SemiBold } from '@expo-google-fonts/rubik/600SemiBold';
-import { Rubik_700Bold } from '@expo-google-fonts/rubik/700Bold';
+import { Geist_400Regular } from '@expo-google-fonts/geist/400Regular';
+import { Geist_500Medium } from '@expo-google-fonts/geist/500Medium';
+import { Geist_600SemiBold } from '@expo-google-fonts/geist/600SemiBold';
+import { Geist_700Bold } from '@expo-google-fonts/geist/700Bold';
+import { Newsreader_500Medium } from '@expo-google-fonts/newsreader/500Medium';
 import { bgFor } from '../src/theme';
 import { useStore, subscribeLoadNotices } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
@@ -20,6 +24,7 @@ import { setIntroPhase } from '../src/intro';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ToastHost } from '../src/components/Toast';
+import { useAnimLevel } from '../src/components/Motion';
 
 // the native splash stays up until the intro (or the app) has painted its first
 // frame — no bare-material gap between the splash icon and the first real frame
@@ -39,13 +44,16 @@ SplashScreen.setOptions({ duration: 180, fade: true });
 export default function RootLayout() {
   const hydrated = useHydrated();
   const theme = useStore((s) => s.settings.theme);
+  const level = useAnimLevel();
   const bg = bgFor(theme);
   const [revealed, setRevealed] = useState(false);
   const [introDone, setIntroDone] = useState(false);
   // the intro renders only these two faces, so only they gate its first frame. A face that fails
   // to load falls back to the system font instead of holding the app on its splash forever.
   const [introLoaded, introError] = useFonts({ Rubik_500Medium, Rubik_600SemiBold });
-  const [appLoaded, appError] = useFonts({ Rubik_300Light, Rubik_400Regular, Rubik_700Bold });
+  const [appLoaded, appError] = useFonts({
+    Rubik_300Light, Geist_400Regular, Geist_500Medium, Geist_600SemiBold, Geist_700Bold, Newsreader_500Medium,
+  });
   const introFonts = introLoaded || !!introError;
   const appFonts = appLoaded || !!appError;
   const splashHidden = useRef(false);
@@ -120,7 +128,8 @@ export default function RootLayout() {
             // explicitly inside each screen, consistent everywhere
             headerShown: false,
             contentStyle: { backgroundColor: bg },
-            animation: 'fade_from_bottom',
+            // with motion off a page simply appears, like everything else
+            animation: level === 'none' ? 'none' : 'fade_from_bottom',
             animationDuration: 220,
           }}
         />

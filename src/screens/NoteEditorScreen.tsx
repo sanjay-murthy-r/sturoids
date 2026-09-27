@@ -1,11 +1,11 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TextInput, Alert, Share, Image, Keyboard, useWindowDimensions,
+  View, Text, ScrollView, StyleSheet, TextInput, Alert, Share, Keyboard, AppState, useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
-  useAnimatedStyle, useSharedValue, withRepeat, withSpring, withTiming, Easing, cancelAnimation,
+  useAnimatedStyle, useSharedValue, withRepeat, withSpring, withTiming, Easing, cancelAnimation, FadeIn, FadeOut,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as CachedImage } from 'expo-image';
@@ -15,19 +15,29 @@ import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { C, F, MIN, S, T, neuInset, neuPressedInner, neuRaised, NEU } from '../theme';
 import { columnWidth } from '../layout';
-import { useStore, Attachment } from '../store';
+import { useStore, Attachment, Note, flushSaves } from '../store';
 import { todayKey, uid } from '../utils';
 import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuHeader, NeuIconBtn, PillButton, DotMenu, useTheme } from '../components/UI';
 import { toast } from '../components/Toast';
 import { NoteGate, PinSheet, ToolGate } from '../components/LockGate';
 import { markOpen, noteScope, pinStatus } from '../lock';
-import { Bouncy } from '../components/Motion';
+import { Bouncy, EASE_OUT, glide, rowIn, rowOut, useAnimLevel, useBuilt } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ATT_DIR, deleteAttachmentFiles } from '../attachments';
 
 const LINE_H = 24;
 const FREE_LINES = 9; // keep ~8-10 lines of breathing room while dictating
+/**
+ * The title and the words live in the editor while they are typed, and reach the store after this pause. A keystroke
+ * used to write the store, which re-rendered every screen watching the notes (the list under this page among them).
+ */
+const COMMIT_PAUSE_MS = 300;
+
+const countWords = (text: string) => {
+  const t = text.trim();
+  return t ? t.split(/\s+/).length : 0;
+};
 
 /**
  * Copies a picked file into the app's own attachments folder, where Android never clears it. When the copy fails (a
@@ -46,27 +56,41 @@ async function persistFile(uri: string, name: string): Promise<{ uri: string; ke
 }
 const NOT_KEPT = 'Attached, but the phone is too full to keep a copy. Free some space and attach it again.';
 
-/** Raised mic button — carves in while listening and breathes a pulse ring. */
+/**
+ * Raised mic button — carves in while listening and breathes a pulse ring. With only some motion the ring holds still,
+ * and with motion off nothing moves.
+ */
 function MicButton({ listening, onPress }: { listening: boolean; onPress: () => void }) {
   const theme = useTheme();
+  const level = useAnimLevel();
   const scale = useSharedValue(1);
   const pulse = useSharedValue(0);
+  const on = useSharedValue(listening ? 1 : 0);
 
   React.useEffect(() => {
+    cancelAnimation(pulse);
+    if (level === 'none') {
+      scale.value = 1;
+      pulse.value = 0;
+      on.value = listening ? 1 : 0;
+      return;
+    }
+    on.value = withTiming(listening ? 1 : 0, { duration: 160, easing: EASE_OUT });
     if (listening) {
       scale.value = withSpring(1.06, { damping: 14, stiffness: 220 });
       pulse.value = 0;
-      pulse.value = withRepeat(withTiming(1, { duration: 1100, easing: Easing.out(Easing.quad) }), -1, false);
+      if (level === 'full') {
+        pulse.value = withRepeat(withTiming(1, { duration: 1100, easing: Easing.out(Easing.quad) }), -1, false);
+      }
     } else {
-      cancelAnimation(pulse);
       pulse.value = withTiming(0, { duration: 150 });
       scale.value = withSpring(1, { damping: 16, stiffness: 240 });
     }
-  }, [listening]);
+  }, [listening, level]);
 
   const micStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
   const ringStyle = useAnimatedStyle(() => ({
-    opacity: listening ? (1 - pulse.value) * 0.5 : 0,
+    opacity: on.value * (1 - pulse.value) * 0.5,
     transform: [{ scale: 1 + pulse.value * 0.7 }],
   }));
 
@@ -118,7 +142,14 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const router = useRouter();
   const theme = useTheme();
   const { width } = useWindowDimensions();
-  const note = useStore((s) => s.notes.find((n) => n.id === id));
+  const level = useAnimLevel();
+  const built = useBuilt();
+  const stored = useStore((s) => s.notes.find((n) => n.id === id));
+  // a note deleted from here keeps its page while the page leaves, instead of flashing "Note not found" on its way out
+  const lastNote = useRef<Note | undefined>(stored);
+  const leaving = useRef(false);
+  if (stored) lastNote.current = stored;
+  const note = stored ?? (leaving.current ? lastNote.current : undefined);
   const updateNote = useStore((s) => s.updateNote);
   const deleteNote = useStore((s) => s.deleteNote);
   const folders = useStore((s) => s.noteFolders);
@@ -149,10 +180,55 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     voiceRef.current?.stop();
   }, []);
 
-  // a line offered as a task is its words: the bullet or box the toolbar put in front of it stays in the note
+  // ---- the draft: what is typed shows at once, and reaches the store after a pause ----
+  const [title, setTitle] = useState(stored?.title ?? '');
+  const [body, setBodyText] = useState(stored?.body ?? '');
+  const draft = useRef({ title: stored?.title ?? '', body: stored?.body ?? '' });
+  const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const commit = React.useCallback(() => {
+    if (commitTimer.current) { clearTimeout(commitTimer.current); commitTimer.current = null; }
+    const s = useStore.getState();
+    const n = s.notes.find((x) => x.id === id);
+    if (!n) return;
+    const d = draft.current;
+    if (n.title !== d.title || n.body !== d.body) s.updateNote(n.id, { title: d.title, body: d.body });
+  }, [id]);
+  const touched = useRef(false);
+  const scheduleCommit = React.useCallback(() => {
+    touched.current = true;
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = setTimeout(commit, COMMIT_PAUSE_MS);
+  }, [commit]);
+  // a note that turns up after the page was built (the store still loading) fills the draft, unless typing began
+  React.useEffect(() => {
+    if (!stored || touched.current) return;
+    if (draft.current.title === stored.title && draft.current.body === stored.body) return;
+    draft.current = { title: stored.title, body: stored.body };
+    setTitle(stored.title);
+    setBodyText(stored.body);
+  }, [stored?.id]);
+  // closing the note writes what is waiting, and so does leaving the app, straight through to storage
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') { commit(); flushSaves(); }
+    });
+    return () => { sub.remove(); commit(); };
+  }, [commit]);
+
+  // a line offered as a task is its words: the bullet or box the toolbar put in front of it stays in the note. They are
+  // read only while the sheet is open (not on every keystroke), and a closing sheet keeps the lines it opened with
+  const linesFrom = useRef('');
+  if (lineSheet) linesFrom.current = body;
   const lines = useMemo(
-    () => (note?.body || '').split('\n').map((l) => l.trim().replace(/^[•☐☑✓]\s*/, '').trim()).filter((l) => l.length > 2),
-    [note?.body]
+    () => linesFrom.current.split('\n').map((l) => l.trim().replace(/^[•☐☑✓]\s*/, '').trim()).filter((l) => l.length > 2),
+    [linesFrom.current]
+  );
+  const words = useMemo(() => countWords(body), [body]);
+
+  const noteId = note?.id ?? '';
+  const removeOne = React.useCallback(
+    (attId: string) => deleteAttachmentFiles(removeAttachment(noteId, attId)),
+    [noteId, removeAttachment],
   );
 
   if (!note) {
@@ -165,13 +241,20 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   }
 
   /**
-   * The live body, straight from the store. Voice callbacks are registered
-   * ONCE per recording session, so any `note.body` they close over is frozen
+   * The live body, straight from the draft. Voice callbacks are registered
+   * ONCE per recording session, so any `body` they close over is frozen
    * at record-start — every later utterance would rebuild the note from that
    * stale baseline and erase what came in between (the dictation-erases-text
    * bug). Everything that mutates the body must read through here instead.
    */
-  const liveBody = () => useStore.getState().notes.find((n) => n.id === id)?.body ?? '';
+  const liveBody = () => draft.current.body;
+
+  /** The words change now; the store hears of it after a pause. */
+  const writeBody = (v: string) => {
+    draft.current.body = v;
+    setBodyText(v);
+    scheduleCommit();
+  };
 
   const setBody = (v: string, pushHistory = true) => {
     if (pushHistory && Date.now() - lastPush.current > 800) {
@@ -180,20 +263,20 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       redoStack.current = [];
       lastPush.current = Date.now();
     }
-    updateNote(note.id, { body: v });
+    writeBody(v);
   };
 
   const undo = () => {
     const prev = undoStack.current.pop();
     if (prev === undefined) return;
     redoStack.current.push(liveBody());
-    updateNote(note.id, { body: prev });
+    writeBody(prev);
   };
   const redo = () => {
     const next = redoStack.current.pop();
     if (next === undefined) return;
     undoStack.current.push(liveBody());
-    updateNote(note.id, { body: next });
+    writeBody(next);
   };
 
   const insertAtCursor = (text: string) => {
@@ -291,14 +374,6 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     }
   };
 
-  const openFile = async (a: Attachment) => {
-    try {
-      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(a.uri);
-    } catch {
-      toast('Could not open ' + a.name);
-    }
-  };
-
   // the toast waits for the sheet to go: a sheet is a window of its own and would cover it
   const promoted = React.useRef<{ kind: 'daily' | 'mission'; id: string } | null>(null);
   const promote = (line: string, kind: 'daily' | 'mission') => {
@@ -334,7 +409,14 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     setLockPin(true);
   };
 
-  const words = note.body.trim() ? note.body.trim().split(/\s+/).length : 0;
+  const deleteThis = () => {
+    // the page keeps showing the note while it leaves; what was typed is dropped with it
+    leaving.current = true;
+    if (commitTimer.current) { clearTimeout(commitTimer.current); commitTimer.current = null; }
+    router.back();
+    deleteAttachmentFiles(deleteNote(note.id));
+  };
+
   // the note's column: the window on a phone, a capped column on a wide window
   const colW = columnWidth(width, mode === 'tab');
   // under 372dp the nine toolbar targets overflow: media, file, undo and redo move into a menu
@@ -353,13 +435,13 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
               onPress={() => updateNote(note.id, { pinned: !note.pinned })} accessibilityLabel={note.pinned ? 'Unpin note' : 'Pin note'} />
             <IconBtn name="folder-outline" size={20} pad={6} onPress={() => setFolderSheet(true)} accessibilityLabel="Move to folder" />
             {!note.locked && (
-              <IconBtn name="share-outline" size={20} pad={6} onPress={() => Share.share({ message: note.title + '\n\n' + note.body })} accessibilityLabel="Share note" />
+              <IconBtn name="share-outline" size={20} pad={6} onPress={() => Share.share({ message: title + '\n\n' + body })} accessibilityLabel="Share note" />
             )}
             <IconBtn name="trash-outline" size={20} pad={6} color={C.danger}
               onPress={() =>
                 Alert.alert('Delete note', 'This cannot be undone.', [
                   { text: 'Cancel', style: 'cancel' },
-                  { text: 'Delete', style: 'destructive', onPress: () => { deleteAttachmentFiles(deleteNote(note.id)); router.back(); } },
+                  { text: 'Delete', style: 'destructive', onPress: deleteThis },
                 ])
               } accessibilityLabel="Delete note" />
           </Row>
@@ -373,45 +455,23 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         onLayout={(e) => { sizesRef.current.viewport = e.nativeEvent.layout.height; }}
       >
         <TextInput
-          value={note.title}
-          onChangeText={(v) => updateNote(note.id, { title: v })}
+          value={title}
+          onChangeText={(v) => { draft.current.title = v; setTitle(v); scheduleCommit(); }}
           placeholder="Title"
           placeholderTextColor={C.textFaint}
           style={st.title}
         />
         <Text style={[T.caption, { marginBottom: 12 }]}>
-          {new Date(note.updatedAt).toLocaleString('en-IN')} · {words} words
+          {new Date(note.updatedAt).toLocaleString('en-IN')}
+          {words ? ' · ' + words + (words === 1 ? ' word' : ' words') : ''}
         </Text>
 
         {note.attachments.length > 0 && (
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
-            {note.attachments.map((a) => (
-              <View key={a.id}>
-                {a.kind === 'image' && (
-                  <AttachedImage uri={a.uri} width={mediaW} />
-                )}
-                {a.kind === 'video' && <InlineVideo uri={a.uri} width={mediaW} />}
-                {a.kind === 'file' && (
-                  <Bouncy onPress={() => openFile(a)} style={[st.fileRow, { borderColor: C.accent + '44', backgroundColor: C.accent + '18' }]}>
-                    <Ionicons name="document-attach-outline" size={18} color={C.accent} />
-                    <Text style={{ color: C.accent, fontFamily: F.med, marginLeft: 8, fontSize: 13, maxWidth: mediaW * 1.6 }} numberOfLines={1}>
-                      {a.name}
-                    </Text>
-                  </Bouncy>
-                )}
-                <IconBtn
-                  name="close-circle" size={20} color={C.danger}
-                  style={{ position: 'absolute', top: -6, right: -6 }}
-                  onPress={() => deleteAttachmentFiles(removeAttachment(note.id, a.id))}
-                  accessibilityLabel="Remove attachment"
-                />
-              </View>
-            ))}
-          </View>
+          <Attachments items={note.attachments} width={mediaW} onRemove={removeOne} live={built.current} />
         )}
 
         <TextInput
-          value={note.body}
+          value={body}
           onChangeText={(v) => setBody(v)}
           onSelectionChange={(e) => { selRef.current = e.nativeEvent.selection; }}
           placeholder="Write…"
@@ -430,12 +490,17 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
 
       {/* live transcript strip */}
       {listening && (
-        <View style={[st.liveBar, { bottom: 66 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, boxShadow: undefined }]}>
+        // the strip floats over the page, so it can fade in and out where it stands without moving anything
+        <Animated.View
+          entering={level === 'none' ? undefined : FadeIn.duration(level === 'full' ? 220 : 160).easing(EASE_OUT)}
+          exiting={level === 'none' ? undefined : FadeOut.duration(150)}
+          style={[st.liveBar, { bottom: 66 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, boxShadow: undefined }]}
+        >
           <View style={st.liveDot} />
           <Text style={st.liveBarText} numberOfLines={2}>
             {liveText || 'Listening…'}
           </Text>
-        </View>
+        </Animated.View>
       )}
 
       {/* editor toolbar */}
@@ -508,6 +573,55 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   );
 }
 
+async function openFile(a: Attachment) {
+  try {
+    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(a.uri);
+  } catch {
+    toast('Could not open ' + a.name);
+  }
+}
+
+/**
+ * The note's pictures, videos and files. Kept apart from the editor so a keystroke never re-renders a video; one added
+ * later fades in where it lands, one removed fades as it goes, and the rest glide to their places.
+ */
+const Attachments = React.memo(function Attachments({ items, width, onRemove, live }: {
+  items: Attachment[]; width: number; onRemove: (id: string) => void;
+  /** the note was already open when these arrived: the first one fades in too */
+  live: boolean;
+}) {
+  useTheme(); // repaints a file's accent on a new accent
+  const level = useAnimLevel();
+  const built = useBuilt();
+  const enter = built.current || live ? rowIn(level) : undefined;
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+      {items.map((a) => (
+        <Animated.View key={a.id} entering={enter} exiting={rowOut(level)} layout={glide(level)}>
+          {a.kind === 'image' && (
+            <AttachedImage uri={a.uri} width={width} />
+          )}
+          {a.kind === 'video' && <InlineVideo uri={a.uri} width={width} />}
+          {a.kind === 'file' && (
+            <Bouncy onPress={() => openFile(a)} style={[st.fileRow, { borderColor: C.accent + '44', backgroundColor: C.accent + '18' }]}>
+              <Ionicons name="document-attach-outline" size={18} color={C.accent} />
+              <Text style={{ color: C.accent, fontFamily: F.med, marginLeft: 8, fontSize: 13, maxWidth: width * 1.6 }} numberOfLines={1}>
+                {a.name}
+              </Text>
+            </Bouncy>
+          )}
+          <IconBtn
+            name="close-circle" size={20} color={C.danger}
+            style={{ position: 'absolute', top: -6, right: -6 }}
+            onPress={() => onRemove(a.id)}
+            accessibilityLabel="Remove attachment"
+          />
+        </Animated.View>
+      ))}
+    </View>
+  );
+});
+
 /** An attached picture; when its file is gone, a carved placeholder says so instead of an empty box. */
 function AttachedImage({ uri, width }: { uri: string; width: number }) {
   const [failed, setFailed] = React.useState(false);
@@ -539,9 +653,9 @@ function InlineVideo({ uri, width }: { uri: string; width: number }) {
 }
 
 const st = StyleSheet.create({
-  title: { color: C.text, fontFamily: F.bold, fontSize: 30, letterSpacing: -0.5, paddingVertical: 6 },
+  title: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 36, letterSpacing: -0.3, paddingVertical: 6 },
   body: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: LINE_H, minHeight: 300, paddingTop: 4 },
-  // Rubik ships no italic, so Android would synthesise a slant: live text reads as faint instead
+  // only the upright Geist ships, so Android would synthesise a slant: live text reads as faint instead
   liveInline: { color: C.textFaint, fontFamily: F.reg, fontSize: 15, lineHeight: LINE_H },
   toolbar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,

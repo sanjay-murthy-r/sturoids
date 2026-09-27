@@ -221,6 +221,71 @@ const checks = {
     assert.equal(A.trendText(-1), 'Falling 1 point an exam');
     assert.equal(A.trendText(0.2), 'Holding steady');
   },
+  'the insight line says the latest and how it moves, never a zero'() {
+    const pt = (pct, i, title = 'Mock ' + (i + 1)) => ({ id: 'p' + i, title, when: '2026-01-0' + (i + 1), pct });
+    assert.equal(A.insightLine(A.seriesStats([50, 52, 54].map((v, i) => pt(v, i)))), 'Latest 54%, rising 2 points an exam');
+    assert.equal(A.insightLine(A.seriesStats([54, 54.2, 54].map((v, i) => pt(v, i)))), 'Latest 54%, holding steady');
+    assert.equal(A.insightLine(A.seriesStats([50, 51].map((v, i) => pt(v, i)))), 'Latest 51%, up 1 point on the one before');
+    assert.equal(A.insightLine(A.seriesStats([60, 57.6].map((v, i) => pt(v, i)))), 'Latest 57.6%, down 2.4 points on the one before');
+    assert.equal(A.insightLine(A.seriesStats([60, 60.02].map((v, i) => pt(v, i)))), 'Latest 60%', 'no sentence about no change');
+    assert.equal(A.insightLine(A.seriesStats([pt(72.44, 0, 'Unit 1')])), '72.4% in Unit 1');
+  },
+  'a second reading only when the last five run differently'() {
+    const pts = [40, 50, 60, 70, 80, 78, 76, 74, 72].map((pct, i) => ({ id: 'p' + i, title: '', when: '2026-01-0' + (i + 1), pct }));
+    const s = A.seriesStats(pts);
+    assert.equal(s.trend, 'rising');
+    assert.equal(A.recentNote(s), 'Over the last five: falling 2 points an exam');
+    const same = A.seriesStats([40, 45, 50, 55, 60, 65].map((pct, i) => ({ id: 'q' + i, title: '', when: '2026-01-0' + (i + 1), pct })));
+    assert.equal(A.recentNote(same), null);
+    assert.equal(A.recentNote(A.seriesStats(pts.slice(0, 3))), null, 'no recent slope from three');
+  },
+  'consistency in words, and none for results that never move'() {
+    assert.equal(A.steadyText(3.24), 'Steady: within about 3.2 points of the average');
+    assert.equal(A.steadyText(1), 'Very steady: within about 1 point of the average');
+    assert.equal(A.steadyText(12), 'Up and down: within about 12 points of the average');
+    assert.equal(A.steadyText(0.02), null);
+    assert.equal(A.steadyText(0), null);
+  },
+  'a view opens on every result up to ten'() {
+    assert.equal(A.defaultRange(0), 'all');
+    assert.equal(A.defaultRange(10), 'all');
+    assert.equal(A.defaultRange(11), 10);
+  },
+  'a chart scale has three or four round gridlines and a ten point span'() {
+    const check = (values, lo, hi, ticks) => {
+      const s = A.chartScale(values);
+      assert.deepEqual([s.lo, s.hi, s.ticks], [lo, hi, ticks], 'scale for ' + values.join(', '));
+    };
+    check([50, 170 / 3, 175 / 3], 45, 60, [45, 50, 55, 60]);
+    check([42, 71], 40, 80, [40, 60, 80]);
+    check([30, 95], 25, 100, [25, 50, 75, 100]);
+    check([0, 100], 0, 100, [0, 50, 100]);
+    check([98, 100], 90, 100, [90, 95, 100]);
+    check([1, 3], 0, 10, [0, 5, 10]);
+    check([-12, 40], -20, 40, [-20, 0, 20, 40]);
+    check([64], 55, 70, [55, 60, 65, 70]);
+    for (const vals of [[12.3, 13.1], [33, 34, 99], [-80, 100], [71.4]]) {
+      const s = A.chartScale(vals);
+      assert.ok(s.ticks.length >= 3 && s.ticks.length <= 4, 'three or four ticks for ' + vals);
+      assert.ok(s.hi - s.lo >= 10, 'at least ten points for ' + vals);
+      assert.ok(s.lo <= Math.min(...vals) && s.hi >= Math.max(...vals), 'the results inside for ' + vals);
+      assert.ok(s.ticks.every((t) => Number.isInteger(t / 5)), 'round ticks for ' + vals);
+    }
+  },
+  'a series with gaps splits into runs'() {
+    assert.deepEqual(A.runsOf([1, 2, null, 4, null, null, 7, 8]), [
+      { start: 0, values: [1, 2] }, { start: 3, values: [4] }, { start: 6, values: [7, 8] },
+    ]);
+    assert.deepEqual(A.runsOf([null, null]), []);
+  },
+  'columns are named by date, then by number, then by place'() {
+    assert.equal(A.shortDay('2026-09-12'), '12 Sep');
+    assert.equal(A.shortDay('2026-01-01'), '1 Jan');
+    assert.equal(A.shortDay('bad'), 'bad');
+    assert.deepEqual(A.columnLabels([{ title: 'Mock 1', when: '2026-08-01' }, { title: 'Mock 2', when: '2026-08-15' }]), ['1 Aug', '15 Aug']);
+    assert.deepEqual(A.columnLabels([{ title: 'Mock 07', when: '2026-08-01' }, { title: 'Mock 8', when: '2026-08-01' }]), ['#7', '#8']);
+    assert.deepEqual(A.columnLabels([{ title: 'Physics', when: '2026-08-01' }, { title: 'Maths', when: '2026-08-01' }]), ['1', '2']);
+  },
 };
 
 let failed = 0;

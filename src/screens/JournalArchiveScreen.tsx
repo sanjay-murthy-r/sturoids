@@ -3,6 +3,8 @@ import { Alert, ScrollView, SectionList, Share, StyleSheet, Text, View } from 'r
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import type { SharedValue } from 'react-native-reanimated';
 import { C, F, MIN, NEU, S, T, bgFor } from '../theme';
 import { useStore, JournalEntry } from '../store';
 import { todayKey } from '../utils';
@@ -18,6 +20,7 @@ import {
 } from '../journal';
 import { openTool } from '../toolNav';
 import { tick } from '../haptics';
+import { Bouncy, CountUp, EASE_OUT, riseIn, useAnimLevel } from '../components/Motion';
 
 type Sort = 'newest' | 'oldest' | 'longest' | 'best';
 const SORT_LABEL: Record<Sort, string> = { newest: 'Newest', oldest: 'Oldest', longest: 'Longest', best: 'Best days' };
@@ -44,10 +47,53 @@ function Highlighted({ text, tokens, style, lines }: { text: string; tokens: str
   );
 }
 
+/** One entry in the archive, memoised: a filter or a pin re-renders the rows that changed, not every row. */
+const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, snippet, well, dip, onOpen, onMenu }: {
+  e: JournalEntry; first: boolean; last: boolean; enter: boolean; tokens: string[]; snippet: string; well: object;
+  dip: SharedValue<number>; onOpen: (dateKey: string, id?: string) => void; onMenu: (e: JournalEntry) => void;
+}) {
+  const d = keyToDate(e.dateKey);
+  const moodIcon = MOODS.find((m) => m.value === e.mood)?.icon;
+  // the words and the tags; an entry with neither (a mood alone) states no count of nothing
+  const caption = [
+    e.wordCount ? e.wordCount + (e.wordCount === 1 ? ' word' : ' words') : '',
+    e.tags.map((t) => '#' + t).join(' '),
+  ].filter(Boolean).join(', ');
+  const dipStyle = useAnimatedStyle(() => ({ opacity: dip.value }));
+  return (
+    <ListSlice first={first} last={last} enter={enter}>
+      <Animated.View style={dipStyle}>
+        <ListRow onPress={() => onOpen(e.dateKey, e.id)} onLongPress={() => { tick(); onMenu(e); }} style={st.entry}>
+          <View style={[st.dayWell, well]}>
+            <Text style={st.dayName}>{d.toLocaleDateString('en-IN', { weekday: 'short' })}</Text>
+            <Text style={st.dayNum}>{d.getDate()}</Text>
+          </View>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Row>
+              <Highlighted text={e.title || e.excerpt.split(/[.!?\n]/)[0] || 'Untitled'} tokens={tokens} style={[T.title, { flex: 1 }]} lines={1} />
+              {e.pinned ? <Ionicons name="pin" size={14} color={C.gold} style={{ marginLeft: 6 }} /> : null}
+              {moodIcon ? <Ionicons name={moodIcon as any} size={15} color={C.gold} style={{ marginLeft: 6 }} /> : null}
+              {e.rating ? (
+                <View style={st.rate}>
+                  <Ionicons name="star" size={12} color={C.gold} />
+                  <Text style={st.rateText}>{e.rating}</Text>
+                </View>
+              ) : null}
+            </Row>
+            {e.excerpt ? <Highlighted text={snippet} tokens={tokens} style={st.excerpt} lines={2} /> : null}
+            {caption ? <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>{caption}</Text> : null}
+          </View>
+        </ListRow>
+      </Animated.View>
+    </ListSlice>
+  );
+});
+
 function Archive({ tabMode }: { tabMode: boolean }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const theme = useTheme();
+  const level = useAnimLevel();
   const journal = useStore((s) => s.journal);
   const journalTags = useStore((s) => s.journalTags);
   const cutoff = useStore((s) => s.settings.journalCutoffHour);
@@ -130,12 +176,26 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   ].filter(Boolean).join(', ');
   const clearAll = () => { setMonth(null); setMoods([]); setRatings([]); setTags([]); setPinnedOnly(false); setQ(''); };
 
-  const open = (dateKey: string, id?: string) => {
+  const open = React.useCallback((dateKey: string, id?: string) => {
     tick();
     requestJournalOpen(dateKey, id);
     if (router.canGoBack()) router.back();
     else openTool('journal');
-  };
+  }, [router]);
+  const openMenu = React.useCallback((e: JournalEntry) => setMenu(e), []);
+
+  // a new filter or order is a different list: its rows come up from a faint start together, so the change reads as
+  // one step instead of rows jumping about. A search narrows as it is typed, so it answers at once, with no dip
+  const listKey = [month, moods.join(), ratings.join(), tags.join(), pinnedOnly, sort].join('|');
+  const dip = useSharedValue(1);
+  const shownList = React.useRef(listKey);
+  React.useEffect(() => {
+    if (shownList.current === listKey) return;
+    shownList.current = listKey;
+    if (level === 'none') return;
+    dip.value = 0.3;
+    dip.value = withTiming(1, { duration: 240, easing: EASE_OUT });
+  }, [listKey, level]);
 
   const snippet = (e: JournalEntry) => {
     const text = bodies?.get(e.id);
@@ -172,7 +232,17 @@ function Archive({ tabMode }: { tabMode: boolean }) {
       }));
   }, [journal, today]);
 
-  const well = theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...NEU.insetLow };
+  const well = React.useMemo(
+    () => (theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...NEU.insetLow }),
+    [theme],
+  );
+  const marked = React.useMemo(() => new Set(journal.map((e) => e.dateKey)), [journal]);
+  // a stat of zero says nothing, so it is left out rather than shown as a nought
+  const glances = [
+    { value: s.entries, label: 'entries' },
+    { value: s.current, label: 'day streak' },
+    { value: s.words, label: 'words' },
+  ].filter((g) => g.value > 0);
 
   const header = (
     <View>
@@ -187,17 +257,22 @@ function Archive({ tabMode }: { tabMode: boolean }) {
           <Text style={[T.caption, { flex: 1 }]} numberOfLines={1}>
             {visible.length} {visible.length === 1 ? 'entry' : 'entries'}{summary ? ', ' + summary : ''}
           </Text>
-          <Text style={st.link} onPress={clearAll}>Clear</Text>
+          <Bouncy onPress={clearAll} scaleTo={0.92} radius={8} hitSlop={8} accessibilityRole="button" style={st.linkBox}>
+            <Text style={st.link}>Clear</Text>
+          </Bouncy>
         </Row>
       ) : null}
       {stats && journal.length ? (
+        // the stats open where they stand, rising a short way in; they sit above the list, so they never cover a row
+        <Animated.View entering={level === 'none' ? undefined : riseIn}>
         <Card pad={16}>
           <Row>
-            <Glance value={s.entries} label="entries" />
-            <View style={st.vDivider} />
-            <Glance value={s.current} label="day streak" />
-            <View style={st.vDivider} />
-            <Glance value={s.words} label="words" />
+            {glances.map((g, i) => (
+              <React.Fragment key={g.label}>
+                {i > 0 ? <View style={st.vDivider} /> : null}
+                <Glance value={g.value} label={g.label} />
+              </React.Fragment>
+            ))}
           </Row>
           {s.avgRating != null ? (
             <Text style={[T.caption, { textAlign: 'center', marginTop: 12 }]}>
@@ -231,6 +306,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
             </View>
           ) : null}
         </Card>
+        </Animated.View>
       ) : null}
     </View>
   );
@@ -256,37 +332,12 @@ function Archive({ tabMode }: { tabMode: boolean }) {
         ListEmptyComponent={empty}
         contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 40 + (tabMode ? 0 : insets.bottom) }}
         renderSectionHeader={({ section }) => <Text style={[st.section, { backgroundColor: bgFor(theme) }]}>{section.title}</Text>}
-        renderItem={({ item: e, index, section }) => {
-          const d = keyToDate(e.dateKey);
-          const moodIcon = MOODS.find((m) => m.value === e.mood)?.icon;
-          return (
-            <ListSlice first={index === 0} last={index === section.data.length - 1} enter={firstPaint.current}>
-              <ListRow onPress={() => open(e.dateKey, e.id)} onLongPress={() => { tick(); setMenu(e); }} style={st.entry}>
-                <View style={[st.dayWell, well]}>
-                  <Text style={st.dayName}>{d.toLocaleDateString('en-IN', { weekday: 'short' })}</Text>
-                  <Text style={st.dayNum}>{d.getDate()}</Text>
-                </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Row>
-                    <Highlighted text={e.title || e.excerpt.split(/[.!?\n]/)[0] || 'Untitled'} tokens={tokens} style={[T.title, { flex: 1 }]} lines={1} />
-                    {e.pinned ? <Ionicons name="pin" size={14} color={C.gold} style={{ marginLeft: 6 }} /> : null}
-                    {moodIcon ? <Ionicons name={moodIcon as any} size={15} color={C.gold} style={{ marginLeft: 6 }} /> : null}
-                    {e.rating ? (
-                      <View style={st.rate}>
-                        <Ionicons name="star" size={12} color={C.gold} />
-                        <Text style={st.rateText}>{e.rating}</Text>
-                      </View>
-                    ) : null}
-                  </Row>
-                  {e.excerpt ? <Highlighted text={snippet(e)} tokens={tokens} style={st.excerpt} lines={2} /> : null}
-                  <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>
-                    {e.wordCount} {e.wordCount === 1 ? 'word' : 'words'}{e.tags.length ? ', ' + e.tags.map((t) => '#' + t).join(' ') : ''}
-                  </Text>
-                </View>
-              </ListRow>
-            </ListSlice>
-          );
-        }}
+        renderItem={({ item: e, index, section }) => (
+          <EntryRow
+            e={e} first={index === 0} last={index === section.data.length - 1} enter={firstPaint.current}
+            tokens={tokens} snippet={snippet(e)} well={well} dip={dip} onOpen={open} onMenu={openMenu}
+          />
+        )}
       />
 
       <Sheet visible={filters} onClose={() => setFilters(false)} title="Filters">
@@ -357,7 +408,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
           <JournalCalendar
             value={moveEntry.dateKey}
             maxKey={today}
-            marked={new Set(journal.map((e) => e.dateKey))}
+            marked={marked}
             onPick={(key) => { patchJournalEntry(moveEntry.id, { dateKey: key }); setMoveEntry(null); }}
           />
         ) : null}
@@ -366,17 +417,21 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   );
 }
 
+const fmtCount = (n: number) => n.toLocaleString('en-IN');
+
 function Glance({ value, label }: { value: number; label: string }) {
   return (
     <View style={{ flex: 1, alignItems: 'center' }}>
-      <Text style={st.glanceValue}>{value.toLocaleString('en-IN')}</Text>
+      {/* a figure that changes while the stats are open counts to its new value */}
+      <CountUp value={value} format={fmtCount} style={st.glanceValue} />
       <Text style={st.glanceLabel}>{label}</Text>
     </View>
   );
 }
 
 const st = StyleSheet.create({
-  link: { color: C.accent, fontFamily: F.semi, fontSize: 13, marginLeft: 12 },
+  link: { color: C.accent, fontFamily: F.semi, fontSize: 13 },
+  linkBox: { marginLeft: 12, paddingHorizontal: 2 },
   rate: { flexDirection: 'row', alignItems: 'center', marginLeft: 6 },
   rateText: { color: C.gold, fontFamily: F.semi, fontSize: 12, marginLeft: 2, fontVariant: ['tabular-nums'] },
   // a sticky month spans the whole width, so the card's side shadows pass under it instead of beside it

@@ -1,9 +1,10 @@
 import React from 'react';
 import { AccessibilityInfo, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, F, MIN, NEU } from '../theme';
 import { useTheme } from './UI';
+import { EASE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
 import { WIDE_AT } from '../layout';
 
@@ -21,31 +22,64 @@ export function toast(message: string, action?: ToastAction) {
   if (show) show(message, action);
 }
 
+/** the card rises in on an ease out and sinks away on a short ease in */
+const IN = { duration: 240, easing: EASE_OUT };
+const OUT_EASE = Easing.in(Easing.quad);
+
 /** Mounted once, in the root layout. */
 export function ToastHost() {
   const theme = useTheme();
+  const level = useAnimLevel();
   const insets = useSafeAreaInsets();
   const { width: winW } = useWindowDimensions();
   const [shownToast, setShownToast] = React.useState<Shown | null>(null);
   const shown = useSharedValue(0);
+  // a toast that takes the place of one still showing: its words come up in the same card
+  const swap = useSharedValue(1);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const counter = React.useRef(0);
+  // what is on screen, and the motion level, read from `show`, which is set up once
+  const current = React.useRef<Shown | null>(null);
+  const still = React.useRef(level === 'none');
+  still.current = level === 'none';
+
+  const clear = React.useCallback(() => {
+    current.current = null;
+    setShownToast(null);
+  }, []);
 
   const hide = React.useCallback((duration: number) => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
+    if (still.current) {
+      shown.value = 0;
+      clear();
+      return;
+    }
     // a newer toast restarts the fade in, which cancels this fade out before it can clear the card
-    shown.value = withTiming(0, { duration }, (done) => { if (done) runOnJS(setShownToast)(null); });
-  }, []);
+    shown.value = withTiming(0, { duration, easing: OUT_EASE }, (done) => { if (done) runOnJS(clear)(); });
+  }, [clear]);
 
   React.useEffect(() => {
     show = (message, action) => {
       counter.current += 1;
-      setShownToast({ message, action, key: counter.current });
+      const next = { message, action, key: counter.current };
+      const replacing = current.current != null;
+      current.current = next;
+      setShownToast(next);
       AccessibilityInfo.announceForAccessibility(action ? message + '. ' + action.label + ' is available.' : message);
-      shown.value = withTiming(1, { duration: 180 });
+      if (still.current) {
+        shown.value = 1;
+        swap.value = 1;
+      } else {
+        if (replacing) {
+          swap.value = 0;
+          swap.value = withTiming(1, { duration: 200, easing: EASE_OUT });
+        }
+        shown.value = withTiming(1, IN);
+      }
       if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => hide(220), action ? 4200 : 2200);
+      timer.current = setTimeout(() => hide(200), action ? 4200 : 2200);
     };
     return () => {
       show = null;
@@ -53,7 +87,8 @@ export function ToastHost() {
     };
   }, [hide]);
 
-  const style = useAnimatedStyle(() => ({ opacity: shown.value, transform: [{ translateY: (1 - shown.value) * 12 }] }));
+  const style = useAnimatedStyle(() => ({ opacity: shown.value, transform: [{ translateY: (1 - shown.value) * 10 }] }));
+  const wordsStyle = useAnimatedStyle(() => ({ opacity: swap.value, transform: [{ translateY: (1 - swap.value) * 4 }] }));
   if (!shownToast) return null;
   const { message, action, key } = shownToast;
 
@@ -64,28 +99,29 @@ export function ToastHost() {
         pointerEvents={action ? 'auto' : 'none'}
         style={[
           st.card,
-          action && st.cardWithAction,
           theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
             : { backgroundColor: C.card, ...NEU.raisedMid },
         ]}
       >
-        <Text style={[st.text, action && { textAlign: 'left', flexShrink: 1 }]} numberOfLines={action ? 2 : undefined}>{message}</Text>
-        {action ? (
-          <Pressable
-            key={key}
-            onPress={() => {
-              tick();
-              action.onPress();
-              hide(160);
-            }}
-            hitSlop={10}
-            accessibilityRole="button"
-            style={st.action}
-          >
-            <Text style={st.actionText}>{action.label}</Text>
-          </Pressable>
-        ) : null}
+        <Animated.View style={[action ? st.rowWithAction : null, wordsStyle]}>
+          <Text style={[st.text, action && { textAlign: 'left', flexShrink: 1 }]} numberOfLines={action ? 2 : undefined}>{message}</Text>
+          {action ? (
+            <Pressable
+              key={key}
+              onPress={() => {
+                tick();
+                action.onPress();
+                hide(160);
+              }}
+              hitSlop={10}
+              accessibilityRole="button"
+              style={({ pressed }) => [st.action, pressed && st.actionPressed]}
+            >
+              <Text style={[st.actionText, { color: C.accent }]}>{action.label}</Text>
+            </Pressable>
+          ) : null}
+        </Animated.View>
       </View>
     </Animated.View>
   );
@@ -94,8 +130,10 @@ export function ToastHost() {
 const st = StyleSheet.create({
   wrap: { position: 'absolute', left: 20, right: 20, alignItems: 'center' },
   card: { borderRadius: 16, paddingVertical: 12, paddingHorizontal: 18, maxWidth: 420 },
-  cardWithAction: { flexDirection: 'row', alignItems: 'center', paddingRight: 8 },
+  rowWithAction: { flexDirection: 'row', alignItems: 'center', marginRight: -10 },
   text: { color: C.text, fontFamily: F.med, fontSize: 14, lineHeight: 19, textAlign: 'center' },
-  action: { marginLeft: 14, paddingHorizontal: 10, paddingVertical: 4 },
-  actionText: { color: C.accent, fontFamily: F.semi, fontSize: 14, lineHeight: 19 },
+  action: { marginLeft: 14, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  actionPressed: { opacity: 0.55 },
+  // the accent is applied at the call site: a StyleSheet would freeze it at import and miss a change of accent
+  actionText: { fontFamily: F.semi, fontSize: 14, lineHeight: 19 },
 });

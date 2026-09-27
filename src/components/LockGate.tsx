@@ -4,11 +4,11 @@ import { useFocusEffect } from 'expo-router';
 import { allowScreenCaptureAsync, preventScreenCaptureAsync } from 'expo-screen-capture';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
-  Easing, FadeIn, ZoomIn, ZoomOut, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming,
+  Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming,
 } from 'react-native-reanimated';
-import { C, F, MIN, NEU, S, T } from '../theme';
+import { AnimLevel, C, F, MIN, NEU, S, T } from '../theme';
 import { ScreenBG, Sheet, useTheme } from './UI';
-import { Bouncy, useAnimLevel } from './Motion';
+import { Bouncy, EASE_OUT, FadeSwap, useAnimLevel } from './Motion';
 import { useStore } from '../store';
 import { tap, tick } from '../haptics';
 import {
@@ -24,6 +24,26 @@ const KEY_GAP_Y = 14;
 const KEY_MAX = 72;
 
 type Stage = 'enter' | 'legacy' | 'choose' | 'confirm';
+
+/** A digit's dot fills its well from the centre, quickly, and empties the same way a little quicker. */
+const dotIn = () => {
+  'worklet';
+  const ease = { duration: 150, easing: Easing.out(Easing.cubic) };
+  return {
+    initialValues: { opacity: 0, transform: [{ scale: 0.4 }] },
+    animations: { opacity: withTiming(1, ease), transform: [{ scale: withTiming(1, ease) }] },
+  };
+};
+const dotOut = () => {
+  'worklet';
+  const ease = { duration: 110, easing: Easing.in(Easing.quad) };
+  return {
+    initialValues: { opacity: 1, transform: [{ scale: 1 }] },
+    animations: { opacity: withTiming(0, ease), transform: [{ scale: withTiming(0.5, ease) }] },
+  };
+};
+/** the page a gate opens onto comes up as the gate dissolves: shorter with only some motion */
+const pageIn = (level: AnimLevel) => FadeIn.duration(level === 'full' ? 320 : 200).easing(EASE_OUT);
 
 /**
  * The PIN keypad: the prompt, four wells, a status line, and a phone keypad in three columns. `enter` checks the PIN;
@@ -74,9 +94,10 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
     setMessage(text);
     setDigits('');
     if (level !== 'none') {
+      const q = Easing.inOut(Easing.quad);
       shake.value = withSequence(
-        withTiming(-8, { duration: 50 }), withTiming(8, { duration: 50 }),
-        withTiming(-5, { duration: 50 }), withTiming(0, { duration: 60 }),
+        withTiming(-8, { duration: 50, easing: q }), withTiming(8, { duration: 60, easing: q }),
+        withTiming(-5, { duration: 55, easing: q }), withTiming(0, { duration: 70, easing: EASE_OUT }),
       );
     }
   };
@@ -153,6 +174,13 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
       : screenKey ? 'Or use your screen lock.'
         : '';
   const status = coolS > 0 ? 'Try again in ' + coolS + ' s' : message;
+  // while the PIN's state is being read, or a wait is on, the keys rest dimmed; they ease back up when they can be used
+  const resting = coolS > 0 || !stage;
+  const keysOn = useSharedValue(resting ? 0.45 : 1);
+  React.useEffect(() => {
+    keysOn.value = level === 'none' ? (resting ? 0.45 : 1) : withTiming(resting ? 0.45 : 1, { duration: 220, easing: EASE_OUT });
+  }, [resting, level]);
+  const keysStyle = useAnimatedStyle(() => ({ opacity: keysOn.value }));
   const wells = stage === 'legacy' ? Math.max(LEGACY_MIN, digits.length) : PIN_LEN;
   const key = Math.min(KEY_MAX, Math.floor((width - 2 * S.pad - 2 * KEY_GAP_X - 24) / 3));
   const well = theme === 'minimal'
@@ -164,35 +192,44 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
 
   return (
     <View style={st.pad}>
-      <Text style={st.prompt}>{prompt}</Text>
-      <Text style={[T.caption, st.hint]}>{hint}</Text>
+      {/* a new step (choose, then confirm) changes its words in place: they dip out and come back */}
+      <FadeSwap swapKey={prompt}>
+        <Text style={st.prompt}>{prompt}</Text>
+      </FadeSwap>
+      <FadeSwap swapKey={hint}>
+        <Text style={[T.caption, st.hint]}>{hint}</Text>
+      </FadeSwap>
       <Animated.View style={[st.dots, shakeStyle]}>
         {Array.from({ length: wells }, (_, i) => (
           <Animated.View
             key={i}
-            entering={level === 'none' || i < LEGACY_MIN ? undefined : ZoomIn.duration(160)}
-            exiting={level === 'none' || i < LEGACY_MIN ? undefined : ZoomOut.duration(120)}
+            entering={level === 'none' || i < LEGACY_MIN ? undefined : dotIn}
+            exiting={level === 'none' || i < LEGACY_MIN ? undefined : dotOut}
             style={[st.dotWell, well]}
           >
             {i < digits.length ? (
               <Animated.View
-                entering={level === 'none' ? undefined : ZoomIn.duration(150)}
+                entering={level === 'none' ? undefined : dotIn}
+                exiting={level === 'none' ? undefined : dotOut}
                 style={[st.dot, { backgroundColor: tint }]}
               />
             ) : null}
           </Animated.View>
         ))}
       </Animated.View>
-      <Text style={[T.caption, st.status, status ? { color: coolS > 0 ? C.textFaint : C.danger } : null]}>
-        {status || ' '}
-      </Text>
-      <View style={st.keypad}>
+      {/* a wait counts down in place; a new message dips in */}
+      <FadeSwap swapKey={coolS > 0 ? 'wait' : message}>
+        <Text style={[T.caption, st.status, status ? { color: coolS > 0 ? C.textFaint : C.danger } : null]}>
+          {status || ' '}
+        </Text>
+      </FadeSwap>
+      <Animated.View style={[st.keypad, keysStyle]}>
         {ROWS.map((row, r) => (
           <View key={r} style={st.keyRow}>
             {row.map((k) => {
               const kind = k === 'side' ? (stage === 'legacy' ? 'ok' : screenKey ? 'bio' : '') : k;
               if (!kind) return <View key={k} style={{ width: key, height: key }} />;
-              const off = coolS > 0 || !stage || (kind === 'ok' && digits.length < LEGACY_MIN);
+              const off = kind === 'ok' && digits.length < LEGACY_MIN;
               return (
                 <Bouncy
                   key={k}
@@ -215,7 +252,7 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
             })}
           </View>
         ))}
-      </View>
+      </Animated.View>
     </View>
   );
 }
@@ -301,15 +338,17 @@ function LockPage({ scope, alsoOpenedBy, locked, screenLock, title, reason, tint
       return undefined;
     }
     // the lock turns, then the gate dissolves and the page arrives in its place
-    turn.value = withSequence(withTiming(1, { duration: 170 }), withTiming(0, { duration: 240 }));
-    fade.value = withDelay(180, withTiming(0, { duration: 240, easing: Easing.out(Easing.quad) }));
+    turn.value = withSequence(
+      withTiming(1, { duration: 170, easing: EASE_OUT }), withTiming(0, { duration: 240, easing: Easing.inOut(Easing.quad) }),
+    );
+    fade.value = withDelay(180, withTiming(0, { duration: 240, easing: EASE_OUT }));
     const t = setTimeout(() => setShown(true), 430);
     return () => clearTimeout(t);
   }, [open, shown, level]);
 
   if (shown) {
     const page = fromGate.current && level !== 'none'
-      ? <Animated.View entering={FadeIn.duration(320)} style={st.page}>{children}</Animated.View>
+      ? <Animated.View entering={pageIn(level)} style={st.page}>{children}</Animated.View>
       : <View style={st.page}>{children}</View>;
     return locked ? <Shielded>{page}</Shielded> : page;
   }

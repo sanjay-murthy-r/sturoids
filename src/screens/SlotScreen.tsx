@@ -15,6 +15,7 @@ import { VaultLibraryScreen } from './VaultLibraryScreen';
 import { AiLinksScreen } from './AiLinksScreen';
 import { JournalScreen } from './JournalScreen';
 import { ScoresScreen } from './ScoresScreen';
+import { useAnimLevel } from '../components/Motion';
 
 /**
  * The screen each tool shows at the root of a bar slot. Every tool must register here (a missing one fails to
@@ -37,12 +38,14 @@ export const SLOT_SCREENS: Record<ToolKey, React.ComponentType<{ mode: ScreenMod
 /** The Stack inside bar slot `index`: the tool at its root, the tool's own pages (a note, a video) above. */
 export function SlotStack({ index }: { index: number }) {
   const theme = useStore((s) => s.settings.theme);
+  // a page opening in a slot (a note, a video) rises in, like a full page does; with motion off it is simply there
+  const level = useAnimLevel();
   return (
     <SlotProvider slot={index}>
       <Stack
         screenOptions={{
           headerShown: false,
-          animation: 'fade_from_bottom',
+          animation: level === 'none' ? 'none' : 'fade_from_bottom',
           animationDuration: 220,
           contentStyle: { backgroundColor: bgFor(theme) },
         }}

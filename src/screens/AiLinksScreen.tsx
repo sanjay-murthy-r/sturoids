@@ -6,8 +6,9 @@ import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { useStore, AiLink } from '../store';
 import { uid } from '../utils';
 import { ScreenBG, Card, Sheet, Field, PillButton, Row, IconBtn, InfoDot, NeuHeader, useTheme, EmptyState } from '../components/UI';
+import Animated from 'react-native-reanimated';
 import { toast } from '../components/Toast';
-import { Enter } from '../components/Motion';
+import { Appear, glide, rowOut, useAnimLevel, useEntrance } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WIDE_AT, columnWidth } from '../layout';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
@@ -72,6 +73,45 @@ function LinkIcon({ link }: { link: AiLink }) {
   );
 }
 
+/**
+ * One launcher in the grid. It rises in with the screen the first time; a removed one fades as it goes and the rest
+ * glide into its place, and moving one swaps two places with a glide instead of a jump. The glide and the fade sit on
+ * an outer layer, the entrance on an inner one, so the two never fight over the same view.
+ */
+function LinkTile({ link: l, index, edit, style, onOpen, onMove, onRemove }: {
+  link: AiLink; index: number; edit: boolean; style: any;
+  onOpen: (l: AiLink) => void; onMove: (i: number, dir: -1 | 1) => void; onRemove: (id: string) => void;
+}) {
+  const level = useAnimLevel();
+  const entrance = useEntrance(index);
+  return (
+    <Animated.View style={style} exiting={rowOut(level)} layout={glide(level)}>
+      <Animated.View style={entrance}>
+        <Card pad={0} onPress={() => (edit ? undefined : onOpen(l))}>
+          <View style={{ alignItems: 'center', paddingVertical: 18 }}>
+            <LinkIcon link={l} />
+            <Text style={{ color: C.text, fontFamily: F.semi, marginTop: 10, fontSize: 14 }} numberOfLines={1}>
+              {l.label}
+            </Text>
+            <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{domainOf(l.url)}</Text>
+            {edit && (
+              // the edit keys fade in where they open, rather than appearing in one frame
+              <Appear>
+                <Row style={{ marginTop: 8 }}>
+                  <IconBtn name="chevron-back" size={18} onPress={() => onMove(index, -1)} accessibilityLabel={'Move ' + l.label + ' earlier'} />
+                  <IconBtn name="chevron-forward" size={18} onPress={() => onMove(index, 1)} accessibilityLabel={'Move ' + l.label + ' later'} />
+                  <IconBtn name="trash-outline" size={18} color={C.danger}
+                    onPress={() => onRemove(l.id)} accessibilityLabel={'Remove ' + l.label} />
+                </Row>
+              </Appear>
+            )}
+          </View>
+        </Card>
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
 export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const { width: winW } = useWindowDimensions();
@@ -94,6 +134,8 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     [next[i], next[j]] = [next[j], next[i]];
     setAiLinks(next);
   };
+
+  const remove = (id: string) => setAiLinks(useStore.getState().aiLinks.filter((x) => x.id !== id));
 
   const add = () => {
     const u = siteUrl(url);
@@ -123,25 +165,10 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
         <View style={wide ? st.gridWide : st.grid}>
           {aiLinks.map((l, i) => (
-            <Enter key={l.id} index={i} style={wide ? { width: itemW } : st.item}>
-              <Card pad={0} onPress={() => (edit ? undefined : open(l))}>
-                <View style={{ alignItems: 'center', paddingVertical: 18 }}>
-                  <LinkIcon link={l} />
-                  <Text style={{ color: C.text, fontFamily: F.semi, marginTop: 10, fontSize: 14 }} numberOfLines={1}>
-                    {l.label}
-                  </Text>
-                  <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{domainOf(l.url)}</Text>
-                  {edit && (
-                    <Row style={{ marginTop: 8 }}>
-                      <IconBtn name="chevron-back" size={18} onPress={() => move(i, -1)} accessibilityLabel={'Move ' + l.label + ' earlier'} />
-                      <IconBtn name="chevron-forward" size={18} onPress={() => move(i, 1)} accessibilityLabel={'Move ' + l.label + ' later'} />
-                      <IconBtn name="trash-outline" size={18} color={C.danger}
-                        onPress={() => setAiLinks(aiLinks.filter((x) => x.id !== l.id))} accessibilityLabel={'Remove ' + l.label} />
-                    </Row>
-                  )}
-                </View>
-              </Card>
-            </Enter>
+            <LinkTile
+              key={l.id} link={l} index={i} edit={edit} style={wide ? { width: itemW } : st.item}
+              onOpen={open} onMove={move} onRemove={remove}
+            />
           ))}
         </View>
 
@@ -151,7 +178,11 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
             actionLabel="Add link" onAction={() => setAddSheet(true)}
           />
         ) : null}
-        {edit && aiLinks.length > 0 && <PillButton label="Add link" icon="add" onPress={() => setAddSheet(true)} />}
+        {edit && aiLinks.length > 0 && (
+          <Appear>
+            <PillButton label="Add link" icon="add" onPress={() => setAddSheet(true)} />
+          </Appear>
+        )}
       </ScrollView>
 
       <Sheet visible={addSheet} onClose={() => setAddSheet(false)} title="Add AI tool">

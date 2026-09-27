@@ -1,7 +1,8 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, BackHandler, useWindowDimensions } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { View, Text, ScrollView, StyleSheet, BackHandler, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import YoutubePlayer, { YoutubeIframeRef } from 'react-native-youtube-iframe';
+import Animated from 'react-native-reanimated';
 import { C, F, S, T } from '../theme';
 import { useStore, TimedNote, Bookmark } from '../store';
 import { fmtMediaTime } from '../utils';
@@ -9,7 +10,7 @@ import {
   ScreenBG, Card, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, DotMenu, NeuHeader,
 } from '../components/UI';
 import { toast } from '../components/Toast';
-import { Enter } from '../components/Motion';
+import { glide, rowOut, useAnimLevel, useEntrance } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { READ_MAX, TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth, frame } from '../layout';
 
@@ -18,8 +19,76 @@ const PLAYER_MAX_H = 0.55;
 /** between the video's column and the notes' column on a sideways tablet */
 const COL_GAP = 28;
 
+/** The last value that was not null, so a sheet keeps its title and its rows while it closes. */
+function useHeld<T>(value: T | null): T | null {
+  const held = useRef(value);
+  if (value != null) held.current = value;
+  return held.current;
+}
+
+/**
+ * A sheet with one field and one button. It keeps its own draft, so typing re-renders the sheet and not the page under
+ * it (here, a playing video). Each opening starts from `initial`.
+ */
+export function DraftSheet({
+  visible, onClose, title, initial = '', placeholder, multiline, minHeight, autoCapitalize, label, color, hint, onSave,
+}: {
+  visible: boolean; onClose: () => void; title: string; initial?: string; placeholder?: string; multiline?: boolean;
+  minHeight?: number; autoCapitalize?: 'none' | 'sentences'; label: string; color?: string;
+  /** a quiet line under the button */
+  hint?: string;
+  onSave: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  React.useEffect(() => { if (visible) setDraft(initial); }, [visible, initial]);
+  return (
+    <Sheet visible={visible} onClose={onClose} title={title}>
+      <Field
+        value={draft} onChangeText={setDraft} placeholder={placeholder} autoFocus multiline={multiline}
+        autoCapitalize={autoCapitalize} style={minHeight ? { minHeight } : undefined}
+      />
+      <PillButton label={label} color={color} onPress={() => onSave(draft)} />
+      {hint ? <Text style={[T.caption, { marginTop: 8 }]}>{hint}</Text> : null}
+    </Sheet>
+  );
+}
+
+/**
+ * A bookmark or a timed note. It rises in the first time it is seen; one removed fades as it goes while the rest glide
+ * up into its place. The glide sits on the outer layer and the entrance on the inner, so the two never fight.
+ */
+const ItemRow = React.memo(function ItemRow({ item, isBookmark, index, onSeek, onMenu }: {
+  item: TimedNote | Bookmark; isBookmark: boolean; index: number;
+  onSeek: (sec: number) => void; onMenu: (m: { item: TimedNote | Bookmark; isBookmark: boolean }) => void;
+}) {
+  const level = useAnimLevel();
+  const entrance = useEntrance(Math.min(index, 6));
+  const tint = isBookmark ? C.pink : C.green;
+  return (
+    <Animated.View exiting={rowOut(level)} layout={glide(level)}>
+      <Animated.View style={entrance}>
+        <Card pad={12} onPress={() => onSeek(item.time)}>
+          <Row>
+            <View style={[st.timePill, { borderColor: tint + '66', backgroundColor: tint + '14' }]}>
+              <Text style={{ color: tint, fontSize: 11, fontFamily: F.semi, fontVariant: ['tabular-nums'] }}>
+                {fmtMediaTime(item.time)}
+                {'endTime' in item && item.endTime ? '-' + fmtMediaTime(item.endTime) : ''}
+              </Text>
+            </View>
+            <Text style={[T.body, { flex: 1, marginLeft: 10, fontSize: 14 }]}>
+              {isBookmark ? (item as Bookmark).label : (item as TimedNote).text}
+            </Text>
+            <IconBtn name="ellipsis-vertical" size={16} onPress={() => onMenu({ item, isBookmark })} accessibilityLabel="More" />
+          </Row>
+        </Card>
+      </Animated.View>
+    </Animated.View>
+  );
+});
+
 export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
+  const level = useAnimLevel();
   const { id, t } = useLocalSearchParams<{ id: string; t?: string }>();
   const { width, height } = useWindowDimensions();
   const wide = width >= WIDE_AT;
@@ -43,12 +112,15 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [playing, setPlaying] = useState(false);
   const [noteSheet, setNoteSheet] = useState<{ time: number } | null>(null);
   const [bmSheet, setBmSheet] = useState<{ time: number } | null>(null);
-  const [draft, setDraft] = useState('');
-  const [tagDraft, setTagDraft] = useState('');
   const [folderSheet, setFolderSheet] = useState(false);
   const [tagSheet, setTagSheet] = useState(false);
   const [menu, setMenu] = useState<{ item: TimedNote | Bookmark; isBookmark: boolean } | null>(null);
   const [editSheet, setEditSheet] = useState<{ item: any; isBookmark: boolean } | null>(null);
+  // what each sheet shows stays while it closes, instead of turning to "@ 0:00" or an empty menu on its way out
+  const heldNote = useHeld(noteSheet);
+  const heldBm = useHeld(bmSheet);
+  const heldMenu = useHeld(menu);
+  const heldEdit = useHeld(editSheet);
 
   // layered back: fullscreen video is a native surface parented to the whole
   // activity, so popping this route out from under it strands a black overlay
@@ -59,6 +131,61 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const sub = BackHandler.addEventListener('hardwareBackPress', blockBack);
     return () => sub.remove();
   }, [blockBack]));
+
+  const seek = useCallback((sec: number) => {
+    playerRef.current?.seekTo(sec, true);
+    setPlaying(true);
+  }, []);
+  const onReady = useCallback(() => {
+    const start = parseInt(String(t || ''), 10);
+    if (!seekDone.current && start > 0) {
+      seekDone.current = true;
+      playerRef.current?.seekTo(start, true);
+      setPlaying(true);
+    }
+  }, [t]);
+  const onError = useCallback((e: string) => toast(
+    e === 'embed_not_allowed' || e === 'HTML5_error'
+      ? 'This video cannot play inside the app. Your notes and bookmarks are still here.'
+      : e === 'video_not_found'
+        ? 'This video is private or no longer on YouTube. Your notes and bookmarks are still here.'
+        : 'The video would not load. Check your connection and open it again.',
+  ), []);
+  const onFullScreen = useCallback((f: boolean) => { fullscreen.current = f; }, []);
+  const onState = useCallback((s: string) => {
+    if (s === 'playing') setPlaying(true);
+    if (s === 'paused' || s === 'ended') setPlaying(false);
+  }, []);
+
+  // a sideways tablet sets the notes beside the video; otherwise one column, the video across its top
+  const twoCol = wide && areaW >= TWO_COL_AT;
+  const colW = twoCol ? ((areaW - S.pad * 2 - COL_GAP) * 3) / 5 : Math.min(areaW, READ_MAX);
+  // 16:9 across the column. A phone's video is exactly as it always was; a wide window's never takes over the
+  // height, and when it would, it narrows to keep its shape
+  let playerH = Math.round((colW * 9) / 16);
+  let playerW: number | undefined;
+  if (wide) {
+    playerH = Math.min(playerH, Math.round(height * PLAYER_MAX_H));
+    playerW = Math.min(Math.round(colW), Math.round((playerH * 16) / 9));
+  }
+
+  // the player is built only when what it shows changes: a note being typed, a tag or a sheet never re-renders it
+  const videoId = video?.videoId;
+  const player = useMemo(() => (videoId ? (
+    <YoutubePlayer
+      ref={playerRef}
+      width={playerW}
+      height={playerH}
+      play={playing}
+      videoId={videoId}
+      onReady={onReady}
+      onError={onError}
+      onFullScreenChange={onFullScreen}
+      onChangeState={onState}
+    />
+  ) : null), [videoId, playerW, playerH, playing, onReady, onError, onFullScreen, onState]);
+
+  const openMenu = useCallback((m: { item: TimedNote | Bookmark; isBookmark: boolean }) => setMenu(m), []);
 
   if (!video) {
     return (
@@ -72,20 +199,6 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const now = async () => {
     try { return Math.floor((await playerRef.current?.getCurrentTime()) || 0); }
     catch { return 0; }
-  };
-
-  const seek = (sec: number) => {
-    playerRef.current?.seekTo(sec, true);
-    setPlaying(true);
-  };
-
-  const onReady = () => {
-    const start = parseInt(String(t || ''), 10);
-    if (!seekDone.current && start > 0) {
-      seekDone.current = true;
-      playerRef.current?.seekTo(start, true);
-      setPlaying(true);
-    }
   };
 
   const exportToNotes = () => {
@@ -104,60 +217,6 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     toast('Revision sheet added to Notes.');
   };
 
-  const itemRow = (item: TimedNote | Bookmark, isBookmark: boolean, i: number) => (
-    <Enter key={item.id} index={Math.min(i, 6)}>
-      <Card pad={12} onPress={() => seek(item.time)}>
-        <Row>
-          <View style={[st.timePill, { borderColor: (isBookmark ? C.pink : C.green) + '66', backgroundColor: (isBookmark ? C.pink : C.green) + '14' }]}>
-            <Text style={{ color: isBookmark ? C.pink : C.green, fontSize: 11, fontFamily: F.semi, fontVariant: ['tabular-nums'] }}>
-              {fmtMediaTime(item.time)}
-              {'endTime' in item && item.endTime ? '-' + fmtMediaTime(item.endTime) : ''}
-            </Text>
-          </View>
-          <Text style={[T.body, { flex: 1, marginLeft: 10, fontSize: 14 }]}>
-            {isBookmark ? (item as Bookmark).label : (item as TimedNote).text}
-          </Text>
-          <IconBtn name="ellipsis-vertical" size={16} onPress={() => setMenu({ item, isBookmark })} accessibilityLabel="More" />
-        </Row>
-      </Card>
-    </Enter>
-  );
-
-  // a sideways tablet sets the notes beside the video; otherwise one column, the video across its top
-  const twoCol = wide && areaW >= TWO_COL_AT;
-  const colW = twoCol ? ((areaW - S.pad * 2 - COL_GAP) * 3) / 5 : Math.min(areaW, READ_MAX);
-  // 16:9 across the column. A phone's video is exactly as it always was; a wide window's never takes over the
-  // height, and when it would, it narrows to keep its shape
-  let playerH = Math.round((colW * 9) / 16);
-  let playerW: number | undefined;
-  if (wide) {
-    playerH = Math.min(playerH, Math.round(height * PLAYER_MAX_H));
-    playerW = Math.min(Math.round(colW), Math.round((playerH * 16) / 9));
-  }
-
-  const player = (
-    <YoutubePlayer
-      ref={playerRef}
-      width={playerW}
-      height={playerH}
-      play={playing}
-      videoId={video.videoId}
-      onReady={onReady}
-      onError={(e: string) => toast(
-        e === 'embed_not_allowed' || e === 'HTML5_error'
-          ? 'This video cannot play inside the app. Your notes and bookmarks are still here.'
-          : e === 'video_not_found'
-            ? 'This video is private or no longer on YouTube. Your notes and bookmarks are still here.'
-            : 'The video would not load. Check your connection and open it again.',
-      )}
-      onFullScreenChange={(f: boolean) => { fullscreen.current = f; }}
-      onChangeState={(s: string) => {
-        if (s === 'playing') setPlaying(true);
-        if (s === 'paused' || s === 'ended') setPlaying(false);
-      }}
-    />
-  );
-
   const info = (
     <>
       <Text style={T.title}>{video.title}</Text>
@@ -166,34 +225,43 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {video.tags.map((x) => (
           <Chip key={x} small label={'#' + x} color={C.teal} active onPress={() => removeVideoTag(video.id, x)} />
         ))}
-        <Chip small label="+ tag" onPress={() => { setTagDraft(''); setTagSheet(true); }} />
+        <Chip small label="+ tag" onPress={() => setTagSheet(true)} />
       </Row>
 
       <Row style={{ marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
         <PillButton small label="Note @ now" icon="create-outline" color={C.green}
-          onPress={async () => { setDraft(''); setNoteSheet({ time: await now() }); }} />
+          onPress={async () => { setNoteSheet({ time: await now() }); }} />
         <PillButton small label="Mark @ now" icon="bookmark-outline" color={C.pink}
-          onPress={async () => { setDraft(''); setBmSheet({ time: await now() }); }} />
+          onPress={async () => { setBmSheet({ time: await now() }); }} />
         <PillButton small label="→ Notes" icon="download-outline" color={C.accent} outline onPress={exportToNotes} />
         <PillButton small label="Move" icon="folder-outline" color={C.textDim} outline onPress={() => setFolderSheet(true)} />
       </Row>
     </>
   );
 
+  // the titles and the empty notes glide with the rows around them, so nothing jumps while a row folds away
   const lists = (
     <>
-      <SectionTitle>Bookmarks</SectionTitle>
+      <Animated.View layout={glide(level)}>
+        <SectionTitle>Bookmarks</SectionTitle>
+      </Animated.View>
       {video.bookmarks.length === 0 ? (
-        <EmptyState compact icon="bookmark-outline" title="No bookmarks yet" body="Mark key moments, then tap one to jump there." />
+        <Animated.View layout={glide(level)}>
+          <EmptyState compact icon="bookmark-outline" title="No bookmarks yet" body="Mark key moments, then tap one to jump there." />
+        </Animated.View>
       ) : (
-        video.bookmarks.map((b, i) => itemRow(b, true, i))
+        video.bookmarks.map((b, i) => <ItemRow key={b.id} item={b} isBookmark index={i} onSeek={seek} onMenu={openMenu} />)
       )}
 
-      <SectionTitle>Timed notes</SectionTitle>
+      <Animated.View layout={glide(level)}>
+        <SectionTitle>Timed notes</SectionTitle>
+      </Animated.View>
       {video.notes.length === 0 ? (
-        <EmptyState compact icon="create-outline" title="No timed notes yet" body='Pin a note to a moment, like "why does this step work?" at 12:34.' />
+        <Animated.View layout={glide(level)}>
+          <EmptyState compact icon="create-outline" title="No timed notes yet" body='Pin a note to a moment, like "why does this step work?" at 12:34.' />
+        </Animated.View>
       ) : (
-        video.notes.map((n, i) => itemRow(n, false, i))
+        video.notes.map((n, i) => <ItemRow key={n.id} item={n} isBookmark={false} index={i} onSeek={seek} onMenu={openMenu} />)
       )}
     </>
   );
@@ -226,24 +294,24 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         )}
       </ScrollView>
 
-      <Sheet visible={!!noteSheet} onClose={() => setNoteSheet(null)} title={'Note @ ' + fmtMediaTime(noteSheet?.time || 0)}>
-        <Field value={draft} onChangeText={setDraft} placeholder="What's worth remembering here?" autoFocus multiline style={{ minHeight: 70 }} />
-        <PillButton label="Save note" color={C.green}
-          onPress={() => { if (draft.trim() && noteSheet) { addTimedNote(video.id, noteSheet.time, draft.trim()); setNoteSheet(null); } }} />
-      </Sheet>
+      <DraftSheet
+        visible={!!noteSheet} onClose={() => setNoteSheet(null)} title={'Note @ ' + fmtMediaTime(heldNote?.time || 0)}
+        placeholder="What's worth remembering here?" multiline minHeight={70} label="Save note" color={C.green}
+        onSave={(text) => { if (text.trim() && noteSheet) { addTimedNote(video.id, noteSheet.time, text.trim()); setNoteSheet(null); } }}
+      />
 
-      <Sheet visible={!!bmSheet} onClose={() => setBmSheet(null)} title={'Bookmark @ ' + fmtMediaTime(bmSheet?.time || 0)}>
-        <Field value={draft} onChangeText={setDraft} placeholder="Label, e.g. 'Torque derivation'" autoFocus />
-        <PillButton label="Save bookmark" color={C.pink}
-          onPress={() => { if (bmSheet) { addBookmark(video.id, bmSheet.time, draft.trim() || 'Bookmark'); setBmSheet(null); } }} />
-      </Sheet>
+      <DraftSheet
+        visible={!!bmSheet} onClose={() => setBmSheet(null)} title={'Bookmark @ ' + fmtMediaTime(heldBm?.time || 0)}
+        placeholder="Label, e.g. 'Torque derivation'" label="Save bookmark" color={C.pink}
+        onSave={(text) => { if (bmSheet) { addBookmark(video.id, bmSheet.time, text.trim() || 'Bookmark'); setBmSheet(null); } }}
+      />
 
-      <Sheet visible={tagSheet} onClose={() => setTagSheet(false)} title="Add hashtag">
-        <Field value={tagDraft} onChangeText={setTagDraft} placeholder="e.g. rotation, organic, pyq" autoFocus autoCapitalize="none" />
-        <PillButton label="Add" color={C.teal}
-          onPress={() => { if (tagDraft.trim()) { addVideoTag(video.id, tagDraft); setTagSheet(false); } }} />
-        <Text style={[T.caption, { marginTop: 8 }]}>Tap a tag on the video page to remove it. Search the library with #tag.</Text>
-      </Sheet>
+      <DraftSheet
+        visible={tagSheet} onClose={() => setTagSheet(false)} title="Add hashtag"
+        placeholder="e.g. rotation, organic, pyq" autoCapitalize="none" label="Add" color={C.teal}
+        hint="Tap a tag on the video page to remove it. Search the library with #tag."
+        onSave={(text) => { if (text.trim()) { addVideoTag(video.id, text); setTagSheet(false); } }}
+      />
 
       <Sheet visible={folderSheet} onClose={() => setFolderSheet(false)} title="Move to folder">
         <Row style={{ flexWrap: 'wrap' }}>
@@ -259,34 +327,30 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <DotMenu
         visible={!!menu}
         onClose={() => setMenu(null)}
-        items={menu ? [
-          { label: 'Jump to moment', icon: 'play-outline', onPress: () => seek(menu.item.time) },
-          {
-            label: 'Edit', icon: 'create-outline',
-            onPress: () => { setDraft(menu.isBookmark ? (menu.item as Bookmark).label : (menu.item as TimedNote).text); setEditSheet(menu); },
-          },
+        items={heldMenu ? [
+          { label: 'Jump to moment', icon: 'play-outline', onPress: () => seek(heldMenu.item.time) },
+          { label: 'Edit', icon: 'create-outline', onPress: () => setEditSheet(heldMenu) },
           {
             label: 'Delete', icon: 'trash-outline', color: C.danger,
             onPress: () => {
-              if (menu.isBookmark) removeBookmark(video.id, menu.item.id);
-              else removeTimedNote(video.id, menu.item.id);
+              if (heldMenu.isBookmark) removeBookmark(video.id, heldMenu.item.id);
+              else removeTimedNote(video.id, heldMenu.item.id);
             },
           },
         ] : []}
       />
 
-      <Sheet visible={!!editSheet} onClose={() => setEditSheet(null)} title={'Edit @ ' + fmtMediaTime(editSheet?.item?.time || 0)}>
-        <Field value={draft} onChangeText={setDraft} autoFocus multiline style={{ minHeight: 60 }} />
-        <PillButton
-          label="Save"
-          onPress={() => {
-            if (!editSheet) return;
-            if (editSheet.isBookmark) updateBookmark(video.id, editSheet.item.id, draft.trim());
-            else updateTimedNote(video.id, editSheet.item.id, draft.trim());
-            setEditSheet(null);
-          }}
-        />
-      </Sheet>
+      <DraftSheet
+        visible={!!editSheet} onClose={() => setEditSheet(null)} title={'Edit @ ' + fmtMediaTime(heldEdit?.item?.time || 0)}
+        initial={heldEdit ? (heldEdit.isBookmark ? (heldEdit.item as Bookmark).label : (heldEdit.item as TimedNote).text) : ''}
+        multiline minHeight={60} label="Save"
+        onSave={(text) => {
+          if (!editSheet) return;
+          if (editSheet.isBookmark) updateBookmark(video.id, editSheet.item.id, text.trim());
+          else updateTimedNote(video.id, editSheet.item.id, text.trim());
+          setEditSheet(null);
+        }}
+      />
     </ScreenBG>
   );
 }

@@ -6,7 +6,7 @@
 // across exams by name, ignoring case and spacing.
 
 import {
-  ScoreIndex, ScoreNode, ScoreTag, ScoreResult, categoryOf, resultOf, subjectKey, topExams, whenOf,
+  ScoreIndex, ScoreNode, ScoreTag, ScoreResult, categoryOf, fmtPct, resultOf, subjectKey, topExams, whenOf,
 } from './scores';
 
 /** Which exams a view looks at: one category, every exam, or the exams in no category. */
@@ -452,4 +452,113 @@ export function trendText(slope: number): string {
   if (w === 'flat') return 'Holding steady';
   const a = Math.round(Math.abs(slope) * 10) / 10;
   return (w === 'rising' ? 'Rising ' : 'Falling ') + a + (a === 1 ? ' point' : ' points') + ' an exam';
+}
+
+/** "1 point", "1.6 points": a size of change, to one place, without a sign. */
+function pointsText(v: number): string {
+  const a = Math.round(Math.abs(v) * 10) / 10;
+  return a + (a === 1 ? ' point' : ' points');
+}
+
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+
+/**
+ * The one line the Scores page shows for a series: the latest result and how it is moving. "Latest 72.4%, rising 1.6
+ * points an exam" from three exams on, the change on the one before with two (left out when there was none), and the
+ * result with its exam's name for a series of one.
+ */
+export function insightLine(s: SeriesStats): string {
+  const latest = 'Latest ' + fmtPct(s.latest.pct);
+  if (s.slope != null) return latest + ', ' + lowerFirst(trendText(s.slope));
+  if (s.delta != null) {
+    const r = Math.round(s.delta * 10) / 10;
+    return r === 0 ? latest : latest + ', ' + (r > 0 ? 'up ' : 'down ') + pointsText(r) + ' on the one before';
+  }
+  return fmtPct(s.latest.pct) + ' in ' + s.latest.title;
+}
+
+/** A second reading when the last five run differently from the whole range, or null when they agree. */
+export function recentNote(s: SeriesStats): string | null {
+  if (s.slope == null || s.recentSlope == null) return null;
+  if (trendWord(s.recentSlope) === trendWord(s.slope)) return null;
+  return 'Over the last five: ' + lowerFirst(trendText(s.recentSlope));
+}
+
+/** "Steady: within about 3.2 points of the average", or null when the results do not move at all. */
+export function steadyText(sd: number): string | null {
+  const r = Math.round(sd * 10) / 10;
+  if (!(r > 0)) return null;
+  const w = steadyWord(sd);
+  return w.charAt(0).toUpperCase() + w.slice(1) + ': within about ' + pointsText(r) + ' of the average';
+}
+
+/** Where a view opens: every result when there are ten or fewer, otherwise the latest ten. */
+export const defaultRange = (marked: number): Range => (marked <= 10 ? 'all' : 10);
+
+// ---------- charts ----------
+
+/** Gridline steps a chart may use: round numbers only, so a label never reads 47.5. */
+const STEPS = [5, 10, 20, 25, 50, 100];
+
+/**
+ * A chart's vertical scale: the results, widened to at least `minSpan` points so two close results never look like a
+ * cliff, kept inside 0 to 100 when the results are, then snapped out to round gridlines (three or four of them, the
+ * top and bottom ones included).
+ */
+export function chartScale(values: number[], minSpan = 10): { lo: number; hi: number; step: number; ticks: number[] } {
+  const ys = values.filter((v) => Number.isFinite(v));
+  const dataLo = ys.length ? Math.min(...ys) : 0;
+  const dataHi = ys.length ? Math.max(...ys) : 100;
+  let lo = dataLo;
+  let hi = dataHi;
+  if (hi - lo < minSpan) {
+    const mid = (hi + lo) / 2;
+    lo = mid - minSpan / 2;
+    hi = mid + minSpan / 2;
+    if (hi > 100 && dataHi <= 100) { lo -= hi - 100; hi = 100; }
+    if (lo < 0 && dataLo >= 0) { hi -= lo; lo = 0; }
+  }
+  let pick = { a: 0, b: 100, step: 50 };
+  for (const step of STEPS) {
+    const a = Math.floor(lo / step + 1e-9) * step;
+    const b = Math.ceil(hi / step - 1e-9) * step;
+    pick = { a, b, step };
+    if (Math.round((b - a) / step) + 1 <= 4) break;
+  }
+  const ticks: number[] = [];
+  for (let v = pick.a; v <= pick.b + 1e-9; v += pick.step) ticks.push(Math.round(v * 1e6) / 1e6);
+  return { lo: pick.a, hi: pick.b, step: pick.step, ticks };
+}
+
+/** The unbroken runs of a series with gaps, for drawing it as separate lines: where each starts, and its values. */
+export function runsOf(values: (number | null)[]): { start: number; values: number[] }[] {
+  const out: { start: number; values: number[] }[] = [];
+  let cur: { start: number; values: number[] } | null = null;
+  values.forEach((v, i) => {
+    if (v == null || !Number.isFinite(v)) { cur = null; return; }
+    if (!cur) { cur = { start: i, values: [] }; out.push(cur); }
+    cur.values.push(v);
+  });
+  return out;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "12 Sep", from YYYY-MM-DD, the same on every device. */
+export function shortDay(key: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return key;
+  return Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1];
+}
+
+/**
+ * Short names for a run of exams laid side by side: their dates when no two share a day, otherwise the numbers in
+ * their titles ("#7") when every one has its own, otherwise their places in the run.
+ */
+export function columnLabels(points: { title: string; when: string }[]): string[] {
+  const days = points.map((p) => shortDay(p.when));
+  if (new Set(days).size === days.length) return days;
+  const nums = points.map((p) => /(\d+)\D*$/.exec(p.title)?.[1] ?? '');
+  if (nums.every(Boolean) && new Set(nums.map(Number)).size === nums.length) return nums.map((n) => '#' + Number(n));
+  return points.map((_, i) => String(i + 1));
 }

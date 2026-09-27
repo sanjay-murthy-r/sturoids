@@ -1,11 +1,11 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import Animated, { FadeIn, LayoutAnimationConfig } from 'react-native-reanimated';
+import Animated, { FadeIn, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { C, F, MIN, S, T, neuRaised } from '../theme';
 import { fmtClockTime } from '../utils';
 import { TimerState, displayOf, shownSecondsOf, useSessionTick } from '../deepWork';
 import { WIDE_AT } from '../layout';
-import { useAnimLevel } from './Motion';
+import { CHANGE, EASE_OUT, FadeSwap, useAnimLevel } from './Motion';
 import { ClockDigits, clockWidth } from './ClockDigits';
 import { CheckCircle, Chip, NeuIconBtn, PillButton, ProgressBar, useTheme } from './UI';
 
@@ -73,7 +73,7 @@ function SlabClock({ timer, base, availW, startedAt, finishAt, hour24, clockStyl
 
   return (
     <>
-      <Animated.View key={size} entering={resized ? FadeIn.duration(280) : undefined} style={[st.time, clockStyle]}>
+      <Animated.View key={size} entering={resized ? FadeIn.duration(280).easing(EASE_OUT) : undefined} style={[st.time, clockStyle]}>
         <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} />
         <ClockDigits
           text={sec}
@@ -139,6 +139,13 @@ export function SessionStage({
   const surface = minimal
     ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
     : { backgroundColor: C.card, ...neuRaised('high') };
+  // paused, the ambient key fades out of reach and fades back on resume, instead of blinking
+  const moon = useSharedValue(timer.running ? 1 : 0);
+  React.useEffect(() => {
+    moon.value = level === 'none' ? (timer.running ? 1 : 0) : withTiming(timer.running ? 1 : 0, CHANGE);
+  }, [timer.running, level]);
+  const moonStyle = useAnimatedStyle(() => ({ opacity: moon.value }));
+  const block = timer.mode === 'countdown' ? `${timer.targetMin} min block` : 'Stopwatch';
 
   return (
     // the clock's digits never play their exits when the whole plate goes: it leaves as one
@@ -159,9 +166,10 @@ export function SessionStage({
               {subject || 'Add a subject'}
             </Text>
           </Pressable>
-          <Text style={st.block} numberOfLines={1}>
-            {timer.mode === 'countdown' ? `${timer.targetMin} min block` : 'Stopwatch'}
-          </Text>
+          {/* five more minutes changes the block's length in place: the words dip over */}
+          <FadeSwap swapKey={block}>
+            <Text style={st.block} numberOfLines={1}>{block}</Text>
+          </FadeSwap>
         </View>
 
         <SlabClock
@@ -178,12 +186,12 @@ export function SessionStage({
             style={st.toggle}
           />
           {/* paused, the ambient screen has nothing to count: its key keeps its place so the pill never moves */}
-          <View pointerEvents={timer.running ? 'auto' : 'none'} style={{ opacity: timer.running ? 1 : 0 }}>
+          <Animated.View pointerEvents={timer.running ? 'auto' : 'none'} style={moonStyle}>
             <NeuIconBtn
               name="moon-outline" color={C.textDim} dim={50} size={20} onPress={onAmbient}
               accessibilityLabel="Open the ambient screen"
             />
-          </View>
+          </Animated.View>
         </View>
       </View>
 
@@ -204,7 +212,7 @@ export function SessionStage({
             <Text style={st.currentKick}>Current task</Text>
             <Animated.Text
               key={current ? current.title : 'done'}
-              entering={level === 'none' ? undefined : FadeIn.duration(220)}
+              entering={level === 'none' ? undefined : FadeIn.duration(220).easing(EASE_OUT)}
               style={[st.currentTitle, !current && { color: C.textDim }]}
               numberOfLines={1}
             >

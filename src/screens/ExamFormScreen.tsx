@@ -190,9 +190,9 @@ export function ExamFormScreen() {
   };
 
   // a new exam that changes category takes that category's subjects, as long as none have been typed into yet
-  const pickCategory = (id: string | null) => {
+  const pickCategory = (id: string | null, toggle = true) => {
     tick();
-    const next = d.category === id ? null : id;
+    const next = toggle && d.category === id ? null : id;
     if (editing || touched) {
       set({ category: next });
       return;
@@ -207,7 +207,7 @@ export function ExamFormScreen() {
     if (!name) return;
     const id = addScoreTag(name, { category: true });
     setNewCat(null);
-    if (id) pickCategory(id);
+    if (id) pickCategory(id, false);
   };
 
   // the total, adding up as marks are typed; the same sum the exam's page will show
@@ -436,7 +436,8 @@ export function ExamFormScreen() {
                 <View style={st.removeCol} />
               </View>
               {rowsShown.map((r, i) => {
-                const lockedRes = r.locked && r.id ? resultOf(ix.byId.get(r.id) as ScoreNode, ix) : null;
+                const lockedNode = r.locked && r.id ? ix.byId.get(r.id) : undefined;
+                const lockedRes = lockedNode ? resultOf(lockedNode, ix) : null;
                 return (
                   <Animated.View
                     key={r.key}

@@ -180,15 +180,20 @@ export const S = {
   radiusSm: 14,
 };
 
-// ---- Rubik (the kit's face). Where fontFamily is set, fontWeight must NOT
-// be — Android fake-bolds any family+weight combo. ----
+// ---- faces (the Font Lab v2 pick, 2026-09-26): Newsreader for headings, Geist for everything small, Rubik Light
+// for counting numbers. Where fontFamily is set, fontWeight must NOT be: Android fake-bolds any family+weight combo. ----
 export const F = {
-  reg: 'Rubik_400Regular',
-  med: 'Rubik_500Medium',
-  semi: 'Rubik_600SemiBold',
-  bold: 'Rubik_700Bold',
+  reg: 'Geist_400Regular',
+  med: 'Geist_500Medium',
+  semi: 'Geist_600SemiBold',
+  bold: 'Geist_700Bold',
+  /** headings: a screen's title, a page's name, a hero line (Newsreader Medium) */
+  head: 'Newsreader_500Medium',
   /** counting numbers: timers, clocks and big figures (Rubik Light, the Focus Lab pick) */
   num: 'Rubik_300Light',
+  /** the intro's wordmark and caption keep Rubik, the face its timing and shine were set to */
+  brand: 'Rubik_600SemiBold',
+  brandMed: 'Rubik_500Medium',
 };
 
 /**
@@ -200,13 +205,15 @@ export const NUM_COLON_W = 0.241;
 
 // type scale (~1.25 ratio)
 export type TName =
-  | 'display' | 'h1' | 'title' | 'body' | 'bodyLong' | 'label' | 'caption' | 'kicker'
+  | 'display' | 'h1' | 'head' | 'title' | 'body' | 'bodyLong' | 'label' | 'caption' | 'kicker'
   | 'numHero' | 'numWheel' | 'numAmbient' | 'numStat' | 'numDisplay';
 
 // faces carry the weight, so no token can hold a fontWeight (scripts/lint-type.js guards the call sites too)
 export const T: Record<TName, Omit<TextStyle, 'fontWeight'>> = {
-  display: { color: C.text, fontFamily: F.bold, fontSize: 30, letterSpacing: -0.5 },
-  h1: { color: C.text, fontFamily: F.bold, fontSize: 22, letterSpacing: -0.3 },
+  display: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 36, letterSpacing: -0.3 },
+  h1: { color: C.text, fontFamily: F.head, fontSize: 22, lineHeight: 28, letterSpacing: -0.3 },
+  /** a page's name in its header, and a hero line such as the next planned block */
+  head: { color: C.text, fontFamily: F.head, fontSize: 20, lineHeight: 26, letterSpacing: -0.3 },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1 },
   body: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21 },
   /** long-form writing: the journal page */
@@ -217,7 +224,7 @@ export const T: Record<TName, Omit<TextStyle, 'fontWeight'>> = {
     color: C.textFaint, fontFamily: F.semi, fontSize: 11,
     letterSpacing: 2.2, textTransform: 'uppercase',
   },
-  // counting numbers: large figures in Rubik Light, small ones in Rubik Medium (the Focus Lab pick)
+  // counting numbers: large figures in Rubik Light; small ones in the text face, Geist Medium (the Font Lab v2 pick)
   /** the Deep Work clock */
   numHero: { color: C.text, fontFamily: F.num, fontSize: 48 },
   /** the Deep Work minutes wheel */

@@ -12,7 +12,7 @@ import { C, F } from '../theme';
 import { useStore } from '../store';
 import { fmtClockTime } from '../utils';
 import { TimerState, displayOf, shownSecondsOf, useSessionTick } from '../deepWork';
-import { useAnimLevel } from './Motion';
+import { EASE_OUT, useAnimLevel } from './Motion';
 import { ClockDigits, clockWidth } from './ClockDigits';
 
 /** the ambient screen never brightens a dim room: it only ever lowers the phone to this */
@@ -40,7 +40,7 @@ const SEC_TOP = 5 / 46;
 /** "min" beside whole minutes when the seconds are off */
 const UNIT = 6 / 46;
 const UNIT_GAP = 2 / 46;
-/** Rubik Regular's "min" is about this many ems wide */
+/** Geist Regular's "min" is about this many ems wide (1.70, measured from the font file) */
 const UNIT_EM = 1.7;
 const LINE = 1.02;
 
@@ -177,7 +177,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
         {subject ? (
           <Text
             allowFontScaling={false}
-            style={[st.kicker, { fontSize: kickerSize, letterSpacing: kickerSize * 0.32, paddingLeft: kickerSize * 0.32 }]}
+            style={[st.kicker, { color: C.accent, fontSize: kickerSize, letterSpacing: kickerSize * 0.32, paddingLeft: kickerSize * 0.32 }]}
             numberOfLines={1}
           >
             {subject}
@@ -191,7 +191,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
       </View>
 
       <View style={st.mid} pointerEvents="none">
-        <Animated.View key={size} entering={resized ? FadeIn.duration(280) : undefined} style={st.time}>
+        <Animated.View key={size} entering={resized ? FadeIn.duration(280).easing(EASE_OUT) : undefined} style={st.time}>
           <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} color={INK.digit} />
           {withSeconds ? (
             <ClockDigits
@@ -293,8 +293,8 @@ function AmbientBody({ onExit, ...face }: Omit<AmbientProps, 'visible'>) {
       </Animated.View>
       {hint ? (
         <Animated.Text
-          entering={FadeIn.duration(200)}
-          exiting={FadeOut.duration(400)}
+          entering={level === 'none' ? undefined : FadeIn.duration(200).easing(EASE_OUT)}
+          exiting={level === 'none' ? undefined : FadeOut.duration(400).easing(Easing.inOut(Easing.quad))}
           allowFontScaling={false}
           style={[st.hint, { bottom: u * 0.08, fontSize: Math.max(12, u * 0.034) }]}
         >
@@ -318,8 +318,10 @@ interface AmbientProps {
  * the face drifts a little each minute against burn-in.
  */
 export function AmbientView({ visible, onExit, ...rest }: AmbientProps) {
+  const level = useAnimLevel();
   return (
-    <Modal visible={visible} animationType="fade" statusBarTranslucent onRequestClose={onExit}>
+    // with motion off the dark screen is simply there, and simply gone
+    <Modal visible={visible} animationType={level === 'none' ? 'none' : 'fade'} statusBarTranslucent onRequestClose={onExit}>
       {visible ? (
         // the face leaves with the screen, not digit by digit
         <LayoutAnimationConfig skipExiting>
@@ -333,7 +335,8 @@ export function AmbientView({ visible, onExit, ...rest }: AmbientProps) {
 const st = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.ambient },
   top: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
-  kicker: { color: C.accent, opacity: 0.8, fontFamily: F.semi, textTransform: 'uppercase', maxWidth: '84%' },
+  // the kicker's colour is the accent, read at render: a sheet built at load would keep the first accent for good
+  kicker: { opacity: 0.8, fontFamily: F.semi, textTransform: 'uppercase', maxWidth: '84%' },
   faint: { color: INK.faint, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   mid: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   time: { flexDirection: 'row', alignItems: 'flex-start' },
