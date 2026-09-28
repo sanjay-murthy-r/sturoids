@@ -151,7 +151,7 @@ const st = StyleSheet.create({
   mood: { flex: 1, alignItems: 'center', paddingVertical: 8, marginHorizontal: 2, borderRadius: 14 },
   /** the picked mood's tint, a layer that fades in under its icon */
   moodTint: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 14 },
-  moodLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 5 },
+  moodLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 5, textAlign: 'center' },
   moodOn: { fontFamily: F.semi },
   /** a second ink laid exactly over the first, for colours that cross over */
   ink: { position: 'absolute', top: 0, left: 0, right: 0 },

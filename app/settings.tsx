@@ -697,6 +697,7 @@ export default function Settings() {
           <OptionPicker options={ANIMS} value={settings.animLevel} onPick={pickAnim} />
         </Card>
 
+        <SectionTitle>Start screen</SectionTitle>
         <Card>
           <Row style={{ justifyContent: 'space-between' }}>
             <View style={{ flex: 1, paddingRight: 12 }}>

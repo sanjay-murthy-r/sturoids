@@ -165,8 +165,10 @@ export interface SeriesStats {
   /** the run of rises or falls the latest exam ends */
   streak: { dir: 'up' | 'down'; count: number } | null;
   bands: { label: string; count: number }[];
-  rank: { first: number; latest: number; best: number; change: number | null; n: number } | null;
-  percentile: { latest: number; mean: number; best: number; n: number } | null;
+  /** `latestId` and `latestTitle` name the exam the latest figure is from: not always the latest exam, when the
+   *  newest ones carry no rank */
+  rank: { first: number; latest: number; best: number; change: number | null; n: number; latestId: string; latestTitle: string } | null;
+  percentile: { latest: number; mean: number; best: number; n: number; latestId: string; latestTitle: string } | null;
 }
 
 const clampPct = (v: number) => Math.max(0, Math.min(100, v));
@@ -243,6 +245,8 @@ export function seriesStats(points: ExamPoint[]): SeriesStats | null {
         best: Math.min(...ranked.map((p) => p.rank as number)),
         change: ranked.length > 1 ? (ranked[ranked.length - 1].rank as number) - (ranked[ranked.length - 2].rank as number) : null,
         n: ranked.length,
+        latestId: ranked[ranked.length - 1].id,
+        latestTitle: ranked[ranked.length - 1].title,
       }
       : null,
     percentile: pctiled.length
@@ -251,6 +255,8 @@ export function seriesStats(points: ExamPoint[]): SeriesStats | null {
         mean: mean(pctiled.map((p) => p.percentile as number)),
         best: Math.max(...pctiled.map((p) => p.percentile as number)),
         n: pctiled.length,
+        latestId: pctiled[pctiled.length - 1].id,
+        latestTitle: pctiled[pctiled.length - 1].title,
       }
       : null,
   };

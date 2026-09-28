@@ -14,7 +14,7 @@ import { Card, Chip, EmptyState, ListCard, ListRow, PillButton, SectionTitle, us
 import { Bouncy, CountUp, Enter, FadeSwap, useAppear } from './Motion';
 import { SegmentedControl } from './SegmentedControl';
 import { Sparkline } from './Sparkline';
-import { ChartKey, GrowBar, Heatmap, ShareBar, SubjectTrendChart, TrendChart, useSeen } from './ScoreCharts';
+import { ChartKey, GrowBar, Heatmap, ShareBar, SubjectTrendChart, TrendChart, useSeen, seriesColor } from './ScoreCharts';
 import { tick } from '../haptics';
 import { WIDE_AT } from '../layout';
 
@@ -561,12 +561,16 @@ const RankCard = React.memo(function RankCard({ stats }: { stats: SeriesStats })
   const p = stats.percentile;
   const both = !!(r && p);
   const rankTiles: Tile[] = r ? [
-    { label: 'Latest', value: fmtRank(r.latest), sub: r.n > 1 ? 'from ' + fmtRank(r.first) : undefined },
+    // a figure from an older exam says which one, so it never reads as today's standing
+    {
+      label: 'Latest', value: fmtRank(r.latest),
+      sub: r.latestId !== stats.latest.id ? 'as of ' + r.latestTitle : r.n > 1 ? 'from ' + fmtRank(r.first) : undefined,
+    },
     ...(r.n > 1 ? [{ label: 'Best', value: fmtRank(r.best) }] : []),
     ...(r.change != null ? [{ label: 'Last change', value: <Delta large value={r.change} better="down" format={fmtRank} style={st.tileDelta} /> }] : []),
   ] : [];
   const pctTiles: Tile[] = p ? [
-    { label: 'Latest', value: fmtMark(p.latest) },
+    { label: 'Latest', value: fmtMark(p.latest), sub: p.latestId !== stats.latest.id ? 'as of ' + p.latestTitle : undefined },
     ...(p.n > 1 ? [{ label: 'Average', value: fmtMark(round1(p.mean)) }, { label: 'Best', value: fmtMark(p.best) }] : []),
   ] : [];
   return (
@@ -625,7 +629,7 @@ const Subjects = React.memo(function Subjects({ subjects, callouts, pts, seen, e
   useTheme();
   const [focus, setFocus] = useState<string[]>([]);
   // each subject keeps one pastel for the whole page, in the order the list shows them
-  const colors = useMemo(() => new Map(subjects.map((s, i) => [s.key, TAG_COLORS[i % TAG_COLORS.length]])), [subjects]);
+  const colors = useMemo(() => new Map(subjects.map((s, i) => [s.key, seriesColor(i)])), [subjects]);
   const colorOf = (key: string) => colors.get(key) || TAG_COLORS[0];
 
   const heat = useMemo(() => {
@@ -815,5 +819,5 @@ const st = StyleSheet.create({
     marginRight: 8, marginBottom: 8, overflow: 'hidden',
   },
   keyDot: { width: 8, height: 8, borderRadius: 4 },
-  keyChipText: { fontFamily: F.med, fontSize: 12, marginLeft: 7, letterSpacing: 0.1 },
+  keyChipText: { fontFamily: F.med, fontSize: 12, marginLeft: 7, letterSpacing: 0.1, maxWidth: 160, flexShrink: 1 },
 });

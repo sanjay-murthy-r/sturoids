@@ -577,7 +577,7 @@ export function ExamFormScreen() {
         </Enter>
 
         <Enter index={5}>
-          <View style={{ marginTop: S.section - 8 }}>
+          <View style={{ marginTop: S.section }}>
             <TagPicker value={d.tags} onChange={(v) => set({ tags: v })} />
           </View>
         </Enter>

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import Svg, { Circle, Line, Path, Text as SvgText } from 'react-native-svg';
 import { useIsFocused } from '@react-navigation/native';
+import { TAG_COLORS } from '../scores';
 import { C, F, MIN, NEU, DEFAULT_ACCENT } from '../theme';
 import { useTheme } from './UI';
 import { EASE_OUT, useAnimLevel } from './Motion';
@@ -52,6 +53,18 @@ const contrast = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a
 /** A colour laid over the card at a strength, as a hex with alpha. */
 export const tint = (hex: string, alpha: number) =>
   '#' + rgbOf(hex).map((v) => v.toString(16).padStart(2, '0')).join('') + Math.round(Math.max(0, Math.min(1, alpha)) * 255).toString(16).padStart(2, '0');
+
+/**
+ * A series' colour: the tag pastels in order, and past eight each lap of them a step lighter, so no two subjects ever
+ * share a line colour exactly.
+ */
+export function seriesColor(i: number): string {
+  const base = TAG_COLORS[i % TAG_COLORS.length];
+  const lap = Math.floor(i / TAG_COLORS.length);
+  if (!lap) return base;
+  const t = Math.min(0.75, lap * 0.3);
+  return '#' + rgbOf(base).map((v) => Math.round(v + (255 - v) * t).toString(16).padStart(2, '0')).join('');
+}
 
 /** Whichever of the light and the dark text reads better on a colour laid over the card at a strength. */
 export function readableOn(hex: string, alpha: number): string {

@@ -165,9 +165,19 @@ const checks = {
     assert.equal(s.projection, null, 'no projection from three exams');
     assert.deepEqual(s.streak, { dir: 'down', count: 1 });
     assert.deepEqual(s.targets, { set: 3, met: 0 });
-    assert.deepEqual(s.rank, { first: 5000, latest: 3000, best: 3000, change: -1000, n: 3 });
+    assert.deepEqual(s.rank, { first: 5000, latest: 3000, best: 3000, change: -1000, n: 3, latestId: 'm3', latestTitle: 'Mock 3' });
     near(s.percentile.mean, (90 + 92 + 95) / 3, 'percentile mean');
     assert.equal(s.bands.find((b) => b.label === '50s').count, 3);
+  },
+  'a latest rank from an older exam names it'() {
+    const pts = [
+      { id: 'a', title: 'Mock 1', when: '2026-01-01', pct: 50, rank: 900 },
+      { id: 'b', title: 'Mock 2', when: '2026-01-02', pct: 55 },
+    ];
+    const s = A.seriesStats(pts);
+    assert.equal(s.rank.latestId, 'a');
+    assert.equal(s.rank.latestTitle, 'Mock 1');
+    assert.notEqual(s.rank.latestId, s.latest.id);
   },
   'streaks, targets met and the projection'() {
     const pts = [40, 45, 50, 60, 70].map((pct, i) => ({ id: 'p' + i, title: '', when: '2026-01-0' + (i + 1), pct, target: 55 }));
