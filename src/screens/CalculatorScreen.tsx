@@ -118,7 +118,8 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     if (!expr.trim()) return '';
     try {
       const v = evalExpr(expr);
-      if (v === undefined || typeof v === 'function') return '';
+      // an indeterminate result (0/0, asin(2)...) is not a value to preview as an answer
+      if (v === undefined || typeof v === 'function' || math.isNaN(v)) return '';
       return fmt(v);
     } catch {
       return '';
@@ -145,7 +146,9 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     if (!expr.trim()) return;
     try {
       const v = evalExpr(expr);
-      if (v === undefined || typeof v === 'function') throw new Error('bad');
+      // 0/0, asin(2) and the like come back NaN, not a thrown error: treat it the same as "can't evaluate"
+      // instead of showing a raw NaN as an answer and carrying it into the history and Ans
+      if (v === undefined || typeof v === 'function' || math.isNaN(v)) throw new Error('bad');
       const out = fmt(v);
       ansRef.current = v;
       pushCalc(expr, out);
