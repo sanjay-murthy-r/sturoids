@@ -6,7 +6,7 @@ import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T } from '../theme';
-import { useStore, JournalEntry } from '../store';
+import { useStore, JournalEntry, flushSaves } from '../store';
 import { todayKey } from '../utils';
 import {
   Chip, DotMenu, Field, Hairline, IconBtn, NeuHeader, NeuIconBtn, PillButton, ProgressBar, Row, ScreenBG, Sheet, Toggle, useTheme,
@@ -17,7 +17,7 @@ import { PinSheet, ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, countWords, deleteEntry, formatJournalDate, journalDateParts, journalDayFor, promptFor, readBody, relativeDay, saveEntry,
-  shiftKey, takeJournalOpenRequest,
+  shiftKey, takeJournalOpenRequest, onBodiesRestored,
 } from '../journal';
 import { useToolNav } from '../toolNav';
 import { tap, tick } from '../haptics';
@@ -32,6 +32,8 @@ type Rating = JournalEntry['rating'];
 interface Draft {
   id: string | null; dateKey: string; title: string; body: string;
   mood: Mood; rating: Rating; checkoutSkipped: boolean; tags: string[]; promptId?: string; dirty: boolean;
+  /** the stored entry's updatedAt as this page last loaded or saved it: a different one means it changed elsewhere */
+  seen?: number;
 }
 
 const SAVE_DEBOUNCE_MS = 400;
@@ -119,10 +121,13 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       : turnDir.current ? shiftIn(turnDir.current * 22) : FadeIn.duration(240).easing(EASE_OUT);
 
   // ---- saving: serialised, so two flushes can never create the same entry twice ----
+  // set while a save is on its way, so a store change it causes is never mistaken for one made elsewhere
+  const saving = React.useRef(false);
   const runFlush = React.useCallback(async () => {
     const d = draft.current;
     if (!d.dirty) return;
     d.dirty = false;
+    saving.current = true;
     const empty = !d.title.trim() && !d.body.trim() && d.mood == null && d.rating == null && d.tags.length === 0;
     try {
       if (empty) {
@@ -141,6 +146,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         d.id = id;
         setEntryId(id);
       }
+      d.seen = useStore.getState().journal.find((x) => x.id === id)?.updatedAt;
       setSaveFailed(false);
       if (level !== 'none') {
         saved.value = withSequence(
@@ -151,6 +157,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     } catch {
       d.dirty = true;
       setSaveFailed(true);
+    } finally {
+      saving.current = false;
     }
   }, [level]);
 
@@ -175,7 +183,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     draft.current = {
       id: meta?.id ?? null, dateKey: key, title: meta?.title ?? '', body: text,
       mood: meta?.mood, rating: meta?.rating, checkoutSkipped: !!meta?.checkoutSkipped,
-      tags: meta?.tags ?? [], promptId: meta?.promptId, dirty: false,
+      tags: meta?.tags ?? [], promptId: meta?.promptId, dirty: false, seen: meta?.updatedAt,
     };
     setDateKey(key);
     setEntryId(meta?.id ?? null);
@@ -217,30 +225,41 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   // leaving the app saves; coming back on a new journal day moves an untouched page along
   React.useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
-      if (s !== 'active') { flush(); return; }
+      // the entry lands in the store only once its file is written, so storage is written after that, not before
+      if (s !== 'active') { flush().then(flushSaves); return; }
       const day = journalDayFor(new Date(), useStore.getState().settings.journalCutoffHour);
       if (autoDay.current && day !== draft.current.dateKey) openDay(day);
     });
     return () => {
       sub.remove();
       if (idle.current) clearTimeout(idle.current);
-      flush();
+      flush().then(flushSaves);
     };
   }, [flush, openDay]);
 
-  // an entry deleted elsewhere (the archive) leaves a blank page for its day; one moved to another day takes
-  // the page with it
+  // an entry deleted elsewhere (the archive) leaves a blank page for its day; one changed elsewhere (a restored
+  // backup) reloads when nothing typed is waiting, so a later keystroke never writes the old text back over it; one
+  // moved to another day takes the page with it
   React.useEffect(() => {
     if (!entryId) return;
     const e = journal.find((x) => x.id === entryId);
+    const idleNow = !draft.current.dirty && !timer.current && !saving.current;
     if (!e) {
       if (!draft.current.dirty) loadEntry(draft.current.dateKey, null);
+    } else if (idleNow && e.updatedAt !== draft.current.seen) {
+      loadEntry(e.dateKey, e.id);
     } else if (e.dateKey !== draft.current.dateKey) {
       autoDay.current = false;
       draft.current.dateKey = e.dateKey;
       setDateKey(e.dateKey);
     }
   }, [journal, entryId, loadEntry]);
+
+  // a restore writes the texts after the index: once they are in, an idle page reads its text again
+  React.useEffect(() => onBodiesRestored(() => {
+    const d = draft.current;
+    if (d.id && !d.dirty && !timer.current && !saving.current) loadEntry(d.dateKey, d.id);
+  }), [loadEntry]);
 
   // ---- edits ----
   // writing tucks the check-out away; the next time the keyboard goes down it may offer itself again

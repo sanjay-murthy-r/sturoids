@@ -52,6 +52,7 @@ const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, s
   e: JournalEntry; first: boolean; last: boolean; enter: boolean; tokens: string[]; snippet: string; well: object;
   dip: SharedValue<number>; onOpen: (dateKey: string, id?: string) => void; onMenu: (e: JournalEntry) => void;
 }) {
+  useTheme(); // a memo row: its search matches follow a new accent, which its props never carry
   const d = keyToDate(e.dateKey);
   const moodIcon = MOODS.find((m) => m.value === e.mood)?.icon;
   // the words and the tags; an entry with neither (a mood alone) states no count of nothing

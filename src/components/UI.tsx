@@ -7,8 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
-  Easing, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming,
-} from 'react-native-reanimated';
+  Easing, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming, LayoutAnimationConfig } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, SH, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
@@ -743,7 +742,9 @@ export function Sheet({
             style={{ maxHeight: scrollMax, marginHorizontal: -10, marginTop: -8 }}
             contentContainerStyle={{ paddingHorizontal: 10, paddingTop: 8, paddingBottom: 10 }}
           >
-            {children}
+            {/* rows that fold out of a sheet never outlive it: when the modal goes, its content leaves at once (the
+                ambient screen does the same), so no exit animation runs on in a window that is being torn down */}
+            <LayoutAnimationConfig skipExiting>{children}</LayoutAnimationConfig>
           </ScrollView>
         </Animated.View>
       </KeyboardAvoidingView>

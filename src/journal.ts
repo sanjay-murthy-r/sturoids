@@ -294,10 +294,23 @@ export async function journalForBackup(entries: JournalEntry[]) {
 }
 
 /** Writes the text carried by a restored backup's entries to their files. */
+// A restore writes the index first and the texts after it, so a page open meanwhile hears when the texts are in.
+const restoredListeners = new Set<() => void>();
+
+/** Called once a restore has written its texts; returns the unsubscribe. */
+export function onBodiesRestored(fn: () => void): () => void {
+  restoredListeners.add(fn);
+  return () => { restoredListeners.delete(fn); };
+}
+
 export async function restoreBodies(items: unknown): Promise<void> {
   if (!Array.isArray(items)) return;
-  for (const it of items as any[]) {
-    if (it && typeof it.id === 'string' && typeof it.body === 'string') await writeBody(it.id, it.body);
+  try {
+    for (const it of items as any[]) {
+      if (it && typeof it.id === 'string' && typeof it.body === 'string') await writeBody(it.id, it.body);
+    }
+  } finally {
+    restoredListeners.forEach((fn) => fn());
   }
 }
 
