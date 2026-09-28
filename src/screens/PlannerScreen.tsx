@@ -109,7 +109,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const deleteHabit = useCallback(async (h: Habit) => {
     const all = useStore.getState().habits;
-    const before = all.slice(0, all.findIndex((x) => x.id === h.id)).map((x) => x.id);
+    const before = all.slice(0, Math.max(0, all.findIndex((x) => x.id === h.id))).map((x) => x.id);
     removeHabit(h.id);
     toast('Deleted ' + h.title, {
       label: 'Undo',

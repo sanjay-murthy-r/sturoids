@@ -395,7 +395,10 @@ function RemindersSheet({ visible, onClose }: { visible: boolean; onClose: () =>
           label="Daily plan your ToDos nudge"
           onChange={async (v) => {
             setSetting('todoReminderEnabled', v);
-            await applyReminders();
+            // only switching one on asks for permission and enables reminders app-wide; switching off just
+            // cancels it, so turning a nudge off can never silently turn reminders on
+            if (v) await applyReminders();
+            else setTimeout(rescheduleAllReminders, 200);
           }}
         />
       </Row>
@@ -419,7 +422,7 @@ function RemindersSheet({ visible, onClose }: { visible: boolean; onClose: () =>
         <Row key={r.id} style={{ paddingVertical: 6 }}>
           <Text style={[T.body, { width: 62, fontVariant: ['tabular-nums'], color: C.accent }]}>{r.time}</Text>
           <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{r.label || 'ToDo check-in'}</Text>
-          <IconBtn name="close" size={17} onPress={async () => { removeTodoReminder(r.id); await applyReminders(); }} accessibilityLabel={'Remove the reminder at ' + r.time} />
+          <IconBtn name="close" size={17} onPress={async () => { removeTodoReminder(r.id); await rescheduleAllReminders(); }} accessibilityLabel={'Remove the reminder at ' + r.time} />
         </Row>
       ))}
       <Row style={{ marginTop: 4 }}>

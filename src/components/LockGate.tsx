@@ -318,9 +318,13 @@ function LockPage({ scope, alsoOpenedBy, locked, screenLock, title, reason, tint
   }, [scope, reason]);
 
   useFocusEffect(React.useCallback(() => {
-    if (open || !deviceOk || asked.current) return;
-    asked.current = true;
-    tryScreenLock();
+    if (!open && deviceOk && !asked.current) {
+      asked.current = true;
+      tryScreenLock();
+    }
+    // leaving the page re-arms it, so it is offered again next time the page comes into view, as intended,
+    // instead of only once for as long as this screen happens to stay mounted (tabs never unmount)
+    return () => { asked.current = false; };
   }, [open, deviceOk, tryScreenLock]));
 
   React.useEffect(() => {

@@ -64,6 +64,8 @@ export default function RootLayout() {
     const task = InteractionManager.runAfterInteractions(() => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       require('../src/notifications').initNotifications().catch(() => {});
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      require('../src/cloud').initCloud().catch(() => {});
     });
     return () => task.cancel();
   }, [revealed]);

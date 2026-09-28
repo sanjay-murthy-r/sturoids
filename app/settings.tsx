@@ -21,6 +21,7 @@ import { deviceAuthAvailable, isOpen, markOpen, pinStatus, removePin } from '../
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../src/tools';
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
+import { CloudSection } from '../src/components/CloudCard';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.5.0';
@@ -824,7 +825,9 @@ export default function Settings() {
           onClose={() => setPinStep(null)} onDone={pinDone}
         />
 
-        <SectionTitle right={<InfoDot text="Everything is stored locally on this phone, with no accounts. Export a backup before changing phones: it carries your notes' attachments too. Importing replaces all current data." />}>
+        <CloudSection />
+
+        <SectionTitle right={<InfoDot text="Everything lives on this phone, and in the cloud when you sign in above. A backup file works without an account: it carries your notes' attachments too. Importing replaces all current data." />}>
           Data
         </SectionTitle>
         <Card>

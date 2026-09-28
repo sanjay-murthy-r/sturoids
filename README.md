@@ -57,6 +57,10 @@ node scripts/build-handwriting.js --check
 
 **Planner.** The day is a wheel: drag it and every day keeps its place in one size gradient, large and bright at the centre and smaller outward, or tap a day beside it. There is one tick per day passed, the blocks arrive from the side the new day came from, and away from today a Today link comes back.
 
+**Cloud.** Settings, Cloud signs in with an email and password (Supabase project `sturoids`, Mumbai; the schema is `supabase/setup.sql`). The phone stays where the data lives; the cloud keeps its latest copy. The whole store, with the journal's texts, goes up as one snapshot in the user's own row of `public.backups`, and each note attachment goes up once into the private `backups` bucket under `<user id>/att/<attachment id>` (20 MB a file, 120 MB an account), streamed by the platform; attachments no note uses are cleared. A backup follows 45 seconds after a change and runs whenever the app goes to the background, and an unchanged app sends nothing (a fingerprint of the snapshot). A phone remembers the copy it last wrote or read: when the cloud holds a newer one from another phone, or one found on first sign-in, it stops and asks whether to bring it here or keep this phone's data. Signing in asks for the PIN when anything is locked, like an export. Row-level security lets an account see only its own row and files, a trigger caps the project at eight accounts, and deleting the account removes its files and row. `src/cloud.ts` is the engine, `src/components/CloudCard.tsx` the Settings section.
+
+**Running it on a PC.** `run-on-pc.bat` (or `scripts/run-on-pc.ps1 -Apk <file or link>`) starts the `Sturoids_Pixel` emulator (Android 14, hardware accelerated through the Windows Hypervisor Platform), installs an APK when one is given, even straight from an EAS build link, and opens the app.
+
 ## Design system
 
 Everything visual comes from `src/theme.ts`.
@@ -114,5 +118,7 @@ src/layout.ts         window widths, columns and the rail
 src/theme.ts          palette, NEU shadows, type scale
 src/components/       UI kit, tab bar, sheets, toasts, lock gate, ambient view, intro
 scripts/              signature and handwriting builders, type lint, store, backup, scores and analytics tests
-supabase/setup.sql    the cloud backup schema, for the project's SQL editor
+src/cloud.ts          cloud sync: account, snapshot, attachments, the two-phone choice
+supabase/setup.sql    the cloud schema (applied to the sturoids project; safe to run again)
+scripts/run-on-pc.ps1 the emulator launcher behind run-on-pc.bat
 ```

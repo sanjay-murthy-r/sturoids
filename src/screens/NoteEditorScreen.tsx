@@ -212,7 +212,9 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     const sub = AppState.addEventListener('change', (next) => {
       if (next !== 'active') { commit(); flushSaves(); }
     });
-    return () => { sub.remove(); commit(); };
+    // closing the note (not just backgrounding) must also flush past the save debounce, or a quick
+    // back-then-kill can lose the last edit before the store's own pause finishes writing it out
+    return () => { sub.remove(); commit(); flushSaves(); };
   }, [commit]);
 
   // a line offered as a task is its words: the bullet or box the toolbar put in front of it stays in the note. They are

@@ -1,6 +1,6 @@
 {
   "name": "all-in-one-student-app",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
@@ -17,6 +17,7 @@
     "@expo-google-fonts/rubik": "^0.4.2",
     "@expo/vector-icons": "^14.1.0",
     "@react-native-async-storage/async-storage": "2.1.2",
+    "@supabase/supabase-js": "^2.117.2",
     "expo": "~53.0.0",
     "expo-asset": "~11.1.5",
     "expo-brightness": "~13.1.4",
@@ -53,6 +54,7 @@
     "react-native-safe-area-context": "5.4.0",
     "react-native-screens": "~4.10.0",
     "react-native-svg": "15.11.2",
+    "react-native-url-polyfill": "^4.0.0",
     "react-native-webview": "13.13.5",
     "react-native-youtube-iframe": "^2.3.0",
     "zustand": "^5.0.3"
