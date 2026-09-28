@@ -193,20 +193,20 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     const d = draft.current;
     if (n.title !== d.title || n.body !== d.body) s.updateNote(n.id, { title: d.title, body: d.body });
   }, [id]);
-  const touched = useRef(false);
   const scheduleCommit = React.useCallback(() => {
-    touched.current = true;
     if (commitTimer.current) clearTimeout(commitTimer.current);
     commitTimer.current = setTimeout(commit, COMMIT_PAUSE_MS);
   }, [commit]);
-  // a note that turns up after the page was built (the store still loading) fills the draft, unless typing began
+  // the draft follows the stored note whenever nothing typed is waiting to be committed: a note that turns up after
+  // the page was built (the store still loading), and a note changed from outside while it sits open (a restored
+  // backup), so a later keystroke never writes the old text back over it
   React.useEffect(() => {
-    if (!stored || touched.current) return;
+    if (!stored || commitTimer.current) return;
     if (draft.current.title === stored.title && draft.current.body === stored.body) return;
     draft.current = { title: stored.title, body: stored.body };
     setTitle(stored.title);
     setBodyText(stored.body);
-  }, [stored?.id]);
+  }, [stored?.id, stored?.title, stored?.body]);
   // closing the note writes what is waiting, and so does leaving the app, straight through to storage
   React.useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
