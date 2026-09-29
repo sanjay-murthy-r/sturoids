@@ -21,7 +21,7 @@ import { deviceAuthAvailable, isOpen, markOpen, pinStatus, removePin } from '../
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../src/tools';
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
-import { CloudSection } from '../src/components/CloudCard';
+import { CloudSection, DeleteSection } from '../src/components/CloudCard';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.5.0';
@@ -856,6 +856,8 @@ export default function Settings() {
           Updates
         </SectionTitle>
         <UpdatesCard />
+
+        <DeleteSection />
 
         <Text style={[T.caption, { textAlign: 'center', marginTop: 16 }]}>
           Sturoids v{APP_VERSION} · local-first · made for focused work

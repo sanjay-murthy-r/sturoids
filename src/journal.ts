@@ -7,6 +7,8 @@ import { streaks, todayKey, uid } from './utils';
 // daily journal would eventually reach.
 
 const DIR = (FileSystem.documentDirectory || '') + 'journal/';
+/** where each entry's text lives, one file per entry (erasing the phone empties it) */
+export const JOURNAL_DIR = DIR;
 const EXCERPT_LEN = 200;
 const pathFor = (id: string) => DIR + id + '.txt';
 

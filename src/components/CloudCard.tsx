@@ -3,11 +3,12 @@ import { View, Text, StyleSheet, Alert, Pressable } from 'react-native';
 import { C, F, T } from '../theme';
 import { useStore } from '../store';
 import {
-  QUOTA_BYTES, deleteAccount, initCloud, keepThisPhone, restoreFromCloud, setAuto, signIn, signOut, signUp, syncNow,
-  useCloud, describe,
+  QUOTA_BYTES, changePassword, deleteAccount, deleteCloudCopy, initCloud, keepThisPhone, restoreFromCloud, setAuto,
+  signIn, signOut, signUp, syncNow, useCloud, describe,
 } from '../cloud';
+import { eraseThisPhone } from '../wipe';
 import { pinStatus } from '../lock';
-import { Card, Field, Hairline, InfoDot, PillButton, Row, SectionTitle, Toggle } from './UI';
+import { Card, Field, Hairline, InfoDot, PillButton, Row, SectionTitle, Sheet, Toggle } from './UI';
 import { FadeSwap } from './Motion';
 import { SegmentedControl } from './SegmentedControl';
 import { PinSheet } from './LockGate';
@@ -27,19 +28,28 @@ function ago(at: number, now = Date.now()): string {
 
 const mb = (bytes: number) => (bytes < 1024 * 1024 ? '<1' : String(Math.round(bytes / (1024 * 1024))));
 
+/** Anything locked (the journal, the Notes tool, a note) with a PIN set: then the PIN guards what could reveal it. */
+async function locksNeedPin() {
+  const s = useStore.getState();
+  const anyLock = s.settings.journalLocked || s.settings.notesLocked || s.notes.some((n) => n.locked);
+  return anyLock && (await pinStatus()) !== 'none';
+}
+
 /**
- * Settings, Cloud: sign in or create an account; then the backup's state, automatic backing up, backing up now,
- * bringing the cloud copy here, and a choice whenever the cloud holds a copy this phone has not seen.
+ * Settings, Account: sign in or create an account; then the email, the backup's state, automatic backing up,
+ * backing up now, bringing the cloud copy here, changing the password and signing out, and a choice whenever the
+ * cloud holds a copy this phone has not seen. Deleting lives in DeleteSection, at the end of Settings.
  */
 export function CloudSection() {
   const c = useCloud();
   const [mode, setMode] = React.useState<'in' | 'up'>('in');
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
-  const [busy, setBusy] = React.useState<null | 'auth' | 'restore' | 'delete'>(null);
+  const [busy, setBusy] = React.useState<null | 'auth' | 'restore'>(null);
   const [error, setError] = React.useState('');
   const [info, setInfo] = React.useState('');
   const [pinFor, setPinFor] = React.useState<null | 'auth'>(null);
+  const [pwOpen, setPwOpen] = React.useState(false);
   const [, tick] = React.useState(0);
 
   React.useEffect(() => { initCloud().catch(() => {}); }, []);
@@ -49,19 +59,13 @@ export function CloudSection() {
     return () => clearInterval(t);
   }, []);
 
-  // signing in sends locked pages to the cloud, so it asks for the PIN when anything is locked, like an export
-  const needsPin = async () => {
-    const s = useStore.getState();
-    const anyLock = s.settings.journalLocked || s.settings.notesLocked || s.notes.some((n) => n.locked);
-    return anyLock && (await pinStatus()) !== 'none';
-  };
-
   const submit = async (pinOk = false) => {
     setError('');
     setInfo('');
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) { setError('That does not look like an email address.'); return; }
     if (password.length < 6) { setError('Use a password of at least 6 characters.'); return; }
-    if (!pinOk && (await needsPin())) { setPinFor('auth'); return; }
+    // signing in sends locked pages to the cloud, so it asks for the PIN when anything is locked, like an export
+    if (!pinOk && (await locksNeedPin())) { setPinFor('auth'); return; }
     setBusy('auth');
     try {
       if (mode === 'up') {
@@ -120,34 +124,10 @@ export function CloudSection() {
   };
 
   const leave = () => {
-    Alert.alert('Sign out?', 'This phone keeps its data. Backing up stops until you sign in again.', [
+    Alert.alert('Sign out?', 'This phone keeps its data, and the cloud keeps its copy. Backing up stops until you sign in again.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign out', onPress: () => { signOut().then(() => toast('Signed out')); } },
     ]);
-  };
-
-  const remove = () => {
-    Alert.alert(
-      'Delete your cloud account?',
-      'The copy in the cloud and every attachment there are deleted for good. This phone keeps its data.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete', style: 'destructive',
-          onPress: async () => {
-            setBusy('delete');
-            try {
-              await deleteAccount();
-              toast('Cloud account deleted');
-            } catch (e) {
-              Alert.alert('Could not delete', describe(e));
-            } finally {
-              setBusy(null);
-            }
-          },
-        },
-      ],
-    );
   };
 
   const signedIn = c.status !== 'signed-out' && !!c.email;
@@ -160,8 +140,8 @@ export function CloudSection() {
 
   return (
     <>
-      <SectionTitle right={<InfoDot text="Your data is kept in your own private space in the cloud: only your account can read it. Attachments go up to 20 MB each, 120 MB in all. The data stays on this phone too." />}>
-        Cloud
+      <SectionTitle right={<InfoDot text="An account keeps a copy of everything in your own private space in the cloud: only you can read it, and it comes back on a new phone. Attachments go up to 20 MB each, 120 MB in all. Your data stays on this phone too." />}>
+        Account
       </SectionTitle>
 
       {signedIn && c.status === 'choice' && c.remote ? (
@@ -178,9 +158,10 @@ export function CloudSection() {
 
       {signedIn ? (
         <Card>
-          <Text style={st.title} numberOfLines={1}>{c.email}</Text>
+          <Text style={T.caption}>Signed in as</Text>
+          <Text style={[st.title, { marginTop: 2 }]} numberOfLines={1}>{c.email}</Text>
           <FadeSwap swapKey={c.status + ':' + (c.error || '') + ':' + (syncing ? '' : String(c.lastSyncedAt))}>
-            <Text style={[T.caption, { marginTop: 3 }, c.status === 'error' && { color: C.danger }]}>{statusLine}</Text>
+            <Text style={[T.caption, { marginTop: 6 }, c.status === 'error' && { color: C.danger }]}>{statusLine}</Text>
           </FadeSwap>
           {c.note ? <Text style={[T.caption, { marginTop: 3 }]}>{c.note}</Text> : null}
           {c.usedBytes != null && c.usedBytes > 0 ? (
@@ -207,11 +188,11 @@ export function CloudSection() {
             color={C.amber} outline onPress={() => { if (!busy) restore(); }} style={{ marginTop: 10 }}
           />
           <View style={st.links}>
+            <Pressable onPress={() => setPwOpen(true)} hitSlop={8} accessibilityRole="button">
+              <Text style={[st.link, { color: C.accent }]}>Change password</Text>
+            </Pressable>
             <Pressable onPress={leave} hitSlop={8} accessibilityRole="button">
               <Text style={[st.link, { color: C.textDim }]}>Sign out</Text>
-            </Pressable>
-            <Pressable onPress={() => { if (!busy) remove(); }} hitSlop={8} accessibilityRole="button">
-              <Text style={[st.link, { color: C.danger }]}>{busy === 'delete' ? 'Deleting' : 'Delete cloud account'}</Text>
             </Pressable>
           </View>
         </Card>
@@ -249,6 +230,132 @@ export function CloudSection() {
         visible={!!pinFor} mode="enter" onClose={() => setPinFor(null)}
         onDone={() => { setPinFor(null); submit(true); }}
       />
+      <PasswordSheet visible={pwOpen} onClose={() => setPwOpen(false)} />
+    </>
+  );
+}
+
+/** Changing the password: the new one twice, so a typo never locks the account. */
+function PasswordSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const [next, setNext] = React.useState('');
+  const [again, setAgain] = React.useState('');
+  const [error, setError] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const done = React.useRef(false);
+  React.useEffect(() => {
+    if (visible) { setNext(''); setAgain(''); setError(''); done.current = false; }
+  }, [visible]);
+
+  const save = async () => {
+    if (next.length < 6) { setError('Use a password of at least 6 characters.'); return; }
+    if (next !== again) { setError('The two passwords do not match.'); return; }
+    setBusy(true);
+    try {
+      await changePassword(next);
+      done.current = true;
+      onClose();
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet
+      visible={visible} onClose={onClose} title="Change password"
+      onClosed={() => { if (done.current) toast('Password changed'); }}
+    >
+      <Field
+        label="New password" value={next} onChangeText={(v) => { setNext(v); if (error) setError(''); }}
+        secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="new-password" textContentType="newPassword"
+        placeholder="At least 6 characters" autoFocus
+      />
+      <Field
+        label="The new password again" value={again} onChangeText={(v) => { setAgain(v); if (error) setError(''); }}
+        secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="new-password" textContentType="newPassword"
+        returnKeyType="done" onSubmitEditing={save}
+      />
+      {error ? <Text style={st.problem}>{error}</Text> : null}
+      <PillButton label={busy ? 'Saving' : 'Save password'} icon="key-outline" onPress={() => { if (!busy) save(); }} style={{ marginTop: 6 }} />
+    </Sheet>
+  );
+}
+
+/**
+ * The end of Settings: deleting, each behind a dialog that says exactly what goes and what stays. The account's two
+ * rows show only when signed in; erasing this phone is always there.
+ */
+export function DeleteSection() {
+  const c = useCloud();
+  const [busy, setBusy] = React.useState<null | 'account' | 'cloud' | 'phone'>(null);
+  const [pinFor, setPinFor] = React.useState<null | 'phone'>(null);
+  const signedIn = c.status !== 'signed-out' && !!c.email;
+
+  const run = async (what: 'account' | 'cloud' | 'phone') => {
+    setBusy(what);
+    try {
+      if (what === 'account') { await deleteAccount(); toast('Account deleted'); }
+      else if (what === 'cloud') { await deleteCloudCopy(); toast('Cloud data deleted'); }
+      else { await eraseThisPhone(); toast('Everything on this phone was deleted'); }
+      tap();
+    } catch (e) {
+      Alert.alert('Could not delete', describe(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const confirmAccount = () => Alert.alert(
+    'Delete your account?',
+    'Your account, the copy in the cloud and every attachment there are deleted for good. This phone keeps its data. This cannot be undone.',
+    [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete account', style: 'destructive', onPress: () => run('account') }],
+  );
+  const confirmCloud = () => Alert.alert(
+    'Delete your cloud data?',
+    'The copy in the cloud and every attachment there are deleted, and automatic backup turns off. Your account and this phone\'s data stay. This cannot be undone.',
+    [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete cloud data', style: 'destructive', onPress: () => run('cloud') }],
+  );
+  const confirmPhone = async (pinOk = false) => {
+    // erasing takes locked pages with it, so the PIN is asked for first when anything is locked
+    if (!pinOk && (await locksNeedPin())) { setPinFor('phone'); return; }
+    Alert.alert(
+      'Delete everything on this phone?',
+      'Tasks, notes, the journal, scores, lectures, habits, settings, attachments and the PIN are erased from this phone. '
+        + (signedIn ? 'You are signed out here first, so the copy in the cloud stays and can be brought back. ' : '')
+        + 'This cannot be undone.',
+      [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete everything', style: 'destructive', onPress: () => run('phone') }],
+    );
+  };
+
+  return (
+    <>
+      <SectionTitle>Delete</SectionTitle>
+      <Card>
+        {signedIn ? (
+          <>
+            <PillButton
+              label={busy === 'account' ? 'Deleting account' : 'Delete my account'} icon="person-remove-outline"
+              color={C.danger} outline onPress={() => { if (!busy) confirmAccount(); }}
+            />
+            <Text style={st.danger}>Your account and everything it keeps in the cloud.</Text>
+            <PillButton
+              label={busy === 'cloud' ? 'Deleting cloud data' : 'Delete my cloud data'} icon="cloud-offline-outline"
+              color={C.danger} outline onPress={() => { if (!busy) confirmCloud(); }} style={{ marginTop: 16 }}
+            />
+            <Text style={st.danger}>The copy in the cloud. Your account stays.</Text>
+          </>
+        ) : null}
+        <PillButton
+          label={busy === 'phone' ? 'Deleting' : 'Delete everything on this phone'} icon="trash-outline"
+          color={C.danger} outline onPress={() => { if (!busy) confirmPhone(); }} style={signedIn ? { marginTop: 16 } : undefined}
+        />
+        <Text style={st.danger}>Every tool's data and settings on this phone.</Text>
+      </Card>
+      <PinSheet
+        visible={!!pinFor} mode="enter" onClose={() => setPinFor(null)}
+        onDone={() => { setPinFor(null); confirmPhone(true); }}
+      />
     </>
   );
 }
@@ -259,5 +366,5 @@ const st = StyleSheet.create({
   info: { color: C.textDim, fontFamily: F.med, fontSize: 12, lineHeight: 17, marginTop: -4, marginBottom: 12 },
   links: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 18, paddingHorizontal: 4 },
   link: { fontFamily: F.semi, fontSize: 13 },
+  danger: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 17, marginTop: 8, marginLeft: 4 },
 });
-

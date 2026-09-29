@@ -134,6 +134,8 @@ export function describe(e: unknown): string {
   if (/User already registered|already been registered|user_already_exists/i.test(msg + code)) return 'An account with that email exists. Sign in instead.';
   if (/Database error saving new user|accounts are full/i.test(msg)) return 'Sign-ups are full: this app keeps to eight accounts.';
   if (/Password should be at least|weak_password/i.test(msg + code)) return 'Use a password of at least 6 characters.';
+  if (/should be different|same_password/i.test(msg + code)) return 'The new password must differ from the one you use now.';
+  if (/reauthentication|reauthentication_needed/i.test(msg + code)) return 'Sign out and in again, then change the password.';
   if (/rate limit|over_email_send_rate_limit|too many/i.test(msg + code)) return 'Too many tries just now. Wait a minute and try again.';
   if (/valid email|email_address_invalid|invalid email/i.test(msg + code)) return 'That does not look like an email address.';
   if (/JWT|session|not authenticated|401/i.test(msg)) return 'You were signed out. Sign in again to keep backing up.';
@@ -270,8 +272,23 @@ export async function deleteAccount() {
   const c = cloud();
   const { data: u } = await c.auth.getUser();
   if (!u.user) throw new Error('Sign in first.');
-  const folder = u.user.id + '/att';
   // files first: deleting the account removes its row, but files are only removed by a request like this
+  await removeAllFiles(u.user.id);
+  const { error } = await c.rpc('delete_my_account');
+  if (error) throw error;
+  await signOut();
+}
+
+/** Changes the account's password (the account stays signed in on this phone). */
+export async function changePassword(password: string) {
+  const { error } = await cloud().auth.updateUser({ password });
+  if (error) throw error;
+}
+
+/** Removes every attachment the account keeps in the cloud. */
+async function removeAllFiles(userId: string) {
+  const c = cloud();
+  const folder = userId + '/att';
   for (;;) {
     const { data: files, error } = await c.storage.from(BUCKET).list(folder, { limit: 100 });
     if (error) throw error;
@@ -280,9 +297,21 @@ export async function deleteAccount() {
     if (rm) throw rm;
     if (files.length < 100) break;
   }
-  const { error } = await c.rpc('delete_my_account');
+}
+
+/**
+ * Deletes the copy in the cloud (data and attachments) and keeps the account. Automatic backing up turns off, so the
+ * cloud stays empty until the user backs up again.
+ */
+export async function deleteCloudCopy() {
+  if (running) await running.catch(() => {});
+  const s = await session();
+  await removeAllFiles(s.user.id);
+  const { error } = await cloud().from('backups').delete().eq('user_id', s.user.id);
   if (error) throw error;
-  await signOut();
+  meta = { ...meta, auto: false, lastRemoteAt: null, lastSyncedAt: null, lastHash: null };
+  await saveMeta();
+  patch({ auto: false, lastSyncedAt: null, remote: null, pending: true, usedBytes: 0, status: 'idle', note: null, error: null });
 }
 
 export async function setAuto(on: boolean) {
