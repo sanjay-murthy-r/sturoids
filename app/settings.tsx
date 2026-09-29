@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, Linking, AppState } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import Constants from 'expo-constants';
+import { Image } from 'expo-image';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, ThemeMode, AnimLevel, ACCENT_CHOICES, neuInset, neuRaised } from '../src/theme';
 import { useStore, exportSnapshot, importSnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves } from '../src/store';
 import { compareVersions, todayKey } from '../src/utils';
-import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, useTheme } from '../src/components/UI';
+import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu, useTheme } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
-import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt } from '../src/components/Motion';
+import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, shiftIn, useAnimLevel, useBuilt, useEntrance } from '../src/components/Motion';
 import { tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
 import { PinSheet } from '../src/components/LockGate';
@@ -22,6 +24,7 @@ import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../src/tools';
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
 import { CloudSection, DeleteSection } from '../src/components/CloudCard';
+import { useCloud } from '../src/cloud';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.5.0';
@@ -239,16 +242,158 @@ const AccentCard = React.memo(function AccentCard() {
   );
 });
 
-/** The name the greeting uses. What is typed stays in this card until a pause (see useSettingDraft). */
+/**
+ * A photo from the gallery, cropped square and made small (256 px, a JPEG of a few dozen KB) so it can live in the
+ * settings and travel with backups and the cloud. Null when nothing was picked.
+ */
+async function pickPhoto(): Promise<string | null> {
+  // required here: the picker and the resizer stay off the startup path
+  const ImagePicker = require('expo-image-picker') as typeof import('expo-image-picker');
+  const Manipulator = require('expo-image-manipulator') as typeof import('expo-image-manipulator');
+  const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 1 });
+  if (res.canceled || !res.assets?.[0]) return null;
+  const small = await Manipulator.manipulateAsync(
+    res.assets[0].uri, [{ resize: { width: 256, height: 256 } }],
+    { compress: 0.72, format: Manipulator.SaveFormat.JPEG, base64: true },
+  );
+  return small.base64 ? 'data:image/jpeg;base64,' + small.base64 : null;
+}
+
+/** Up to two initials from a name, or from the part of an email before the @. */
+function initialsOf(name: string, email: string | null): string {
+  const words = (name.trim() || (email || '').split('@')[0].replace(/[._-]+/g, ' ')).split(/\s+/).filter(Boolean);
+  return (words.length > 1 ? words[0][0] + words[words.length - 1][0] : (words[0] || '').slice(0, 1)).toUpperCase();
+}
+
+/** The profile photo, or initials on a tint of the accent when there is none. */
+function Avatar({ size }: { size: number }) {
+  useTheme(); // the initials' tint is the accent
+  const avatar = useStore((s) => s.settings.avatar);
+  const name = useStore((s) => s.settings.name);
+  const email = useCloud((c) => c.email);
+  const initials = initialsOf(name, email);
+  return (
+    <View style={[st.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: C.accent + '26' }]}>
+      {avatar ? (
+        <Image source={{ uri: avatar }} style={{ width: size, height: size }} contentFit="cover" transition={180} />
+      ) : initials ? (
+        <Text style={{ color: C.accent, fontFamily: F.semi, fontSize: Math.round(size * 0.38) }}>{initials}</Text>
+      ) : (
+        <Ionicons name="person" size={Math.round(size * 0.46)} color={C.accent} />
+      )}
+    </View>
+  );
+}
+
+/** The photo and the name the greeting uses. What is typed stays in the field until a pause (see useSettingDraft). */
 const ProfileCard = React.memo(function ProfileCard() {
   const name = useSettingDraft('name');
+  const avatar = useStore((s) => s.settings.avatar);
+  const setSetting = useStore((s) => s.setSetting);
+  const [menu, setMenu] = useState(false);
+  const choose = async () => {
+    try {
+      const uri = await pickPhoto();
+      if (uri) { setSetting('avatar', uri); tick(); }
+    } catch (e: any) {
+      Alert.alert('Could not use that photo', String(e?.message || e));
+    }
+  };
   return (
     <Card>
+      <View style={{ alignItems: 'center', marginBottom: 16 }}>
+        <Bouncy
+          onPress={() => (avatar ? setMenu(true) : choose())} radius={48} scaleTo={0.95}
+          accessibilityRole="button" accessibilityLabel={avatar ? 'Change or remove your photo' : 'Add a photo'}
+        >
+          <Avatar size={88} />
+        </Bouncy>
+        <Pressable onPress={() => (avatar ? setMenu(true) : choose())} hitSlop={8} accessibilityRole="button">
+          <Text style={[st.link, { color: C.accent, marginTop: 10 }]}>{avatar ? 'Change photo' : 'Add a photo'}</Text>
+        </Pressable>
+      </View>
       <Text style={st.label}>Name (used in the greeting)</Text>
       <Field value={name.draft} onChangeText={name.change} onBlur={name.commit} placeholder="Your name" />
+      <DotMenu
+        visible={menu} onClose={() => setMenu(false)}
+        items={[
+          { label: 'Choose another photo', icon: 'images-outline', onPress: choose },
+          { label: 'Remove photo', icon: 'trash-outline', color: C.danger, onPress: () => setSetting('avatar', '') },
+        ]}
+      />
     </Card>
   );
 });
+
+/** Settings' top: the photo, the name, the account and how the backup stands. Opens the Account page. */
+const ProfileHeader = React.memo(function ProfileHeader({ onOpen }: { onOpen: () => void }) {
+  useTheme();
+  const name = useStore((s) => s.settings.name);
+  const c = useCloud();
+  const signedIn = c.status !== 'signed-out' && !!c.email;
+  const status = !signedIn ? 'Sign in to back up to the cloud'
+    : c.status === 'choice' ? 'A newer copy in the cloud needs your choice'
+      : c.status === 'error' ? 'Backup needs attention'
+        : c.status === 'syncing' ? 'Backing up'
+          : c.lastSyncedAt ? 'Backed up' : 'Not backed up yet';
+  const tone = !signedIn ? C.textFaint : c.status === 'choice' || c.status === 'error' ? C.amber : C.green;
+  return (
+    <Card hero onPress={onOpen} pad={18}>
+      <Row style={{ alignItems: 'center' }}>
+        <Avatar size={60} />
+        <View style={{ flex: 1, marginLeft: 16 }}>
+          <Text style={T.head} numberOfLines={1}>{name.trim() || 'Your profile'}</Text>
+          <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{signedIn ? c.email : 'Not signed in'}</Text>
+          <Row style={{ alignItems: 'center', marginTop: 6 }}>
+            <View style={[st.statusDot, { backgroundColor: tone }]} />
+            <FadeSwap swapKey={status}>
+              <Text style={[T.caption, { color: C.textDim }]} numberOfLines={1}>{status}</Text>
+            </FadeSwap>
+          </Row>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+      </Row>
+    </Card>
+  );
+});
+
+/** One category of Settings: its icon, its name, what it is set to now, and a way in. */
+function CategoryRow({ icon, title, summary, onPress, danger, first }: {
+  icon: any; title: string; summary: string; onPress: () => void; danger?: boolean; first?: boolean;
+}) {
+  return (
+    <>
+      {first ? null : <Hairline />}
+      <ListRow onPress={() => { tick(); onPress(); }} style={st.catRow}>
+        <Ionicons name={icon} size={21} color={danger ? C.danger : C.textDim} />
+        <View style={{ flex: 1, marginLeft: 14 }}>
+          <Text style={[T.body, { fontFamily: F.med }, danger && { color: C.danger }]}>{title}</Text>
+          <FadeSwap swapKey={summary}>
+            <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{summary}</Text>
+          </FadeSwap>
+        </View>
+        <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
+      </ListRow>
+    </>
+  );
+}
+
+/**
+ * The list's entrance the first time Settings opens. Whether it plays is decided as the list mounts, so coming back
+ * from a page (a fresh mount, with `first` false) never replays it, and nothing remounts when `first` changes later.
+ */
+function Arrive({ first, index, children }: { first: boolean; index: number; children: React.ReactNode }) {
+  const entrance = useEntrance(index, first);
+  return <Animated.View style={entrance}>{children}</Animated.View>;
+}
+
+type Page = 'account' | 'appearance' | 'tools' | 'motion' | 'time' | 'deepwork' | 'privacy' | 'backup' | 'updates' | 'delete';
+
+const PAGE_TITLES: Record<Page, string> = {
+  account: 'Account', appearance: 'Appearance', tools: 'Tabs and tools', motion: 'Motion and start screen',
+  time: 'Time and reminders', deepwork: 'Deep Work', privacy: 'Privacy and locks', backup: 'Backup', updates: 'Updates',
+  delete: 'Delete',
+};
 
 /** One bar slot, memoised: a new tool in it dips in where the old one was. */
 const SlotRow = React.memo(function SlotRow({ index, toolKey, onOpen }: {
@@ -338,7 +483,7 @@ const ToolsSection = React.memo(function ToolsSection() {
   return (
     <>
       <SectionTitle right={<InfoDot text="Today and More stay fixed. Tools placed in a slot open as tabs; the rest live in More. Archived tools stay out of sight until you restore them." />}>
-        Tools
+        Tab bar slots
       </SectionTitle>
       <Card pad={6}>
         {slots.map((key, i) => <SlotRow key={i} index={i} toolKey={key} onOpen={openSlot} />)}
@@ -412,6 +557,25 @@ const UpdatesCard = React.memo(function UpdatesCard() {
 export default function Settings() {
   useTheme(); // a new accent or theme repaints the page's toggles and pills, which take the accent as a prop
   const level = useAnimLevel();
+  const router = useRouter();
+  // Settings opens on its list of categories; each opens as its own page within the screen, and back returns to the
+  // list. `dir` is the way the page moves: in from the right going in, from the left coming back
+  const [page, setPage] = useState<Page | null>(null);
+  const dir = useRef<1 | -1>(1);
+  const open = useCallback((p: Page) => { dir.current = 1; setPage(p); }, []);
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const back = useCallback(() => {
+    if (!pageRef.current) return false;
+    dir.current = -1;
+    setPage(null);
+    return true;
+  }, []);
+  useFocusEffect(useCallback(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', back);
+    return () => sub.remove();
+  }, [back]));
+  const cloud = useCloud();
   // parts that turn up after the first paint (the screen-lock choices, a kept copy, Remove PIN) fade in where they
   // stand. They leave at once: this page's cards do not glide, so a fading ghost would lie over the lines moving up
   const built = useBuilt();
@@ -676,198 +840,293 @@ export default function Settings() {
   );
   const arrive = built.current ? rowIn(level) : undefined;
 
+  // ---- what each category is set to now, for its row on the list ----
+  const slotNames = normaliseSlots(settings.tabSlots).map((k) => toolByKey(k)?.shortLabel || toolByKey(k)?.label).join(', ');
+  const signedIn = cloud.status !== 'signed-out' && !!cloud.email;
+  const summaries: Record<Page, string> = {
+    account: signedIn
+      ? cloud.status === 'choice' ? 'A newer copy in the cloud needs your choice' : (cloud.email as string)
+      : 'Profile, photo and cloud backup',
+    appearance: (THEMES.find((t) => t.key === settings.theme)?.label || 'Default') + ', '
+      + (ACCENT_CHOICES.find((x) => x.color === settings.accent)?.label || 'custom') + ' accent',
+    tools: slotNames,
+    motion: (ANIMS.find((x) => x.key === settings.animLevel)?.label || 'Everything') + ' motion, '
+      + (settings.introStyle === 'logo' ? 'logo first' : 'the big signature'),
+    time: (settings.hour24 ? '24-hour clock' : '12-hour clock') + ', reminders ' + (settings.remindersEnabled ? 'on' : 'off'),
+    deepwork: 'Ambient screen: ' + [settings.ambientSeconds ? 'seconds' : '', settings.ambientClock ? 'time of day' : '']
+      .filter(Boolean).join(' and ').replace(/^$/, 'minutes only'),
+    privacy: [settings.journalLocked ? 'Journal locked' : '', settings.notesLocked ? 'Notes locked' : '']
+      .filter(Boolean).join(', ') || (pinState === 'none' ? 'Nothing locked' : 'Nothing locked, PIN set'),
+    backup: recovery ? 'A kept copy is waiting' : 'Export or import a backup file',
+    updates: 'Version ' + APP_VERSION,
+    delete: signedIn ? 'Your account, cloud data or this phone' : 'Everything on this phone',
+  };
+
+  const pageBody = (p: Page) => {
+    switch (p) {
+      case 'account':
+        return (
+          <>
+            <ProfileCard />
+            <CloudSection title="Cloud backup" />
+          </>
+        );
+      case 'appearance':
+        return (
+          <>
+            <SectionTitle>Theme</SectionTitle>
+            <Card pad={12}>
+              <OptionPicker options={THEMES} value={settings.theme} onPick={pickTheme} />
+            </Card>
+            <SectionTitle>Accent colour</SectionTitle>
+            <AccentCard />
+          </>
+        );
+      case 'tools':
+        return <ToolsSection />;
+      case 'motion':
+        return (
+          <>
+            <SectionTitle>Animations</SectionTitle>
+            <Card pad={12}>
+              <OptionPicker options={ANIMS} value={settings.animLevel} onPick={pickAnim} />
+            </Card>
+            <SectionTitle>Start screen</SectionTitle>
+            <Card>
+              <Row style={{ justifyContent: 'space-between' }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>Disable the big signature</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>
+                    The logo and the words come first; the signature is written below them, a little faster.
+                  </Text>
+                </View>
+                <Toggle
+                  value={settings.introStyle === 'logo'}
+                  onChange={(v) => setSetting('introStyle', v ? 'logo' : 'signed')}
+                  color={C.accent}
+                  label="Disable the big signature"
+                />
+              </Row>
+            </Card>
+          </>
+        );
+      case 'time':
+        return (
+          <>
+            <SectionTitle>Clock and reminders</SectionTitle>
+            <Card>
+              <Row style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+                <Text style={T.body}>24-hour time</Text>
+                <Toggle value={settings.hour24} onChange={(v) => setSetting('hour24', v)} color={C.accent} label="24-hour time" />
+              </Row>
+              <Hairline />
+              <Row style={{ justifyContent: 'space-between', marginTop: 12 }}>
+                <Row>
+                  <Text style={T.body}>All reminders (master)</Text>
+                  <InfoDot text="The master switch for every notification. Habit times live in Planner, Streaks; ToDo nudges in Tasks, the bell icon." />
+                </Row>
+                <Toggle value={settings.remindersEnabled} onChange={toggleReminders} color={C.green} label="All reminders" />
+              </Row>
+            </Card>
+          </>
+        );
+      case 'deepwork':
+        return (
+          <>
+            <SectionTitle>Ambient screen</SectionTitle>
+            <Card>
+              <Row style={{ justifyContent: 'space-between', marginBottom: 10 }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>Seconds on the ambient screen</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>Off, it shows whole minutes.</Text>
+                </View>
+                <Toggle value={settings.ambientSeconds} onChange={(v) => setSetting('ambientSeconds', v)} color={C.accent} label="Seconds on the ambient screen" />
+              </Row>
+              <Hairline />
+              <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>Time of day on the ambient screen</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>Shown small, above the timer.</Text>
+                </View>
+                <Toggle value={settings.ambientClock} onChange={(v) => setSetting('ambientClock', v)} color={C.accent} label="Time of day on the ambient screen" />
+              </Row>
+            </Card>
+          </>
+        );
+      case 'privacy':
+        return (
+          <>
+            <SectionTitle>Locks</SectionTitle>
+            <Card>
+              <Row style={{ justifyContent: 'space-between' }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>Lock the journal</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>Your app PIN opens it.</Text>
+                </View>
+                <Toggle value={settings.journalLocked} onChange={(v) => setToolLock('journal', v)} color={C.gold} label="Lock the journal" />
+              </Row>
+              <Hairline />
+              <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>Lock Notes</Text>
+                  <FadeSwap swapKey={String(lockedNotes)}>
+                    <Text style={[T.caption, { marginTop: 2 }]}>
+                      {'The whole tool. A single note locks from inside the note'
+                        + (lockedNotes ? '; ' + lockedNotes + (lockedNotes === 1 ? ' is locked now.' : ' are locked now.') : '.')}
+                    </Text>
+                  </FadeSwap>
+                </View>
+                <Toggle value={settings.notesLocked === true} onChange={(v) => setToolLock('notes', v)} color={C.green} label="Lock Notes" />
+              </Row>
+              {deviceLock ? (
+                <Animated.View entering={arrive}>
+                  <Hairline />
+                  <Text style={[st.label, { marginTop: 10, marginBottom: 4 }]}>Your screen lock can also open</Text>
+                  <Row style={{ justifyContent: 'space-between', marginTop: 6 }}>
+                    <Text style={T.body}>The journal</Text>
+                    <Toggle value={settings.journalScreenLock === true} onChange={(v) => setScreenLock('journal', v)} color={C.gold} label="Screen lock opens the journal" />
+                  </Row>
+                  <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
+                    <Text style={T.body}>Notes</Text>
+                    <Toggle value={settings.notesScreenLock === true} onChange={(v) => setScreenLock('notes', v)} color={C.green} label="Screen lock opens Notes" />
+                  </Row>
+                  <Text style={[T.caption, { marginTop: 8 }]}>
+                    Fingerprint, face or the phone's own PIN, as well as the app PIN. A locked single note always asks for the
+                    app PIN.
+                  </Text>
+                </Animated.View>
+              ) : null}
+            </Card>
+            <SectionTitle>App PIN</SectionTitle>
+            <Card>
+              <Row style={{ justifyContent: 'space-between' }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>App PIN</Text>
+                  {pinKnown ? <FadeSwap swapKey={pinState}>{pinLine}</FadeSwap> : pinLine}
+                </View>
+                <PillButton
+                  small outline label={pinState === 'none' ? 'Set PIN' : 'Change PIN'}
+                  onPress={() => setPinStep({ mode: 'set', for: 'change' })}
+                />
+              </Row>
+              {pinState !== 'none' && !pinInUse ? (
+                <Animated.View entering={arrive} style={{ marginTop: 10, alignSelf: 'flex-end' }}>
+                  <PillButton small outline color={C.danger} label="Remove PIN" onPress={() => setPinStep({ mode: 'enter', for: 'remove' })} />
+                </Animated.View>
+              ) : null}
+              <Hairline />
+              <Text style={[st.label, { marginTop: 10, marginBottom: 8 }]}>Re-lock after</Text>
+              <SegmentedControl
+                size="sm"
+                stretch
+                value={String(settings.lockGraceSec)}
+                onChange={(k) => setSetting('lockGraceSec', Number(k))}
+                options={GRACE_OPTIONS}
+              />
+              <Text style={[T.caption, { marginTop: 14 }]}>
+                Locks hide pages, they do not encrypt them. Backups still include everything, so keep them somewhere safe.
+              </Text>
+            </Card>
+          </>
+        );
+      case 'backup':
+        return (
+          <>
+            <SectionTitle right={<InfoDot text="Everything lives on this phone, and in the cloud when you sign in under Account. A backup file works without an account: it carries your notes' attachments too. Importing replaces all current data." />}>
+              Backup file
+            </SectionTitle>
+            <Card>
+              <PillButton
+                label={busy?.kind === 'export' ? 'Writing backup, ' + busy.pct + '%' : 'Export backup (JSON)'}
+                icon="download-outline" onPress={() => exportData()} style={{ marginBottom: 10 }}
+              />
+              <PillButton
+                label={busy?.kind === 'import' ? 'Restoring attachments, ' + busy.pct + '%' : 'Import backup'}
+                icon="push-outline" color={C.amber} outline onPress={importData}
+              />
+              {recovery ? (
+                <Animated.View entering={arrive} style={st.recovery}>
+                  <Text style={st.recoveryTitle}>A copy of data that could not be opened</Text>
+                  <Text style={st.recoveryBody}>
+                    It was set aside so nothing is lost. Share it to keep it safe, or restore it after updating the app.
+                  </Text>
+                  <PillButton label="Share copy" icon="share-outline" outline onPress={shareRecovery} style={{ marginTop: 12 }} />
+                  <PillButton label="Restore copy" icon="refresh-outline" color={C.amber} outline onPress={restoreRecovery} style={{ marginTop: 10 }} />
+                  <PillButton label="Delete copy" icon="trash-outline" color={C.danger} outline onPress={discardRecovery} style={{ marginTop: 10 }} />
+                </Animated.View>
+              ) : null}
+            </Card>
+          </>
+        );
+      case 'updates':
+        return (
+          <>
+            <SectionTitle right={<InfoDot text="Sideloaded APKs don't auto-update. This checks the GitHub Releases of the repo below for a newer version tag and links you to the download." />}>
+              Check for a new version
+            </SectionTitle>
+            <UpdatesCard />
+          </>
+        );
+      case 'delete':
+        return <DeleteSection title={null} />;
+    }
+  };
+
+  const moving = level === 'none' ? undefined : level === 'some' ? rowIn(level) : shiftIn(dir.current * 24);
+  const groups: { title: string; rows: { p: Page; icon: string; danger?: boolean }[] }[] = [
+    { title: 'Look and feel', rows: [{ p: 'appearance', icon: 'color-palette-outline' }, { p: 'tools', icon: 'apps-outline' }, { p: 'motion', icon: 'sparkles-outline' }] },
+    { title: 'Your day', rows: [{ p: 'time', icon: 'time-outline' }, { p: 'deepwork', icon: (toolByKey('focus')?.icon || 'hourglass-outline') }, { p: 'privacy', icon: 'lock-closed-outline' }] },
+    { title: 'Data', rows: [{ p: 'account', icon: 'cloud-outline' }, { p: 'backup', icon: 'archive-outline' }, { p: 'updates', icon: 'cloud-download-outline' }] },
+    { title: 'Delete', rows: [{ p: 'delete', icon: 'trash-outline', danger: true }] },
+  ];
+
   return (
     <ScreenBG>
-      <NeuHeader title="Settings" />
-      <ScrollView contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 }}>
-        <SectionTitle>Profile</SectionTitle>
-        <ProfileCard />
-
-        <SectionTitle>Appearance</SectionTitle>
-        <Card pad={12}>
-          <OptionPicker options={THEMES} value={settings.theme} onPick={pickTheme} />
-        </Card>
-
-        <SectionTitle>Accent colour</SectionTitle>
-        <AccentCard />
-
-        <ToolsSection />
-
-        <SectionTitle>Animations</SectionTitle>
-        <Card pad={12}>
-          <OptionPicker options={ANIMS} value={settings.animLevel} onPick={pickAnim} />
-        </Card>
-
-        <SectionTitle>Start screen</SectionTitle>
-        <Card>
-          <Row style={{ justifyContent: 'space-between' }}>
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={[T.body, { fontFamily: F.med }]}>Disable the big signature</Text>
-              <Text style={[T.caption, { marginTop: 2 }]}>
-                The logo and the words come first; the signature is written below them, a little faster.
+      <NeuHeader title={page ? PAGE_TITLES[page] : 'Settings'} onBack={() => { if (!back()) router.back(); }} />
+      <ScrollView key={page || 'list'} contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+        <Animated.View key={page || 'list'} entering={built.current ? moving : undefined}>
+          {page ? (
+            // the page's first heading sits close under the header, like the list's first card
+            <View style={{ marginTop: -S.section + 10 }}>{pageBody(page)}</View>
+          ) : (
+            <>
+              {/* the list rises in once, as Settings opens; coming back from a page it simply slides back */}
+              <Arrive first={!built.current} index={0}>
+                <ProfileHeader onOpen={() => open('account')} />
+              </Arrive>
+              {groups.map((g, gi) => (
+                <Arrive key={g.title} first={!built.current} index={gi + 1}>
+                  <SectionTitle>{g.title}</SectionTitle>
+                  <ListCard>
+                    {g.rows.map((r, i) => (
+                      <CategoryRow
+                        key={r.p} first={i === 0} icon={r.icon} danger={r.danger}
+                        title={PAGE_TITLES[r.p]} summary={summaries[r.p]} onPress={() => open(r.p)}
+                      />
+                    ))}
+                  </ListCard>
+                </Arrive>
+              ))}
+              <Text style={[T.caption, { textAlign: 'center', marginTop: 24 }]}>
+                Sturoids v{APP_VERSION} · local-first · made for focused work
               </Text>
-            </View>
-            <Toggle
-              value={settings.introStyle === 'logo'}
-              onChange={(v) => setSetting('introStyle', v ? 'logo' : 'signed')}
-              color={C.accent}
-              label="Disable the big signature"
-            />
-          </Row>
-        </Card>
-
-        <SectionTitle>Time & reminders</SectionTitle>
-        <Card>
-          <Row style={{ justifyContent: 'space-between', marginBottom: 12 }}>
-            <Text style={T.body}>24-hour time</Text>
-            <Toggle value={settings.hour24} onChange={(v) => setSetting('hour24', v)} color={C.accent} label="24-hour time" />
-          </Row>
-          <Hairline />
-          <Row style={{ justifyContent: 'space-between', marginTop: 12 }}>
-            <Row>
-              <Text style={T.body}>All reminders (master)</Text>
-              <InfoDot text="The master switch for every notification. Habit times live in Planner → Streaks; ToDo nudges in Tasks → bell icon." />
-            </Row>
-            <Toggle value={settings.remindersEnabled} onChange={toggleReminders} color={C.green} label="All reminders" />
-          </Row>
-        </Card>
-
-        <SectionTitle>Deep Work</SectionTitle>
-        <Card>
-          <Row style={{ justifyContent: 'space-between', marginBottom: 10 }}>
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={[T.body, { fontFamily: F.med }]}>Seconds on the ambient screen</Text>
-              <Text style={[T.caption, { marginTop: 2 }]}>Off, it shows whole minutes.</Text>
-            </View>
-            <Toggle value={settings.ambientSeconds} onChange={(v) => setSetting('ambientSeconds', v)} color={C.accent} label="Seconds on the ambient screen" />
-          </Row>
-          <Hairline />
-          <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={[T.body, { fontFamily: F.med }]}>Time of day on the ambient screen</Text>
-              <Text style={[T.caption, { marginTop: 2 }]}>Shown small, above the timer.</Text>
-            </View>
-            <Toggle value={settings.ambientClock} onChange={(v) => setSetting('ambientClock', v)} color={C.accent} label="Time of day on the ambient screen" />
-          </Row>
-        </Card>
-
-        <SectionTitle>Privacy</SectionTitle>
-        <Card>
-          <Row style={{ justifyContent: 'space-between' }}>
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={[T.body, { fontFamily: F.med }]}>Lock the journal</Text>
-              <Text style={[T.caption, { marginTop: 2 }]}>Your app PIN opens it.</Text>
-            </View>
-            <Toggle value={settings.journalLocked} onChange={(v) => setToolLock('journal', v)} color={C.gold} label="Lock the journal" />
-          </Row>
-          <Hairline />
-          <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={[T.body, { fontFamily: F.med }]}>Lock Notes</Text>
-              <FadeSwap swapKey={String(lockedNotes)}>
-                <Text style={[T.caption, { marginTop: 2 }]}>
-                  {'The whole tool. A single note locks from inside the note'
-                    + (lockedNotes ? '; ' + lockedNotes + (lockedNotes === 1 ? ' is locked now.' : ' are locked now.') : '.')}
-                </Text>
-              </FadeSwap>
-            </View>
-            <Toggle value={settings.notesLocked === true} onChange={(v) => setToolLock('notes', v)} color={C.green} label="Lock Notes" />
-          </Row>
-          {deviceLock ? (
-            <Animated.View entering={arrive}>
-              <Hairline />
-              <Text style={[st.label, { marginTop: 10, marginBottom: 4 }]}>Your screen lock can also open</Text>
-              <Row style={{ justifyContent: 'space-between', marginTop: 6 }}>
-                <Text style={T.body}>The journal</Text>
-                <Toggle value={settings.journalScreenLock === true} onChange={(v) => setScreenLock('journal', v)} color={C.gold} label="Screen lock opens the journal" />
-              </Row>
-              <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
-                <Text style={T.body}>Notes</Text>
-                <Toggle value={settings.notesScreenLock === true} onChange={(v) => setScreenLock('notes', v)} color={C.green} label="Screen lock opens Notes" />
-              </Row>
-              <Text style={[T.caption, { marginTop: 8 }]}>
-                Fingerprint, face or the phone's own PIN, as well as the app PIN. A locked single note always asks for the
-                app PIN.
-              </Text>
-            </Animated.View>
-          ) : null}
-          <Hairline />
-          <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={[T.body, { fontFamily: F.med }]}>App PIN</Text>
-              {pinKnown ? <FadeSwap swapKey={pinState}>{pinLine}</FadeSwap> : pinLine}
-            </View>
-            <PillButton
-              small outline label={pinState === 'none' ? 'Set PIN' : 'Change PIN'}
-              onPress={() => setPinStep({ mode: 'set', for: 'change' })}
-            />
-          </Row>
-          {pinState !== 'none' && !pinInUse ? (
-            <Animated.View entering={arrive} style={{ marginTop: 10, alignSelf: 'flex-end' }}>
-              <PillButton small outline color={C.danger} label="Remove PIN" onPress={() => setPinStep({ mode: 'enter', for: 'remove' })} />
-            </Animated.View>
-          ) : null}
-          <Hairline />
-          <Text style={[st.label, { marginTop: 10, marginBottom: 8 }]}>Re-lock after</Text>
-          <SegmentedControl
-            size="sm"
-            stretch
-            value={String(settings.lockGraceSec)}
-            onChange={(k) => setSetting('lockGraceSec', Number(k))}
-            options={GRACE_OPTIONS}
-          />
-          <Text style={[T.caption, { marginTop: 14 }]}>
-            Locks hide pages, they do not encrypt them. Backups still include everything, so keep them somewhere safe.
-          </Text>
-        </Card>
-        <PinSheet
-          visible={!!pinStep} mode={pinStep?.mode ?? 'enter'} tint={pinTint}
-          onClose={() => setPinStep(null)} onDone={pinDone}
-        />
-
-        <CloudSection />
-
-        <SectionTitle right={<InfoDot text="Everything lives on this phone, and in the cloud when you sign in above. A backup file works without an account: it carries your notes' attachments too. Importing replaces all current data." />}>
-          Data
-        </SectionTitle>
-        <Card>
-          <PillButton
-            label={busy?.kind === 'export' ? 'Writing backup, ' + busy.pct + '%' : 'Export backup (JSON)'}
-            icon="download-outline" onPress={() => exportData()} style={{ marginBottom: 10 }}
-          />
-          <PillButton
-            label={busy?.kind === 'import' ? 'Restoring attachments, ' + busy.pct + '%' : 'Import backup'}
-            icon="push-outline" color={C.amber} outline onPress={importData}
-          />
-          {recovery ? (
-            <Animated.View entering={arrive} style={st.recovery}>
-              <Text style={st.recoveryTitle}>A copy of data that could not be opened</Text>
-              <Text style={st.recoveryBody}>
-                It was set aside so nothing is lost. Share it to keep it safe, or restore it after updating the app.
-              </Text>
-              <PillButton label="Share copy" icon="share-outline" outline onPress={shareRecovery} style={{ marginTop: 12 }} />
-              <PillButton label="Restore copy" icon="refresh-outline" color={C.amber} outline onPress={restoreRecovery} style={{ marginTop: 10 }} />
-              <PillButton label="Delete copy" icon="trash-outline" color={C.danger} outline onPress={discardRecovery} style={{ marginTop: 10 }} />
-            </Animated.View>
-          ) : null}
-        </Card>
-
-        <SectionTitle right={<InfoDot text="Sideloaded APKs don't auto-update. This checks the GitHub Releases of the repo below for a newer version tag and links you to the download." />}>
-          Updates
-        </SectionTitle>
-        <UpdatesCard />
-
-        <DeleteSection />
-
-        <Text style={[T.caption, { textAlign: 'center', marginTop: 16 }]}>
-          Sturoids v{APP_VERSION} · local-first · made for focused work
-        </Text>
+            </>
+          )}
+        </Animated.View>
       </ScrollView>
+      <PinSheet
+        visible={!!pinStep} mode={pinStep?.mode ?? 'enter'} tint={pinTint}
+        onClose={() => setPinStep(null)} onDone={pinDone}
+      />
     </ScreenBG>
   );
 }
 
 const st = StyleSheet.create({
+  avatar: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  statusDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
+  catRow: { paddingVertical: 13 },
+  link: { fontFamily: F.semi, fontSize: 13 },
   recovery: {
     marginTop: 16, paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,

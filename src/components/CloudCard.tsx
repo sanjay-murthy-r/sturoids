@@ -40,7 +40,7 @@ async function locksNeedPin() {
  * backing up now, bringing the cloud copy here, changing the password and signing out, and a choice whenever the
  * cloud holds a copy this phone has not seen. Deleting lives in DeleteSection, at the end of Settings.
  */
-export function CloudSection() {
+export function CloudSection({ title = 'Account' }: { title?: string | null }) {
   const c = useCloud();
   const [mode, setMode] = React.useState<'in' | 'up'>('in');
   const [email, setEmail] = React.useState('');
@@ -140,9 +140,11 @@ export function CloudSection() {
 
   return (
     <>
-      <SectionTitle right={<InfoDot text="An account keeps a copy of everything in your own private space in the cloud: only you can read it, and it comes back on a new phone. Attachments go up to 20 MB each, 120 MB in all. Your data stays on this phone too." />}>
-        Account
-      </SectionTitle>
+      {title ? (
+        <SectionTitle right={<InfoDot text="An account keeps a copy of everything in your own private space in the cloud: only you can read it, and it comes back on a new phone. Attachments go up to 20 MB each, 120 MB in all. Your data stays on this phone too." />}>
+          {title}
+        </SectionTitle>
+      ) : null}
 
       {signedIn && c.status === 'choice' && c.remote ? (
         <Card>
@@ -286,7 +288,7 @@ function PasswordSheet({ visible, onClose }: { visible: boolean; onClose: () => 
  * The end of Settings: deleting, each behind a dialog that says exactly what goes and what stays. The account's two
  * rows show only when signed in; erasing this phone is always there.
  */
-export function DeleteSection() {
+export function DeleteSection({ title = 'Delete' }: { title?: string | null }) {
   const c = useCloud();
   const [busy, setBusy] = React.useState<null | 'account' | 'cloud' | 'phone'>(null);
   const [pinFor, setPinFor] = React.useState<null | 'phone'>(null);
@@ -330,7 +332,7 @@ export function DeleteSection() {
 
   return (
     <>
-      <SectionTitle>Delete</SectionTitle>
+      {title ? <SectionTitle>{title}</SectionTitle> : null}
       <Card>
         {signedIn ? (
           <>

@@ -8,3 +8,6 @@ web-build/
 # prebuild output (expo run:android); modules/app-list/android is source and stays tracked
 /android/
 /ios/
+
+# locally built APKs
+*.apk

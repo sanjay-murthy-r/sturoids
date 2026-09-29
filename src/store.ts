@@ -139,6 +139,8 @@ export interface Settings {
   ambientSeconds: boolean;
   /** and the time of day above them */
   ambientClock: boolean;
+  /** the profile photo, a small JPEG as a data URI ('' for none), so it travels with backups and the cloud */
+  avatar: string;
 }
 
 export type PlannerWeek = Record<DayName, PlannerBlock[]>;
@@ -207,6 +209,7 @@ export const DEFAULT_SETTINGS: Settings = {
   introStyle: 'signed',
   ambientSeconds: true,
   ambientClock: false,
+  avatar: '',
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -538,6 +541,8 @@ export function migrateV5(p: any): any {
     archivedTools: normaliseArchived(s.archivedTools ?? DEFAULT_ARCHIVED, tabSlots),
     // an upgrading user with data is "returning", never "first launch"
     firstOpenedAt: s.firstOpenedAt ?? (hasAnyUserData(p) ? earliestActivity(p) : undefined),
+    // only a small image the app made itself is kept: anything else would bloat every save
+    avatar: typeof s.avatar === 'string' && s.avatar.startsWith('data:image/') && s.avatar.length < 300000 ? s.avatar : '',
   };
   out.quickAccess = normaliseQuick(p?.quickAccess);
   // every week comes back with all seven days holding blocks only, so a screen can read any day
