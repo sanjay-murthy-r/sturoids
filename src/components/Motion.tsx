@@ -1,8 +1,8 @@
 import React from 'react';
-import { Pressable, Text, ViewStyle } from 'react-native';
+import { AppState, Pressable, Text, ViewStyle } from 'react-native';
 import Animated, {
-  FadeIn, FadeOut, LinearTransition, runOnJS,
-  useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming, Easing,
+  FadeIn, FadeOut, LinearTransition, cancelAnimation, runOnJS,
+  useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withSpring, withTiming, Easing,
 } from 'react-native-reanimated';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from '@react-navigation/native';
 import { useStore } from '../store';
@@ -124,6 +124,44 @@ export function useBuilt() {
   const built = React.useRef(false);
   React.useEffect(() => { built.current = true; }, []);
   return built;
+}
+
+/** True while the app is in front: false once it has gone to the background, so a loop can stand down. */
+export function useAppActive() {
+  const [active, setActive] = React.useState(AppState.currentState === 'active');
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => setActive(state === 'active'));
+    return () => sub.remove();
+  }, []);
+  return active;
+}
+
+/** The breath's curve: the ease-in-out a loop on a live marker has always had. */
+const BREATH_EASE = Easing.bezier(0.42, 0, 0.58, 1);
+
+/**
+ * A live marker's breath, as a shared value that goes 1 down to 0 and back over `period` ms, for an animated style to
+ * read. It runs only with full motion, while its screen is in front and the app is open; otherwise it rests at 1 (the
+ * marker at full strength) and nothing is scheduled. The loop is cancelled on blur, when the app leaves and on unmount,
+ * so nothing breathes unseen.
+ */
+export function useBreath(on = true, period = 2800) {
+  const level = useAnimLevel();
+  const focused = useIsFocused();
+  const inFront = useAppActive();
+  const breath = useSharedValue(1);
+  const run = on && level === 'full' && focused && inFront;
+  React.useEffect(() => {
+    if (!run) {
+      cancelAnimation(breath);
+      breath.value = 1;
+      return undefined;
+    }
+    const half = { duration: period / 2, easing: BREATH_EASE };
+    breath.value = withRepeat(withSequence(withTiming(0, half), withTiming(1, half)), -1);
+    return () => cancelAnimation(breath);
+  }, [run, period]);
+  return breath;
 }
 
 /**

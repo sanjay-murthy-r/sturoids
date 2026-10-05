@@ -7,7 +7,9 @@ import { useToolNav } from '../toolNav';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, Note } from '../store';
-import { ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
+import {
+  ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, useTheme, useToolHeader, contextLine,
+} from '../components/UI';
 import { Bouncy, EASE_OUT, Enter, glide, useAnimLevel } from '../components/Motion';
 import { tap } from '../haptics';
 import { deleteAttachmentFiles } from '../attachments';
@@ -16,9 +18,24 @@ import { ToolGate } from '../components/LockGate';
 /** Notes, behind the Notes lock when it is on. A single note locks from inside the note. */
 export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
   return (
-    <ToolGate tool="notes" guard={mode === 'tab'} header={<NeuHeader title="Notes" variant={mode === 'tab' ? 'tab' : 'page'} />}>
+    <ToolGate tool="notes" guard={mode === 'tab'} header={<GateHeader title="Notes" tab={mode === 'tab'} />}>
       <NotesList mode={mode} />
     </ToolGate>
+  );
+}
+
+/**
+ * What a lock screen wears in place of the tool: the same bar and, on a tab, the same big title, and no line of context,
+ * so nothing of what is locked (a count, a date) shows before the PIN is given. Nothing scrolls under it, so the big
+ * title simply sits below the bar, where it sits at the top of the open tool.
+ */
+export function GateHeader({ title, tab }: { title: string; tab: boolean }) {
+  const header = useToolHeader({ title, mode: tab ? 'tab' : 'page' });
+  return (
+    <>
+      {header.bar}
+      <View style={{ paddingHorizontal: S.pad }}>{header.hero}</View>
+    </>
   );
 }
 
@@ -148,6 +165,21 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
     const id = addNote({ folder: folder || 'General' });
     nav.openNote(id);
   };
+  // The header counts the notes in the folder you are in, or all of them, and not the search's matches: a line that
+  // changed with every letter typed would only flicker. No notes, no line.
+  const inFolder = useMemo(() => (folder ? notes.filter((n) => n.folder === folder).length : 0), [notes, folder]);
+  const total = folder ? inFolder : notes.length;
+  const tabMode = mode === 'tab';
+  const header = useToolHeader({
+    title: 'Notes',
+    mode: tabMode ? 'tab' : 'page',
+    context: contextLine(
+      total > 0 && (folder
+        ? [total + (total === 1 ? ' note in ' : ' notes in '), { em: folder }]
+        : total + (total === 1 ? ' note' : ' notes')),
+    ),
+  });
+
   const openNote = React.useCallback((id: string) => nav.openNote(id), [nav]);
   const openMenu = React.useCallback((n: Note) => { tap(); setMenuNote(n); }, []);
   const count = filtered.length;
@@ -159,24 +191,25 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   ), [count, openNote, openMenu]);
 
   return (
-    <ScreenBG guard={mode === 'tab'}>
-      <NeuHeader title="Notes" variant={mode === 'tab' ? 'tab' : 'page'} />
-      {/* the list rises as one surface, the search and the folders with its rows, on every visit: whatever rows are in
-          the window then, however they got there */}
+    <ScreenBG guard={tabMode}>
+      {header.bar}
+      {/* the list rises as one surface, the header's hero, the search and the folders with its rows, on every visit:
+          whatever rows are in the window then, however they got there */}
       <Enter index={0} style={{ flex: 1 }}>
         <Animated.FlatList
           data={filtered}
           keyExtractor={(n) => n.id}
           renderItem={renderItem}
           itemLayoutAnimation={sameList ? glide(level) : undefined}
-          // Reanimated's list asks for a scroll event every frame unless told otherwise: the list only needs the default
-          scrollEventThrottle={50}
-          contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 110 + (mode === 'tab' ? 0 : insets.bottom) }}
+          // the header follows the list's offset, on the UI thread
+          {...header.scrollProps}
+          contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 110 + (tabMode ? 0 : insets.bottom) }}
           keyboardShouldPersistTaps="handled"
           initialNumToRender={10}
           windowSize={9}
           ListHeaderComponent={
             <>
+              {header.hero}
               <Field value={q} onChangeText={setQ} placeholder="Search titles & bodies…" />
               {/* the scroller runs to the screen edges, so chip shadows are never clipped at its bounds */}
               <ScrollView
@@ -212,7 +245,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
         scaleTo={0.9}
         style={[
           st.fab,
-          { bottom: mode === 'tab' ? 24 : insets.bottom + 20 },
+          { bottom: tabMode ? 24 : insets.bottom + 20 },
           theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.green }
             : { backgroundColor: C.card, ...neuRaised('high') },

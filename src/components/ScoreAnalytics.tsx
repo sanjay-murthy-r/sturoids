@@ -4,7 +4,7 @@ import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore } from '../store';
-import { TAG_COLORS, categoriesOf, fmtExamDate, fmtMark, fmtPct, indexScores } from '../scores';
+import { ScoreIndex, ScoreTag, TAG_COLORS, categoriesOf, fmtExamDate, fmtMark, fmtPct, indexScores } from '../scores';
 import {
   ALL, NONE, CategoryRow, ExamPoint, Range, Scope, SeriesStats, SubjectCallouts, SubjectStat,
   categoryRows, columnLabels, defaultRange, defaultScope, examPoints, fmtPoints, inRange, insightLine,
@@ -112,12 +112,38 @@ export function AnalyticsTeaser({ onPress }: { onPress: () => void }) {
 
 interface ScopeChip { scope: Scope; label: string; color?: string }
 
+/** Which exams Analytics looks at (a category, all of them, or those in none) and how far back. */
+export interface AnalyticsView { scope: Scope; range: Range }
+
 /**
- * The Analytics page's content, for the Scores screen to place under its header and inside its scroll. It keeps its
- * own view: which exams (a category, all of them, or those in none) and how far back.
+ * A view measured against the exams as they are now. `null` is the page's own opening view: the category of the latest
+ * marked exam, as far back as is worth looking. A category deleted or emptied since it was picked falls back to every
+ * exam, and a range as long as the series is the whole series. The page draws from this, and the Scores header words
+ * its line from the same result, so the two can never disagree about what is in scope.
  */
-export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
-  onOpenExam: (id: string) => void; onManageCategories: () => void;
+export function resolveView(ix: ScoreIndex, tags: ScoreTag[], view: AnalyticsView | null) {
+  const cats = categoriesOf(tags);
+  const overview = categoryRows(ix, tags);
+  const chips: ScopeChip[] = [{ scope: ALL, label: 'All exams' }];
+  for (const r of overview) if (r.scope !== NONE) chips.push({ scope: r.scope, label: r.label, color: r.color || undefined });
+  if (cats.length && overview.some((r) => r.scope === NONE)) chips.push({ scope: NONE, label: 'No category' });
+  const opening = defaultScope(ix, tags);
+  const asked: AnalyticsView = view ?? { scope: opening, range: defaultRange(examPoints(ix, tags, opening).length) };
+  const scope = chips.some((c) => c.scope === asked.scope) ? asked.scope : ALL;
+  const label = chips.find((c) => c.scope === scope)?.label || 'All exams';
+  const all = examPoints(ix, tags, scope);
+  const range: Range = all.length <= 5 || (asked.range === 10 && all.length <= 10) ? 'all' : asked.range;
+  return { cats, overview, chips, scope, label, all, range, pts: inRange(all, range) };
+}
+
+/**
+ * The Analytics page's content, for the Scores screen to place under its header and inside its scroll. The view
+ * lives in the screen (`view`, `onView`), which words its header from it; `hero` is the header's first block, carried
+ * in the page's first entrance.
+ */
+export function ScoreAnalytics({ view, onView, onOpenExam, onManageCategories, hero }: {
+  view: AnalyticsView | null; onView: (v: AnalyticsView) => void;
+  onOpenExam: (id: string) => void; onManageCategories: () => void; hero?: React.ReactNode;
 }) {
   useTheme();
   const scores = useStore((s) => s.scores);
@@ -126,50 +152,36 @@ export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
   // the page's round: 0 until it is in view, then one more each time it comes into view, so its figures and bars play the same every visit
   const round = useSeen();
   const { width } = useWindowDimensions();
-  const [view, setView] = useState<{ scope: Scope; range: Range }>(() => {
-    const scope = defaultScope(ix, tags);
-    return { scope, range: defaultRange(examPoints(ix, tags, scope).length) };
-  });
 
-  const cats = useMemo(() => categoriesOf(tags), [tags]);
-  const overview = useMemo(() => categoryRows(ix, tags), [ix, tags]);
-  const chips = useMemo(() => {
-    const out: ScopeChip[] = [{ scope: ALL, label: 'All exams' }];
-    for (const r of overview) if (r.scope !== NONE) out.push({ scope: r.scope, label: r.label, color: r.color || undefined });
-    if (cats.length && overview.some((r) => r.scope === NONE)) out.push({ scope: NONE, label: 'No category' });
-    return out;
-  }, [overview, cats]);
-  // a category deleted or emptied since it was picked falls back to every exam
-  const scope = chips.some((c) => c.scope === view.scope) ? view.scope : ALL;
-  const scopeLabel = chips.find((c) => c.scope === scope)?.label || 'All exams';
+  const { cats, overview, chips, scope, label: scopeLabel, all, range, pts } = useMemo(() => resolveView(ix, tags, view), [ix, tags, view]);
 
   const data = useMemo(() => {
-    const all = examPoints(ix, tags, scope);
-    // a range as long as the series is the whole series
-    const range: Range = all.length <= 5 || (view.range === 10 && all.length <= 10) ? 'all' : view.range;
-    const pts = inRange(all, range);
     const stats = seriesStats(pts);
     const subjects = subjectStats(ix, pts.map((p) => p.id));
-    return { all, range, pts, stats, subjects, callouts: subjectCallouts(subjects) };
-  }, [ix, tags, scope, view.range]);
+    return { stats, subjects, callouts: subjectCallouts(subjects) };
+  }, [ix, pts]);
 
   const pickScope = React.useCallback((next: Scope) => {
     if (next === scope) return;
     tick();
-    setView({ scope: next, range: defaultRange(examPoints(ix, tags, next).length) });
-  }, [ix, tags, scope]);
+    onView({ scope: next, range: defaultRange(examPoints(ix, tags, next).length) });
+  }, [ix, tags, scope, onView]);
 
-  const { stats, all, pts } = data;
+  const { stats } = data;
   const ranges = all.length > 10
     ? [{ key: '5', label: 'Last 5' }, { key: '10', label: 'Last 10' }, { key: 'all', label: 'All' }]
     : [{ key: '5', label: 'Last 5' }, { key: 'all', label: 'All' }];
   const showOverview = scope === ALL && overview.some((r) => r.scope !== NONE);
   let enter = 0;
+  // the header's hero rides in whichever block this page builds first, so the two rise as one
+  let lead = hero;
+  const first = () => { const h = lead; lead = null; return h; };
 
   return (
     <>
       {chips.length > 1 || all.length > 5 ? (
         <Enter index={enter++}>
+          {first()}
           {chips.length > 1 ? (
             <View style={st.chipRow}>
               {chips.map((c) => (
@@ -181,8 +193,8 @@ export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
             <SegmentedControl
               size="sm"
               options={ranges}
-              value={String(data.range)}
-              onChange={(k) => setView((v) => ({ ...v, range: k === 'all' ? 'all' : (Number(k) as 5 | 10) }))}
+              value={String(range)}
+              onChange={(k) => onView({ scope, range: k === 'all' ? 'all' : (Number(k) as 5 | 10) })}
               style={{ marginBottom: 18 }}
             />
           ) : null}
@@ -191,6 +203,7 @@ export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
 
       {!cats.length ? (
         <Enter index={enter++}>
+          {first()}
           <Card pad={16}>
             <Text style={T.label}>
               Categories keep like with like, such as JEE Main mocks apart from unit tests. Put exams in one, and
@@ -205,6 +218,7 @@ export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
 
       {!stats ? (
         <Enter index={enter++}>
+          {first()}
           <Card>
             <EmptyState
               compact
@@ -217,6 +231,7 @@ export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
       ) : (
         <>
           <Enter index={enter++}>
+            {first()}
             <Hero stats={stats} total={all.length} round={round} />
             {stats.n === 1 ? <OneMore /> : null}
           </Enter>

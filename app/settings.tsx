@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable } from 'react-native';
 import Animated, { Easing, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import * as FileSystem from 'expo-file-system';
@@ -13,6 +13,7 @@ import { C, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, bgFor, ne
 import { useStore, exportSnapshot, importSnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves } from '../src/store';
 import { compareVersions, todayKey } from '../src/utils';
 import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu, useTheme } from '../src/components/UI';
+import { EdgeScroll } from '../src/components/ScrollEdge';
 import { toast } from '../src/components/Toast';
 import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt, useEntrance } from '../src/components/Motion';
 import { tick } from '../src/haptics';
@@ -1144,6 +1145,8 @@ export default function Settings() {
 
   return (
     <ScreenBG>
+      {/* one bar for the list and every page: the title dips and comes back as the page changes, and back climbs page,
+          list, out. Each layer's scroll draws its own edge under the bar (EdgeScroll), since two scrolls share it */}
       <NeuHeader title={page ? PAGE_TITLES[page] : 'Settings'} onBack={() => { if (!back()) router.back(); }} />
       <View style={st.body}>
         {/* the list never remounts: while a page is open it takes no touches and is hidden from screen readers */}
@@ -1153,7 +1156,7 @@ export default function Settings() {
           importantForAccessibility={page ? 'no-hide-descendants' : 'auto'}
           accessibilityElementsHidden={!!page}
         >
-          <ScrollView contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
+          <EdgeScroll contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
             {/* the list rises in once, as Settings opens; coming back from a page it is simply there as it was left */}
             <Arrive first={!built.current} index={0}>
               <ProfileHeader onOpen={() => open('account')} />
@@ -1174,7 +1177,7 @@ export default function Settings() {
             <Text style={[T.caption, { textAlign: 'center', marginTop: 24 }]}>
               Sturoids v{APP_VERSION} · local-first · made for focused work
             </Text>
-          </ScrollView>
+          </EdgeScroll>
         </Animated.View>
         {page ? (
           // an open page is its own layer over the list, with its own scroll that starts at the top. It is opaque so the
@@ -1182,10 +1185,10 @@ export default function Settings() {
           // later (see `arrive`) fade in
           <Animated.View key={page} entering={pageIn} exiting={pageOut} style={[st.pageLayer, { backgroundColor: bgFor(theme) }]}>
             <LayoutAnimationConfig skipEntering>
-              <ScrollView style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
+              <EdgeScroll style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
                 {/* the page's first heading sits close under the header, like the list's first card */}
                 <View style={{ marginTop: -S.section + 10 }}>{pageBody(page)}</View>
-              </ScrollView>
+              </EdgeScroll>
             </LayoutAnimationConfig>
           </Animated.View>
         ) : null}
@@ -1200,7 +1203,8 @@ export default function Settings() {
 
 const st = StyleSheet.create({
   body: { flex: 1 },
-  scroll: { padding: S.pad, paddingTop: 4, paddingBottom: 40 },
+  // 12 under the bar, as every page of a tool sits
+  scroll: { padding: S.pad, paddingTop: 12, paddingBottom: 40 },
   // an open page covers the list exactly (a layer within the body, below the header)
   pageLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   avatar: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },

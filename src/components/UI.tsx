@@ -7,14 +7,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
-  Easing, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming, LayoutAnimationConfig } from 'react-native-reanimated';
+  Easing, Extrapolation, interpolate, runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue, withDelay,
+  withSequence, withSpring, withTiming, LayoutAnimationConfig } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, SH, T, TRACK, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
+import { C, F, MIN, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner } from '../theme';
 import { useStore } from '../store';
 import {
   ARRIVE, Bouncy, CHANGE, EASE_OUT, FADE_IN, FADE_OUT, FadeSwap, LEAVE, RISE_OUT, glide, rowIn, rowOut, useAnimLevel,
-  useAppear, useEntrance,
+  useAppear, useBreath, useEntrance,
 } from './Motion';
 import { tap, tick } from '../haptics';
 import { stepTab } from '../toolNav';
@@ -68,53 +70,303 @@ export function ScreenBG({ children, guard = false, fling = true, maxWidth = REA
   return <GestureDetector gesture={gesture}>{body}</GestureDetector>;
 }
 
+/* ---------------------------------------------------------------- the tool header */
+
+/** A piece of a context line: plain words, or words picked out in the brighter ink (the subject on now). */
+export type ContextPart = string | { em: string };
+
+/** One flat icon button of a header's tray. */
+export interface ToolAction {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  /** what it does: read by a screen reader, and the row's name if the action lands in the overflow menu */
+  label: string;
+  onPress: () => void;
+  /** the icon's colour; the dim text ink when left out */
+  color?: string;
+}
+
+export interface ToolHeaderOptions {
+  /** the tool's name: the big title in tab mode, the compact one in the bar */
+  title: string;
+  /** `tab` is the root of a bar slot (no back), `page` a full page with a back button; page when left out */
+  mode?: 'tab' | 'page';
+  /** the one fact you open the tool for, built with contextLine; none, and no line renders at all */
+  context?: string | ContextPart[] | null;
+  /** something is happening at this very moment (a block, a session, a deadline within the hour): the breathing dot */
+  live?: boolean;
+  /** the screen is covered by something full-screen, so the dot's breath rests until it is seen again */
+  covered?: boolean;
+  /** at most two sit in the tray; with more, the first stays beside an overflow button that opens the rest in a menu */
+  actions?: ToolAction[];
+  /** free-form tray content, for the screens that have not moved to `actions` yet */
+  right?: React.ReactNode;
+  onBack?: () => void;
+}
+
+/** The compact title and the context line, set as the Header Lab drew them. */
+const CTX_SIZE = 12.5; // the lab's size, which falls between the type scale's whole sizes, so it is named here
+const CTX_EM_MAX = 26;
+/** the bar: a 40 high row between 8 above (below the status bar) and 8 below, so 56 with the status bar's inset */
+const BAR_ROW = 40;
+const BAR_SIDE = 12;
+const BACK_W = 40;
+const TITLE_GAP = 4;
+/** where a page's compact title starts, less the content's own side padding: its context line is indented to meet it */
+const PAGE_INDENT = BAR_SIDE + BACK_W + TITLE_GAP - S.pad;
+/** the scroll offsets over which the compact title takes the big title's place (the big title spans 4 to 40) */
+const TITLE_FROM = 12;
+const TITLE_TO = 36;
+const SHADE = [darkSh(0.3), darkSh(0)] as const;
+
+const clipEm = (p: ContextPart): ContextPart => (
+  typeof p === 'string' || p.em.length <= CTX_EM_MAX ? p : { em: p.em.slice(0, CTX_EM_MAX - 1).trimEnd() + '…' }
+);
+const textOf = (p: ContextPart) => (typeof p === 'string' ? p : p.em);
+
 /**
- * App-owned header for tool screens: the ONE place status-bar spacing for headered screens is decided.
- * `page` (the default) has a back button. `tab` is the root of a bar slot, where there is nothing
- * to go back to, so it shows the tab's title instead; `compact` keeps that title one line tall for
- * tools that need the height (the calculator, Desmos).
+ * Builds a context line from its facts, joined with " · ". Anything empty (null, false, '') is left out, so a fact with
+ * nothing to say never leaves a stray separator; with no facts at all it returns null and no line renders. A fact is a
+ * string, an `{ em }` for words picked out in the brighter ink, or a list of those. An `{ em }` longer than 26 characters
+ * is cut with an ellipsis, so the rest of the line is never pushed off the end.
+ *
+ *   contextLine([{ em: 'Organic chem' }, ' until 11:30'], blocks > 0 && blocks + ' blocks today')
  */
-export function NeuHeader({ title, right, onBack, variant = 'page', compact = false }: {
+export function contextLine(...facts: (ContextPart | ContextPart[] | null | false | undefined)[]): ContextPart[] | null {
+  const out: ContextPart[] = [];
+  for (const fact of facts) {
+    if (!fact) continue;
+    const parts = (Array.isArray(fact) ? fact : [fact]).map(clipEm).filter((p) => textOf(p) !== '');
+    if (!parts.length) continue;
+    if (out.length) out.push(' · ');
+    out.push(...parts);
+  }
+  return out.length ? out : null;
+}
+
+const partsOf = (context: ToolHeaderOptions['context']): ContextPart[] | null => {
+  if (!context) return null;
+  const parts = typeof context === 'string' ? [context] : context;
+  return parts.some((p) => textOf(p) !== '') ? parts : null;
+};
+
+/**
+ * The tool header: one for every tool (the Header Lab's "Context line"). A screen calls it once and places the pieces:
+ *
+ *   const header = useToolHeader({ title: 'Planner', mode: tabMode ? 'tab' : 'page', context, live, actions });
+ *   <ScreenBG guard={tabMode}>
+ *     {header.bar}
+ *     <Animated.ScrollView {...header.scrollProps} contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop }}>
+ *       <Enter index={0}>{header.hero}{firstBlock}</Enter>
+ *
+ * `bar` is fixed above the scroll, opaque in the screen's colour: a flat back chevron (page mode), the compact title,
+ * and a carved tray of at most two icon actions. Once the content has scrolled, a hairline and a soft shade fade in under
+ * it. `hero` is the first thing in the scroll and joins the screen's first entrance (put it inside that Enter, not in one
+ * of its own): in tab mode the big title, with the compact one in the bar fading in as it scrolls away, and the context
+ * line under it; in page mode only the context line, indented to start under the compact title. It is laid out inside
+ * a scroll content that has S.pad on its sides. `scrollProps` goes on the Animated ScrollView or FlatList: the scroll
+ * offset runs on the UI thread, and nothing is animated in height or layout. `padTop` is the content's top padding.
+ *
+ * The title and the context line cross-fade when they change. `live` is for something happening this minute and
+ * nothing else: it adds a 7 dp accent dot before the context line that breathes at full motion, while the screen is in
+ * front and the app is open. A line that changes with the clock (a block ends, a deadline nears) needs its screen to
+ * re-render on the minute: useNow does that, only while the screen is in front.
+ */
+export function useToolHeader({ title, mode = 'page', context, live = false, covered = false, actions, right, onBack }: ToolHeaderOptions) {
+  const scrollY = useSharedValue(0);
+  const onScroll = useAnimatedScrollHandler((e) => { scrollY.value = e.contentOffset.y; });
+  const scrollProps = React.useMemo(() => ({ onScroll, scrollEventThrottle: 16 }), [onScroll]);
+  const parts = partsOf(context);
+  const tab = mode === 'tab';
+  return {
+    bar: (
+      <ToolBar
+        title={title} back={!tab} onBack={onBack} actions={actions} right={right} scrollY={scrollY} titleOnScroll={tab}
+      />
+    ),
+    hero: <ToolHero title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} />,
+    scrollProps,
+    padTop: tab ? 0 : parts ? 4 : 12,
+  };
+}
+
+/**
+ * The older way in: just the bar, with the title always showing, for the screens that have not moved to
+ * useToolHeader. Its title can change in place and cross-fades; `compact` no longer does anything, since the bar is one
+ * line in every mode.
+ */
+export function NeuHeader({ title, right, onBack, variant = 'page' }: {
   title: string; right?: React.ReactNode; onBack?: () => void; variant?: 'page' | 'tab'; compact?: boolean;
 }) {
+  return <ToolBar title={title} back={variant === 'page'} onBack={onBack} right={right} />;
+}
+
+/** One flat icon button of the tray: it carves in while pressed. */
+function TrayButton({ action }: { action: ToolAction }) {
+  return (
+    <Bouncy
+      onPress={action.onPress} scaleTo={1} sink={false} radius={18} hitSlop={4}
+      accessibilityLabel={action.label} accessibilityRole="button" style={hdr.trayBtn}
+    >
+      <Ionicons name={action.icon} size={19} color={action.color || C.textDim} />
+    </Bouncy>
+  );
+}
+
+function ToolBar({ title, back, onBack, actions, right, scrollY, titleOnScroll = false }: {
+  title: string; back: boolean; onBack?: () => void; actions?: ToolAction[]; right?: React.ReactNode;
+  /** the offset the edge follows; without it (the older NeuHeader) the bar has no hairline or shade */
+  scrollY?: SharedValue<number>;
+  /** the compact title waits for the hero's big title to scroll away, instead of always showing */
+  titleOnScroll?: boolean;
+}) {
   const theme = useTheme();
+  const level = useAnimLevel();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  if (variant === 'tab' && !compact) {
-    return (
-      <View
-        style={{
-          paddingTop: insets.top + 22, paddingBottom: 16, paddingHorizontal: S.pad,
-          flexDirection: 'row', alignItems: 'center', backgroundColor: bgFor(theme),
-        }}
-      >
-        {/* a title that changes in place (a tab's tool swapped, a page named differently) dips and comes back as
-            the new words instead of snapping */}
-        <FadeSwap swapKey={title} style={{ flex: 1 }}>
-          <Text numberOfLines={1} style={T.display}>{title}</Text>
-        </FadeSwap>
-        {right}
-      </View>
-    );
-  }
-  const page = variant === 'page';
+  const [overflow, setOverflow] = React.useState(false);
+  const own = useSharedValue(0);
+  const y = scrollY ?? own;
+  const minimal = theme === 'minimal';
+
+  // the compact title takes the big title's place as it scrolls up under the bar: it rises a few points and fills in
+  // with full motion, only fills in with some, and is a step with none. All on the UI thread
+  const titleStyle = useAnimatedStyle(() => {
+    if (!titleOnScroll) return { opacity: 1, transform: [{ translateY: 0 }] };
+    if (level === 'none') return { opacity: y.value > (TITLE_FROM + TITLE_TO) / 2 ? 1 : 0, transform: [{ translateY: 0 }] };
+    const p = interpolate(y.value, [TITLE_FROM, TITLE_TO], [0, 1], Extrapolation.CLAMP);
+    return { opacity: p, transform: [{ translateY: level === 'full' ? 4 * (1 - p) : 0 }] };
+  });
+  // the hairline and the shade under the bar, once the content has moved
+  const edgeStyle = useAnimatedStyle(() => ({
+    opacity: level === 'none' ? (y.value > 2 ? 1 : 0) : interpolate(y.value, [2, 14], [0, 1], Extrapolation.CLAMP),
+  }));
+
+  const list = actions ?? [];
+  const shown = list.length > 2 ? list.slice(0, 1) : list;
+  const rest = list.length > 2 ? list.slice(1) : [];
+  const hasTray = shown.length > 0 || rest.length > 0 || !!right;
+
   return (
-    <View
-      style={{
-        paddingTop: insets.top + 8, paddingBottom: 14, paddingHorizontal: page ? 14 : S.pad,
-        minHeight: insets.top + 56, flexDirection: 'row', alignItems: 'center', backgroundColor: bgFor(theme),
-      }}
-    >
-      {page ? (
-        <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={onBack || (() => router.back())} accessibilityLabel="Back" />
+    <View style={[hdr.bar, { paddingTop: insets.top + 8, paddingLeft: back ? BAR_SIDE : S.pad, backgroundColor: bgFor(theme) }]}>
+      <View style={hdr.row}>
+        {back ? (
+          <Bouncy
+            onPress={onBack || (() => router.back())} scaleTo={1} sink={false} radius={BACK_W / 2} hitSlop={4}
+            accessibilityLabel="Back" accessibilityRole="button" style={hdr.back}
+          >
+            <Ionicons name="chevron-back" size={24} color={C.text} />
+          </Bouncy>
+        ) : null}
+        <Animated.View style={[hdr.titleBox, { marginLeft: back ? TITLE_GAP : 0 }, titleStyle]}>
+          {/* a title that changes in place (a tab's tool swapped, a page named differently) dips and comes back as
+              the new words instead of snapping */}
+          <FadeSwap swapKey={title}>
+            <Text
+              numberOfLines={1} style={hdr.title}
+              accessibilityRole={titleOnScroll ? undefined : 'header'}
+              importantForAccessibility={titleOnScroll ? 'no' : 'auto'}
+            >
+              {title}
+            </Text>
+          </FadeSwap>
+        </Animated.View>
+        {hasTray ? (
+          <View
+            style={[
+              hdr.tray,
+              // the outline takes 1 of the pill's 2 padding, so both themes give the bar the same height
+              minimal ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, padding: 1 } : { backgroundColor: C.inset, ...neuInset('hairline') },
+            ]}
+          >
+            {shown.map((a) => <TrayButton key={a.label} action={a} />)}
+            {rest.length ? (
+              <TrayButton action={{ icon: 'ellipsis-horizontal', label: 'More actions', onPress: () => setOverflow(true) }} />
+            ) : null}
+            {right}
+          </View>
+        ) : null}
+      </View>
+      {scrollY ? (
+        <Animated.View pointerEvents="none" style={[hdr.edge, edgeStyle]}>
+          <View style={[hdr.hair, { backgroundColor: minimal ? MIN.border : C.border }]} />
+          <LinearGradient colors={SHADE} style={hdr.shade} />
+        </Animated.View>
       ) : null}
-      <FadeSwap swapKey={title} style={{ flex: 1, marginLeft: page ? 12 : 0 }}>
-        <Text numberOfLines={1} style={T.head}>{title}</Text>
-      </FadeSwap>
-      {right}
+      {rest.length ? <DotMenu visible={overflow} onClose={() => setOverflow(false)} items={rest} /> : null}
     </View>
   );
 }
+
+/** The first thing in the scroll: the big title in tab mode, and the context line, if there is one. */
+function ToolHero({ title, tab, parts, live, covered }: {
+  title: string; tab: boolean; parts: ContextPart[] | null; live: boolean; covered: boolean;
+}) {
+  if (tab) {
+    return (
+      <View style={hdr.heroTab}>
+        <FadeSwap swapKey={title}>
+          <Text numberOfLines={1} accessibilityRole="header" style={T.display}>{title}</Text>
+        </FadeSwap>
+        {parts ? <ContextLine parts={parts} live={live} covered={covered} style={{ marginTop: 2 }} /> : null}
+      </View>
+    );
+  }
+  if (!parts) return null;
+  return (
+    <View style={hdr.heroPage}>
+      <ContextLine parts={parts} live={live} covered={covered} />
+    </View>
+  );
+}
+
+/** The context line: one line, the dot (if live) before it. A change of words or of the dot dips and comes back. */
+function ContextLine({ parts, live, covered, style }: {
+  parts: ContextPart[]; live: boolean; covered: boolean; style?: ViewStyle;
+}) {
+  return (
+    <FadeSwap swapKey={(live ? '+' : '-') + parts.map(textOf).join('')} style={style}>
+      <View style={hdr.ctxRow}>
+        {live ? <LiveDot covered={covered} /> : null}
+        <Text numberOfLines={1} style={hdr.ctx}>
+          {parts.map((p, i) => (typeof p === 'string' ? p : <Text key={i} style={hdr.em}>{p.em}</Text>))}
+        </Text>
+      </View>
+    </FadeSwap>
+  );
+}
+
+/** The live dot: 7 dp of accent that breathes (opacity .35 to 1, scale .82 to 1) while it is seen; still otherwise. */
+function LiveDot({ covered }: { covered: boolean }) {
+  useTheme(); // the dot is the accent, so it follows a new one
+  const breath = useBreath(!covered);
+  const dotStyle = useAnimatedStyle(() => ({
+    opacity: 0.35 + 0.65 * breath.value,
+    transform: [{ scale: 0.82 + 0.18 * breath.value }],
+  }));
+  return <Animated.View importantForAccessibility="no" style={[hdr.dot, { backgroundColor: C.accent }, dotStyle]} />;
+}
+
+const hdr = StyleSheet.create({
+  // above the scroll that follows it, so its shade falls over the content
+  bar: { paddingRight: S.pad, paddingBottom: 8, zIndex: 2 },
+  row: { minHeight: BAR_ROW, flexDirection: 'row', alignItems: 'center' },
+  back: { width: BACK_W, height: BACK_W, borderRadius: BACK_W / 2, alignItems: 'center', justifyContent: 'center' },
+  titleBox: { flex: 1, minWidth: 0 },
+  title: { color: C.text, fontFamily: F.semi, fontSize: 18, lineHeight: 24, letterSpacing: -0.3 },
+  // the carved pill the actions sit in; it clips each button's carve at its rim
+  tray: { flexDirection: 'row', alignItems: 'center', padding: 2, gap: 2, borderRadius: 999, overflow: 'hidden', marginLeft: 12 },
+  trayBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  edge: { position: 'absolute', left: 0, right: 0, top: '100%', height: 10 },
+  hair: { position: 'absolute', left: 0, right: 0, top: 0, height: StyleSheet.hairlineWidth },
+  shade: { position: 'absolute', left: 0, right: 0, top: 0, height: 10 },
+  // the big title sits close under the bar; 18 below the hero is the gap to the first block
+  heroTab: { paddingTop: 4, paddingBottom: 18 },
+  heroPage: { paddingBottom: 18, paddingLeft: PAGE_INDENT },
+  ctxRow: { flexDirection: 'row', alignItems: 'center' },
+  ctx: { flexShrink: 1, color: C.textFaint, fontFamily: F.med, fontSize: CTX_SIZE, lineHeight: 17, letterSpacing: 0.2 },
+  em: { color: C.textDim },
+  dot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
+});
 
 /** Small ⓘ that floats a short feature description in a raised dialog. */
 export function InfoDot({ text, size = 15 }: { text: string; size?: number }) {

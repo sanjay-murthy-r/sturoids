@@ -9,10 +9,12 @@ import { C, F, MIN, NEU, S, T, TRACK, bgFor } from '../theme';
 import { useStore, JournalEntry } from '../store';
 import { todayKey } from '../utils';
 import {
-  Card, Chip, DotMenu, EmptyState, Field, Hairline, IconBtn, ListRow, ListSlice, NeuHeader, PillButton, Row, ScreenBG, Sheet, useTheme,
+  Card, Chip, DotMenu, EmptyState, Field, Hairline, ListRow, ListSlice, PillButton, Row, ScreenBG, Sheet, useTheme, useToolHeader,
+  contextLine,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { ToolGate } from '../components/LockGate';
+import { GateHeader } from './JournalScreen';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, deleteEntry, entryMatches, formatJournalDate, journalDayFor, journalStats, keyToDate, loadBodies, onThisDay,
@@ -28,9 +30,13 @@ const SORT_LABEL: Record<Sort, string> = { newest: 'Newest', oldest: 'Oldest', l
 const NEXT_SORT: Record<Sort, Sort> = { newest: 'oldest', oldest: 'longest', longest: 'best', best: 'newest' };
 const HEAT_WEEKS = 12;
 
+/** The list the header's scroll offset follows: Reanimated hands the offset to its handler on the UI thread. */
+const AnimatedSectionList = Animated.createAnimatedComponent(SectionList) as typeof SectionList;
+
 export function JournalArchiveScreen({ mode }: { mode: 'tab' | 'stack' }) {
+  // a page pushed from the journal, in a tab slot or not: it has its back button either way
   return (
-    <ToolGate tool="journal" guard={mode === 'tab'} header={<NeuHeader title="Journal" />}>
+    <ToolGate tool="journal" guard={mode === 'tab'} header={<GateHeader title="Journal" tab={false} />}>
       <Archive tabMode={mode === 'tab'} />
     </ToolGate>
   );
@@ -249,8 +255,29 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     { value: s.words, label: 'words' },
   ].filter((g) => g.value > 0);
 
-  const header = (
+  // what is in the archive, or in the month picked: the search and the other filters are said under the chips, so the
+  // header's count does not change with every letter typed. No entries, no line
+  const inMonth = React.useMemo(() => (month ? journal.filter((e) => e.dateKey.startsWith(month)).length : 0), [journal, month]);
+  const counted = month ? inMonth : journal.length;
+  const tool = useToolHeader({
+    title: 'Journal',
+    mode: 'page',
+    context: contextLine(
+      month && [{ em: keyToDate(month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) }],
+      counted > 0 && counted + (counted === 1 ? ' entry' : ' entries'),
+    ),
+    // with nothing in the archive the stats have nothing to show, so no button offers them
+    actions: journal.length ? [{
+      icon: stats ? 'stats-chart' : 'stats-chart-outline',
+      label: stats ? 'Hide stats' : 'Show stats',
+      color: stats ? C.gold : undefined,
+      onPress: () => setStats(!stats),
+    }] : undefined,
+  });
+
+  const listHead = (
     <View>
+      {tool.hero}
       <Field value={q} onChangeText={setQ} placeholder="Search entries" autoCapitalize="none" returnKeyType="search" />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -6 }} contentContainerStyle={{ paddingHorizontal: 6, paddingVertical: 12 }}>
         <Chip icon="options-outline" label={filterCount ? 'Filters ' + filterCount : 'Filters'} active={filterCount > 0} onPress={() => setFilters(true)} />
@@ -327,18 +354,16 @@ function Archive({ tabMode }: { tabMode: boolean }) {
 
   return (
     <ScreenBG>
-      <NeuHeader
-        title="Journal"
-        right={<IconBtn name={stats ? 'stats-chart' : 'stats-chart-outline'} color={stats ? C.gold : C.textDim} onPress={() => setStats(!stats)} accessibilityLabel={stats ? 'Hide stats' : 'Show stats'} />}
-      />
-      <SectionList
+      {tool.bar}
+      <AnimatedSectionList
         sections={sections}
         keyExtractor={(e) => e.id}
         stickySectionHeadersEnabled
         keyboardShouldPersistTaps="handled"
-        ListHeaderComponent={header}
+        {...tool.scrollProps}
+        ListHeaderComponent={listHead}
         ListEmptyComponent={empty}
-        contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 40 + (tabMode ? 0 : insets.bottom) }}
+        contentContainerStyle={{ padding: S.pad, paddingTop: tool.padTop, paddingBottom: 40 + (tabMode ? 0 : insets.bottom) }}
         renderSectionHeader={({ section }) => <Text style={[st.section, { backgroundColor: bgFor(theme) }]}>{section.title}</Text>}
         renderItem={({ item: e, index, section }) => (
           <EntryRow

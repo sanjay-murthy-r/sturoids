@@ -33,10 +33,10 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
   return (
     <ScreenBG guard={mode === 'tab'} fling={false} maxWidth={null}>
       <View style={{ flex: 1, backgroundColor: bg, paddingBottom: mode === 'tab' ? 0 : insets.bottom }}>
+        {/* a full-screen tool has no scroll to link and nothing to introduce: just the bar, its title always showing */}
         <NeuHeader
           title="Desmos"
           variant={mode === 'tab' ? 'tab' : 'page'}
-          compact
           onBack={() => { if (!goBack()) router.back(); }}
         />
         {failed ? (

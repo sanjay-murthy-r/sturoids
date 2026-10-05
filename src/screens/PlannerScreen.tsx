@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { C, F, S, T, TRACK, BLOCK_COLORS } from '../theme';
@@ -7,8 +7,8 @@ import { useStore, PlannerBlock, PlannerWeek, Habit } from '../store';
 import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours } from '../utils';
 import { useNow } from '../hooks/useNow';
 import {
-  ScreenBG, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, CheckCircle, useTheme, NeuHeader,
-  ListCard, ListRow,
+  ScreenBG, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, CheckCircle, useTheme, useToolHeader,
+  contextLine, ListCard, ListRow,
 } from '../components/UI';
 import { Ionicons } from '@expo/vector-icons';
 import { Wheel } from '../components/Wheel';
@@ -65,6 +65,17 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const viewingToday = day === dayName();
   const dayIdx = DAY_NAMES.indexOf(day);
   const todayIdx = DAY_NAMES.indexOf(dayName(now));
+
+  // the header speaks of today, whichever day the wheel is on. Of two blocks that overlap (allowed, on purpose), the one
+  // that ends first is the one on now. Blocks cannot be ticked off, so there is no count of done ones to give.
+  const todayBlocks = planner[dayName(now)] ?? [];
+  const onNow = useMemo(() => {
+    let cur: PlannerBlock | null = null;
+    for (const b of todayBlocks) {
+      if (toMinutes(b.start) <= nowMin && nowMin < toMinutes(b.end) && (!cur || toMinutes(b.end) < toMinutes(cur.end))) cur = b;
+    }
+    return cur;
+  }, [todayBlocks, nowMin]);
 
   // the blocks follow the wheel: the new day's blocks arrive from the side the new day came from. They are a new
   // view with its own entrance, so the old day's blocks never flash sideways before the new ones replace them.
@@ -127,30 +138,35 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, [removeHabit, restoreHabit]);
 
   const tabMode = mode === 'tab';
-  const plannerActions = (
-    <Row>
-      <IconBtn name="copy-outline" color={C.textDim} onPress={() => setCopySheet(true)} accessibilityLabel="Copy this day" />
-      <IconBtn name="albums-outline" color={C.textDim} onPress={() => setTplSheet(true)} accessibilityLabel="Week templates" />
-    </Row>
-  );
+  // the dot is for a block in progress this minute: nothing else says "now" in the header
+  const header = useToolHeader({
+    title: 'Planner',
+    mode: tabMode ? 'tab' : 'page',
+    context: contextLine(
+      onNow
+        ? [{ em: onNow.subject }, ' until ' + fmtClockTime(toMinutes(onNow.end), hour24)]
+        : todayBlocks.length > 0 && todayBlocks.length + (todayBlocks.length === 1 ? ' block today' : ' blocks today'),
+    ),
+    live: onNow != null,
+    actions: [
+      { icon: 'copy-outline', label: 'Copy this day', onPress: () => setCopySheet(true) },
+      { icon: 'albums-outline', label: 'Week templates', onPress: () => setTplSheet(true) },
+    ],
+  });
 
   return (
     <ScreenBG guard={tabMode}>
-      {!tabMode && <NeuHeader title="Planner" right={plannerActions} />}
-      <ScrollView
+      {header.bar}
+      <Animated.ScrollView
         key={fk}
-        contentContainerStyle={{ padding: S.pad, paddingTop: tabMode ? insets.top + 20 : 8, paddingBottom: 44 + (tabMode ? 0 : insets.bottom) }}
+        {...header.scrollProps}
+        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 44 + (tabMode ? 0 : insets.bottom) }}
         showsVerticalScrollIndicator={false}
       >
-        {tabMode && (
-          <Row style={{ justifyContent: 'space-between' }}>
-            <Text style={T.display}>Planner</Text>
-            {plannerActions}
-          </Row>
-        )}
-
-        {/* the day: drag the wheel or tap a day beside it, and the blocks follow in the same direction */}
+        {/* the day: drag the wheel or tap a day beside it, and the blocks follow in the same direction. The header's
+            hero rises with it, in the screen's first entrance */}
         <Enter index={0}>
+          {header.hero}
           <View style={st.wheelWrap}>
             <Wheel
               loop
@@ -211,7 +227,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
             )}
           </Animated.View>
         </Enter>
-      </ScrollView>
+      </Animated.ScrollView>
 
       <BlockSheet visible={blockSheet} day={day} editing={editing} onClose={() => setBlockSheet(false)} />
 
@@ -556,7 +572,7 @@ function ReminderSheet({ habit, onClose }: { habit: Habit | null; onClose: () =>
 }
 
 const st = StyleSheet.create({
-  wheelWrap: { marginTop: 10, marginBottom: 18 },
+  wheelWrap: { marginBottom: 18 },
   dayText: { fontFamily: F.semi, fontSize: 22, lineHeight: 28, letterSpacing: TRACK.large },
   todayLink: { alignSelf: 'center', marginTop: 2 },
   todayPress: { paddingHorizontal: 8, paddingVertical: 2 },

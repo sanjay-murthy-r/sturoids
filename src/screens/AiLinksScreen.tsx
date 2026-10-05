@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Linking, Alert, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, Linking, Alert, useWindowDimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, AiLink } from '../store';
 import { uid } from '../utils';
-import { ScreenBG, Card, Sheet, Field, PillButton, Row, IconBtn, InfoDot, NeuHeader, useTheme, EmptyState } from '../components/UI';
+import { ScreenBG, Card, Sheet, Field, PillButton, Row, IconBtn, useTheme, useToolHeader, EmptyState } from '../components/UI';
 import Animated from 'react-native-reanimated';
 import { toast } from '../components/Toast';
-import { Appear, glide, rowOut, useAnimLevel, useEntrance } from '../components/Motion';
+import { Appear, Enter, glide, rowOut, useAnimLevel, useEntrance } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WIDE_AT, columnWidth } from '../layout';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
@@ -113,11 +113,13 @@ function LinkTile({ link: l, index, edit, style, onOpen, onMove, onRemove }: {
 }
 
 export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
+  useTheme(); // the tray's tick is the accent, so a new one repaints it
   const insets = useSafeAreaInsets();
   const { width: winW } = useWindowDimensions();
   const aiLinks = useStore((s) => s.aiLinks);
   const setAiLinks = useStore((s) => s.setAiLinks);
   const [edit, setEdit] = useState(false);
+  const [about, setAbout] = useState(false);
   const [addSheet, setAddSheet] = useState(false);
   const [label, setLabel] = useState('');
   const [url, setUrl] = useState('');
@@ -151,17 +153,29 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const wide = winW >= WIDE_AT;
   const itemW = wide ? (columnWidth(winW, mode === 'tab') - S.pad * 2 - GRID_GAP * 2) / 3 : 0;
 
+  // the tool's two controls live in the header's tray, so nothing floats under it: what the launchers are, and editing
+  // them (the pencil turns to a tick in the accent while the keys are out). No context line: there is nothing to say
+  const header = useToolHeader({
+    title: 'AI Quick-Links',
+    mode: mode === 'tab' ? 'tab' : 'page',
+    actions: [
+      { icon: 'information-circle-outline', label: 'About quick-links', onPress: () => setAbout(true) },
+      {
+        icon: edit ? 'checkmark' : 'create-outline', label: edit ? 'Done editing' : 'Edit links',
+        color: edit ? C.accent : undefined, onPress: () => setEdit(!edit),
+      },
+    ],
+  });
+
   return (
     <ScreenBG guard={mode === 'tab'}>
-      <NeuHeader
-        title="AI Quick-Links"
-        variant={mode === 'tab' ? 'tab' : 'page'}
-        right={<InfoDot text="One-tap launchers for your AI tools. Opens the app when it's installed, the browser otherwise. Edit to reorder, remove, or add your own links." />}
-      />
-      <ScrollView contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}>
-        <Row style={{ justifyContent: 'flex-end', marginBottom: 12 }}>
-          <PillButton small label={edit ? 'Done' : 'Edit'} outline onPress={() => setEdit(!edit)} />
-        </Row>
+      {header.bar}
+      <Animated.ScrollView
+        {...header.scrollProps}
+        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
+      >
+        {/* the hero is the first tile's own entrance, so the title and the launchers rise as one */}
+        <Enter index={0}>{header.hero}</Enter>
 
         <View style={wide ? st.gridWide : st.grid}>
           {aiLinks.map((l, i) => (
@@ -183,7 +197,13 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
             <PillButton label="Add link" icon="add" onPress={() => setAddSheet(true)} />
           </Appear>
         )}
-      </ScrollView>
+      </Animated.ScrollView>
+
+      <Sheet visible={about} onClose={() => setAbout(false)} title="AI Quick-Links">
+        <Text style={T.body}>
+          One-tap launchers for your AI tools. Each opens its app when it is installed, the browser otherwise. Tap the pencil to reorder, remove or add your own links.
+        </Text>
+      </Sheet>
 
       <Sheet visible={addSheet} onClose={() => setAddSheet(false)} title="Add AI tool">
         <Field value={label} onChangeText={setLabel} placeholder="Name, e.g. NotebookLM" autoFocus />

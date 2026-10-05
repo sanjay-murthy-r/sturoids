@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TextInput, Alert, Share, Keyboard, AppState, useWindowDimensions,
+  View, Text, StyleSheet, TextInput, Alert, Share, Keyboard, AppState, useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,8 +16,8 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { C, F, MIN, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU } from '../theme';
 import { columnWidth } from '../layout';
 import { useStore, Attachment, Note, flushSaves } from '../store';
-import { todayKey, uid } from '../utils';
-import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuHeader, NeuIconBtn, PillButton, DotMenu, useTheme } from '../components/UI';
+import { fmtClockTime, todayKey, uid, yesterdayKey } from '../utils';
+import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuIconBtn, PillButton, DotMenu, useTheme, useToolHeader } from '../components/UI';
 import { toast } from '../components/Toast';
 import { NoteGate, PinSheet, ToolGate } from '../components/LockGate';
 import { markOpen, noteScope, pinStatus } from '../lock';
@@ -25,6 +25,9 @@ import { Bouncy, EASE_OUT, glide, rowIn, rowOut, useAnimLevel, useBuilt } from '
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ATT_DIR, deleteAttachmentFiles } from '../attachments';
+import { useToday } from '../hooks/useNow';
+import { useKeyboardOpen } from '../hooks/useKeyboard';
+import { GateHeader } from './NotesListScreen';
 
 const LINE_H = 24;
 const FREE_LINES = 9; // keep ~8-10 lines of breathing room while dictating
@@ -55,6 +58,21 @@ async function persistFile(uri: string, name: string): Promise<{ uri: string; ke
   }
 }
 const NOT_KEPT = 'Attached, but the phone is too full to keep a copy. Free some space and attach it again.';
+
+/**
+ * When a note was last written to, for the header: the time today, the word yesterday, the date after that. Nothing
+ * when it is not known, so the header says nothing rather than a date from 1970.
+ */
+function editedLine(updatedAt: number, today: string, hour24: boolean): string {
+  const d = new Date(updatedAt);
+  if (!updatedAt || isNaN(d.getTime())) return '';
+  const key = todayKey(d);
+  if (key === today) return 'Edited today, ' + fmtClockTime(d.getHours() * 60 + d.getMinutes(), hour24);
+  if (key === yesterdayKey()) return 'Edited yesterday';
+  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return 'Edited ' + d.toLocaleDateString('en-IN', opts);
+}
 
 /**
  * Raised mic button — carves in while listening and breathes a pulse ring. With only some motion the ring holds still,
@@ -125,7 +143,8 @@ export function NoteEditorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const { id } = useLocalSearchParams<{ id: string }>();
   const locked = useStore((s) => s.notes.find((n) => n.id === id)?.locked === true);
   const folder = useStore((s) => s.notes.find((n) => n.id === id)?.folder ?? 'Note');
-  const header = <NeuHeader title={folder} />;
+  // a lock screen wears the header without its line, so nothing of a locked note shows
+  const header = <GateHeader title={folder} tab={false} />;
   return (
     <ToolGate tool="notes" guard={false} header={header}>
       <NoteGate id={id ?? ''} locked={locked} header={header}>
@@ -170,9 +189,12 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const undoStack = useRef<string[]>([]);
   const redoStack = useRef<string[]>([]);
   const lastPush = useRef(0);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<Animated.ScrollView>(null);
   const sizesRef = useRef({ content: 0, viewport: 0 });
   const [toolMenu, setToolMenu] = useState(false);
+  // the toast waits for the sheet to go: a sheet is a window of its own and would cover it. A hook, so it sits above the
+  // "Note not found" return: a note that vanishes from the store (a restored backup) must not change the hook count
+  const promoted = React.useRef<{ kind: 'daily' | 'mission'; id: string } | null>(null);
 
   // a dictation still running when the note closes is stopped, never left listening
   React.useEffect(() => () => {
@@ -233,10 +255,72 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     [noteId, removeAttachment],
   );
 
+  const toggleLock = async () => {
+    if (!note) return;
+    Keyboard.dismiss();
+    // the note is open, so its PIN has been given (or it was never locked): the lock comes off without asking again
+    if (note.locked) {
+      updateNote(note.id, { locked: false });
+      toast('The note is no longer locked.');
+      return;
+    }
+    if ((await pinStatus()) === 'set') {
+      updateNote(note.id, { locked: true });
+      markOpen(noteScope(note.id));
+      toast('Note locked. Your PIN opens it.');
+      return;
+    }
+    // no PIN on this phone yet, or only an older code: one is chosen first, then the note locks
+    setLockPin(true);
+  };
+
+  const deleteThis = () => {
+    if (!note) return;
+    // the page keeps showing the note while it leaves; what was typed is dropped with it
+    leaving.current = true;
+    if (commitTimer.current) { clearTimeout(commitTimer.current); commitTimer.current = null; }
+    router.back();
+    deleteAttachmentFiles(deleteNote(note.id));
+  };
+
+  // The header: the folder is the bar's title, and the line under it says when the note was last written to. That line
+  // reads at rest: with the keyboard up the note is being typed in, and a time ticking over under the title would only
+  // draw the eye. The lock stays in the bar, where its state shows; the rest are in the menu beside it.
+  const hour24 = useStore((s) => s.settings.hour24);
+  const today = useToday();
+  const keyboardOpen = useKeyboardOpen();
+  const edited = note ? editedLine(note.updatedAt, today, hour24) : '';
+  const [editedHeld, setEditedHeld] = useState(edited);
+  React.useEffect(() => { if (!keyboardOpen) setEditedHeld(edited); }, [keyboardOpen, edited]);
+  const header = useToolHeader({
+    title: note?.folder ?? 'Note',
+    mode: 'page',
+    context: editedHeld,
+    actions: note ? [
+      {
+        icon: note.locked ? 'lock-closed' : 'lock-open-outline', label: note.locked ? 'Unlock note' : 'Lock note',
+        color: note.locked ? C.gold : undefined, onPress: toggleLock,
+      },
+      {
+        icon: note.pinned ? 'pin' : 'pin-outline', label: note.pinned ? 'Unpin note' : 'Pin note',
+        onPress: () => updateNote(note.id, { pinned: !note.pinned }),
+      },
+      { icon: 'folder-outline', label: 'Move to folder', onPress: () => setFolderSheet(true) },
+      ...(note.locked ? [] : [{ icon: 'share-outline' as const, label: 'Share note', onPress: () => { Share.share({ message: title + '\n\n' + body }); } }]),
+      {
+        icon: 'trash-outline', label: 'Delete note', color: C.danger,
+        onPress: () => Alert.alert('Delete note', 'This cannot be undone.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: deleteThis },
+        ]),
+      },
+    ] : undefined,
+  });
+
   if (!note) {
     return (
       <ScreenBG>
-        <NeuHeader title="Note" />
+        {header.bar}
         <Text style={{ color: C.textDim, textAlign: 'center', marginTop: 60 }}>Note not found.</Text>
       </ScreenBG>
     );
@@ -376,9 +460,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     }
   };
 
-  // the toast waits for the sheet to go: a sheet is a window of its own and would cover it
-  const promoted = React.useRef<{ kind: 'daily' | 'mission'; id: string } | null>(null);
-  const promote = (line: string, kind: 'daily' | 'mission') => {
+  const promote =(line: string, kind: 'daily' | 'mission') => {
     const id = kind === 'daily' ? addDaily(line) : addMission(line, todayKey());
     promoted.current = { kind, id };
     setLineSheet(false);
@@ -393,32 +475,6 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     });
   };
 
-  const toggleLock = async () => {
-    Keyboard.dismiss();
-    // the note is open, so its PIN has been given (or it was never locked): the lock comes off without asking again
-    if (note.locked) {
-      updateNote(note.id, { locked: false });
-      toast('The note is no longer locked.');
-      return;
-    }
-    if ((await pinStatus()) === 'set') {
-      updateNote(note.id, { locked: true });
-      markOpen(noteScope(note.id));
-      toast('Note locked. Your PIN opens it.');
-      return;
-    }
-    // no PIN on this phone yet, or only an older code: one is chosen first, then the note locks
-    setLockPin(true);
-  };
-
-  const deleteThis = () => {
-    // the page keeps showing the note while it leaves; what was typed is dropped with it
-    leaving.current = true;
-    if (commitTimer.current) { clearTimeout(commitTimer.current); commitTimer.current = null; }
-    router.back();
-    deleteAttachmentFiles(deleteNote(note.id));
-  };
-
   // the note's column: the window on a phone, a capped column on a wide window
   const colW = columnWidth(width, mode === 'tab');
   // under 372dp the nine toolbar targets overflow: media, file, undo and redo move into a menu
@@ -427,35 +483,16 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
 
   return (
     <ScreenBG>
-      <NeuHeader
-        title={note.folder}
-        right={
-          <Row>
-            <IconBtn name={note.locked ? 'lock-closed' : 'lock-open-outline'} size={20} pad={6} color={note.locked ? C.gold : C.textDim}
-              onPress={toggleLock} accessibilityLabel={note.locked ? 'Unlock note' : 'Lock note'} />
-            <IconBtn name={note.pinned ? 'pin' : 'pin-outline'} size={20} pad={6} color={note.pinned ? C.gold : C.textDim}
-              onPress={() => updateNote(note.id, { pinned: !note.pinned })} accessibilityLabel={note.pinned ? 'Unpin note' : 'Pin note'} />
-            <IconBtn name="folder-outline" size={20} pad={6} onPress={() => setFolderSheet(true)} accessibilityLabel="Move to folder" />
-            {!note.locked && (
-              <IconBtn name="share-outline" size={20} pad={6} onPress={() => Share.share({ message: title + '\n\n' + body })} accessibilityLabel="Share note" />
-            )}
-            <IconBtn name="trash-outline" size={20} pad={6} color={C.danger}
-              onPress={() =>
-                Alert.alert('Delete note', 'This cannot be undone.', [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Delete', style: 'destructive', onPress: deleteThis },
-                ])
-              } accessibilityLabel="Delete note" />
-          </Row>
-        }
-      />
-      <ScrollView
+      {header.bar}
+      <Animated.ScrollView
         ref={scrollRef}
-        contentContainerStyle={{ padding: S.pad, paddingBottom: 170 + (mode === 'tab' ? 0 : insets.bottom) }}
+        {...header.scrollProps}
+        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 170 + (mode === 'tab' ? 0 : insets.bottom) }}
         keyboardShouldPersistTaps="handled"
         onContentSizeChange={(w, h) => { sizesRef.current.content = h; if (listening) autoScroll(); }}
         onLayout={(e) => { sizesRef.current.viewport = e.nativeEvent.layout.height; }}
       >
+        {header.hero}
         <TextInput
           value={title}
           onChangeText={(v) => { draft.current.title = v; setTitle(v); scheduleCommit(); }}
@@ -463,9 +500,10 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
           placeholderTextColor={C.textFaint}
           style={st.title}
         />
+        {/* the date is the header's now; the count keeps its line when there are no words, so the first one typed
+            does not push the page down */}
         <Text style={[T.caption, { marginBottom: 12 }]}>
-          {new Date(note.updatedAt).toLocaleString('en-IN')}
-          {words ? ' · ' + words + (words === 1 ? ' word' : ' words') : ''}
+          {words ? words + (words === 1 ? ' word' : ' words') : ' '}
         </Text>
 
         {note.attachments.length > 0 && (
@@ -488,7 +526,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
             {liveText || '…'}
           </Text>
         )}
-      </ScrollView>
+      </Animated.ScrollView>
 
       {/* live transcript strip */}
       {listening && (

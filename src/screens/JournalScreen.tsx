@@ -1,7 +1,7 @@
 import React from 'react';
-import { Alert, AppState, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, AppState, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
@@ -9,7 +9,7 @@ import { C, F, S, T, TRACK } from '../theme';
 import { useStore, JournalEntry, flushSaves } from '../store';
 import { todayKey } from '../utils';
 import {
-  Chip, DotMenu, Field, Hairline, IconBtn, NeuHeader, NeuIconBtn, PillButton, ProgressBar, Row, ScreenBG, Sheet, Toggle, useTheme,
+  Chip, DotMenu, Field, Hairline, IconBtn, PillButton, ProgressBar, Row, ScreenBG, Sheet, Toggle, useTheme, useToolHeader,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Bouncy, EASE_OUT, Enter, FadeSwap, shiftIn, useAnimLevel } from '../components/Motion';
@@ -24,6 +24,7 @@ import { tap, tick } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
 import { markOpen, pinStatus } from '../lock';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
+import { useNow } from '../hooks/useNow';
 import { DayCheckout } from '../components/DayCheckout';
 import { QuickTaskSheet } from '../components/QuickTaskSheet';
 
@@ -44,15 +45,29 @@ const CHECKOUT_MIN_WORDS = 30;
 export function JournalScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const tabMode = mode === 'tab';
   return (
-    <ToolGate tool="journal" guard={tabMode} header={<NeuHeader title="Journal" variant={tabMode ? 'tab' : 'page'} />}>
+    <ToolGate tool="journal" guard={tabMode} header={<GateHeader title="Journal" tab={tabMode} />}>
       <WritingSpace tabMode={tabMode} />
     </ToolGate>
   );
 }
 
+/**
+ * What a lock screen wears in place of the journal (and of its archive): the same bar and, on a tab, the same big
+ * title, and no line of context, so nothing of what is locked (a streak, a count) shows before the PIN is given. Nothing
+ * scrolls under it, so the big title simply sits below the bar, where it sits at the top of the open tool.
+ */
+export function GateHeader({ title, tab }: { title: string; tab: boolean }) {
+  const header = useToolHeader({ title, mode: tab ? 'tab' : 'page' });
+  return (
+    <>
+      {header.bar}
+      <View style={{ paddingHorizontal: S.pad }}>{header.hero}</View>
+    </>
+  );
+}
+
 function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const insets = useSafeAreaInsets();
-  const router = useRouter();
   useTheme(); // repaints on a new accent
   const level = useAnimLevel();
   const nav = useToolNav();
@@ -468,40 +483,61 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     />
   ), [pinFlow, setSetting]);
 
+  // The header speaks of today, whichever day the page is on: whether today is written, and the run of days written
+  // in a row. No live dot: nothing here is happening this minute. The minute ticker (only while this screen is in
+  // front) turns "today" over when the journal day does, at its cutoff hour.
+  const now = useNow();
+  const todayDay = journalDayFor(now, settings.journalCutoffHour);
+  const writtenDays = React.useMemo(() => new Set(journal.filter((e) => e.wordCount > 0).map((e) => e.dateKey)), [journal]);
+  // The run of days written, ending today (or yesterday while today is still blank), counted from the journal's own
+  // day: before the cutoff hour the calendar has already turned over and the journal has not, and a calendar count
+  // would lose the run in those small hours
+  const streak = React.useMemo(() => {
+    let run = 0;
+    let key = writtenDays.has(todayDay) ? todayDay : shiftKey(todayDay, -1);
+    while (writtenDays.has(key)) { run++; key = shiftKey(key, -1); }
+    return run;
+  }, [writtenDays, todayDay]);
+  const todayLine = writtenDays.has(todayDay) ? 'Written today' : streak > 1 ? 'Today not written yet' : '';
+  const line = [todayLine, streak > 1 ? streak + ' day streak' : ''].filter(Boolean).join(' · ');
+  // The line reads at rest. With the keyboard up the page is being written, and the line's first words (a line that
+  // appears pushes the page down) or a changed fact (a dip under the title) would move things under the writer's eye.
+  const [lineHeld, setLineHeld] = React.useState(line);
+  React.useEffect(() => { if (!keyboardOpen) setLineHeld(line); }, [keyboardOpen, line]);
+  const tool = useToolHeader({
+    title: 'Journal',
+    mode: tabMode ? 'tab' : 'page',
+    context: lineHeld,
+    actions: [
+      { icon: 'albums-outline', label: 'Archive', onPress: openArchive },
+      { icon: 'ellipsis-horizontal', label: 'More', onPress: () => setMenu(true) },
+    ],
+  });
+
   return (
     <ScreenBG guard={tabMode}>
-      {/* the chrome, the page and the footer rise with the screen on every visit, as every other tool does; a page
-          turn (below) is its own entrance, inside the surface */}
-      <Enter index={0}>
-        <Animated.View style={[st.head, { paddingTop: insets.top + (tabMode ? 14 : 8) }, headStyle]}>
-          <View style={st.side}>
-            {tabMode ? null : <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={() => router.back()} accessibilityLabel="Back" />}
-          </View>
-          <Bouncy onPress={() => { tick(); setDateSheet(true); }} scaleTo={0.97} radius={14} style={st.dateBtn}>
-            {/* a new day's date dips out and comes back with the page, instead of changing under it in one frame */}
-            <FadeSwap swapKey={dateKey + '|' + sub} style={st.dateWords}>
-              <Text style={st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
-              <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
-            </FadeSwap>
-          </Bouncy>
-          <View style={[st.side, { justifyContent: 'flex-end' }]}>
-            <NeuIconBtn name="albums-outline" dim={38} size={18} color={C.textDim} onPress={openArchive} accessibilityLabel="Archive" />
-            <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => setMenu(true)} style={{ marginLeft: 8 }} accessibilityLabel="More" />
-          </View>
-        </Animated.View>
-        {goal > 0 ? (
-          <View style={{ paddingHorizontal: S.pad + 4, marginBottom: 4 }}>
-            <ProgressBar value={Math.min(1, words / goal)} height={4} color={C.gold} />
-          </View>
-        ) : null}
-      </Enter>
+      {/* the bar recedes while typing, as the footer does, and comes back when the writing pauses */}
+      <Animated.View style={[st.bar, headStyle]}>{tool.bar}</Animated.View>
 
-      <Enter index={1} style={st.page}>
-        <Animated.View key={page} entering={pageEnter} style={st.page}>
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingHorizontal: S.pad + 4, paddingTop: 8, paddingBottom: 40 }}
-          >
+      {/* the page and the footer rise with the screen on every visit, as every other tool does; a page turn (below)
+          is its own entrance, inside the surface. The header's hero is the first thing in the page's scroll, so it
+          rises with it */}
+      <Enter index={0} style={st.page}>
+        <Animated.ScrollView
+          {...tool.scrollProps}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ paddingHorizontal: S.pad, paddingTop: tool.padTop, paddingBottom: 40 }}
+        >
+          {tool.hero}
+          <Animated.View key={page} entering={pageEnter}>
+            {/* the page's own heading: its date, in the serif, with the weekday under it. A new day's date dips out and
+                comes back with the page, instead of changing under it in one frame */}
+            <Bouncy onPress={() => { tick(); setDateSheet(true); }} scaleTo={0.97} radius={14} style={st.dateBtn}>
+              <FadeSwap swapKey={dateKey + '|' + sub} style={st.dateWords}>
+                <Text style={st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
+                <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
+              </FadeSwap>
+            </Bouncy>
             <TextInput
               value={title}
               onChangeText={onTitle}
@@ -535,8 +571,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
               textAlignVertical="top"
               style={st.body}
             />
-          </ScrollView>
-        </Animated.View>
+          </Animated.View>
+        </Animated.ScrollView>
       </Enter>
 
       {checkout ? (
@@ -551,42 +587,51 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           onDone={() => setCheckout(null)}
         />
       ) : null}
-      <Enter index={2}>
-        <Animated.View style={[st.foot, { paddingBottom: 10 + (tabMode ? 0 : insets.bottom) }, footStyle]}>
-          <Row style={{ flex: 1 }}>
-            <Bouncy
-              onPress={() => { tick(); setCheckout(checkout ? null : 'asked'); }}
-              scaleTo={0.9}
-              radius={17}
-              style={st.dayWell}
-              accessibilityRole="button"
-              accessibilityLabel={'How the day went' + (mood ? ', ' + MOODS.find((m) => m.value === mood)?.label : '') + (rating ? ', ' + rating + ' of 5 stars' : '')}
-            >
-              <Animated.View pointerEvents="none" style={[st.dayTint, { backgroundColor: C.gold + '24' }, tintStyle]} />
-              <Ionicons name={dayIcon as any} size={18} color={mood || rating ? C.gold : C.textFaint} />
-            </Bouncy>
-            <IconBtn
-              name={tags.length ? 'pricetag' : 'pricetag-outline'} size={19} pad={8} color={tags.length ? C.gold : C.textDim}
-              onPress={() => setTagSheet(true)} accessibilityLabel={tags.length ? 'Tags, ' + tags.length : 'Add tags'}
-            />
-            {tasksArchived ? null : (
-              <IconBtn name="checkbox-outline" size={19} pad={8} color={C.textDim} onPress={openTask} accessibilityLabel="Add a task" />
-            )}
-          </Row>
-          <View style={{ alignItems: 'flex-end' }}>
-            <FadeSwap swapKey={saveFailed ? 'failed' : 'count'}>
-              <Text
-                style={[st.words, saveFailed && { color: C.danger }]}
-                onPress={saveFailed ? () => { flush(); } : undefined}
-                suppressHighlighting
+      <Enter index={1}>
+        <View style={[st.foot, { paddingBottom: 10 + (tabMode ? 0 : insets.bottom) }]}>
+          {/* the word goal sits with the count it measures, and stays at full strength while the rest of the footer
+              recedes: it is what you look at while you write */}
+          {goal > 0 ? (
+            <View style={st.goal}>
+              <ProgressBar value={Math.min(1, words / goal)} height={4} color={C.gold} />
+            </View>
+          ) : null}
+          <Animated.View style={[st.footRow, footStyle]}>
+            <Row style={{ flex: 1 }}>
+              <Bouncy
+                onPress={() => { tick(); setCheckout(checkout ? null : 'asked'); }}
+                scaleTo={0.9}
+                radius={17}
+                style={st.dayWell}
+                accessibilityRole="button"
+                accessibilityLabel={'How the day went' + (mood ? ', ' + MOODS.find((m) => m.value === mood)?.label : '') + (rating ? ', ' + rating + ' of 5 stars' : '')}
               >
-                {/* an empty page states no count at all */}
-                {saveFailed ? 'Not saved, tap to retry' : words ? words + (words === 1 ? ' word' : ' words') : ' '}
-              </Text>
-            </FadeSwap>
-            <Animated.View style={[st.tick, { backgroundColor: C.accent }, tickStyle]} />
-          </View>
-        </Animated.View>
+                <Animated.View pointerEvents="none" style={[st.dayTint, { backgroundColor: C.gold + '24' }, tintStyle]} />
+                <Ionicons name={dayIcon as any} size={18} color={mood || rating ? C.gold : C.textFaint} />
+              </Bouncy>
+              <IconBtn
+                name={tags.length ? 'pricetag' : 'pricetag-outline'} size={19} pad={8} color={tags.length ? C.gold : C.textDim}
+                onPress={() => setTagSheet(true)} accessibilityLabel={tags.length ? 'Tags, ' + tags.length : 'Add tags'}
+              />
+              {tasksArchived ? null : (
+                <IconBtn name="checkbox-outline" size={19} pad={8} color={C.textDim} onPress={openTask} accessibilityLabel="Add a task" />
+              )}
+            </Row>
+            <View style={{ alignItems: 'flex-end' }}>
+              <FadeSwap swapKey={saveFailed ? 'failed' : 'count'}>
+                <Text
+                  style={[st.words, saveFailed && { color: C.danger }]}
+                  onPress={saveFailed ? () => { flush(); } : undefined}
+                  suppressHighlighting
+                >
+                  {/* an empty page states no count at all */}
+                  {saveFailed ? 'Not saved, tap to retry' : words ? words + (words === 1 ? ' word' : ' words') : ' '}
+                </Text>
+              </FadeSwap>
+              <Animated.View style={[st.tick, { backgroundColor: C.accent }, tickStyle]} />
+            </View>
+          </Animated.View>
+        </View>
       </Enter>
 
       {dateSheetEl}
@@ -704,24 +749,27 @@ function JournalPrefs({ visible, onClose, onLock }: {
 }
 
 const st = StyleSheet.create({
-  head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 8 },
-  side: { width: 84, flexDirection: 'row', alignItems: 'center' },
-  dateBtn: { flex: 1, alignItems: 'center', paddingVertical: 4 },
+  // above the page that follows it, so the bar's shade falls over the page
+  bar: { zIndex: 2 },
+  // the date is the page's heading: it starts where the page's text does, and is only as wide as it is
+  dateBtn: { alignSelf: 'flex-start', maxWidth: '100%', paddingVertical: 4, marginBottom: 6 },
   date: { color: C.text, fontFamily: F.head, fontSize: 21, lineHeight: 27, letterSpacing: TRACK.large },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title, paddingVertical: 8 },
   prompt: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, marginBottom: 2 },
   promptText: { flex: 1, color: C.textDim, fontFamily: F.reg, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 20 },
   body: { color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, lineHeight: 26, minHeight: 320, paddingTop: 6 },
   foot: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: S.pad, paddingTop: 10,
+    paddingHorizontal: S.pad, paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,
   },
+  goal: { marginBottom: 8 },
+  footRow: { flexDirection: 'row', alignItems: 'center' },
   dayWell: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 4 },
   /** the day button's gold tint, a layer that fades in and out under the icon */
   dayTint: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 17 },
-  /** the page, keyed on each load so it arrives with its own entrance */
+  /** the page's scroll: it fills what the bar and the footer leave */
   page: { flex: 1 },
-  dateWords: { alignItems: 'center', alignSelf: 'stretch' },
+  dateWords: { alignItems: 'flex-start' },
   words: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, fontVariant: ['tabular-nums'] },
   tick: { width: 16, height: 2, borderRadius: 1, marginTop: 4 },
   prefLabel: { ...T.label, marginTop: 10, marginBottom: 8 },

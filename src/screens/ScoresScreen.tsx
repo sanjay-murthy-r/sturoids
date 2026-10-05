@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Pressable, Alert, BackHandler } from 'react-native';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, Alert, BackHandler } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,15 +11,16 @@ import {
   deltaVsPrevious, pathOf, descendantIds, canMove, fmtPct, fmtMark, fmtExamDate, fromToday, whenOf, filterLearnings,
   categoriesOf, categoryOf, plainTagsOf, rootExamOf, isTopExam,
 } from '../scores';
-import { todayKey } from '../utils';
+import { useToday } from '../hooks/useNow';
 import {
-  ScreenBG, Card, SectionTitle, EmptyState, ListCard, ListRow, NeuHeader, NeuIconBtn, DotMenu, Sheet, Hairline,
-  PillButton, Chip, Field, useTheme,
+  ScreenBG, Card, SectionTitle, EmptyState, ListCard, ListRow, DotMenu, Sheet, Hairline,
+  PillButton, Chip, Field, useTheme, useToolHeader, contextLine,
 } from '../components/UI';
-import { Appear, Bouncy, Enter, FadeSwap, useFocusKey } from '../components/Motion';
+import type { ToolAction } from '../components/UI';
+import { Appear, Bouncy, Enter, FadeSwap } from '../components/Motion';
 import { useSwapIn } from '../components/Swap';
 import { ScoreEditor, ScoreEditTarget } from '../components/ScoreEditor';
-import { ScoreAnalytics, AnalyticsTeaser } from '../components/ScoreAnalytics';
+import { ScoreAnalytics, AnalyticsTeaser, AnalyticsView, resolveView } from '../components/ScoreAnalytics';
 import { useScoresNav, takeScoreNode } from '../scoresNav';
 import { TagDots, TagRow, TagManagerSheet } from '../components/ScoreTags';
 import { LearningSheet, LearningTarget } from '../components/LearningSheet';
@@ -33,6 +34,58 @@ const SORTS: { key: Sort; label: string }[] = [
 ];
 
 const plural = (n: number, one: string, many = one + 's') => n + ' ' + (n === 1 ? one : many);
+
+/** A value that follows another once it has held still for `ms`, so a line worded from a live search never flickers per key. */
+function useSettled<T>(value: T, ms: number): T {
+  const [out, setOut] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setOut(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return out;
+}
+
+/** A name cut to fit beside other facts on the header's one line. */
+const clip = (s: string, n = 18) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
+
+/** A node's name, or what it is called until it has one: the same words in the header, its rows and its menus. */
+function nameOf(ix: ScoreIndex, n: ScoreNode) {
+  const title = n.title.trim();
+  if (title) return title;
+  if (n.kind === 'group') return 'Untitled group';
+  return n.parentId && ix.byId.get(n.parentId)?.kind === 'exam' ? 'Untitled subject' : 'Untitled exam';
+}
+
+/** Where a learning came from, top level first, for its caption and for the search. */
+function learningPath(ix: ScoreIndex, l: Learning) {
+  const from = ix.byId.get(l.nodeId);
+  return from ? [...pathOf(ix, from.id).map((n) => nameOf(ix, n)), nameOf(ix, from)].join('  /  ') : '';
+}
+
+/**
+ * Somewhere the page can be. The pages are kept as the way you came, so back always goes one step the way you came:
+ * Analytics and the notebook return to the level they were opened from, and an exam opened from either returns to it.
+ * The root is the empty trail.
+ */
+type Loc = { kind: 'node'; id: string } | { kind: 'analytics' } | { kind: 'notebook' };
+const sameLoc = (a: Loc | undefined, b: Loc) => !!a && a.kind === b.kind && (a.kind !== 'node' || (b.kind === 'node' && a.id === b.id));
+
+/** An exam's line under its header: where it lives, its date, and its result (or how soon, while it has none). */
+function nodeLine(ix: ScoreIndex, n: ScoreNode, today: string) {
+  const parent = n.parentId ? ix.byId.get(n.parentId) : undefined;
+  const place = parent ? (parent.kind === 'exam' ? 'Part of ' : '') + clip(nameOf(ix, parent)) : null;
+  if (n.kind === 'group') {
+    const count = examsUnder(ix, n.id).length;
+    const s = groupSummary(ix, n.id);
+    return contextLine(place, count > 0 && plural(count, 'exam'), s && ['average ', { em: fmtPct(s.average) }]);
+  }
+  const r = resultOf(n, ix);
+  return contextLine(
+    place,
+    n.date && fmtExamDate(n.date),
+    r ? { em: fmtPct(r.pct) } : n.date && n.date >= today && fromToday(n.date, today),
+  );
+}
 
 /** How far a result moved: a small caret and the points, green up, muted red down. */
 function Delta({ value, style }: { value: number; style?: any }) {
@@ -60,14 +113,17 @@ function Bar({ pct }: { pct: number }) {
 /**
  * Exam scores: groups hold groups and exams, an exam holds its subjects, and every exam keeps what it taught you.
  * Categories group exams of a kind across the tree, and Analytics compares the exams inside each. The page walks the
- * tree in place (hardware back climbs one level), so it works the same in a tab slot and as a full page. Adding or
- * editing an exam opens the full-screen form (app/exam.tsx); groups and subjects keep their sheet.
+ * tree in place (the header's arrow and the hardware back both go one step the way you came), so it works the same in a
+ * tab slot and as a full page. Adding or editing an exam opens the full-screen form (app/exam.tsx); groups and
+ * subjects keep their sheet.
+ *
+ * The header is the tool header (useToolHeader). Its title, mode, tray and context line all follow the page in view:
+ * the root in a bar slot is the only tab-mode page, every level below it is a page with a back arrow.
  */
 export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const theme = useTheme();
-  const fk = useFocusKey();
   const scores = useStore((s) => s.scores);
   const learnings = useStore((s) => s.learnings);
   const removeLearning = useStore((s) => s.removeLearning);
@@ -85,9 +141,10 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     for (const l of learnings) m.set(l.nodeId, (m.get(l.nodeId) || 0) + 1);
     return m;
   }, [learnings]);
-  const today = todayKey();
+  // turns over at midnight, so "Tomorrow" and "in 3 days" are never a day behind on a screen left open
+  const today = useToday();
 
-  const [cwd, setCwd] = useState<string | null>(null);
+  const [stack, setStack] = useState<Loc[]>([]);
   const [sort, setSort] = useState<Sort>('newest');
   const [editor, setEditor] = useState<ScoreEditTarget | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -98,10 +155,8 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [moveOpen, setMoveOpen] = useState(false);
   const moved = useRef<string | null>(null);
   const [areaW, setAreaW] = useState(0);
-  // the notebook is the tool's other half: every learning, from every exam, filtered by the same tags
-  const [notebook, setNotebook] = useState(false);
-  // Analytics: every marked exam, compared within its category
-  const [analytics, setAnalytics] = useState(false);
+  // Analytics' view (which exams, how far back) lives here so the header can say what is in scope; null is its opening view
+  const [analyticsView, setAnalyticsView] = useState<AnalyticsView | null>(null);
   // the group whose exams are being put in a category
   const [catGroup, setCatGroup] = useState<ScoreNode | null>(null);
   const [catOpen, setCatOpen] = useState(false);
@@ -121,55 +176,55 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setPicked((cur) => (cur.every((id) => live.has(id)) ? cur : cur.filter((id) => live.has(id))));
   }, [tagIds]);
 
-  const here = cwd ? ix.byId.get(cwd) : undefined;
+  // The page in view is the last of the pages opened so far. One whose node has gone (a delete, an undo, an import) is
+  // skipped in the very render that finds it gone, so no frame shows a title that is no longer true, and the page the
+  // user came from is what is left: deleting the node in view goes up one level.
+  const ixRef = useRef(ix);
+  ixRef.current = ix;
+  const trail = useMemo(() => stack.filter((l) => l.kind !== 'node' || ix.byId.has(l.id)), [stack, ix]);
+  useEffect(() => { if (trail.length !== stack.length) setStack(trail); }, [trail, stack]);
+  const loc = trail[trail.length - 1];
+  const here = loc?.kind === 'node' ? ix.byId.get(loc.id) : undefined;
+  // the notebook is the tool's other half: every learning, from every exam, filtered by the same tags
+  const notebook = loc?.kind === 'notebook';
+  // Analytics: every marked exam, compared within its category
+  const analytics = loc?.kind === 'analytics';
+  const aside = notebook || analytics;
+  const inExam = here?.kind === 'exam';
 
-  // a page whose node goes away (a delete, an undo, an import) climbs to the nearest level that still exists
-  const trail = useRef<string[]>([]);
-  useEffect(() => {
-    if (cwd && here) {
-      trail.current = [...pathOf(ix, cwd).map((n) => n.id), cwd];
-      return;
-    }
-    if (cwd && !here) {
-      const alive = [...trail.current].reverse().find((id) => ix.byId.has(id));
-      setCwd(alive ?? null);
-    }
-  }, [cwd, here, ix]);
+  const go = React.useCallback((to: Loc) => setStack((cur) => (sameLoc(cur[cur.length - 1], to) ? cur : [...cur, to])), []);
+  const openNode = (id: string) => go({ kind: 'node', id });
+  const openNotebook = () => go({ kind: 'notebook' });
+  const openAnalytics = () => { setAnalyticsView(null); go({ kind: 'analytics' }); };
 
-  const hereRef = useRef(here);
-  hereRef.current = here;
-  const notebookRef = useRef(notebook);
-  notebookRef.current = notebook;
-  const analyticsRef = useRef(analytics);
-  analyticsRef.current = analytics;
-  const goUp = React.useCallback(() => {
-    if (notebookRef.current) {
-      setNotebook(false);
+  // Back, for the arrow and the hardware key alike: a sheet that is open closes first, then the page goes one step back
+  // the way it came. False at the root, where the system takes the key.
+  const gate = useRef({ depth: 0, sheet: false });
+  gate.current = {
+    depth: trail.length,
+    sheet: addOpen || menuOpen || moveOpen || catOpen || tagsOpen || learnMenu || learn != null || editor != null,
+  };
+  const back = React.useCallback((): boolean => {
+    if (gate.current.sheet) {
+      setAddOpen(false); setMenuOpen(false); setMoveOpen(false); setCatOpen(false);
+      setTagsOpen(false); setLearnMenu(false); setLearn(null); setEditor(null);
       return true;
     }
-    if (analyticsRef.current) {
-      setAnalytics(false);
-      return true;
-    }
-    const cur = hereRef.current;
-    if (!cur) return false;
-    setCwd(cur.parentId);
+    if (!gate.current.depth) return false;
+    setStack((cur) => cur.filter((l) => l.kind !== 'node' || ixRef.current.byId.has(l.id)).slice(0, -1));
     return true;
   }, []);
   useFocusEffect(React.useCallback(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', goUp);
+    const sub = BackHandler.addEventListener('hardwareBackPress', back);
     return () => sub.remove();
-  }, [goUp]));
+  }, [back]));
 
   // the exam form asks, after adding an exam, for its page to open here
   const pendingOpen = useScoresNav((s) => s.open);
   useEffect(() => {
     if (!pendingOpen || !ix.byId.has(pendingOpen)) return;
     const id = takeScoreNode();
-    if (!id) return;
-    setNotebook(false);
-    setAnalytics(false);
-    setCwd(id);
+    if (id) openNode(id);
   }, [pendingOpen, ix]);
 
   const openMenu = (n: ScoreNode) => { setMenuNode(n); setMenuOpen(true); };
@@ -233,7 +288,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   };
 
   const menuItems = (n: ScoreNode, open: boolean) => [
-    ...(open ? [{ label: 'Open', icon: 'open-outline', onPress: () => setCwd(n.id) }] : []),
+    ...(open ? [{ label: 'Open', icon: 'open-outline', onPress: () => openNode(n.id) }] : []),
     { label: n.kind === 'group' ? 'Rename' : 'Edit', icon: 'create-outline', onPress: () => editNode(n) },
     ...(n.kind === 'group' && examsUnder(ix, n.id).length
       ? [{ label: 'Category for its exams', icon: 'albums-outline', onPress: () => openCategoryFor(n) }]
@@ -248,98 +303,156 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     if (!moveNode) return [];
     const groups = scores
       .filter((g) => g.kind === 'group')
-      .map((g) => ({ id: g.id as string | null, label: [...pathOf(ix, g.id).map((p) => p.title), g.title].join(' / ') }))
+      .map((g) => ({ id: g.id as string | null, label: [...pathOf(ix, g.id).map((p) => nameOf(ix, p)), nameOf(ix, g)].join(' / ') }))
       .sort((a, b) => a.label.localeCompare(b.label));
     return [{ id: null as string | null, label: 'Top level' }, ...groups].filter((dst) => canMove(ix, moveNode.id, dst.id));
   }, [moveNode, scores, ix]);
 
-  const titleOf = (n: ScoreNode | undefined) => (n ? n.title || (n.kind === 'group' ? 'Untitled group' : 'Untitled exam') : 'Scores');
   const fabRight = areaW > READ_MAX ? (areaW - READ_MAX) / 2 + 20 : 20;
-  const inExam = here?.kind === 'exam';
-  const aside = notebook || analytics;
   // a learning also carries its exam's category, so a category chip finds every learning from the exams inside it
   const learningCats = React.useCallback((l: Learning) => {
     const cat = categoryOf(rootExamOf(ix, l.nodeId), scoreTags);
     return cat ? [cat.id] : [];
   }, [ix, scoreTags]);
 
+  // the notebook's rows, worked out here so its header can count them: every learning whose exam is still there, and
+  // the ones the tags picked and the search let through
+  const alive = useMemo(() => new Set(ix.byId.keys()), [ix]);
+  const rowsFor = React.useCallback((search: string) => {
+    const q = search.trim().toLowerCase();
+    const byTags = filterLearnings(learnings, picked, match, alive, learningCats);
+    return {
+      mine: learnings.filter((l) => alive.has(l.nodeId)),
+      shown: q ? byTags.filter((l) => l.text.toLowerCase().includes(q) || learningPath(ix, l).toLowerCase().includes(q)) : byTags,
+    };
+  }, [learnings, picked, match, alive, learningCats, ix]);
+  const notebookRows = useMemo(() => (notebook ? rowsFor(find) : null), [notebook, rowsFor, find]);
+  // the list follows each key of the search; the header's line waits until the typing pauses
+  const settledFind = useSettled(find, 350);
+  const lineRows = useMemo(
+    () => (notebook ? (settledFind === find ? notebookRows : rowsFor(settledFind)) : null),
+    [notebook, notebookRows, settledFind, find, rowsFor],
+  );
+  const focus = useMemo(() => (analytics ? resolveView(ix, scoreTags, analyticsView) : null), [analytics, ix, scoreTags, analyticsView]);
+
+  // The header's line: the one fact each page is opened for. A figure that is zero is not said, and a page with nothing
+  // true to say has no line at all.
+  const context = useMemo(() => {
+    if (focus) {
+      const n = focus.pts.length;
+      // a category with nothing marked keeps the scope's name, so the line (and the chips under it) stay put as the scope is switched
+      if (!n) return focus.chips.length > 1 ? contextLine({ em: focus.label }) : null;
+      return contextLine({ em: focus.label }, focus.range === 'all' ? n + ' marked' : 'last ' + n + ' of ' + focus.all.length + ' marked');
+    }
+    if (lineRows) {
+      const { mine, shown } = lineRows;
+      if (!mine.length) return null;
+      const tag = picked.length === 1 ? scoreTags.find((t) => t.id === picked[0])?.label : undefined;
+      const q = settledFind.trim();
+      return contextLine(
+        shown.length > 0 && (shown.length === mine.length ? plural(mine.length, 'learning') : shown.length + ' of ' + plural(mine.length, 'learning')),
+        tag ? ['tagged ', { em: tag }] : picked.length > 1 && picked.length + ' tags, ' + (match === 'all' ? 'all of them' : 'any of them'),
+        q && 'matching "' + clip(q, 14) + '"',
+      );
+    }
+    if (here) return nodeLine(ix, here, today);
+    const count = examsUnder(ix, null).length;
+    const latest = groupSummary(ix, null)?.latest;
+    return contextLine(
+      count > 0 && plural(count, 'exam'),
+      latest && ['latest ', { em: fmtPct(latest.pct) }, ' in ' + clip(nameOf(ix, latest.node), 22)],
+    );
+  }, [focus, lineRows, picked, match, settledFind, scoreTags, here, ix, today]);
+
+  // Only actions that act on what is in view: the notebook and Analytics each manage what they filter by, and a group,
+  // an exam or a subject has its own menu beside the way into the notebook.
+  const tray: ToolAction[] = [];
+  if (aside) {
+    tray.push({ icon: 'pricetags-outline', label: analytics ? 'Manage categories' : 'Manage tags', onPress: () => setTagsOpen(true) });
+  } else {
+    tray.push({ icon: 'book-outline', label: 'Learnings notebook', onPress: openNotebook });
+    if (here) {
+      tray.push({
+        icon: 'ellipsis-horizontal',
+        label: here.kind === 'group' ? 'Group options' : isTopExam(ix, here) ? 'Exam options' : 'Subject options',
+        onPress: () => openMenu(here),
+      });
+    }
+  }
+  const header = useToolHeader({
+    title: notebook ? 'Learnings' : analytics ? 'Analytics' : here ? nameOf(ix, here) : 'Scores',
+    // the root of a bar slot is the only page with the big title; every level below it, and the root opened from More, has an arrow
+    mode: mode === 'tab' && !loc ? 'tab' : 'page',
+    context,
+    actions: tray,
+    onBack: () => { if (!back()) router.back(); },
+  });
+
+  // the page's own scroll resets as the level changes, so the bar's hairline and compact title never keep the last
+  // page's offset; the content below is keyed to the level, so it rises anew while the scroll view itself stays
+  const scrollRef = useRef<Animated.ScrollView>(null);
+  const pageKey = loc ? loc.kind + (loc.kind === 'node' ? ':' + loc.id : '') : 'top';
+  useLayoutEffect(() => { scrollRef.current?.scrollTo({ y: 0, animated: false }); }, [pageKey]);
+
+  // the sheet that opens a learning keeps the exam's name while it closes, so its title never flips to "New learning"
+  const learnFor = useRef<string | undefined>(undefined);
+  if (learn?.mode === 'new') {
+    const from = ix.byId.get(learn.nodeId);
+    learnFor.current = from ? nameOf(ix, from) : undefined;
+  }
+
   return (
     <ScreenBG guard={mode === 'tab'}>
       <View style={{ flex: 1 }} onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}>
-        <NeuHeader
-          title={notebook ? 'Learnings' : analytics ? 'Analytics' : titleOf(here)}
-          variant={mode === 'tab' && !here && !aside ? 'tab' : 'page'}
-          onBack={() => { if (!goUp()) router.back(); }}
-          right={(
-            <View style={st.headRight}>
-              {aside ? (
-                <NeuIconBtn
-                  name="pricetags-outline" dim={38} size={18} color={C.textDim} onPress={() => setTagsOpen(true)}
-                  accessibilityLabel={analytics ? 'Manage categories' : 'Manage tags'}
-                />
-              ) : (
-                <NeuIconBtn
-                  name="book-outline" dim={38} size={18} color={C.textDim} onPress={() => setNotebook(true)}
-                  accessibilityLabel="Learnings notebook"
-                />
-              )}
-              {here && !aside ? (
-                <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => openMenu(here)} accessibilityLabel="More" />
-              ) : null}
-            </View>
-          )}
-        />
-        <ScrollView
-          key={fk + ':' + (notebook ? 'notebook' : analytics ? 'analytics' : cwd || 'top')}
+        {header.bar}
+        <Animated.ScrollView
+          ref={scrollRef}
+          {...header.scrollProps}
           contentContainerStyle={[
             frame(READ_MAX),
-            { padding: S.pad, paddingTop: 4, paddingBottom: (inExam || aside ? 40 : 120) + (mode === 'tab' ? 0 : insets.bottom) },
+            { padding: S.pad, paddingTop: header.padTop, paddingBottom: (inExam || aside ? 40 : 120) + (mode === 'tab' ? 0 : insets.bottom) },
           ]}
         >
-          {analytics ? (
-            <ScoreAnalytics
-              onOpenExam={(id) => { setAnalytics(false); setCwd(id); }}
-              onManageCategories={() => setTagsOpen(true)}
-            />
-          ) : notebook ? (
-            <Notebook
-              learnings={learnings} ix={ix} picked={picked} match={match} find={find} onFind={setFind} extra={learningCats}
-              onPick={(id) => { tick(); setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])); }}
-              onMatch={() => { tick(); setMatch((m) => (m === 'all' ? 'any' : 'all')); }}
-              onClear={() => { tick(); setPicked([]); setMatch('any'); }}
-              onOpen={(l) => { setNotebook(false); setCwd(l.nodeId); }}
-              onMenu={openLearning}
-              onManage={() => setTagsOpen(true)}
-            />
-          ) : (
-          <>
-          {here && pathOf(ix, here.id).length ? (
-            <Text style={[T.kicker, { marginBottom: 12 }]} numberOfLines={1}>
-              {pathOf(ix, here.id).map((p) => titleOf(p)).join('  /  ')}
-            </Text>
-          ) : null}
-          {inExam && here ? (
-            <ExamView
-              exam={here} ix={ix} today={today} onOpen={setCwd} onMenu={openMenu}
-              onEdit={() => editNode(here)}
-              onAddPart={() => editNode(here, true)}
-              learnings={learnings.filter((l) => l.nodeId === here.id)}
-              onAddLearning={() => setLearn({ mode: 'new', nodeId: here.id })}
-              onLearningMenu={openLearning}
-            />
-          ) : (
-            <GroupView
-              groupId={here?.id ?? null} group={here} ix={ix} today={today} sort={sort}
-              onSort={() => { tick(); setSort(SORTS[(SORTS.findIndex((x) => x.key === sort) + 1) % SORTS.length].key); }}
-              onOpen={setCwd} onMenu={openMenu}
-              onAdd={() => newExam(here?.id ?? null)}
-              onAnalytics={() => setAnalytics(true)}
-              learnedBy={learnedBy}
-            />
-          )}
-          </>
-          )}
-        </ScrollView>
+          <View key={pageKey}>
+            {analytics ? (
+              <ScoreAnalytics
+                hero={header.hero} view={analyticsView} onView={setAnalyticsView}
+                onOpenExam={openNode}
+                onManageCategories={() => setTagsOpen(true)}
+              />
+            ) : notebookRows ? (
+              <Notebook
+                hero={header.hero} rows={notebookRows} ix={ix} picked={picked} match={match} find={find} onFind={setFind}
+                onPick={(id) => { tick(); setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])); }}
+                onMatch={() => { tick(); setMatch((m) => (m === 'all' ? 'any' : 'all')); }}
+                onClear={() => { tick(); setPicked([]); setMatch('any'); }}
+                onOpen={(l) => openNode(l.nodeId)}
+                onMenu={openLearning}
+                onManage={() => setTagsOpen(true)}
+              />
+            ) : inExam && here ? (
+              <ExamView
+                hero={header.hero}
+                exam={here} ix={ix} today={today} onOpen={openNode} onMenu={openMenu}
+                onEdit={() => editNode(here)}
+                onAddPart={() => editNode(here, true)}
+                learnings={learnings.filter((l) => l.nodeId === here.id)}
+                onAddLearning={() => setLearn({ mode: 'new', nodeId: here.id })}
+                onLearningMenu={openLearning}
+              />
+            ) : (
+              <GroupView
+                hero={header.hero}
+                groupId={here?.id ?? null} group={here} ix={ix} today={today} sort={sort}
+                onSort={() => { tick(); setSort(SORTS[(SORTS.findIndex((x) => x.key === sort) + 1) % SORTS.length].key); }}
+                onOpen={openNode} onMenu={openMenu}
+                onAdd={() => newExam(here?.id ?? null)}
+                onAnalytics={openAnalytics}
+                learnedBy={learnedBy}
+              />
+            )}
+          </View>
+        </Animated.ScrollView>
 
         {!inExam && !aside ? (
           <Bouncy
@@ -363,20 +476,20 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
         visible={addOpen}
         onClose={() => setAddOpen(false)}
         items={[
-          { label: here ? 'New exam in ' + titleOf(here) : 'New exam', icon: 'ribbon-outline', onPress: () => newExam(here?.id ?? null) },
-          { label: here ? 'New group in ' + titleOf(here) : 'New group', icon: 'folder-outline', onPress: () => setEditor({ mode: 'new', kind: 'group', parentId: here?.id ?? null }) },
+          { label: here ? 'New exam in ' + nameOf(ix, here) : 'New exam', icon: 'ribbon-outline', onPress: () => newExam(here?.id ?? null) },
+          { label: here ? 'New group in ' + nameOf(ix, here) : 'New group', icon: 'folder-outline', onPress: () => setEditor({ mode: 'new', kind: 'group', parentId: here?.id ?? null }) },
         ]}
       />
       <DotMenu
         visible={menuOpen}
         onClose={() => setMenuOpen(false)}
-        items={menuNode ? menuItems(menuNode, menuNode.id !== cwd) : []}
+        items={menuNode ? menuItems(menuNode, menuNode.id !== here?.id) : []}
       />
       <Sheet
         visible={moveOpen}
         onClose={() => setMoveOpen(false)}
         onClosed={() => { const m = moved.current; moved.current = null; if (m) toast(m); }}
-        title={moveNode ? 'Move ' + titleOf(moveNode) : 'Move'}
+        title={moveNode ? 'Move ' + nameOf(ix, moveNode) : 'Move'}
       >
         {destinations.map((dst, i) => {
           const current = moveNode?.parentId === dst.id;
@@ -412,7 +525,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           catDone.current = null;
           if (done) toast(done.text, { label: 'Undo', onPress: done.undo });
         }}
-        title={catGroup ? 'Category for ' + titleOf(catGroup) : 'Category'}
+        title={catGroup ? 'Category for ' + nameOf(ix, catGroup) : 'Category'}
       >
         <Text style={[T.caption, { marginBottom: 12 }]}>
           Every exam in this group goes in the category you pick, and keeps its other tags. Subjects are not changed.
@@ -465,7 +578,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           ...(notebook ? [{
             label: 'Open its exam',
             icon: 'open-outline',
-            onPress: () => { setNotebook(false); setCwd(learnNode.nodeId); },
+            onPress: () => openNode(learnNode.nodeId),
           }] : []),
           { label: 'Delete', icon: 'trash-outline', color: C.danger, onPress: () => deleteLearning(learnNode) },
         ] : []}
@@ -473,7 +586,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <LearningSheet
         target={learn}
         onClose={() => setLearn(null)}
-        title={learn?.mode === 'new' ? titleOf(ix.byId.get(learn.nodeId)) : undefined}
+        title={learnFor.current}
       />
       <TagManagerSheet visible={tagsOpen} onClose={() => setTagsOpen(false)} />
       <ScoreEditor target={editor} onClose={() => setEditor(null)} />
@@ -483,7 +596,9 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 /* ---------------- a group, or the top level ---------------- */
 
-function GroupView({ groupId, ix, today, sort, onSort, onOpen, onMenu, onAdd, onAnalytics, learnedBy }: {
+function GroupView({ hero, groupId, ix, today, sort, onSort, onOpen, onMenu, onAdd, onAnalytics, learnedBy }: {
+  /** the header's first block, carried in the page's first entrance */
+  hero: React.ReactNode;
   groupId: string | null; group?: ScoreNode; ix: ScoreIndex; today: string; sort: Sort;
   onSort: () => void; onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void; onAdd: () => void;
   onAnalytics: () => void;
@@ -506,19 +621,26 @@ function GroupView({ groupId, ix, today, sort, onSort, onOpen, onMenu, onAdd, on
 
   if (!kids.length) {
     return (
-      <EmptyState
-        icon={groupId ? 'folder-open-outline' : 'ribbon-outline'}
-        title={groupId ? 'This group is empty' : 'No exams yet'}
-        body={groupId ? 'Add an exam, or a group inside this one.' : 'Add an exam, or a group to keep a series together, like mock tests or a school term.'}
-        actionLabel="Add an exam"
-        onAction={onAdd}
-      />
+      <>
+        {/* the note rises with the header's hero, as one entrance */}
+        <Enter index={enter++}>
+          {hero}
+          <EmptyState
+            icon={groupId ? 'folder-open-outline' : 'ribbon-outline'}
+            title={groupId ? 'This group is empty' : 'No exams yet'}
+            body={groupId ? 'Add an exam, or a group inside this one.' : 'Add an exam, or a group to keep a series together, like mock tests or a school term.'}
+            actionLabel="Add an exam"
+            onAction={onAdd}
+          />
+        </Enter>
+      </>
     );
   }
 
   return (
     <>
       <Enter index={enter++}>
+        {hero}
         <AnalyticsTeaser onPress={onAnalytics} />
       </Enter>
 
@@ -530,7 +652,7 @@ function GroupView({ groupId, ix, today, sort, onSort, onOpen, onMenu, onAdd, on
               <ListRow key={n.id} onPress={() => onOpen(n.id)} onLongPress={() => onMenu(n)} style={{ paddingVertical: 12 }}>
                 <Ionicons name="calendar-outline" size={18} color={C.accent} />
                 <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={st.rowTitle} numberOfLines={1}>{n.title || 'Untitled exam'}</Text>
+                  <Text style={st.rowTitle} numberOfLines={1}>{nameOf(ix, n)}</Text>
                   <Text style={[T.caption, { marginTop: 2 }]}>{fmtExamDate(n.date as string)}</Text>
                 </View>
                 <Text style={[st.when, { color: C.accent }]}>{fromToday(n.date as string, today)}</Text>
@@ -561,7 +683,7 @@ function GroupView({ groupId, ix, today, sort, onSort, onOpen, onMenu, onAdd, on
               <ListRow key={g.id} onPress={() => onOpen(g.id)} onLongPress={() => onMenu(g)} style={{ paddingVertical: 12 }}>
                 <Ionicons name="folder-outline" size={20} color={C.accent} />
                 <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={st.rowTitle} numberOfLines={1}>{g.title || 'Untitled group'}</Text>
+                  <Text style={st.rowTitle} numberOfLines={1}>{nameOf(ix, g)}</Text>
                   <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>
                     {count ? plural(count, 'exam') + (s ? '  ·  latest ' + fmtPct(s.latest.pct) : '') : 'Empty'}
                   </Text>
@@ -595,7 +717,7 @@ function ExamRow({ n, ix, today, onOpen, onMenu, learned }: {
   return (
     <ListRow onPress={() => onOpen(n.id)} onLongPress={() => onMenu(n)} style={{ paddingVertical: 12 }}>
       <View style={{ flex: 1 }}>
-        <Text style={st.rowTitle} numberOfLines={1}>{n.title || 'Untitled exam'}</Text>
+        <Text style={st.rowTitle} numberOfLines={1}>{nameOf(ix, n)}</Text>
         {caption || n.tags?.length ? (
           <View style={[st.sideRow, { marginTop: 3 }]}>
             <TagDots ids={n.tags} />
@@ -623,8 +745,10 @@ function ExamRow({ n, ix, today, onOpen, onMenu, learned }: {
 /* ---------------- one exam ---------------- */
 
 function ExamView({
-  exam, ix, today, onOpen, onMenu, onEdit, onAddPart, learnings, onAddLearning, onLearningMenu,
+  hero, exam, ix, today, onOpen, onMenu, onEdit, onAddPart, learnings, onAddLearning, onLearningMenu,
 }: {
+  /** the header's first block, carried in the page's first entrance */
+  hero: React.ReactNode;
   exam: ScoreNode; ix: ScoreIndex; today: string; onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void;
   onEdit: () => void; onAddPart: () => void;
   learnings: Learning[]; onAddLearning: () => void; onLearningMenu: (l: Learning) => void;
@@ -648,9 +772,10 @@ function ExamView({
   return (
     <>
       <Enter index={0}>
+        {hero}
         <Card hero pad={20} style={{ marginBottom: S.gap }}>
           <Text style={T.kicker} numberOfLines={1}>
-            {exam.date ? fmtExamDate(exam.date, true) + '  ·  ' + fromToday(exam.date, today) : parent?.kind === 'exam' ? 'Part of ' + (parent.title || 'an exam') : 'No date'}
+            {exam.date ? fmtExamDate(exam.date, true) + '  ·  ' + fromToday(exam.date, today) : parent?.kind === 'exam' ? 'Part of ' + nameOf(ix, parent) : 'No date'}
           </Text>
           {r ? (
             <>
@@ -725,7 +850,7 @@ function ExamView({
                   <ListRow key={p.id} onPress={() => onOpen(p.id)} onLongPress={() => onMenu(p)} style={{ paddingVertical: 12 }}>
                     <View style={{ flex: 1 }}>
                       <View style={st.partHead}>
-                        <Text style={[st.rowTitle, { flex: 1 }]} numberOfLines={1}>{p.title || 'Untitled'}</Text>
+                        <Text style={[st.rowTitle, { flex: 1 }]} numberOfLines={1}>{nameOf(ix, p)}</Text>
                         <Text style={pr ? st.partPct : [st.when, { color: C.textFaint }]}>{pr ? fmtPct(pr.pct) : 'Not marked'}</Text>
                       </View>
                       {pr ? <Bar pct={pr.pct} /> : null}
@@ -806,45 +931,43 @@ function ExamView({
  * Every learning, from every exam, newest first. Picking tags narrows it: by default a learning shows when it carries
  * any of them, and "All tags" keeps only the ones carrying every tag picked, whatever else they carry too.
  */
-function Notebook({ learnings, ix, picked, match, find, onFind, onPick, onMatch, onClear, onOpen, onMenu, onManage, extra }: {
-  learnings: Learning[]; ix: ScoreIndex; picked: string[]; match: TagMatch; find: string; onFind: (v: string) => void;
-  /** the tags a learning carries through its exam: its category */
-  extra: (l: Learning) => string[];
+function Notebook({ hero, rows, ix, picked, match, find, onFind, onPick, onMatch, onClear, onOpen, onMenu, onManage }: {
+  /** the header's first block, carried in the page's first entrance */
+  hero: React.ReactNode;
+  /** every learning whose exam is still there, and the ones the tags and the search let through (worked out by the screen, whose header counts them) */
+  rows: { mine: Learning[]; shown: Learning[] };
+  ix: ScoreIndex; picked: string[]; match: TagMatch; find: string; onFind: (v: string) => void;
   onPick: (id: string) => void; onMatch: () => void; onClear: () => void;
   onOpen: (l: Learning) => void; onMenu: (l: Learning) => void; onManage: () => void;
 }) {
   const all = useStore((s) => s.scoreTags);
   const tags = React.useMemo(() => [...categoriesOf(all), ...plainTagsOf(all)], [all]);
-  const alive = React.useMemo(() => new Set(ix.byId.keys()), [ix]);
-  // where each learning came from, for its caption and for the search
-  const pathText = React.useCallback((l: Learning) => {
-    const from = ix.byId.get(l.nodeId);
-    return from ? [...pathOf(ix, from.id).map((n) => n.title || 'Untitled'), from.title || 'Untitled'].join('  /  ') : '';
-  }, [ix]);
-  const shown = React.useMemo(() => {
-    const q = find.trim().toLowerCase();
-    const byTags = filterLearnings(learnings, picked, match, alive, extra);
-    return q ? byTags.filter((l) => l.text.toLowerCase().includes(q) || pathText(l).toLowerCase().includes(q)) : byTags;
-  }, [learnings, picked, match, alive, find, pathText, extra]);
-  const mine = learnings.filter((l) => alive.has(l.nodeId));
+  const { mine, shown } = rows;
 
   if (!mine.length) {
     return (
-      <EmptyState
-        icon="book-outline"
-        title="Nothing learned yet"
-        body="Open an exam and add what it taught you. Every learning gathers here, and its tags bring it back."
-      />
+      <>
+        {/* the note rises with the header's hero, as one entrance */}
+        <Enter index={0}>
+          {hero}
+          <EmptyState
+            icon="book-outline"
+            title="Nothing learned yet"
+            body="Open an exam and add what it taught you. Every learning gathers here, and its tags bring it back."
+          />
+        </Enter>
+      </>
     );
   }
 
   return (
     <>
-      <Field
-        value={find} onChangeText={onFind} placeholder="Search learnings and exams"
-        autoCapitalize="none" returnKeyType="search" maxLength={80}
-      />
       <Enter index={0}>
+        {hero}
+        <Field
+          value={find} onChangeText={onFind} placeholder="Search learnings and exams"
+          autoCapitalize="none" returnKeyType="search" maxLength={80}
+        />
         {tags.length ? (
           <View style={st.filterRow}>
             {tags.map((t) => (
@@ -881,15 +1004,12 @@ function Notebook({ learnings, ix, picked, match, find, onFind, onPick, onMatch,
         ) : null}
       </Enter>
 
-      <Text style={[T.kicker, { marginBottom: 12 }]}>
-        {shown.length === mine.length ? plural(mine.length, 'learning') : shown.length + ' of ' + mine.length}
-      </Text>
-
       {shown.length ? (
-        <Enter index={1}>
+        // the count and the filter are in the header's line, so the list follows the filters directly
+        <Enter index={1} style={{ marginTop: 10 }}>
           <ListCard>
             {shown.map((l) => {
-              const path = pathText(l);
+              const path = learningPath(ix, l);
               return (
                 <ListRow key={l.id} onPress={() => onOpen(l)} onLongPress={() => onMenu(l)} style={{ paddingVertical: 12 }}>
                   <View style={{ flex: 1 }}>
@@ -918,7 +1038,6 @@ function Notebook({ learnings, ix, picked, match, find, onFind, onPick, onMatch,
 }
 
 const st = StyleSheet.create({
-  headRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   filterRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
   fab: {
     position: 'absolute', width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center',

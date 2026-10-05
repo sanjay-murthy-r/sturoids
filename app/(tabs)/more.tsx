@@ -1,10 +1,10 @@
 import React from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, TRACK, ThemeMode, neuInset } from '../../src/theme';
-import { ScreenBG, ListCard, ListRow, SectionTitle, DotMenu, useTheme } from '../../src/components/UI';
+import { ScreenBG, ListCard, ListRow, SectionTitle, DotMenu, useTheme, useToolHeader } from '../../src/components/UI';
 import { Enter, FadeSwap, useFocusKey } from '../../src/components/Motion';
 import { ToolArchiveSheet } from '../../src/components/ToolArchiveSheet';
 import { toast } from '../../src/components/Toast';
@@ -76,7 +76,6 @@ const ArchivedRow = React.memo(function ArchivedRow({ names, count, onPress }: {
  * opened from here is a full page with a back button; moving it into a slot (Settings, Tools) takes it off this list.
  */
 export default function More() {
-  const insets = useSafeAreaInsets();
   const fk = useFocusKey();
   const router = useRouter();
   const theme = useTheme();
@@ -103,6 +102,8 @@ export default function More() {
   const lockedTool = (key: ToolKey) => (key === 'journal' && journalLocked) || (key === 'notes' && notesLocked);
   const openMenu = React.useCallback((t: Tool) => { setMenuFor(t); setMenuOpen(true); }, []);
   const openArchive = React.useCallback(() => setArchiveSheet(true), []);
+  // the page is a list: its header is the big title alone, with no line of context and nothing live
+  const header = useToolHeader({ title: 'More', mode: 'tab' });
 
   const archive = (t: Tool) => {
     if (setToolArchived(t.key, true)) toast(t.label + ' archived. Restore it from Archived at the end of this list.');
@@ -111,12 +112,16 @@ export default function More() {
 
   return (
     <ScreenBG guard>
-      <ScrollView key={fk} contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 40 }}>
-        <Text style={T.kicker}>Toolbox</Text>
-        <Text style={[T.display, { marginTop: 4, marginBottom: 16 }]}>More</Text>
-
-        {/* a tool archived or restored folds out of or into the card, and the rows after it glide (ListCard) */}
+      {header.bar}
+      <Animated.ScrollView
+        key={fk}
+        {...header.scrollProps}
+        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 40 }}
+      >
+        {/* the title rises with the list, in the screen's first entrance. A tool archived or restored folds out of or
+            into the card, and the rows after it glide (ListCard) */}
         <Enter index={0}>
+          {header.hero}
           <ListCard>
             {tools.map((t) => (
               <ToolRow
@@ -149,7 +154,7 @@ export default function More() {
             </ListRow>
           </ListCard>
         </Enter>
-      </ScrollView>
+      </Animated.ScrollView>
 
       <DotMenu
         visible={menuOpen}

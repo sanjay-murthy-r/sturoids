@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated from 'react-native-reanimated';
@@ -7,18 +7,18 @@ import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, DailyTask, Mission } from '../store';
 import { yesterdayKey, daysUntil, fmtShortDate, toMinutes, indexAfterNeighbours } from '../utils';
 import {
-  ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, NeuHeader, useTheme,
+  ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, useTheme, useToolHeader, contextLine,
   ListCard, ListRow, StrikeText,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import {
-  Enter, Bouncy, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useBuilt, useFocusKey,
+  Enter, Bouncy, glide, rowIn, rowOut, useAnimLevel, useBuilt, useFocusKey,
 } from '../components/Motion';
 import { useSwapIn } from '../components/Swap';
 import { tap } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
 import { toast } from '../components/Toast';
-import { useToday } from '../hooks/useNow';
+import { useNow, useToday } from '../hooks/useNow';
 import { QuickTaskSheet } from '../components/QuickTaskSheet';
 
 type Tab = 'daily' | 'missions';
@@ -42,6 +42,13 @@ async function applyReminders() {
   }
   setTimeout(rescheduleAllReminders, 200);
 }
+
+/** The minutes from `now` until a deadline falls due. A deadline is a day with no time of day, and falls due as that day turns. */
+const minutesToDue = (deadline: string, now: Date) => {
+  const end = new Date(deadline + 'T00:00:00');
+  end.setDate(end.getDate() + 1);
+  return Math.round((end.getTime() - now.getTime()) / 60000);
+};
 
 export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
@@ -138,24 +145,50 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const askDeleteMission = useCallback((m: Mission) => confirmDelete(m.title, () => removeMission(m.id)), [removeMission]);
   const toggleOpen = useCallback((id: string) => setExpanded((x) => (x === id ? null : id)), []);
 
-  const doneToday = useMemo(() => dailyTasks.filter((t) => t.doneOn === today).length, [dailyTasks, today]);
+  // the header's line: counts that are not zero, and what falls due. The minute turns it over (useNow, only while this
+  // screen is in front), so a deadline coming up is noticed without a tap
+  const now = useNow();
+  const openDaily = useMemo(() => dailyTasks.filter((t) => t.doneOn !== today).length, [dailyTasks, today]);
   const openCount = useMemo(() => missions.filter((m) => !m.done).length, [missions]);
-  // the line above the title never states a zero: an empty list says what the list is for instead
-  const kicker = tab === 'daily'
-    ? (dailyTasks.length === 0 ? 'Resets each morning'
-      : doneToday === 0 ? dailyTasks.length + ' left today'
-        : doneToday + '/' + dailyTasks.length + ' done today')
-    : (missions.length === 0 ? 'With deadlines' : openCount === 0 ? 'All done' : openCount + ' open');
+  const dueToday = useMemo(() => missions.filter((m) => !m.done && daysUntil(m.deadline) === 0).length, [missions, today]);
+  const nextDue = useMemo(() => {
+    let next: Mission | null = null;
+    for (const m of missions) if (!m.done && (!next || m.deadline < next.deadline)) next = m;
+    return next;
+  }, [missions]);
+  // The dot is for a task due within the hour. Deadlines carry no time of day (and a ToDo has none at all), so a task
+  // falls due as its day turns, the reading Today uses: the hour that counts is the last of the deadline's day.
+  const dueSoon = useMemo(
+    () => missions.filter((m) => { const left = minutesToDue(m.deadline, now); return !m.done && left > 0 && left <= 60; }),
+    [missions, now],
+  );
+  const dueSoonLine = dueSoon.length === 0 ? null
+    : [{ em: dueSoon.length === 1 ? dueSoon[0].title : dueSoon.length + ' tasks' }, ' due by midnight'];
+  const nextDueLine = nextDue == null ? null : (() => {
+    const d = daysUntil(nextDue.deadline);
+    return d < 0 ? 'overdue since ' + fmtShortDate(nextDue.deadline)
+      : d === 0 ? 'next due today' : d === 1 ? 'next due tomorrow' : 'next due ' + fmtShortDate(nextDue.deadline);
+  })();
+  const context = tab === 'daily'
+    ? contextLine(
+      openDaily > 0 ? openDaily + ' open' : dailyTasks.length > 0 && 'All done',
+      dueSoonLine ?? (dueToday > 0 && dueToday + (dueToday === 1 ? ' task due today' : ' tasks due today')),
+    )
+    : contextLine(openCount > 0 ? openCount + ' open' : missions.length > 0 && 'All done', dueSoonLine ?? nextDueLine);
 
   const tabMode = mode === 'tab';
-  const reminderButton = (
-    <IconBtn
-      name={reminderOn || hasCheckIns ? 'notifications' : 'notifications-outline'}
-      color={reminderOn ? C.accent : C.textDim} size={24}
-      onPress={() => setRemindSheet(true)}
-      accessibilityLabel="Reminders"
-    />
-  );
+  const header = useToolHeader({
+    title: tab === 'daily' ? 'ToDos' : 'Tasks',
+    mode: tabMode ? 'tab' : 'page',
+    context,
+    live: dueSoon.length > 0,
+    actions: [{
+      icon: reminderOn || hasCheckIns ? 'notifications' : 'notifications-outline',
+      label: 'Reminders',
+      color: reminderOn ? C.accent : undefined,
+      onPress: () => setRemindSheet(true),
+    }],
+  });
 
   const empty = tab === 'daily' ? dailyTasks.length === 0 : sortedMissions.length === 0;
   // switching lists, or a list filling or emptying, brings the new body into the old one's place: the other list comes
@@ -165,29 +198,24 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   return (
     <ScreenBG guard={tabMode}>
-      {!tabMode && <NeuHeader title={tab === 'daily' ? 'ToDos' : 'Tasks'} right={reminderButton} />}
-      <ScrollView
+      {header.bar}
+      <Animated.ScrollView
         key={fk}
-        contentContainerStyle={{ padding: S.pad, paddingTop: tabMode ? insets.top + 20 : 8, paddingBottom: 130 + (tabMode ? 0 : insets.bottom) }}
+        {...header.scrollProps}
+        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 130 + (tabMode ? 0 : insets.bottom) }}
         showsVerticalScrollIndicator={false}
       >
-        <Row style={{ justifyContent: 'space-between' }}>
-          <FadeSwap swapKey={tab}>
-            <Text style={T.kicker}>{kicker}</Text>
-            {tabMode && <Text style={[T.display, { marginTop: 4 }]}>{tab === 'daily' ? 'ToDos' : 'Tasks'}</Text>}
-          </FadeSwap>
-          {tabMode && reminderButton}
-        </Row>
-
-        <SegmentedControl
-          options={TABS}
-          value={tab}
-          onChange={(k) => setTab(k)}
-          stretch
-          style={{ marginTop: 16, marginBottom: 16 }}
-        />
-
+        {/* the header's hero, the list switch and the list rise together: the screen's first entrance */}
         <Enter index={0}>
+          {header.hero}
+          <SegmentedControl
+            options={TABS}
+            value={tab}
+            onChange={(k) => setTab(k)}
+            stretch
+            style={{ marginBottom: 16 }}
+          />
+
           <Animated.View key={bodyKey} entering={bodyIn}>
             {tab === 'daily' ? (
               <>
@@ -239,7 +267,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
             )}
           </Animated.View>
         </Enter>
-      </ScrollView>
+      </Animated.ScrollView>
 
       <Bouncy
         onPress={() => { tap(); setAddSheet(true); }}

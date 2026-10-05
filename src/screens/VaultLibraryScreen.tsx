@@ -1,8 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import {
-  View, Text, ScrollView, StyleSheet, Alert, BackHandler, useWindowDimensions, FlatList } from 'react-native';
+import { View, Text, StyleSheet, Alert, BackHandler, useWindowDimensions } from 'react-native';
 import Animated, {
-  FadeIn, runOnJS, useAnimatedRef, useAnimatedScrollHandler, useSharedValue,
+  Extrapolation, FadeIn, interpolate, runOnJS, useAnimatedRef, useAnimatedScrollHandler, useDerivedValue, useSharedValue,
 } from 'react-native-reanimated';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
@@ -11,16 +10,18 @@ import { C, F, S, T, TRACK, NEU } from '../theme';
 import { useStore, VaultVideo, VaultFolder, TimedNote, Bookmark } from '../store';
 import { parseYouTubeId, fmtMediaTime } from '../utils';
 import {
-  ScreenBG, Card, Field, EmptyState, ListCard, ListRow, ListSlice, Row, Chip, Sheet, PillButton, IconBtn, NeuHeader,
-  NeuIconBtn, DotMenu,
+  ScreenBG, Card, Field, EmptyState, ListCard, ListRow, ListSlice, Row, Chip, Sheet, PillButton, IconBtn, NeuIconBtn, DotMenu,
+  useToolHeader, contextLine,
 } from '../components/UI';
+import { ScrollEdge, edgeStrength } from '../components/ScrollEdge';
 import { toast } from '../components/Toast';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Appear, EASE_OUT, Enter, rowIn, shiftIn, useAnimLevel, useBuilt } from '../components/Motion';
 import { useToolNav } from '../toolNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as CachedImage } from 'expo-image';
-import { columnWidth } from '../layout';
+import { WIDE_AT, columnWidth } from '../layout';
+import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { DraftSheet } from './VaultPlayerScreen';
 
 const thumb = (videoId: string) => 'https://img.youtube.com/vi/' + videoId + '/mqdefault.jpg';
@@ -45,6 +46,8 @@ const PAGE_OPTIONS: { key: ViewTab; label: string }[] = [
   { key: 'recent', label: 'Recent' },
   { key: 'notes', label: 'All notes' },
 ];
+
+const plural = (n: number, one: string) => n + ' ' + (n === 1 ? one : one + 's');
 
 /** A timed note or a bookmark, with the video it belongs to: a row of All notes, and what its menu and sheets act on. */
 type NoteHit = { video: VaultVideo; item: TimedNote | Bookmark; isBookmark: boolean };
@@ -291,11 +294,13 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const pageWv = useSharedValue(pageW);
   const shownIdx = useSharedValue(PAGES.indexOf(tab));
   const heading = useSharedValue(-1);
+  const pagerX = useSharedValue(0);
   React.useEffect(() => { pageWv.value = pageW; }, [pageW]);
   const pickIdx = React.useCallback((i: number) => setTab(PAGES[i] || 'library'), []);
   const onPager = useAnimatedScrollHandler({
     onBeginDrag: () => { heading.value = -1; },
     onScroll: (e) => {
+      pagerX.value = e.contentOffset.x;
       if (pageWv.value <= 0) return;
       const i = Math.round(e.contentOffset.x / pageWv.value);
       if (heading.value >= 0) {
@@ -316,6 +321,24 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         runOnJS(pickIdx)(i);
       }
     },
+  });
+
+  // The bar sits over fixed controls, so no list ever scrolls under the bar itself: the header's edge is drawn where the
+  // lists do slide under something, the top of the pager. It shows only for the list in view, and eases from one list's
+  // state to the next's as the pager passes between them, so swiping to a list that is at its top never leaves an edge up
+  const y0 = useSharedValue(0);
+  const y1 = useSharedValue(0);
+  const y2 = useSharedValue(0);
+  const onLibrary = useAnimatedScrollHandler((e) => { y0.value = e.contentOffset.y; });
+  const onRecent = useAnimatedScrollHandler((e) => { y1.value = e.contentOffset.y; });
+  const onNotes = useAnimatedScrollHandler((e) => { y2.value = e.contentOffset.y; });
+  const edgeAt = useDerivedValue(() => {
+    const a = edgeStrength(y0.value, level);
+    if (pageWv.value <= 0) return a;
+    return interpolate(
+      pagerX.value / pageWv.value, [0, 1, 2], [a, edgeStrength(y1.value, level), edgeStrength(y2.value, level)],
+      Extrapolation.CLAMP,
+    );
   });
 
   // a rotation or a split screen changes the page width: the page in view is set back square in the pager, never
@@ -342,6 +365,18 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return m;
   }, [videos, folders]);
   const folderNames = useMemo(() => new Map(folders.map((f) => [f.id, f.name])), [folders]);
+  // the videos at or under the level in view: the root counts the whole library, a folder its own and its subfolders'
+  const levelCount = useMemo(() => {
+    if (!cwd) return videos.length;
+    const under = new Set<string>([cwd]);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const f of folders) {
+        if (f.parentId && under.has(f.parentId) && !under.has(f.id)) { under.add(f.id); grew = true; }
+      }
+    }
+    return videos.filter((v) => v.folderId != null && under.has(v.folderId)).length;
+  }, [videos, folders, cwd]);
 
   // a folder opened comes in from the right, and climbing back up comes in from the left
   const depthOf = (id: string | null) => {
@@ -464,16 +499,26 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     : <EmptyState key="none" icon="bookmark-outline" title="No notes or bookmarks yet" body="Timed notes and bookmarks from every video appear here. Tap one to jump to that moment." />
   ), [anyNotes]);
 
+  // the root of the Vault is the only page with the big title; a folder, and the root opened from More, have an arrow. The
+  // context line is the count of videos, none when there are none. The hero sits above the controls: they are fixed
+  // above three lists, so the big title never scrolls away and the bar's own title stays out of the way. On a phone the
+  // hero steps aside while the keyboard is up: the fixed controls take most of a short screen, and a search would be left
+  // a sliver of results to show
+  const typing = useKeyboardOpen() && width < WIDE_AT;
+  const header = useToolHeader({
+    title: cwdFolder ? cwdFolder.name : 'YT Vault',
+    mode: mode === 'tab' && !cwdFolder ? 'tab' : 'page',
+    context: contextLine(levelCount > 0 && plural(levelCount, 'video')),
+    onBack: () => { if (!goUp()) router.back(); },
+  });
+
   return (
     <ScreenBG guard={mode === 'tab'} fling={false}>
-      <NeuHeader
-        title={cwdFolder ? cwdFolder.name : 'YT Vault'}
-        variant={mode === 'tab' && !cwdFolder ? 'tab' : 'page'}
-        onBack={() => { if (!goUp()) router.back(); }}
-      />
+      {header.bar}
       <View style={{ flex: 1 }}>
         <Enter index={0}>
-          <View style={{ padding: S.pad, paddingBottom: 0 }}>
+          <View style={{ paddingHorizontal: S.pad, paddingTop: typing ? 12 : header.padTop }}>
+            {typing ? null : header.hero}
             <AddCard cwd={cwd} folderName={cwdFolder?.name} onAdded={openVideo} />
 
             <SearchField onQuery={setQ} />
@@ -501,7 +546,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
             onScroll={onPager}
             scrollEventThrottle={16}
           >
-            <ScrollView style={pageBox} contentContainerStyle={pageStyle}>
+            <Animated.ScrollView style={pageBox} contentContainerStyle={pageStyle} onScroll={onLibrary} scrollEventThrottle={16}>
               {/* the header already names the folder: this row only moves between folders and adds one */}
               <Row style={{ marginBottom: 10, flexWrap: 'wrap' }}>
                 <Chip small icon="home-outline" label="All" active={cwd === null} color={C.pink} onPress={() => setCwd(null)} />
@@ -545,11 +590,13 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 )}
                 </>)}
               </FolderPage>
-            </ScrollView>
+            </Animated.ScrollView>
 
-            <FlatList
+            <Animated.FlatList
               style={pageBox}
               contentContainerStyle={pageStyle}
+              onScroll={onRecent}
+              scrollEventThrottle={16}
               data={recentVideos}
               keyExtractor={(v) => v.id}
               initialNumToRender={8}
@@ -558,9 +605,11 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
               ListEmptyComponent={recentEmpty}
             />
 
-            <FlatList
+            <Animated.FlatList
               style={pageBox}
               contentContainerStyle={pageStyle}
+              onScroll={onNotes}
+              scrollEventThrottle={16}
               data={allNotes}
               keyExtractor={(x) => (x.isBookmark ? 'b' : 'n') + x.item.id}
               initialNumToRender={10}
@@ -569,6 +618,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
               ListEmptyComponent={notesEmpty}
             />
           </Animated.ScrollView>
+          <ScrollEdge at={edgeAt} />
         </Enter>
       </View>
 

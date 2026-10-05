@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, AppState } from 'react-native';
+import { View, Text, StyleSheet, Alert, AppState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,8 +9,8 @@ import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import { todayKey, uid, toMinutes, fmtClockTime } from '../utils';
 import {
-  ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, ProgressBar, NeuHeader,
-  ListCard, ListRow, StrikeText,
+  ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, ProgressBar,
+  ListCard, ListRow, StrikeText, useToolHeader, contextLine,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import {
@@ -25,6 +25,7 @@ import { AmbientView } from '../components/AmbientView';
 import { ClockDigits } from '../components/ClockDigits';
 import { SessionStage } from '../components/SessionStage';
 import { READ_MAX, TWO_COL_AT, WIDE_MAX, frame } from '../layout';
+import { useToday } from '../hooks/useNow';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
@@ -362,7 +363,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setAttached((l) => [...l, { key: uid(), kind, title, refId, done: false }]);
   };
 
-  const today = todayKey();
+  // today turns over at midnight, so the focused time in the header does too
+  const today = useToday();
   const pickableDaily = dailyTasks.filter((t) => t.doneOn !== today && !attached.some((a) => a.refId === t.id));
   const pickableMissions = missions.filter((m) => !m.done && !attached.some((a) => a.refId === m.id));
   const currentTask = attached.find((a) => !a.done);
@@ -393,6 +395,30 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     ? undefined
     : currentTask ? { title: currentTask.title, color: currentTask.kind === 'mission' ? C.amber : C.green } : null;
   const twoCol = areaW >= TWO_COL_AT;
+
+  // The header's line, with no ticking seconds in it (the plate has the clock): while a session runs, its subject and
+  // when it ends (a countdown's end, or the finish line), or for a stopwatch with neither, since when; paused, that it
+  // is paused; idle, today's focused time if there is any. Only a running session is live: not paused, not set up. A
+  // session being reviewed has ended, so it is neither running nor paused and the line says nothing.
+  const clockAt = (ms: number) => fmtClockTime(new Date(ms).getHours() * 60 + new Date(ms).getMinutes(), hour24);
+  const lead = shownSubject ? { em: shownSubject } : timerMode === 'stopwatch' ? 'Stopwatch' : 'Countdown';
+  const endsAt = timerMode === 'countdown' && startTs ? startTs + (targetMin * 60 - accumSec) * 1000 : finishAt;
+  const focusContext = review ? null : !started
+    ? (todayFocusMin > 0 ? contextLine(focusedToday(todayFocusMin)) : null)
+    : !running
+      ? contextLine([lead, ' paused'])
+      : contextLine([
+        lead,
+        endsAt ? ' until ' + clockAt(endsAt) : startedAtRef.current ? ' since ' + clockAt(startedAtRef.current) : '',
+      ]);
+  const header = useToolHeader({
+    title: 'Deep Work',
+    mode: mode === 'tab' ? 'tab' : 'page',
+    context: focusContext,
+    live: started && running,
+    // the ambient screen covers this one: the dot rests until it is gone
+    covered: ambient,
+  });
 
   const stageBlock = (
     <Enter index={0}>
@@ -557,25 +583,17 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   return (
     <ScreenBG guard={mode === 'tab'} maxWidth={WIDE_MAX}>
-      {mode !== 'tab' && (
-        <View style={frame(twoCol ? WIDE_MAX : READ_MAX)}>
-          <NeuHeader title="Deep Work" />
-        </View>
-      )}
-      <ScrollView
+      {/* above the scroll, so the bar's shade falls over the cards rather than behind them */}
+      <View style={[frame(twoCol ? WIDE_MAX : READ_MAX), st.barLayer]}>{header.bar}</View>
+      <Animated.ScrollView
         key={fk}
+        {...header.scrollProps}
         onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}
-        contentContainerStyle={{ padding: S.pad, paddingTop: mode === 'tab' ? insets.top + 20 : 8, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
+        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
       >
         <View style={frame(twoCol ? WIDE_MAX : READ_MAX)}>
-          {mode === 'tab' && <Text style={st.h1}>Deep Work</Text>}
-          {todayFocusMin > 0 ? (
-            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, marginBottom: 22 }}>
-              {todayFocusMin} focused minutes today
-            </Text>
-          ) : (
-            <View style={{ height: 22 }} />
-          )}
+          {/* the hero rises with the session: both are the screen's first entrance */}
+          <Enter index={0}>{header.hero}</Enter>
 
           {twoCol ? (
             // a sideways tablet: the session on the left, its tasks and the history beside it
@@ -590,7 +608,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             </>
           )}
         </View>
-      </ScrollView>
+      </Animated.ScrollView>
 
       {/* the subject, once a session is under way */}
       <Sheet visible={subjectSheet} onClose={closeSubject} title="Subject">
@@ -767,6 +785,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   );
 }
 
+/** Today's focused time for the header, in minutes, or hours and minutes from the first hour. */
+function focusedToday(min: number): string {
+  if (min < 60) return min + ' min focused today';
+  const h = Math.floor(min / 60);
+  return (h + ' h' + (min % 60 > 0 ? ' ' + (min % 60) + ' m' : '')) + ' focused today';
+}
+
 /** A logged session's length: whole minutes, or less than one said plainly instead of "0 min". */
 function sessionLength(secs: number): string {
   const m = Math.round(secs / 60);
@@ -783,8 +808,8 @@ function sessionDay(key: string): string {
 }
 
 const st = StyleSheet.create({
-  h1: { ...(T.display as object), marginBottom: 6 } as any,
-  clockSlot: { height: CLOCK_SLOT_H, alignItems: 'center', justifyContent: 'center' },
+  barLayer: { zIndex: 2 },
+  clockSlot:{ height: CLOCK_SLOT_H, alignItems: 'center', justifyContent: 'center' },
   wheelBox: { alignSelf: 'stretch' },
   wheelText: { ...T.numWheel },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body },

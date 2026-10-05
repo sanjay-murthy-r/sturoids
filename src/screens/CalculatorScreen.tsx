@@ -44,6 +44,12 @@ const CALC_MAX = 480;
 /** a wide window's key heights: fitted to the room, within these */
 const KEY_MIN = 44;
 const KEY_MAX = 88;
+/** a phone too short for its keypad as it is fits the keys to the room, no lower than this; below it the keypad scrolls */
+const KEY_MIN_PHONE = 40;
+/** a phone shorter than this (a 360 x 640 screen) sets the display closer, to leave the keys their room */
+const SHORT_H = 700;
+/** the text face's line is 1.3 of its size, and a little more on Android: a key's own height is its padding and one line */
+const LINE = 1.35;
 /** a function key's height, as a share of a number key's */
 const SCI_SHARE = 0.8;
 /** the equals key's height on a wide window, with and without the functions out */
@@ -66,6 +72,15 @@ const SCI: string[][] = [
   ['!', '×10^', 'abs(', 'mod'],
 ];
 const OPS = ['÷', '×', '−', '+'];
+
+/** The height a phone's keypad takes with every key at its own padding (see the keys and the equals key below). */
+function naturalPadH(sci: boolean) {
+  const gap = sci ? 6 : 8;
+  const key = 2 * (sci ? 11 : 16) + 22 * LINE;
+  const fn = 2 * 8 + 15 * LINE;
+  const equals = 2 * (sci ? 10 : 14) + 26 * LINE + 10;
+  return BASIC.length * (key + gap) + (sci ? SCI.length * (fn + 6) : 0) + equals;
+}
 
 /** On equals, the answer lifts from the preview line into the main one, the way the old rise did. */
 const answerIn = (travel: boolean) => () => {
@@ -164,16 +179,20 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
   };
 
-  // A phone keeps its keypad exactly as it was. A wide window sets the calculator in a column of its own width with
-  // keys fitted to the height it has; a sideways tablet sets the display, the controls and the history on the left
-  // and the keypad on the right.
+  // A phone with room for its keypad keeps it exactly as it was. A wide window sets the calculator in a column of its own
+  // width with keys fitted to the height it has; a sideways tablet sets the display, the controls and the history on
+  // the left and the keypad on the right. A phone too short for its keys (a 360 x 640 screen, the tab bar and the
+  // functions taking their share) fits them to the room it has the same way.
   const wide = width >= WIDE_AT;
   const split = wide && width > height && width - (mode === 'tab' ? RAIL_W : 0) >= TWO_COL_AT;
+  const short = !wide && height < SHORT_H;
   const rows = BASIC.length + (sci ? SCI.length * SCI_SHARE : 0);
   const gaps = sci ? (SCI.length + BASIC.length) * 6 : BASIC.length * 8;
   const eqH = sci ? EQ_H_SCI : EQ_H;
-  const keyH = wide && pad.h > 0
-    ? Math.floor(Math.max(KEY_MIN, Math.min(KEY_MAX, (pad.w - 24) / 4, (pad.h - gaps - eqH - 10) / rows)))
+  const fitted = pad.h > 0 && (wide || pad.h < naturalPadH(sci));
+  const keyMin = wide ? KEY_MIN : KEY_MIN_PHONE;
+  const keyH = fitted
+    ? Math.floor(Math.max(keyMin, Math.min(KEY_MAX, (pad.w - 24) / 4, (pad.h - gaps - eqH - 10) / rows)))
     : undefined;
 
   // every key goes through one stable handler, so a keypress re-renders the display and not the thirty keys
@@ -184,12 +203,12 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const display = (
     // display — carved into the material
-    <Inset pad={16} style={{ borderRadius: S.radius, marginBottom: 12, overflow: 'visible' }}>
-      <ScrollView style={{ maxHeight: split ? 140 : 90 }} contentContainerStyle={{ justifyContent: 'flex-end' }}>
+    <Inset pad={short ? 12 : 16} style={{ borderRadius: S.radius, marginBottom: short ? 8 : 12, overflow: 'visible' }}>
+      <ScrollView style={{ maxHeight: split ? 140 : short ? 78 : 90 }} contentContainerStyle={{ justifyContent: 'flex-end' }}>
         <Animated.Text
           key={answers}
           entering={answers > 0 && level !== 'none' ? answerIn(level === 'full') : undefined}
-          style={st.expr}
+          style={[st.expr, short && { fontSize: 30 }]}
           selectable
         >
           {expr || '0'}
@@ -220,9 +239,10 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     </Row>
   );
 
-  // a wide window fits the keys to its height; one too short for them even at the smallest keys scrolls the keypad
-  // instead of pushing it over the display. A phone keeps its keypad exactly as it was.
-  const cramped = wide && pad.h > 0 && (pad.h - gaps - eqH - 10) / rows < KEY_MIN;
+  // a keypad fitted to its height that is too short for them even at the smallest keys scrolls instead of pushing over the
+  // display; it rests at its foot, where the digits and the equals key are, and the functions are a scroll up
+  const cramped = fitted && (pad.h - gaps - eqH - 10) / rows < keyMin;
+  const padScroll = useRef<ScrollView>(null);
   const keyRows = (
     <>
       {/* the functions come up in their own rows as they open; the number keys stay where they are */}
@@ -267,7 +287,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
         style={[
           st.equals,
           sci && { paddingVertical: 10 },
-          wide && { height: eqH, paddingVertical: 0, justifyContent: 'center' },
+          (wide || fitted) && { height: eqH, paddingVertical: 0, justifyContent: 'center' },
           theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
             : { backgroundColor: C.accent, ...NEU.raisedMid },
@@ -277,10 +297,9 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </Bouncy>
     </>
   );
-  const keypad = !wide ? (
-    // keys — rows tighten when the sci pad is out so everything fits
-    <View style={{ flex: 1, justifyContent: 'flex-end' }}>{keyRows}</View>
-  ) : (
+  // keys: rows tighten when the sci pad is out so everything fits. The box is measured: a wide window or a short phone
+  // fits its keys to it
+  const keypad = (
     <View
       style={{ flex: 1 }}
       onLayout={(e) => {
@@ -289,7 +308,12 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       }}
     >
       {cramped ? (
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }}>{keyRows}</ScrollView>
+        <ScrollView
+          ref={padScroll} style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }}
+          onContentSizeChange={() => padScroll.current?.scrollToEnd({ animated: false })}
+        >
+          {keyRows}
+        </ScrollView>
       ) : (
         <View style={{ flex: 1, justifyContent: 'flex-end' }}>{keyRows}</View>
       )}
@@ -306,7 +330,8 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   return (
     <ScreenBG guard={mode === 'tab'} maxWidth={split ? WIDE_MAX : CALC_MAX}>
-      <NeuHeader title="Calculator" variant={mode === 'tab' ? 'tab' : 'page'} compact />
+      {/* a full-screen tool: the bar only, its title always showing, with no hero to push the keypad down */}
+      <NeuHeader title="Calculator" variant={mode === 'tab' ? 'tab' : 'page'} />
       {split ? (
         <View style={[st.split, bodyPad]}>
           <View style={st.splitSide}>

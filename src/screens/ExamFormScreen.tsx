@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, ScrollView, StyleSheet, Pressable, Alert, BackHandler } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert, BackHandler } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
@@ -12,7 +12,7 @@ import {
 } from '../scores';
 import { todayKey } from '../utils';
 import { shiftKey } from '../journal';
-import { ScreenBG, Card, Chip, Field, Hairline, IconBtn, NeuHeader, PillButton, Row, SectionTitle, Toggle } from '../components/UI';
+import { ScreenBG, Card, Chip, Field, Hairline, IconBtn, PillButton, Row, SectionTitle, Toggle, useToolHeader, contextLine } from '../components/UI';
 import { EASE_OUT, Enter, useAnimLevel, useBuilt } from '../components/Motion';
 import { TagPicker } from '../components/ScoreTags';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -335,6 +335,21 @@ export function ExamFormScreen() {
     }
   };
 
+  // The header names where the exam will be saved: its group (or the top level) and the category picked below, which
+  // follows the chips as they are tapped. Always a page, so Back is the arrow, and it goes through the same
+  // unsaved-changes guard as the hardware key.
+  const group = init.parentId ? ix.byId.get(init.parentId) : undefined;
+  const pickedCategory = d.category ? categories.find((c) => c.id === d.category) : undefined;
+  const header = useToolHeader({
+    title: editing ? 'Edit exam' : 'New exam',
+    mode: 'page',
+    context: contextLine(
+      group ? ['In ', { em: group.title.trim() || 'Untitled group' }] : 'At the top level',
+      pickedCategory && { em: pickedCategory.label },
+    ),
+    onBack: () => leaveRef.current(),
+  });
+
   const today = todayKey();
   const yesterday = shiftKey(today, -1);
   const rowsShown = d.subjects;
@@ -344,12 +359,14 @@ export function ExamFormScreen() {
 
   return (
     <ScreenBG>
-      <NeuHeader title={editing ? 'Edit exam' : 'New exam'} onBack={() => leaveRef.current()} />
-      <ScrollView
+      {header.bar}
+      <Animated.ScrollView
+        {...header.scrollProps}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={[frame(READ_MAX), { paddingHorizontal: S.pad, paddingTop: 4, paddingBottom: 32 }]}
+        contentContainerStyle={[frame(READ_MAX), { paddingHorizontal: S.pad, paddingTop: header.padTop, paddingBottom: 32 }]}
       >
         <Enter index={0}>
+          {header.hero}
           <Field
             label="Exam" value={d.title} onChangeText={(v) => { set({ title: v }); if (problems.title) setProblems((p) => ({ ...p, title: '' })); }}
             placeholder={suggestion || 'e.g. Mock test 7'} autoFocus={!editing && !suggestion} maxLength={80}
@@ -612,7 +629,7 @@ export function ExamFormScreen() {
           ) : null}
           {problems.details ? <Text style={st.problem}>{problems.details}</Text> : null}
         </Enter>
-      </ScrollView>
+      </Animated.ScrollView>
 
       <View style={[frame(READ_MAX), st.bar, { paddingBottom: insets.bottom + 14 }]}>
         <PillButton label={editing ? 'Save' : 'Add exam'} icon={editing ? 'checkmark' : 'add'} onPress={save} />

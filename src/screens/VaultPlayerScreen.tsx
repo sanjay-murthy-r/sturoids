@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, BackHandler, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, BackHandler, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import YoutubePlayer, { YoutubeIframeRef } from 'react-native-youtube-iframe';
 import Animated from 'react-native-reanimated';
@@ -7,7 +7,7 @@ import { C, F, S, T, TRACK } from '../theme';
 import { useStore, TimedNote, Bookmark } from '../store';
 import { fmtMediaTime } from '../utils';
 import {
-  ScreenBG, Card, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, DotMenu, NeuHeader,
+  ScreenBG, Card, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, DotMenu, useToolHeader,
 } from '../components/UI';
 import { toast } from '../components/Toast';
 import { glide, rowIn, rowOut, useAnimLevel, useBuilt, useEntrance } from '../components/Motion';
@@ -201,11 +201,18 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const openMenu = useCallback((m: { item: TimedNote | Bookmark; isBookmark: boolean }) => setMenu(m), []);
 
+  // the bar is named for the video's folder, as it always was; the video's own title is the first line of the page, so
+  // there is no hero and no context line. The bar's edge follows the page's scroll, which carries the video up under it
+  const header = useToolHeader({
+    title: video?.folderId ? folders.find((f) => f.id === video.folderId)?.name || 'YT Vault' : 'YT Vault',
+    mode: 'page',
+  });
+
   if (!video) {
     // the text face, like every other empty page (a bare Text fell back to the system font)
     return (
       <ScreenBG>
-        <NeuHeader title="YT Vault" />
+        {header.bar}
         <EmptyState icon="play-circle-outline" title="Video not found" body="It may have been removed from the Vault." />
       </ScreenBG>
     );
@@ -290,10 +297,10 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   return (
     <ScreenBG maxWidth={WIDE_MAX}>
-      <View style={frame(twoCol ? WIDE_MAX : READ_MAX)}>
-        <NeuHeader title={video.folderId ? folders.find((f) => f.id === video.folderId)?.name || 'YT Vault' : 'YT Vault'} />
-      </View>
-      <ScrollView
+      {/* above the scroll, so the bar's shade falls over the video and the notes rather than behind them */}
+      <View style={[frame(twoCol ? WIDE_MAX : READ_MAX), st.barLayer]}>{header.bar}</View>
+      <Animated.ScrollView
+        {...header.scrollProps}
         onLayout={(e) => { const w = e.nativeEvent.layout.width; if (Math.abs(w - areaW) > 0.5) setAreaW(w); }}
         contentContainerStyle={{ paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
       >
@@ -314,7 +321,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
             </View>
           </View>
         )}
-      </ScrollView>
+      </Animated.ScrollView>
 
       <DraftSheet
         visible={!!noteSheet} onClose={() => setNoteSheet(null)} title={'Note @ ' + fmtMediaTime(heldNote?.time || 0)}
@@ -380,6 +387,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 }
 
 const st = StyleSheet.create({
+  barLayer: { zIndex: 2 },
   timePill: {
     borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4,
   },
