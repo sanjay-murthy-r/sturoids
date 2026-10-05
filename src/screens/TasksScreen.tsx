@@ -3,7 +3,7 @@ import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated from 'react-native-reanimated';
-import { C, F, MIN, S, T, neuRaised } from '../theme';
+import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, DailyTask, Mission } from '../store';
 import { yesterdayKey, daysUntil, fmtShortDate, toMinutes, indexAfterNeighbours } from '../utils';
 import {
@@ -12,8 +12,9 @@ import {
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import {
-  Enter, Bouncy, FadeSwap, glide, riseIn, rowIn, rowOut, useAnimLevel, useBuilt, useFocusKey,
+  Enter, Bouncy, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useBuilt, useFocusKey,
 } from '../components/Motion';
+import { useSwapIn } from '../components/Swap';
 import { tap } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
 import { toast } from '../components/Toast';
@@ -47,7 +48,6 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const fk = useFocusKey();
   const theme = useTheme();
   const level = useAnimLevel();
-  const built = useBuilt();
   const [tab, setTab] = useState<Tab>('daily');
 
   const dailyTasks = useStore((s) => s.dailyTasks);
@@ -158,8 +158,10 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   );
 
   const empty = tab === 'daily' ? dailyTasks.length === 0 : sortedMissions.length === 0;
-  // switching lists, or a list filling or emptying, brings the new body up into the old one's place
+  // switching lists, or a list filling or emptying, brings the new body into the old one's place: the other list comes
+  // in from the side its segment is on, and a list that fills or empties rises where the other stood
   const bodyKey = tab + (empty ? ':empty' : ':list');
+  const bodyIn = useSwapIn(bodyKey, tab === 'daily' ? 0 : 1);
 
   return (
     <ScreenBG guard={tabMode}>
@@ -186,7 +188,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         />
 
         <Enter index={0}>
-          <Animated.View key={bodyKey} entering={built.current && level !== 'none' ? riseIn : undefined}>
+          <Animated.View key={bodyKey} entering={bodyIn}>
             {tab === 'daily' ? (
               <>
                 {leftovers.length > 0 && (
@@ -448,21 +450,21 @@ function RemindersSheet({ visible, onClose }: { visible: boolean; onClose: () =>
 }
 
 const st = StyleSheet.create({
-  triageTitle: { color: C.amber, fontFamily: F.semi, fontSize: 13, marginBottom: 10, letterSpacing: 0.2 },
+  triageTitle: { color: C.amber, fontFamily: F.semi, fontSize: 13, marginBottom: 10, letterSpacing: TRACK.small },
   taskWrap: { flex: 1, marginLeft: 12 },
-  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21, letterSpacing: 0.1 },
+  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21, letterSpacing: TRACK.body },
   missionRow: { paddingVertical: 12, paddingHorizontal: 12 },
   steps: { marginTop: 10, paddingLeft: 4 },
   stepWrap: { flex: 1, marginLeft: 10 },
-  stepText: { color: C.textDim, fontFamily: F.reg, fontSize: 14, lineHeight: 20 },
+  stepText: { color: C.textDim, fontFamily: F.reg, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 20 },
   pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginHorizontal: 6 },
-  pillText: { fontSize: 11, fontFamily: F.semi, letterSpacing: 0.8 },
+  pillText: { fontSize: 11, fontFamily: F.semi, letterSpacing: TRACK.caps },
   fab: {
     position: 'absolute', right: 20, bottom: 24, width: 58, height: 58, borderRadius: 29,
     alignItems: 'center', justifyContent: 'center',
   },
   sheetSection: {
     color: C.textFaint, fontSize: 11, fontFamily: F.semi,
-    textTransform: 'uppercase', letterSpacing: 1.6, marginTop: 18, marginBottom: 8,
+    textTransform: 'uppercase', letterSpacing: TRACK.caps, marginTop: 18, marginBottom: 8,
   },
 });

@@ -3,7 +3,8 @@ import { View, Text, ScrollView, StyleSheet, Pressable, Alert, BackHandler } fro
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, NEU, S, T, neuRaised } from '../theme';
+import Animated from 'react-native-reanimated';
+import { C, F, MIN, NEU, S, T, TRACK, neuRaised } from '../theme';
 import { useStore } from '../store';
 import {
   ScoreNode, ScoreIndex, Learning, TagMatch, indexScores, resultOf, partsMismatch, groupSummary, examsUnder, upcoming,
@@ -15,7 +16,8 @@ import {
   ScreenBG, Card, SectionTitle, EmptyState, ListCard, ListRow, NeuHeader, NeuIconBtn, DotMenu, Sheet, Hairline,
   PillButton, Chip, Field, useTheme,
 } from '../components/UI';
-import { Bouncy, Enter, useFocusKey } from '../components/Motion';
+import { Appear, Bouncy, Enter, FadeSwap, useFocusKey } from '../components/Motion';
+import { useSwapIn } from '../components/Swap';
 import { ScoreEditor, ScoreEditTarget } from '../components/ScoreEditor';
 import { ScoreAnalytics, AnalyticsTeaser } from '../components/ScoreAnalytics';
 import { useScoresNav, takeScoreNode } from '../scoresNav';
@@ -542,7 +544,10 @@ function GroupView({ groupId, ix, today, sort, onSort, onOpen, onMenu, onAdd, on
         <SectionTitle
           right={exams.length > 1 ? (
             <Pressable onPress={onSort} hitSlop={8} accessibilityRole="button" accessibilityLabel={'Sorted by ' + SORTS.find((x) => x.key === sort)?.label}>
-              <Text style={[st.link, { color: C.accent }]}>{SORTS.find((x) => x.key === sort)?.label}</Text>
+              {/* the order's name dips over as the rows take their new places */}
+              <FadeSwap swapKey={sort}>
+                <Text style={[st.link, { color: C.accent }]}>{SORTS.find((x) => x.key === sort)?.label}</Text>
+              </FadeSwap>
             </Pressable>
           ) : undefined}
         >
@@ -636,6 +641,9 @@ function ExamView({
     exam.grade ? 'Grade ' + exam.grade : '',
   ].filter(Boolean).join('  ·  ');
   const gap = r && exam.target != null ? r.pct - exam.target : null;
+  // the first subject, or the first learning, takes the place of the note that invited it (and the last one gives it back)
+  const partsIn = useSwapIn(parts.length ? 'list' : 'none');
+  const learnIn = useSwapIn(learnings.length ? 'list' : 'none');
 
   return (
     <>
@@ -707,40 +715,42 @@ function ExamView({
         >
           Subjects{weighted && parts.length ? '  ·  weighted' : ''}
         </SectionTitle>
-        {parts.length ? (
-          <ListCard>
-            {parts.map((p) => {
-              const pr = resultOf(p, ix);
-              const sub = (ix.children.get(p.id) || []).some((k) => k.kind === 'exam');
-              return (
-                <ListRow key={p.id} onPress={() => onOpen(p.id)} onLongPress={() => onMenu(p)} style={{ paddingVertical: 12 }}>
-                  <View style={{ flex: 1 }}>
-                    <View style={st.partHead}>
-                      <Text style={[st.rowTitle, { flex: 1 }]} numberOfLines={1}>{p.title || 'Untitled'}</Text>
-                      <Text style={pr ? st.partPct : [st.when, { color: C.textFaint }]}>{pr ? fmtPct(pr.pct) : 'Not marked'}</Text>
+        <Animated.View key={parts.length ? 'list' : 'none'} entering={partsIn}>
+          {parts.length ? (
+            <ListCard>
+              {parts.map((p) => {
+                const pr = resultOf(p, ix);
+                const sub = (ix.children.get(p.id) || []).some((k) => k.kind === 'exam');
+                return (
+                  <ListRow key={p.id} onPress={() => onOpen(p.id)} onLongPress={() => onMenu(p)} style={{ paddingVertical: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <View style={st.partHead}>
+                        <Text style={[st.rowTitle, { flex: 1 }]} numberOfLines={1}>{p.title || 'Untitled'}</Text>
+                        <Text style={pr ? st.partPct : [st.when, { color: C.textFaint }]}>{pr ? fmtPct(pr.pct) : 'Not marked'}</Text>
+                      </View>
+                      {pr ? <Bar pct={pr.pct} /> : null}
+                      <Text style={[T.caption, { marginTop: pr ? 6 : 2 }]} numberOfLines={1}>
+                        {[
+                          pr && pr.score != null && pr.outOf != null ? fmtMark(pr.score) + ' / ' + fmtMark(pr.outOf) : '',
+                          weighted ? 'weight ' + fmtMark(p.weight ?? 1) : '',
+                          sub ? 'has subjects' : '',
+                        ].filter(Boolean).join('  ·  ') || ' '}
+                      </Text>
+                      <TagRow ids={p.tags} style={{ marginTop: 8, marginBottom: -10 }} />
                     </View>
-                    {pr ? <Bar pct={pr.pct} /> : null}
-                    <Text style={[T.caption, { marginTop: pr ? 6 : 2 }]} numberOfLines={1}>
-                      {[
-                        pr && pr.score != null && pr.outOf != null ? fmtMark(pr.score) + ' / ' + fmtMark(pr.outOf) : '',
-                        weighted ? 'weight ' + fmtMark(p.weight ?? 1) : '',
-                        sub ? 'has subjects' : '',
-                      ].filter(Boolean).join('  ·  ') || ' '}
-                    </Text>
-                    <TagRow ids={p.tags} style={{ marginTop: 8, marginBottom: -10 }} />
-                  </View>
-                </ListRow>
-              );
-            })}
-          </ListCard>
-        ) : (
-          <Card pad={16}>
-            <Text style={T.label}>Split it into subjects, like Physics, Chemistry and Maths, and their marks add up here.</Text>
-            <View style={{ flexDirection: 'row', marginTop: 12 }}>
-              <Chip small icon="add" label="Add a subject" onPress={onAddPart} />
-            </View>
-          </Card>
-        )}
+                  </ListRow>
+                );
+              })}
+            </ListCard>
+          ) : (
+            <Card pad={16}>
+              <Text style={T.label}>Split it into subjects, like Physics, Chemistry and Maths, and their marks add up here.</Text>
+              <View style={{ flexDirection: 'row', marginTop: 12 }}>
+                <Chip small icon="add" label="Add a subject" onPress={onAddPart} />
+              </View>
+            </Card>
+          )}
+        </Animated.View>
       </Enter>
 
       <Enter index={3}>
@@ -753,27 +763,29 @@ function ExamView({
         >
           Learnings
         </SectionTitle>
-        {learnings.length ? (
-          <ListCard>
-            {[...learnings].sort((a, b) => b.createdAt - a.createdAt).map((l) => (
-              <ListRow key={l.id} onPress={() => onLearningMenu(l)} onLongPress={() => onLearningMenu(l)} style={{ paddingVertical: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={T.body}>{l.text}</Text>
-                  <TagRow ids={l.tags} style={{ marginTop: 8, marginBottom: -6 }} />
-                </View>
-              </ListRow>
-            ))}
-          </ListCard>
-        ) : (
-          <Card pad={16}>
-            <Text style={T.label}>
-              What this exam taught you, in your own words. Tag them, and they gather in the notebook.
-            </Text>
-            <View style={{ flexDirection: 'row', marginTop: 12 }}>
-              <Chip small icon="add" label="Add a learning" onPress={onAddLearning} />
-            </View>
-          </Card>
-        )}
+        <Animated.View key={learnings.length ? 'list' : 'none'} entering={learnIn}>
+          {learnings.length ? (
+            <ListCard>
+              {[...learnings].sort((a, b) => b.createdAt - a.createdAt).map((l) => (
+                <ListRow key={l.id} onPress={() => onLearningMenu(l)} onLongPress={() => onLearningMenu(l)} style={{ paddingVertical: 12 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={T.body}>{l.text}</Text>
+                    <TagRow ids={l.tags} style={{ marginTop: 8, marginBottom: -6 }} />
+                  </View>
+                </ListRow>
+              ))}
+            </ListCard>
+          ) : (
+            <Card pad={16}>
+              <Text style={T.label}>
+                What this exam taught you, in your own words. Tag them, and they gather in the notebook.
+              </Text>
+              <View style={{ flexDirection: 'row', marginTop: 12 }}>
+                <Chip small icon="add" label="Add a learning" onPress={onAddLearning} />
+              </View>
+            </Card>
+          )}
+        </Animated.View>
       </Enter>
 
       {exam.note ? (
@@ -844,21 +856,28 @@ function Notebook({ learnings, ix, picked, match, find, onFind, onPick, onMatch,
           </View>
         ) : null}
         <View style={st.filterRow}>
+          {/* the keys that only make sense with tags picked fade in where they appear */}
           {picked.length > 1 ? (
-            <Chip
-              small icon={match === 'all' ? 'checkmark-circle' : 'ellipse-outline'} label="All tags"
-              active={match === 'all'} onPress={onMatch}
-            />
+            <Appear>
+              <Chip
+                small icon={match === 'all' ? 'checkmark-circle' : 'ellipse-outline'} label="All tags"
+                active={match === 'all'} onPress={onMatch}
+              />
+            </Appear>
           ) : null}
-          {picked.length ? <Chip small icon="close" label="Clear" onPress={onClear} /> : null}
+          {picked.length ? <Appear><Chip small icon="close" label="Clear" onPress={onClear} /></Appear> : null}
           <Chip small icon="pricetags-outline" label={tags.length ? 'Manage tags' : 'Make a tag'} onPress={onManage} />
         </View>
         {picked.length > 1 ? (
-          <Text style={[T.caption, { marginBottom: 14 }]}>
-            {match === 'all'
-              ? 'Only learnings carrying every tag picked.'
-              : 'Learnings carrying any of the tags picked. Turn on All tags for the ones carrying every one.'}
-          </Text>
+          <Appear>
+            <FadeSwap swapKey={match}>
+              <Text style={[T.caption, { marginBottom: 14 }]}>
+                {match === 'all'
+                  ? 'Only learnings carrying every tag picked.'
+                  : 'Learnings carrying any of the tags picked. Turn on All tags for the ones carrying every one.'}
+              </Text>
+            </FadeSwap>
+          </Appear>
         ) : null}
       </Enter>
 
@@ -905,19 +924,19 @@ const st = StyleSheet.create({
     position: 'absolute', width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center',
   },
   heroPct: { ...T.numDisplay, lineHeight: 52, letterSpacing: -1, marginTop: 6 },
-  heroMarks: { ...T.numStat, color: C.textDim, fontSize: 17, lineHeight: 22, letterSpacing: 0 },
-  unmarked: { color: C.textDim, fontFamily: F.semi, fontSize: 24, lineHeight: 30, marginTop: 10 },
+  heroMarks: { ...T.numStat, color: C.textDim, fontSize: 17, lineHeight: 22, letterSpacing: TRACK.title },
+  unmarked: { color: C.textDim, fontFamily: F.semi, fontSize: 24, letterSpacing: TRACK.large, lineHeight: 30, marginTop: 10 },
   sideRow: { flexDirection: 'row', alignItems: 'center' },
-  facts: { color: C.textDim, fontFamily: F.med, fontSize: 13, fontVariant: ['tabular-nums'] },
-  rowTitle: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: -0.1 },
+  facts: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, fontVariant: ['tabular-nums'] },
+  rowTitle: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
   rowRight: { alignItems: 'flex-end', marginLeft: 12 },
-  rowPct: { ...T.numStat, fontSize: 18, lineHeight: 22, letterSpacing: 0 },
+  rowPct: { ...T.numStat, fontSize: 18, lineHeight: 22, letterSpacing: TRACK.title },
   partHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  partPct: { ...T.numStat, fontSize: 16, lineHeight: 20, letterSpacing: 0, marginLeft: 12 },
-  when: { fontFamily: F.semi, fontSize: 13, marginLeft: 12, fontVariant: ['tabular-nums'] },
-  delta: { fontFamily: F.semi, fontSize: 12, marginLeft: 2, fontVariant: ['tabular-nums'] },
+  partPct: { ...T.numStat, fontSize: 16, lineHeight: 20, letterSpacing: TRACK.title, marginLeft: 12 },
+  when: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small, marginLeft: 12, fontVariant: ['tabular-nums'] },
+  delta: { fontFamily: F.semi, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, fontVariant: ['tabular-nums'] },
   deltaRow: { flexDirection: 'row', alignItems: 'center' },
-  link: { fontFamily: F.semi, fontSize: 13 },
+  link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   barTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
   barFill: { height: 6, borderRadius: 3 },
   hintRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 4, marginBottom: 6 },

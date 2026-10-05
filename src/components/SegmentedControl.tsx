@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, View, ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, neuInset, neuRaised } from '../theme';
+import { C, F, MIN, TRACK, neuInset, neuRaised } from '../theme';
 import { useTheme } from './UI';
 import { CHANGE, RISE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
@@ -123,7 +123,8 @@ function SegLabel({ active, label, icon, color, size }: {
   }, [active, level]);
   const lit = useAnimatedStyle(() => ({ opacity: on.value }));
   const unlit = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
-  const text = { fontFamily: F.med, fontSize: size, letterSpacing: 0.1 };
+  // the stretched segments are tight, so both sizes take the 13 to 14 px value
+  const text = { fontFamily: F.med, fontSize: size, letterSpacing: TRACK.small };
   return (
     <>
       {icon ? (

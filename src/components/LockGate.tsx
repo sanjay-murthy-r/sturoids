@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming,
 } from 'react-native-reanimated';
-import { AnimLevel, C, F, MIN, NEU, S, T } from '../theme';
+import { AnimLevel, C, F, MIN, NEU, S, T, TRACK } from '../theme';
 import { ScreenBG, Sheet, useTheme } from './UI';
 import { Bouncy, EASE_OUT, FadeSwap, useAnimLevel } from './Motion';
 import { useStore } from '../store';
@@ -432,7 +432,7 @@ const st = StyleSheet.create({
   lockWell: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   lockTitle: { ...T.title, marginTop: 14, marginBottom: 18, textAlign: 'center' },
   pad: { alignItems: 'center', alignSelf: 'stretch' },
-  prompt: { color: C.text, fontFamily: F.semi, fontSize: 17, textAlign: 'center' },
+  prompt: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title, textAlign: 'center' },
   hint: { textAlign: 'center', marginTop: 6, minHeight: 36, maxWidth: 300 },
   dots: { flexDirection: 'row', justifyContent: 'center', gap: 18, marginTop: 10 },
   dotWell: { width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
@@ -441,5 +441,5 @@ const st = StyleSheet.create({
   keypad: { marginTop: 14, gap: KEY_GAP_Y, paddingBottom: 6 },
   keyRow: { flexDirection: 'row', justifyContent: 'center', gap: KEY_GAP_X },
   key: { alignItems: 'center', justifyContent: 'center' },
-  keyText: { color: C.text, fontFamily: F.med, fontSize: 26, fontVariant: ['tabular-nums'] },
+  keyText: { color: C.text, fontFamily: F.med, fontSize: 26, letterSpacing: TRACK.large, fontVariant: ['tabular-nums'] },
 });

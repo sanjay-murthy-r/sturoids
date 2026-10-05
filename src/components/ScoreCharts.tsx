@@ -4,9 +4,9 @@ import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } fro
 import Svg, { Circle, Line, Path, Text as SvgText } from 'react-native-svg';
 import { useIsFocused } from '@react-navigation/native';
 import { TAG_COLORS } from '../scores';
-import { C, F, MIN, NEU, DEFAULT_ACCENT } from '../theme';
+import { C, F, MIN, NEU, TRACK, DEFAULT_ACCENT } from '../theme';
 import { useTheme } from './UI';
-import { EASE_OUT, useAnimLevel } from './Motion';
+import { EASE_OUT, useAnimLevel, useTabReturns } from './Motion';
 import { useIntro } from '../intro';
 import { chartScale, runsOf } from '../analytics';
 import { tick } from '../haptics';
@@ -18,18 +18,21 @@ import { tick } from '../haptics';
 const QUICK = { duration: 180, easing: EASE_OUT };
 
 /**
- * Whether the screen is really in view yet: focused, and past the intro. It turns true once and stays true, so a bar
- * that fills "on first view" fills where someone sees it (the rule every entrance follows).
+ * How many times the page has come into view: 0 until it is really in view (focused, and past the intro), 1 from then,
+ * and one more each time its tab is opened again from the bar. A bar that fills "on view" fills where someone sees it
+ * (the rule every entrance follows), and fills again on every return, exactly as the first time: a chart restarts
+ * when its round changes, never while the page is merely covered by another page above it.
  */
-export function useSeen(): boolean {
+export function useSeen(): number {
   const level = useAnimLevel();
   const focused = useIsFocused();
   const introOver = useIntro((s) => s.phase !== 'playing');
+  const returns = useTabReturns();
   const [seen, setSeen] = React.useState(level === 'none');
   React.useEffect(() => {
     if (!seen && (level === 'none' || (focused && introOver))) setSeen(true);
   }, [focused, introOver, level, seen]);
-  return seen;
+  return seen ? 1 + returns : 0;
 }
 
 /* ---------------------------------------------------------------- colour */
@@ -81,32 +84,43 @@ export const heatAlpha = (pct: number) => 0.1 + 0.62 * Math.pow(Math.max(0, Math
 /* ---------------------------------------------------------------- bars */
 
 /**
- * A carved track whose accent fill grows from the left: from nothing the first time it is shown (`play`), gliding to
- * its new length after that. The fill is a full-length pill slid by a transform, so no layout pass runs per frame.
+ * A carved track whose accent fill grows from the left: from nothing each time the page comes into view (`play`, and
+ * `round` for each return to it), gliding to its new length after that. Only full motion grows it; with some it is simply
+ * at its length and eases to a new one, and with none it changes at once. The fill is a full-length pill slid by a
+ * transform, so no layout pass runs per frame.
  */
-export function GrowBar({ value, color, height = 6, play = true, delay = 0 }: {
+export function GrowBar({ value, color, height = 6, play = true, round = 0, delay = 0 }: {
   /** 0 to 1 */
   value: number; color?: string; height?: number;
   /** false holds it empty until the page is in view */
   play?: boolean;
-  /** ms before the first fill, to follow its section's entrance */
+  /** the page's round (see useSeen): a new one grows the bar again from nothing */
+  round?: number;
+  /** ms before each fill, to follow its section's entrance */
   delay?: number;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
   const v = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
-  const shown = useSharedValue(level === 'none' ? v : 0);
+  const shown = useSharedValue(level === 'full' ? 0 : v);
   const trackW = useSharedValue(0);
   const first = React.useRef(true);
+  const seenRound = React.useRef(round);
   React.useEffect(() => {
     if (!play) return;
-    if (level === 'none') shown.value = v;
-    else {
-      const ease = { duration: level === 'full' ? 420 : 220, easing: EASE_OUT };
-      shown.value = first.current && level === 'full' ? withDelay(delay, withTiming(v, ease)) : withTiming(v, ease);
+    const again = seenRound.current !== round;
+    seenRound.current = round;
+    if (level !== 'full') {
+      shown.value = level === 'none' ? v : withTiming(v, { duration: 200, easing: EASE_OUT });
+      first.current = false;
+      return;
     }
+    // back on the tab: it starts from nothing again, while the section is still hidden at the screen's focus moment
+    if (again && !first.current) shown.value = 0;
+    const ease = { duration: 420, easing: EASE_OUT };
+    shown.value = first.current || again ? withDelay(delay, withTiming(v, ease)) : withTiming(v, ease);
     first.current = false;
-  }, [v, play, level]);
+  }, [v, play, level, round]);
   const fill = useAnimatedStyle(() => ({
     opacity: trackW.value > 0 ? 1 : 0,
     transform: [{ translateX: (shown.value - 1) * trackW.value }],
@@ -126,19 +140,29 @@ export function GrowBar({ value, color, height = 6, play = true, delay = 0 }: {
 
 /**
  * Shares of one whole, side by side in one carved track, each in its own colour with a sliver of the track between
- * them. The whole row slides in from the left the first time it is shown.
+ * them. The whole row slides in from the left each time the page comes into view (`round` counts the returns to it);
+ * with some motion it is simply there, and with none too.
  */
-export function ShareBar({ parts, height = 12, play = true, delay = 0 }: {
-  parts: { key: string; color: string; share: number }[]; height?: number; play?: boolean; delay?: number;
+export function ShareBar({ parts, height = 12, play = true, round = 0, delay = 0 }: {
+  parts: { key: string; color: string; share: number }[]; height?: number; play?: boolean; round?: number; delay?: number;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
-  const shown = useSharedValue(level === 'none' ? 1 : 0);
+  const shown = useSharedValue(level === 'full' ? 0 : 1);
   const trackW = useSharedValue(0);
+  const seenRound = React.useRef(round);
   React.useEffect(() => {
     if (!play) return;
-    shown.value = level === 'none' ? 1 : withDelay(level === 'full' ? delay : 0, withTiming(1, { duration: level === 'full' ? 480 : 220, easing: EASE_OUT }));
-  }, [play, level]);
+    const again = seenRound.current !== round;
+    seenRound.current = round;
+    if (level !== 'full') {
+      shown.value = 1;
+      return;
+    }
+    // back on the tab: it starts from nothing again, while the section is still hidden at the screen's focus moment
+    if (again) shown.value = 0;
+    shown.value = withDelay(delay, withTiming(1, { duration: 480, easing: EASE_OUT }));
+  }, [play, level, round]);
   const slide = useAnimatedStyle(() => ({
     opacity: trackW.value > 0 ? 1 : 0,
     transform: [{ translateX: (shown.value - 1) * trackW.value }],
@@ -212,7 +236,7 @@ function useRefresh(sig: string) {
     last.current = sig;
     if (level === 'none') return;
     fade.value = 0.2;
-    fade.value = withTiming(1, { duration: 260, easing: EASE_OUT });
+    fade.value = withTiming(1, { duration: level === 'full' ? 260 : 200, easing: EASE_OUT });
   }, [sig, level]);
   return useAnimatedStyle(() => ({ opacity: fade.value }));
 }
@@ -520,10 +544,11 @@ const cs = StyleSheet.create({
   ring: { position: 'absolute', left: 0, top: 0, width: RING * 2, height: RING * 2, borderRadius: RING, borderWidth: 1.5 },
   keyRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 6 },
   keyItem: { flexDirection: 'row', alignItems: 'center' },
-  keyText: { fontFamily: F.reg, fontSize: 12, marginLeft: 6 },
-  colLabel: { fontFamily: F.reg, fontSize: 11, textAlign: 'center' },
-  rowName: { fontFamily: F.med, fontSize: 13 },
+  keyText: { fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 6 },
+  // a column's label has only the cell's width, so it takes the smaller value
+  colLabel: { fontFamily: F.reg, fontSize: 11, letterSpacing: TRACK.small, textAlign: 'center' },
+  rowName: { fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
   cell: { height: CELL_H, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  cellText: { fontFamily: F.med, fontSize: 13, fontVariant: ['tabular-nums'] },
+  cellText: { fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, fontVariant: ['tabular-nums'] },
   dash: { width: 10, height: 1.5, borderRadius: 1, opacity: 0.6 },
 });

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Linking, Alert, useWindowDimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, neuRaised } from '../theme';
+import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, AiLink } from '../store';
 import { uid } from '../utils';
 import { ScreenBG, Card, Sheet, Field, PillButton, Row, IconBtn, InfoDot, NeuHeader, useTheme, EmptyState } from '../components/UI';
@@ -90,7 +90,7 @@ function LinkTile({ link: l, index, edit, style, onOpen, onMove, onRemove }: {
         <Card pad={0} onPress={() => (edit ? undefined : onOpen(l))}>
           <View style={{ alignItems: 'center', paddingVertical: 18 }}>
             <LinkIcon link={l} />
-            <Text style={{ color: C.text, fontFamily: F.semi, marginTop: 10, fontSize: 14 }} numberOfLines={1}>
+            <Text style={{ color: C.text, fontFamily: F.semi, marginTop: 10, fontSize: 14, letterSpacing: TRACK.small }} numberOfLines={1}>
               {l.label}
             </Text>
             <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{domainOf(l.url)}</Text>

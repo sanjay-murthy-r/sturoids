@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { Learning } from '../scores';
 import { Field, PillButton, Sheet } from './UI';
 import { TagPicker } from './ScoreTags';
+import { Appear } from './Motion';
 
 export type LearningTarget =
   | { mode: 'new'; nodeId: string }
@@ -56,7 +57,8 @@ export function LearningSheet({ target, onClose, title }: {
         maxLength={600}
         style={{ minHeight: 76 }}
       />
-      {problem ? <Text style={{ color: C.danger, ...T.caption, marginTop: -8, marginBottom: 12 }}>Write the learning first.</Text> : null}
+      {/* a problem fades in where it stands, rather than appearing in one frame */}
+      {problem ? <Appear><Text style={{ ...T.caption, color: C.danger, marginTop: -8, marginBottom: 12 }}>Write the learning first.</Text></Appear> : null}
       <TagPicker value={tags} onChange={setTags} />
       <PillButton label={shown?.mode === 'edit' ? 'Save' : 'Add learning'} onPress={save} />
     </Sheet>

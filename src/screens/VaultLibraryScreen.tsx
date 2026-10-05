@@ -7,7 +7,7 @@ import Animated, {
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, S, T, NEU } from '../theme';
+import { C, F, S, T, TRACK, NEU } from '../theme';
 import { useStore, VaultVideo, VaultFolder, TimedNote, Bookmark } from '../store';
 import { parseYouTubeId, fmtMediaTime } from '../utils';
 import {
@@ -16,7 +16,7 @@ import {
 } from '../components/UI';
 import { toast } from '../components/Toast';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Appear, EASE_OUT, rowIn, shiftIn, useAnimLevel, useBuilt, useEntrance } from '../components/Motion';
+import { Appear, EASE_OUT, Enter, rowIn, shiftIn, useAnimLevel, useBuilt } from '../components/Motion';
 import { useToolNav } from '../toolNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as CachedImage } from 'expo-image';
@@ -76,34 +76,26 @@ function useHeld<T>(value: T | null): T | null {
   return held.current;
 }
 
-/** How a card of a folder's page arrives: with the screen's first entrance, fading in later, or simply there. */
-type Arrival = 'enter' | 'appear' | 'still';
+/** How a card of a folder's page arrives: fading in where it stands once the page is shown, or simply there. */
+type Arrival = 'appear' | 'still';
 
 /**
- * A folder's page, keyed on the folder by its caller, so it arrives as one piece from the side it was reached from.
- * Its cards rise in with the screen's own first entrance (`fresh`); a page arriving from the side brings its cards with
- * it; and a card that turns up later in a page already shown (the first video in a folder, a search that finds some)
- * fades in where it stands.
+ * A folder's page, keyed on the folder by its caller, so it arrives as one piece from the side it was reached from. A
+ * page arriving from the side brings its cards with it, and a card that turns up later in a page already shown (the
+ * first video in a folder, a search that finds some) fades in where it stands. The screen's own entrance, which rises
+ * the whole pager on every visit, brings in the page it is opened on.
  */
-function FolderPage({ entering, fresh, children }: {
-  entering: any; fresh: boolean; children: (how: Arrival) => React.ReactNode;
+function FolderPage({ entering, children }: {
+  entering: any; children: (how: Arrival) => React.ReactNode;
 }) {
   const built = useBuilt();
-  return <Animated.View entering={entering}>{children(built.current ? 'appear' : fresh ? 'enter' : 'still')}</Animated.View>;
+  return <Animated.View entering={entering}>{children(built.current ? 'appear' : 'still')}</Animated.View>;
 }
 
-/**
- * One card of a folder's page. How it arrives is settled as it mounts (the props of later renders never replay it).
- * The fade sits on the outer layer and the entrance on the inner, so the two never fight.
- */
-function Arrive({ index, how, children }: { index: number; how: Arrival; children: React.ReactNode }) {
+/** One card of a folder's page. How it arrives is settled as it mounts (the props of later renders never replay it). */
+function Arrive({ how, children }: { how: Arrival; children: React.ReactNode }) {
   const level = useAnimLevel();
-  const entrance = useEntrance(index, how === 'enter');
-  return (
-    <Animated.View entering={how === 'appear' ? rowIn(level) : undefined}>
-      <Animated.View style={entrance}>{children}</Animated.View>
-    </Animated.View>
-  );
+  return <Animated.View entering={how === 'appear' ? rowIn(level) : undefined}>{children}</Animated.View>;
 }
 
 /** The parts of a video's caption that say something: no "0 notes", no "0 marks". */
@@ -128,7 +120,7 @@ const VideoRow = React.memo(function VideoRow({ v, folderName, onOpen, onMenu }:
     <ListRow onPress={() => onOpen(v.id)} onLongPress={() => onMenu(v)} style={{ paddingVertical: 10 }}>
       <Thumb videoId={v.videoId} />
       <View style={{ flex: 1, marginLeft: 12 }}>
-        <Text style={[T.body, { fontFamily: F.semi, fontSize: 14, lineHeight: 19 }]} numberOfLines={2}>{v.title}</Text>
+        <Text style={[T.body, { fontFamily: F.semi, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 19 }]} numberOfLines={2}>{v.title}</Text>
         {caption ? <Text style={[T.caption, { marginTop: 3 }]} numberOfLines={1}>{caption}</Text> : null}
       </View>
       <IconBtn name="ellipsis-vertical" size={17} onPress={() => onMenu(v)} accessibilityLabel={'More for ' + v.title} />
@@ -143,7 +135,7 @@ const FolderRow = React.memo(function FolderRow({ f, count, onOpen, onMenu }: {
   return (
     <ListRow onPress={() => onOpen(f.id)} onLongPress={() => onMenu(f)} style={{ paddingVertical: 10 }}>
       <Ionicons name="folder" size={22} color={C.amber} />
-      <Text style={[T.title, { flex: 1, marginLeft: 12, fontSize: 15 }]} numberOfLines={1}>{f.name}</Text>
+      <Text style={[T.title, { flex: 1, marginLeft: 12, fontSize: 15, letterSpacing: TRACK.body }]} numberOfLines={1}>{f.name}</Text>
       {/* an empty folder states no count of nothing */}
       {count ? <Text style={T.caption}>{count}</Text> : null}
       <IconBtn name="ellipsis-vertical" size={16} onPress={() => onMenu(f)} accessibilityLabel={'More for ' + f.name} />
@@ -164,12 +156,12 @@ const NoteRow = React.memo(function NoteRow({ video, item, isBookmark, onOpen, o
     <ListRow onPress={() => onOpen(video.id, item.time)} onLongPress={() => onMenu({ video, item, isBookmark })} style={{ paddingVertical: 11 }}>
       <View style={[st.timePill, { borderColor: tint + '66', backgroundColor: tint + '14' }]}>
         <Ionicons name={isBookmark ? 'bookmark' : 'create-outline'} size={11} color={tint} />
-        <Text style={{ color: tint, fontSize: 11, fontFamily: F.semi, marginLeft: 4, fontVariant: ['tabular-nums'] }}>
+        <Text style={{ color: tint, fontSize: 11, letterSpacing: TRACK.fine, fontFamily: F.semi, marginLeft: 4, fontVariant: ['tabular-nums'] }}>
           {fmtMediaTime(item.time)}
         </Text>
       </View>
       <View style={{ flex: 1, marginLeft: 10 }}>
-        <Text style={[T.body, { fontSize: 14 }]} numberOfLines={2}>
+        <Text style={[T.body, { fontSize: 14, letterSpacing: TRACK.small }]} numberOfLines={2}>
           {isBookmark ? (item as Bookmark).label : (item as TimedNote).text}
         </Text>
         <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{video.title}</Text>
@@ -480,99 +472,104 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         onBack={() => { if (!goUp()) router.back(); }}
       />
       <View style={{ flex: 1 }}>
-        <View style={{ padding: S.pad, paddingBottom: 0 }}>
-          <AddCard cwd={cwd} folderName={cwdFolder?.name} onAdded={openVideo} />
+        <Enter index={0}>
+          <View style={{ padding: S.pad, paddingBottom: 0 }}>
+            <AddCard cwd={cwd} folderName={cwdFolder?.name} onAdded={openVideo} />
 
-          <SearchField onQuery={setQ} />
+            <SearchField onQuery={setQ} />
 
-          <SegmentedControl
-            color={C.pink}
-            stretch
-            style={{ marginBottom: 10 }}
-            options={PAGE_OPTIONS}
-            value={tab}
-            onChange={(k) => goTab(k as ViewTab)}
-          />
-        </View>
+            <SegmentedControl
+              color={C.pink}
+              stretch
+              style={{ marginBottom: 10 }}
+              options={PAGE_OPTIONS}
+              value={tab}
+              onChange={(k) => goTab(k as ViewTab)}
+            />
+          </View>
+        </Enter>
 
-        <Animated.ScrollView
-          ref={pagerRef}
-          horizontal pagingEnabled showsHorizontalScrollIndicator={false}
-          onLayout={(e) => {
-            const w = Math.round(e.nativeEvent.layout.width);
-            if (w > 0 && w !== pageW) setPageW(w);
-          }}
-          onScroll={onPager}
-          scrollEventThrottle={16}
-        >
-          <ScrollView style={pageBox} contentContainerStyle={pageStyle}>
-            {/* the header already names the folder: this row only moves between folders and adds one */}
-            <Row style={{ marginBottom: 10, flexWrap: 'wrap' }}>
-              <Chip small icon="home-outline" label="All" active={cwd === null} color={C.pink} onPress={() => setCwd(null)} />
-              {cwdFolder && (
-                <Chip small icon="arrow-up-outline" label="Up" onPress={() => setCwd(cwdFolder.parentId)} />
-              )}
-              <Chip small icon="add" label="Folder" onPress={() => setFolderSheet({ mode: 'new' })} />
-            </Row>
+        {/* the three pages rise as one surface on every visit; a folder's page arriving from the side is its own entrance */}
+        <Enter index={1} style={{ flex: 1 }}>
+          <Animated.ScrollView
+            ref={pagerRef}
+            horizontal pagingEnabled showsHorizontalScrollIndicator={false}
+            onLayout={(e) => {
+              const w = Math.round(e.nativeEvent.layout.width);
+              if (w > 0 && w !== pageW) setPageW(w);
+            }}
+            onScroll={onPager}
+            scrollEventThrottle={16}
+          >
+            <ScrollView style={pageBox} contentContainerStyle={pageStyle}>
+              {/* the header already names the folder: this row only moves between folders and adds one */}
+              <Row style={{ marginBottom: 10, flexWrap: 'wrap' }}>
+                <Chip small icon="home-outline" label="All" active={cwd === null} color={C.pink} onPress={() => setCwd(null)} />
+                {cwdFolder && (
+                  <Chip small icon="arrow-up-outline" label="Up" onPress={() => setCwd(cwdFolder.parentId)} />
+                )}
+                <Chip small icon="add" label="Folder" onPress={() => setFolderSheet({ mode: 'new' })} />
+              </Row>
 
-            {/* a folder's contents are one piece, keyed on the folder: it arrives from the side it was reached from */}
-            <FolderPage key={cwd ?? 'root'} entering={folderIn} fresh={!built.current}>
-              {(how) => (<>
-              {subFolders.length > 0 && (
-                <Arrive index={0} how={how}>
-                  <ListCard>
-                    {subFolders.map((f) => (
-                      <FolderRow key={f.id} f={f} count={counts.get(f.id) || 0} onOpen={openFolder} onMenu={setFolderMenu} />
-                    ))}
-                  </ListCard>
-                </Arrive>
-              )}
+              {/* a folder's contents are one piece, keyed on the folder: it arrives from the side it was reached from */}
+              <FolderPage key={cwd ?? 'root'} entering={folderIn}>
+                {(how) => (<>
+                {subFolders.length > 0 && (
+                  <Arrive how={how}>
+                    <ListCard>
+                      {subFolders.map((f) => (
+                        <FolderRow key={f.id} f={f} count={counts.get(f.id) || 0} onOpen={openFolder} onMenu={setFolderMenu} />
+                      ))}
+                    </ListCard>
+                  </Arrive>
+                )}
 
-              {hereVideos.length > 0 && (
-                <Arrive index={1} how={how}>
-                  <ListCard>
-                    {hereVideos.map((v) => <VideoRow key={v.id} v={v} onOpen={openVideo} onMenu={setVideoMenu} />)}
-                  </ListCard>
-                </Arrive>
-              )}
-              {subFolders.length === 0 && hereVideos.length === 0 && (
-                searching && folderHasVideos ? (
-                  <EmptyState key="match" icon="search-outline" title="No videos match" />
-                ) : (
-                  <EmptyState
-                    key="none"
-                    icon={cwd ? 'folder-open-outline' : 'play-circle-outline'}
-                    title={cwd ? 'This folder is empty' : 'Your study-video library'}
-                    body={cwd ? undefined : 'Paste a lecture link above to start your library.'}
-                  />
-                )
-              )}
-              </>)}
-            </FolderPage>
-          </ScrollView>
+                {hereVideos.length > 0 && (
+                  <Arrive how={how}>
+                    <ListCard>
+                      {hereVideos.map((v) => <VideoRow key={v.id} v={v} onOpen={openVideo} onMenu={setVideoMenu} />)}
+                    </ListCard>
+                  </Arrive>
+                )}
+                {subFolders.length === 0 && hereVideos.length === 0 && (
+                  searching && folderHasVideos ? (
+                    <EmptyState key="match" icon="search-outline" title="No videos match" />
+                  ) : (
+                    <EmptyState
+                      key="none"
+                      icon={cwd ? 'folder-open-outline' : 'play-circle-outline'}
+                      title={cwd ? 'This folder is empty' : 'Your study-video library'}
+                      body={cwd ? undefined : 'Paste a lecture link above to start your library.'}
+                    />
+                  )
+                )}
+                </>)}
+              </FolderPage>
+            </ScrollView>
 
-          <FlatList
-            style={pageBox}
-            contentContainerStyle={pageStyle}
-            data={recentVideos}
-            keyExtractor={(v) => v.id}
-            initialNumToRender={8}
-            windowSize={7}
-            renderItem={renderRecent}
-            ListEmptyComponent={recentEmpty}
-          />
+            <FlatList
+              style={pageBox}
+              contentContainerStyle={pageStyle}
+              data={recentVideos}
+              keyExtractor={(v) => v.id}
+              initialNumToRender={8}
+              windowSize={7}
+              renderItem={renderRecent}
+              ListEmptyComponent={recentEmpty}
+            />
 
-          <FlatList
-            style={pageBox}
-            contentContainerStyle={pageStyle}
-            data={allNotes}
-            keyExtractor={(x) => (x.isBookmark ? 'b' : 'n') + x.item.id}
-            initialNumToRender={10}
-            windowSize={7}
-            renderItem={renderNote}
-            ListEmptyComponent={notesEmpty}
-          />
-        </Animated.ScrollView>
+            <FlatList
+              style={pageBox}
+              contentContainerStyle={pageStyle}
+              data={allNotes}
+              keyExtractor={(x) => (x.isBookmark ? 'b' : 'n') + x.item.id}
+              initialNumToRender={10}
+              windowSize={7}
+              renderItem={renderNote}
+              ListEmptyComponent={notesEmpty}
+            />
+          </Animated.ScrollView>
+        </Enter>
       </View>
 
       <DraftSheet

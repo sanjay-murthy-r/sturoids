@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, { FadeIn, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { C, F, MIN, S, T, neuRaised } from '../theme';
+import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { fmtClockTime } from '../utils';
 import { TimerState, displayOf, shownSecondsOf, useSessionTick } from '../deepWork';
 import { WIDE_AT } from '../layout';
@@ -73,7 +73,7 @@ function SlabClock({ timer, base, availW, startedAt, finishAt, hour24, clockStyl
 
   return (
     <>
-      <Animated.View key={size} entering={resized ? FadeIn.duration(280).easing(EASE_OUT) : undefined} style={[st.time, clockStyle]}>
+      <Animated.View key={size} entering={resized ? FadeIn.duration(level === 'full' ? 280 : 180).easing(EASE_OUT) : undefined} style={[st.time, clockStyle]}>
         <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} />
         <ClockDigits
           text={sec}
@@ -212,7 +212,7 @@ export function SessionStage({
             <Text style={st.currentKick}>Current task</Text>
             <Animated.Text
               key={current ? current.title : 'done'}
-              entering={level === 'none' ? undefined : FadeIn.duration(220).easing(EASE_OUT)}
+              entering={level === 'none' ? undefined : FadeIn.duration(level === 'full' ? 220 : 180).easing(EASE_OUT)}
               style={[st.currentTitle, !current && { color: C.textDim }]}
               numberOfLines={1}
             >
@@ -230,12 +230,12 @@ const st = StyleSheet.create({
   plate: { borderRadius: 26, paddingTop: 20, paddingHorizontal: PAD_X, paddingBottom: 22 },
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   subject: { flexShrink: 1, paddingVertical: 2 },
-  block: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, marginLeft: 12 },
+  block: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 12 },
   time: { flexDirection: 'row', alignItems: 'flex-start', marginTop: 10 },
   rule: { marginTop: 18, marginBottom: 9 },
   noRule: { height: 12 },
   meta: { flexDirection: 'row', justifyContent: 'space-between' },
-  metaText: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, fontVariant: ['tabular-nums'] },
+  metaText: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, fontVariant: ['tabular-nums'] },
   dock: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 20 },
   toggle: { flex: 1, height: 52, paddingVertical: 0 },
   extra: { marginTop: 14, height: 30, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center' },
@@ -245,6 +245,6 @@ const st = StyleSheet.create({
     paddingVertical: 12, paddingLeft: 14, paddingRight: 10, borderRadius: 16, borderWidth: 1,
   },
   currentText: { flex: 1, minWidth: 0 },
-  currentKick: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: 1.6, textTransform: 'uppercase' },
-  currentTitle: { color: C.text, fontFamily: F.med, fontSize: 15, marginTop: 3 },
+  currentKick: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.caps, textTransform: 'uppercase' },
+  currentTitle: { color: C.text, fontFamily: F.med, fontSize: 15, letterSpacing: TRACK.body, marginTop: 3 },
 });

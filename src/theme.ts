@@ -180,14 +180,15 @@ export const S = {
   radiusSm: 14,
 };
 
-// ---- faces (the Font Lab v2 pick, 2026-09-26): Newsreader for headings, Geist for everything small, Rubik Light
-// for counting numbers. Where fontFamily is set, fontWeight must NOT be: Android fake-bolds any family+weight combo. ----
+// ---- faces (the Font Lab v2 pick, 2026-09-26): Geist for nearly everything, Newsreader only for the big screen titles
+// and the writing surfaces' headings, Rubik Light for counting numbers. Where fontFamily is set, fontWeight must NOT be:
+// Android fake-bolds any family+weight combo. ----
 export const F = {
   reg: 'Geist_400Regular',
   med: 'Geist_500Medium',
   semi: 'Geist_600SemiBold',
   bold: 'Geist_700Bold',
-  /** headings: a screen's title, a page's name, a hero line (Newsreader Medium) */
+  /** the serif, kept for a big screen title (T.display) and a writing surface's heading: a note's title, the journal's date */
   head: 'Newsreader_500Medium',
   /** counting numbers: timers, clocks and big figures (Rubik Light, the Focus Lab pick) */
   num: 'Rubik_300Light',
@@ -203,6 +204,25 @@ export const F = {
 export const NUM_DIGIT_W = 0.618;
 export const NUM_COLON_W = 0.241;
 
+// ---- tracking: Geist is set tight as it grows and a touch open as it shrinks, so every size reads evenly. Styles take
+// their value from here instead of a bare number. Rubik numerals keep their own. ----
+export const TRACK = {
+  /** Newsreader display titles, 30 px */
+  display: -0.5,
+  /** Geist semibold, 20 to 22 px */
+  large: -0.35,
+  /** Geist semibold, 16 to 18 px */
+  title: -0.2,
+  /** 15 px and the 16 px reading size */
+  body: 0.1,
+  /** 13 to 14 px */
+  small: 0.15,
+  /** 11 to 12 px in mixed case */
+  fine: 0.25,
+  /** small UPPERCASE labels: kickers, section caps, pills */
+  caps: 1.3,
+};
+
 // type scale (~1.25 ratio)
 export type TName =
   | 'display' | 'h1' | 'head' | 'title' | 'body' | 'bodyLong' | 'label' | 'caption' | 'kicker'
@@ -210,19 +230,20 @@ export type TName =
 
 // faces carry the weight, so no token can hold a fontWeight (scripts/lint-type.js guards the call sites too)
 export const T: Record<TName, Omit<TextStyle, 'fontWeight'>> = {
-  display: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 36, letterSpacing: -0.3 },
-  h1: { color: C.text, fontFamily: F.head, fontSize: 22, lineHeight: 28, letterSpacing: -0.3 },
+  /** a big screen title: Today's greeting, More, Planner, Tasks, the Deep Work title (the one serif left in the chrome) */
+  display: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 36, letterSpacing: TRACK.display },
+  h1: { color: C.text, fontFamily: F.semi, fontSize: 22, lineHeight: 28, letterSpacing: TRACK.large },
   /** a page's name in its header, and a hero line such as the next planned block */
-  head: { color: C.text, fontFamily: F.head, fontSize: 20, lineHeight: 26, letterSpacing: -0.3 },
-  title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1 },
-  body: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21 },
+  head: { color: C.text, fontFamily: F.semi, fontSize: 20, lineHeight: 26, letterSpacing: TRACK.large },
+  title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title },
+  body: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21, letterSpacing: TRACK.body },
   /** long-form writing: the journal page */
-  bodyLong: { color: C.text, fontFamily: F.reg, fontSize: 16, lineHeight: 26 },
-  label: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: 0.1 },
-  caption: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 17 },
+  bodyLong: { color: C.text, fontFamily: F.reg, fontSize: 16, lineHeight: 26, letterSpacing: TRACK.body },
+  label: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
+  caption: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 17, letterSpacing: TRACK.fine },
   kicker: {
     color: C.textFaint, fontFamily: F.semi, fontSize: 11,
-    letterSpacing: 2.2, textTransform: 'uppercase',
+    letterSpacing: TRACK.caps, textTransform: 'uppercase',
   },
   // counting numbers: large figures in Rubik Light; small ones in the text face, Geist Medium (the Font Lab v2 pick)
   /** the Deep Work clock */

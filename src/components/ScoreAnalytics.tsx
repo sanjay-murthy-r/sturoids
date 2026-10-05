@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, useWindowDimensions } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, neuRaised } from '../theme';
+import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore } from '../store';
 import { TAG_COLORS, categoriesOf, fmtExamDate, fmtMark, fmtPct, indexScores } from '../scores';
 import {
@@ -11,7 +11,7 @@ import {
   recentNote, seriesStats, steadyText, subjectCallouts, subjectStats, trendText, trendWord,
 } from '../analytics';
 import { Card, Chip, EmptyState, ListCard, ListRow, PillButton, SectionTitle, useTheme } from './UI';
-import { Bouncy, CountUp, Enter, FadeSwap, useAppear } from './Motion';
+import { Bouncy, CountUp, Enter, FadeSwap, useAnimLevel, useAppear } from './Motion';
 import { SegmentedControl } from './SegmentedControl';
 import { Sparkline } from './Sparkline';
 import { ChartKey, GrowBar, Heatmap, ShareBar, SubjectTrendChart, TrendChart, useSeen, seriesColor } from './ScoreCharts';
@@ -123,7 +123,8 @@ export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
   const scores = useStore((s) => s.scores);
   const tags = useStore((s) => s.scoreTags);
   const ix = useMemo(() => indexScores(scores), [scores]);
-  const seen = useSeen();
+  // the page's round: 0 until it is in view, then one more each time it comes into view, so its figures and bars play the same every visit
+  const round = useSeen();
   const { width } = useWindowDimensions();
   const [view, setView] = useState<{ scope: Scope; range: Range }>(() => {
     const scope = defaultScope(ix, tags);
@@ -216,7 +217,7 @@ export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
       ) : (
         <>
           <Enter index={enter++}>
-            <Hero stats={stats} total={all.length} seen={seen} />
+            <Hero stats={stats} total={all.length} round={round} />
             {stats.n === 1 ? <OneMore /> : null}
           </Enter>
 
@@ -240,7 +241,7 @@ export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
 
           {stats.n > 2 ? (
             <Enter index={enter++}>
-              <Distribution stats={stats} seen={seen} />
+              <Distribution stats={stats} round={round} />
             </Enter>
           ) : null}
 
@@ -251,7 +252,7 @@ export function ScoreAnalytics({ onOpenExam, onManageCategories }: {
           ) : null}
 
           {data.subjects.length ? (
-            <Subjects subjects={data.subjects} callouts={data.callouts} pts={pts} seen={seen} enter={enter} />
+            <Subjects subjects={data.subjects} callouts={data.callouts} pts={pts} round={round} enter={enter} />
           ) : null}
         </>
       )}
@@ -271,8 +272,9 @@ function OneMore() {
   );
 }
 
-const Hero = React.memo(function Hero({ stats, total, seen }: { stats: SeriesStats; total: number; seen: boolean }) {
+const Hero = React.memo(function Hero({ stats, total, round }: { stats: SeriesStats; total: number; round: number }) {
   useTheme();
+  const full = useAnimLevel() === 'full';
   const avg = round1(stats.mean);
   // a count that lands on a whole number settles as "72%", like every other result; on the way it keeps its tenths
   const format = React.useCallback((n: number) => (n === avg ? fmtPct(n) : n.toFixed(1) + '%'), [avg]);
@@ -285,7 +287,8 @@ const Hero = React.memo(function Hero({ stats, total, seen }: { stats: SeriesSta
       <View style={st.heroRow}>
         <View style={{ flex: 1 }}>
           <Text style={T.kicker}>{stats.n === 1 ? 'Result' : 'Average'}</Text>
-          <CountUp value={seen ? avg : 0} from={0} decimals={1} format={format} style={st.heroPct} />
+          {/* each round is a new count, from nothing as the page comes into view; with less than full motion the figure is simply there */}
+          <CountUp key={round} value={round ? avg : 0} from={full ? 0 : undefined} decimals={1} format={format} style={st.heroPct} />
           <FadeSwap swapKey={across}>
             <Text style={T.caption} numberOfLines={2}>{across}</Text>
           </FadeSwap>
@@ -525,7 +528,7 @@ const Figures = React.memo(function Figures({ stats: s, cols }: { stats: SeriesS
 
 /* ---------------------------------------------------------------- distribution */
 
-const Distribution = React.memo(function Distribution({ stats, seen }: { stats: SeriesStats; seen: boolean }) {
+const Distribution = React.memo(function Distribution({ stats, round }: { stats: SeriesStats; round: number }) {
   useTheme();
   // highest band first, read down like a table of results
   const bands = [...stats.bands].reverse();
@@ -543,7 +546,7 @@ const Distribution = React.memo(function Distribution({ stats, seen }: { stats: 
           >
             <Text style={[st.bandLabel, { color: b.count ? C.textDim : C.textFaint }]} numberOfLines={1}>{b.label}</Text>
             <View style={{ flex: 1 }}>
-              <GrowBar value={b.count / max} height={8} play={seen} delay={BAR_DELAY + i * 40} />
+              <GrowBar value={b.count / max} height={8} play={round > 0} round={round} delay={BAR_DELAY + i * 40} />
             </View>
             <Text style={[st.bandCount, { color: b.count ? C.text : C.textFaint }]}>{b.count}</Text>
           </View>
@@ -621,8 +624,8 @@ function KeyChip({ label, color, active, onPress }: { label: string; color: stri
   );
 }
 
-const Subjects = React.memo(function Subjects({ subjects, callouts, pts, seen, enter }: {
-  subjects: SubjectStat[]; callouts: SubjectCallouts; pts: ExamPoint[]; seen: boolean;
+const Subjects = React.memo(function Subjects({ subjects, callouts, pts, round, enter }: {
+  subjects: SubjectStat[]; callouts: SubjectCallouts; pts: ExamPoint[]; round: number;
   /** the first entrance index these sections take */
   enter: number;
 }) {
@@ -701,7 +704,7 @@ const Subjects = React.memo(function Subjects({ subjects, callouts, pts, seen, e
                     ) : null}
                     <Text style={st.partPct}>{fmtPct(s.mean)}</Text>
                   </View>
-                  <GrowBar value={s.mean / 100} play={seen} delay={BAR_DELAY + Math.min(i, 8) * 50} />
+                  <GrowBar value={s.mean / 100} play={round > 0} round={round} delay={BAR_DELAY + Math.min(i, 8) * 50} />
                   <View style={[st.sideRow, { marginTop: 6 }]}>
                     <Text style={T.caption}>Latest {fmtPct(s.latest)}</Text>
                     {s.delta != null ? <Delta value={s.delta} style={{ marginLeft: 6 }} /> : null}
@@ -718,7 +721,7 @@ const Subjects = React.memo(function Subjects({ subjects, callouts, pts, seen, e
         <Enter index={at++}>
           <SectionTitle>Where marks go</SectionTitle>
           <Card>
-            <ShareBar parts={lost.map((s) => ({ key: s.key, color: colorOf(s.key), share: s.lostShare }))} play={seen} delay={BAR_DELAY} />
+            <ShareBar parts={lost.map((s) => ({ key: s.key, color: colorOf(s.key), share: s.lostShare }))} play={round > 0} round={round} delay={BAR_DELAY} />
             <View style={{ marginTop: 16 }}>
               {lost.map((s, i) => (
                 <View key={s.key} style={[st.sideRow, i > 0 && { marginTop: 10 }]}>
@@ -775,29 +778,29 @@ const st = StyleSheet.create({
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
   teaser: { borderRadius: S.radius, marginBottom: S.gap, padding: 20 },
   teaserRow: { flexDirection: 'row', alignItems: 'center' },
-  teaserLine: { color: C.text, fontFamily: F.med, fontSize: 16, lineHeight: 22, marginTop: 8 },
+  teaserLine: { color: C.text, fontFamily: F.med, fontSize: 16, letterSpacing: TRACK.body, lineHeight: 22, marginTop: 8 },
   teaserSpark: { width: 76, marginLeft: 14 },
   heroRow: { flexDirection: 'row', alignItems: 'flex-start' },
   heroPct: { ...T.numDisplay, lineHeight: 52, letterSpacing: -1, marginTop: 6 },
   heroSide: { alignItems: 'flex-end', marginLeft: 16 },
-  sideVal: { ...T.numStat, fontSize: 17, lineHeight: 22, letterSpacing: 0, marginTop: 2 },
+  sideVal: { ...T.numStat, fontSize: 17, lineHeight: 22, letterSpacing: TRACK.title, marginTop: 2 },
   sideRow: { flexDirection: 'row', alignItems: 'center' },
   oneMore: { color: C.textDim, paddingHorizontal: 4, marginTop: 2, marginBottom: 6 },
-  rowTitle: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: -0.1 },
+  rowTitle: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
   rowRight: { alignItems: 'flex-end', marginLeft: 12 },
-  rowPct: { ...T.numStat, fontSize: 18, lineHeight: 22, letterSpacing: 0 },
-  partPct: { ...T.numStat, fontSize: 16, lineHeight: 20, letterSpacing: 0, marginLeft: 12 },
-  delta: { fontFamily: F.semi, fontSize: 12, marginLeft: 2, fontVariant: ['tabular-nums'] },
-  deltaLarge: { fontFamily: F.med, fontSize: 18, lineHeight: 26, marginLeft: 3, fontVariant: ['tabular-nums'] },
+  rowPct: { ...T.numStat, fontSize: 18, lineHeight: 22, letterSpacing: TRACK.title },
+  partPct: { ...T.numStat, fontSize: 16, lineHeight: 20, letterSpacing: TRACK.title, marginLeft: 12 },
+  delta: { fontFamily: F.semi, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, fontVariant: ['tabular-nums'] },
+  deltaLarge: { fontFamily: F.med, fontSize: 18, letterSpacing: TRACK.title, lineHeight: 26, marginLeft: 3, fontVariant: ['tabular-nums'] },
   deltaRow: { flexDirection: 'row', alignItems: 'center' },
-  link: { fontFamily: F.semi, fontSize: 13 },
+  link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   catRow: { paddingVertical: 12, paddingHorizontal: 12, borderRadius: 14 },
   catDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1 },
   catSpark: { width: 52, marginLeft: 12 },
   catPct: { marginLeft: 12, minWidth: 58, textAlign: 'right' },
   pickSlot: { minHeight: 44, marginTop: 14, justifyContent: 'center' },
   pickRow: { flexDirection: 'row', alignItems: 'center' },
-  pickPct: { ...T.numStat, fontSize: 17, lineHeight: 22, letterSpacing: 0, marginLeft: 12 },
+  pickPct: { ...T.numStat, fontSize: 17, lineHeight: 22, letterSpacing: TRACK.title, marginLeft: 12 },
   hair: { height: StyleSheet.hairlineWidth, marginVertical: 14 },
   noteRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, marginBottom: 6 },
   noteText: { flex: 1, marginLeft: 10 },
@@ -805,13 +808,13 @@ const st = StyleSheet.create({
   tile: { paddingVertical: 12, paddingRight: 12 },
   tileValueRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 4 },
   tileValue: { ...T.numStat, lineHeight: 28, flexShrink: 1 },
-  tileUnit: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, marginLeft: 5, flexShrink: 1 },
+  tileUnit: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 5, flexShrink: 1 },
   tileDelta: { minHeight: 28 },
   bandRow: { flexDirection: 'row', alignItems: 'center' },
-  bandLabel: { width: 78, fontFamily: F.med, fontSize: 13 },
-  bandCount: { width: 32, textAlign: 'right', fontFamily: F.med, fontSize: 15, fontVariant: ['tabular-nums'] },
+  bandLabel: { width: 78, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
+  bandCount: { width: 32, textAlign: 'right', fontFamily: F.med, fontSize: 15, letterSpacing: TRACK.body, fontVariant: ['tabular-nums'] },
   subHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  legendPct: { fontFamily: F.semi, fontSize: 14, color: C.text, marginLeft: 12, fontVariant: ['tabular-nums'] },
+  legendPct: { fontFamily: F.semi, fontSize: 14, letterSpacing: TRACK.small, color: C.text, marginLeft: 12, fontVariant: ['tabular-nums'] },
   legendMarks: { width: 84, textAlign: 'right', marginLeft: 8 },
   keyChips: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 },
   keyChip: {
@@ -819,5 +822,5 @@ const st = StyleSheet.create({
     marginRight: 8, marginBottom: 8, overflow: 'hidden',
   },
   keyDot: { width: 8, height: 8, borderRadius: 4 },
-  keyChipText: { fontFamily: F.med, fontSize: 12, marginLeft: 7, letterSpacing: 0.1, maxWidth: 160, flexShrink: 1 },
+  keyChipText: { fontFamily: F.med, fontSize: 12, marginLeft: 7, letterSpacing: TRACK.fine, maxWidth: 160, flexShrink: 1 },
 });

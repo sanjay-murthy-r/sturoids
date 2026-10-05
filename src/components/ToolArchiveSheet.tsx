@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, S, T } from '../theme';
+import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots } from '../tools';
 import { openTool } from '../toolNav';
@@ -146,6 +146,6 @@ const st = StyleSheet.create({
   open: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   // the text keeps its old place: 2 of margin and 10 of padding where it had 12 of margin
   restore: { marginLeft: 2, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999 },
-  restoreText: { fontFamily: F.semi, fontSize: 13 },
+  restoreText: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   toggle: { marginLeft: 12 },
 });

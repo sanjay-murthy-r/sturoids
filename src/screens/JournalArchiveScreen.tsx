@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
-import { C, F, MIN, NEU, S, T, bgFor } from '../theme';
+import { C, F, MIN, NEU, S, T, TRACK, bgFor } from '../theme';
 import { useStore, JournalEntry } from '../store';
 import { todayKey } from '../utils';
 import {
@@ -20,7 +20,8 @@ import {
 } from '../journal';
 import { openTool } from '../toolNav';
 import { tick } from '../haptics';
-import { Bouncy, CountUp, EASE_OUT, riseIn, useAnimLevel } from '../components/Motion';
+import { Appear, Bouncy, CountUp, EASE_OUT, useAnimLevel } from '../components/Motion';
+import { swapIn } from '../components/Swap';
 
 type Sort = 'newest' | 'oldest' | 'longest' | 'best';
 const SORT_LABEL: Record<Sort, string> = { newest: 'Newest', oldest: 'Oldest', longest: 'Longest', best: 'Best days' };
@@ -61,8 +62,11 @@ const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, s
     e.tags.map((t) => '#' + t).join(' '),
   ].filter(Boolean).join(', ');
   const dipStyle = useAnimatedStyle(() => ({ opacity: dip.value }));
+  // settled as the row mounts: a row of the first screenful rises with the page, and the parent's later renders (which
+  // pass false once the page is built) never take that back before it has played
+  const [rise] = React.useState(enter);
   return (
-    <ListSlice first={first} last={last} enter={enter}>
+    <ListSlice first={first} last={last} enter={rise}>
       <Animated.View style={dipStyle}>
         <ListRow onPress={() => onOpen(e.dateKey, e.id)} onLongPress={() => { tick(); onMenu(e); }} style={st.entry}>
           <View style={[st.dayWell, well]}>
@@ -195,7 +199,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     shownList.current = listKey;
     if (level === 'none') return;
     dip.value = 0.3;
-    dip.value = withTiming(1, { duration: 240, easing: EASE_OUT });
+    dip.value = withTiming(1, { duration: level === 'full' ? 240 : 180, easing: EASE_OUT });
   }, [listKey, level]);
 
   const snippet = (e: JournalEntry) => {
@@ -254,18 +258,21 @@ function Archive({ tabMode }: { tabMode: boolean }) {
         <Chip icon="swap-vertical-outline" label={SORT_LABEL[sort]} onPress={() => setSort(NEXT_SORT[sort])} />
       </ScrollView>
       {summary || tokens.length ? (
-        <Row style={{ justifyContent: 'space-between', marginTop: -4, marginBottom: 10 }}>
-          <Text style={[T.caption, { flex: 1 }]} numberOfLines={1}>
-            {visible.length} {visible.length === 1 ? 'entry' : 'entries'}{summary ? ', ' + summary : ''}
-          </Text>
-          <Bouncy onPress={clearAll} scaleTo={0.92} radius={8} hitSlop={8} accessibilityRole="button" style={st.linkBox}>
-            <Text style={[st.link, { color: C.accent }]}>Clear</Text>
-          </Bouncy>
-        </Row>
+        // the line that counts the entries and offers Clear fades in where it appears, once a filter is on
+        <Appear>
+          <Row style={{ justifyContent: 'space-between', marginTop: -4, marginBottom: 10 }}>
+            <Text style={[T.caption, { flex: 1 }]} numberOfLines={1}>
+              {visible.length} {visible.length === 1 ? 'entry' : 'entries'}{summary ? ', ' + summary : ''}
+            </Text>
+            <Bouncy onPress={clearAll} scaleTo={0.92} radius={8} hitSlop={8} accessibilityRole="button" style={st.linkBox}>
+              <Text style={[st.link, { color: C.accent }]}>Clear</Text>
+            </Bouncy>
+          </Row>
+        </Appear>
       ) : null}
       {stats && journal.length ? (
         // the stats open where they stand, rising a short way in; they sit above the list, so they never cover a row
-        <Animated.View entering={level === 'none' ? undefined : riseIn}>
+        <Animated.View entering={swapIn(level)}>
         <Card pad={16}>
           <Row>
             {glances.map((g, i) => (
@@ -431,24 +438,24 @@ function Glance({ value, label }: { value: number; label: string }) {
 }
 
 const st = StyleSheet.create({
-  link: { fontFamily: F.semi, fontSize: 13 },
+  link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   linkBox: { marginLeft: 12, paddingHorizontal: 2 },
   rate: { flexDirection: 'row', alignItems: 'center', marginLeft: 6 },
-  rateText: { color: C.gold, fontFamily: F.semi, fontSize: 12, marginLeft: 2, fontVariant: ['tabular-nums'] },
+  rateText: { color: C.gold, fontFamily: F.semi, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, fontVariant: ['tabular-nums'] },
   // a sticky month spans the whole width, so the card's side shadows pass under it instead of beside it
   section: {
     ...T.kicker, marginHorizontal: -S.pad, paddingHorizontal: S.pad, paddingTop: 14, paddingBottom: 8,
   },
   entry: { alignItems: 'flex-start', paddingVertical: 14 },
   dayWell: { width: 46, paddingVertical: 7, borderRadius: 14, alignItems: 'center' },
-  dayName: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: 0.6 },
-  dayNum: { color: C.text, fontFamily: F.bold, fontSize: 18, fontVariant: ['tabular-nums'], marginTop: 1 },
-  excerpt: { color: C.textDim, fontFamily: F.reg, fontSize: 13, lineHeight: 19, marginTop: 4 },
+  dayName: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.fine },
+  dayNum: { color: C.text, fontFamily: F.bold, fontSize: 18, letterSpacing: TRACK.title, fontVariant: ['tabular-nums'], marginTop: 1 },
+  excerpt: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 19, marginTop: 4 },
   vDivider: { width: StyleSheet.hairlineWidth, backgroundColor: C.hairline, alignSelf: 'stretch' },
   glanceValue: { ...T.numStat, color: C.gold },
-  glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: 0.4 },
+  glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: TRACK.fine },
   heat: { flexDirection: 'row', gap: 3, justifyContent: 'center', marginTop: 16 },
   heatCell: { width: 12, height: 12, borderRadius: 3 },
-  echo: { color: C.textDim, fontFamily: F.reg, fontSize: 13, marginTop: 6 },
+  echo: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, marginTop: 6 },
   sheetLabel: { ...T.label, marginTop: 10, marginBottom: 8 },
 });

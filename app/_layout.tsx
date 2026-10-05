@@ -7,7 +7,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
 // each face from its own file: a package's index would carry every one of its files into the app. Geist speaks,
-// Newsreader heads, Rubik Light counts, and the intro keeps Rubik (the Font Lab v2 pick)
+// Newsreader titles the big screens, Rubik Light counts, and the intro keeps Rubik (the Font Lab v2 pick)
 import { useFonts } from '@expo-google-fonts/rubik/useFonts';
 import { Rubik_300Light } from '@expo-google-fonts/rubik/300Light';
 import { Rubik_500Medium } from '@expo-google-fonts/rubik/500Medium';
@@ -24,7 +24,7 @@ import { setIntroPhase } from '../src/intro';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ToastHost } from '../src/components/Toast';
-import { useAnimLevel } from '../src/components/Motion';
+import { noteTransitionStart, pageTransition, useAnimLevel } from '../src/components/Motion';
 
 // the native splash stays up until the intro (or the app) has painted its first
 // frame — no bare-material gap between the splash icon and the first real frame
@@ -125,14 +125,14 @@ export default function RootLayout() {
       {revealed && appFonts && (
         <ErrorBoundary>
         <Stack
+          screenListeners={noteTransitionStart}
           screenOptions={{
             // headers are app-owned (NeuHeader) — status-bar spacing is padded
             // explicitly inside each screen, consistent everywhere
             headerShown: false,
             contentStyle: { backgroundColor: bg },
-            // with motion off a page simply appears, like everything else
-            animation: level === 'none' ? 'none' : 'fade_from_bottom',
-            animationDuration: 220,
+            // a page dissolves in while its own content rises; with motion off it simply appears (see pageTransition)
+            ...pageTransition(level),
           }}
         />
         </ErrorBoundary>

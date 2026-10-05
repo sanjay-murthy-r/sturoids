@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { C, F, S, T, BLOCK_COLORS } from '../theme';
+import { C, F, S, T, TRACK, BLOCK_COLORS } from '../theme';
 import { useStore, PlannerBlock, PlannerWeek, Habit } from '../store';
 import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours } from '../utils';
 import { useNow } from '../hooks/useNow';
@@ -13,8 +13,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Wheel } from '../components/Wheel';
 import {
-  Bouncy, CHANGE, Enter, FadeSwap, rowIn, shiftIn, useAnimLevel, useBuilt, useFocusKey,
+  Bouncy, CHANGE, Enter, FadeSwap, rowIn, useAnimLevel, useBuilt, useFocusKey,
 } from '../components/Motion';
+import { slideIn, useSwapIn } from '../components/Swap';
 import { tick } from '../haptics';
 import { rescheduleAllReminders, ensurePermission } from '../notifications';
 import { openTool } from '../toolNav';
@@ -74,9 +75,11 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setDay(next);
   };
   const dayIn = useMemo(
-    () => (built.current && level !== 'none' ? shiftIn(dayDir.current * 16) : undefined),
+    () => (built.current ? slideIn(level, dayDir.current * 16) : undefined),
     [day, level]
   );
+  // the first habit turning the empty note into a list, or the last one turning it back, swaps in place
+  const habitsIn = useSwapIn(habits.length === 0 ? 'none' : 'list');
 
   // the way back to today fades in once you have moved off it, and out again when you return
   const away = dayIdx !== todayIdx;
@@ -171,39 +174,43 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
           </View>
         </Enter>
 
-        {/* blocks */}
-        <Animated.View key={day} entering={dayIn}>
-          <DayBlocks
-            day={day} blocks={blocks} hour24={hour24} nowMin={viewingToday ? nowMin : -1}
-            onEdit={openEdit} onDelete={deleteBlock}
-          />
-        </Animated.View>
-        <PillButton label={`Add block to ${day}`} icon="add" onPress={openAdd} style={{ marginTop: 4 }} />
+        {/* blocks: the day's own entrance (above) is for a day change; the screen's rises with the rest, every visit */}
+        <Enter index={1}>
+          <Animated.View key={day} entering={dayIn}>
+            <DayBlocks
+              day={day} blocks={blocks} hour24={hour24} nowMin={viewingToday ? nowMin : -1}
+              onEdit={openEdit} onDelete={deleteBlock}
+            />
+          </Animated.View>
+          <PillButton label={`Add block to ${day}`} icon="add" onPress={openAdd} style={{ marginTop: 4 }} />
+        </Enter>
 
         {/* streaks */}
-        <SectionTitle
-          right={
-            <Pressable onPress={() => setHabitSheet(true)} hitSlop={8}>
-              <Text style={{ color: C.accent, fontSize: 13, fontFamily: F.semi }}>+ Habit</Text>
-            </Pressable>
-          }
-        >
-          Streaks
-        </SectionTitle>
-        {habits.length === 0 ? (
-          <EmptyState compact icon="repeat-outline" title="No habits yet" body="Daily habits with streak counters. Small, repeatable, honest." />
-        ) : (
-          <Enter index={2}>
-            <ListCard>
-              {habits.map((h) => (
-                <HabitRow
-                  key={h.id} h={h} today={today}
-                  onToggle={toggleHabitToday} onRemind={setRemindEdit} onDelete={deleteHabit}
-                />
-              ))}
-            </ListCard>
-          </Enter>
-        )}
+        <Enter index={2}>
+          <SectionTitle
+            right={
+              <Pressable onPress={() => setHabitSheet(true)} hitSlop={8}>
+                <Text style={{ color: C.accent, fontSize: 13, letterSpacing: TRACK.small, fontFamily: F.semi }}>+ Habit</Text>
+              </Pressable>
+            }
+          >
+            Streaks
+          </SectionTitle>
+          <Animated.View key={habits.length === 0 ? 'none' : 'list'} entering={habitsIn}>
+            {habits.length === 0 ? (
+              <EmptyState compact icon="repeat-outline" title="No habits yet" body="Daily habits with streak counters. Small, repeatable, honest." />
+            ) : (
+              <ListCard>
+                {habits.map((h) => (
+                  <HabitRow
+                    key={h.id} h={h} today={today}
+                    onToggle={toggleHabitToday} onRemind={setRemindEdit} onDelete={deleteHabit}
+                  />
+                ))}
+              </ListCard>
+            )}
+          </Animated.View>
+        </Enter>
       </ScrollView>
 
       <BlockSheet visible={blockSheet} day={day} editing={editing} onClose={() => setBlockSheet(false)} />
@@ -550,13 +557,13 @@ function ReminderSheet({ habit, onClose }: { habit: Habit | null; onClose: () =>
 
 const st = StyleSheet.create({
   wheelWrap: { marginTop: 10, marginBottom: 18 },
-  dayText: { fontFamily: F.head, fontSize: 24, lineHeight: 30, letterSpacing: -0.3 },
+  dayText: { fontFamily: F.semi, fontSize: 22, lineHeight: 28, letterSpacing: TRACK.large },
   todayLink: { alignSelf: 'center', marginTop: 2 },
   todayPress: { paddingHorizontal: 8, paddingVertical: 2 },
-  todayText: { fontFamily: F.semi, fontSize: 13 },
+  todayText: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   colorBar: { width: 4, height: 36, borderRadius: 2, marginRight: 12 },
   nowPill: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 3, marginRight: 4 },
-  nowText: { fontFamily: F.semi, fontSize: 11, letterSpacing: 1 },
+  nowText: { fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.caps },
   // flat: a ring in the block's own colour marks the chosen one
   swatchWell: {
     width: 40, height: 40, borderRadius: 20,

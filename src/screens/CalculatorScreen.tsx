@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, useWindowDimensions } from 'react-n
 import Animated, { Easing, FadeIn, withTiming } from 'react-native-reanimated';
 import { create, all } from 'mathjs';
 import * as Clipboard from 'expo-clipboard';
-import { C, F, MIN, NEU, S, T, neuRaised } from '../theme';
+import { C, F, MIN, NEU, S, T, TRACK, neuRaised } from '../theme';
 import { useStore } from '../store';
 import { ScreenBG, Sheet, Row, PillButton, Inset, Chip, IconBtn, NeuHeader, useTheme } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -273,7 +273,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
             : { backgroundColor: C.accent, ...NEU.raisedMid },
         ]}
       >
-        <Text style={{ color: theme === 'minimal' ? C.accent : C.onAccent, fontSize: 26, fontFamily: F.semi }}>=</Text>
+        <Text style={{ color: theme === 'minimal' ? C.accent : C.onAccent, fontSize: 26, letterSpacing: TRACK.large, fontFamily: F.semi }}>=</Text>
       </Bouncy>
     </>
   );
@@ -299,7 +299,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const reuse = useCallback((result: string) => { setExpr((e) => e + result); setHistSheet(false); }, []);
   const historyRows = <HistoryRows history={history} onPick={reuse} />;
   const historyEmpty = (
-    <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 13 }}>Past calculations appear here. Tap one to reuse its result.</Text>
+    <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small }}>Past calculations appear here. Tap one to reuse its result.</Text>
   );
 
   const bodyPad = { padding: S.pad, paddingTop: 8, paddingBottom: S.pad + (mode === 'tab' ? 0 : insets.bottom) };
@@ -363,8 +363,8 @@ const HistoryRows = React.memo(function HistoryRows({ history, onPick }: {
             style={st.histRow} radius={14} scaleTo={0.98}
             onPress={() => { if (h.result !== 'Error') onPick(h.result); }}
           >
-            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13 }} numberOfLines={1}>{h.expr}</Text>
-            <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, fontFamily: F.semi }} numberOfLines={1}>
+            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small }} numberOfLines={1}>{h.expr}</Text>
+            <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, letterSpacing: TRACK.title, fontFamily: F.semi }} numberOfLines={1}>
               = {h.result}
             </Text>
           </Bouncy>
@@ -398,14 +398,14 @@ const Key = React.memo(function Key({ label, value, onKey, onLongPress, color, s
           : { backgroundColor: C.card, ...neuRaised('low') },
       ]}
     >
-      <Text style={{ color, fontSize: small ? 15 : 22, fontFamily: F.med }}>{label}</Text>
+      <Text style={{ color, fontSize: small ? 15 : 22, fontFamily: F.med, letterSpacing: small ? TRACK.body : TRACK.large }}>{label}</Text>
     </Bouncy>
   );
 });
 
 const st = StyleSheet.create({
-  expr: { color: C.text, fontSize: 34, fontFamily: F.semi, textAlign: 'right', fontVariant: ['tabular-nums'] },
-  preview: { fontSize: 16, fontFamily: F.reg, textAlign: 'right', marginTop: 4, fontVariant: ['tabular-nums'] },
+  expr: { color: C.text, fontSize: 34, letterSpacing: TRACK.display, fontFamily: F.semi, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  preview: { fontSize: 16, letterSpacing: TRACK.body, fontFamily: F.reg, textAlign: 'right', marginTop: 4, fontVariant: ['tabular-nums'] },
   key: {
     flex: 1, paddingVertical: 16, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
   },
@@ -417,5 +417,5 @@ const st = StyleSheet.create({
   splitSide: { flex: 1, minWidth: 0 },
   splitPad: { width: SPLIT_PAD_W },
   histHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 6 },
-  histClear: { color: C.danger, fontFamily: F.semi, fontSize: 13 },
+  histClear: { color: C.danger, fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
 });

@@ -4,14 +4,14 @@ import Animated, {
   FadeIn, FadeOut, LinearTransition, runOnJS,
   useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming, Easing,
 } from 'react-native-reanimated';
-import { NavigationContext, useIsFocused } from '@react-navigation/native';
+import { NavigationContext, NavigationRouteContext, useIsFocused } from '@react-navigation/native';
 import { useStore } from '../store';
 import { useIntro } from '../intro';
 import { AnimLevel, C, neuPressedInner } from '../theme';
 
 /**
- * The key for a screen's content container. Entrances play once, when a screen first mounts: every tab is
- * built after the intro, and coming back to a tab shows it as it was instead of replaying its entrance.
+ * The key for a screen's content container. It stays 0 so the content is never rebuilt: a tab's entrance replays
+ * through useEntrance each time the tab is opened from the bar (see useTabReturns), not by remounting.
  */
 export function useFocusKey() {
   return 0;
@@ -38,7 +38,45 @@ export const EASE_OUT = Easing.out(Easing.cubic);
 /** A state change in place: a tint, a fill, a colour crossing over. */
 export const CHANGE = { duration: 200, easing: EASE_OUT };
 
+/*
+ * Motion tokens for things that travel as a whole (a sheet, a bar, a page): an arrival is quick off the mark and long
+ * to settle, a leaving takes about two thirds as long and gathers speed, so a closing never lingers. A surface's own
+ * entrance (useEntrance below) keeps its own timing and is not built from these.
+ */
+/** Emphasised out: most of the way there in the first third, then a long soft landing. */
+export const EASE_EMPHASISED = Easing.bezier(0.16, 1, 0.3, 1);
+/** The leaving curve: a gentle start that gathers speed. */
+export const EASE_EXIT = Easing.in(Easing.quad);
+/** A panel arriving (a sheet rising) and leaving again. */
+export const ARRIVE = { duration: 360, easing: EASE_EMPHASISED };
+export const LEAVE = { duration: 220, easing: EASE_EXIT };
+/** With only some motion a panel fades in place instead of travelling: short, and a little shorter out. */
+export const FADE_IN = { duration: 200, easing: EASE_OUT };
+export const FADE_OUT = { duration: 150, easing: EASE_EXIT };
+/**
+ * The bar's shift from one tab to the next, and with it everything in the bar that follows the current tab (its
+ * colour, its name, its dot), so the bar and the scene arrive together. With only some motion the scene change is a
+ * short fade and the bar keeps pace with that instead.
+ */
+export const TAB_SHIFT = { duration: 260, easing: EASE_OUT };
+export const TAB_FADE = { duration: 200, easing: EASE_OUT };
+
 const ENTER = { duration: 540, easing: Easing.out(Easing.cubic) };
+
+/**
+ * How a page pushed onto a native stack comes and goes. Android plays fixed animations from react-native-screens' own
+ * XML: `animationDuration` is read on iOS only, and 'default' is a sideways slide on Android 13 and up but a zoom
+ * below, so neither the length nor the look can be tuned or trusted there. A pushed page's content already rises on
+ * its own entrance, which the user likes and wants every time, so a stack animation that rises too ('fade_from_bottom',
+ * 'slide_from_bottom') doubles that motion and one that slides sideways fights it. 'fade' adds none: the page
+ * dissolves in over 150 ms while its content rises exactly as a tab's does on a visit, and back dissolves out again.
+ * The window behind both screens is the material's own colour, so the cross-dissolve shows no seam. With motion off a
+ * page simply appears, and some motion is a short fade already. To try a rising page again, 'fade_from_bottom' (350 ms
+ * in, 250 out) is the one to return to; it is set here once for every stack.
+ */
+export const pageTransition = (level: AnimLevel) => ({
+  animation: (level === 'none' ? 'none' : 'fade') as 'none' | 'fade',
+});
 
 /** A panel that takes another's place rises a short way into it as it comes up to full strength. */
 export const riseIn = () => {
@@ -69,7 +107,7 @@ export const rowIn = (level: AnimLevel) =>
 
 /** A row leaving a list: it fades as it goes, a little quicker than one arrives. */
 export const rowOut = (level: AnimLevel) =>
-  (level === 'none' ? undefined : FadeOut.duration(160).easing(Easing.in(Easing.quad)));
+  (level === 'none' ? undefined : FadeOut.duration(160).easing(EASE_EXIT));
 
 /**
  * The rows a fold moves glide to their new places: an eased timing, never a spring (springs across siblings
@@ -141,7 +179,7 @@ export function FadeSwap({ swapKey, children, style }: {
       o.value = 1;
       return;
     }
-    o.value = withTiming(0, { duration: 110, easing: Easing.in(Easing.quad) }, (fin) => {
+    o.value = withTiming(0, { duration: 110, easing: EASE_EXIT }, (fin) => {
       if (fin) runOnJS(land)(swapKey);
     });
   }, [swapKey]);
@@ -150,10 +188,113 @@ export function FadeSwap({ swapKey, children, style }: {
   return <Animated.View style={[style as any, aStyle]}>{swapKey === held.key ? children : held.node}</Animated.View>;
 }
 
+/** The tab navigator a screen sits in, if any: the nearest navigator up the tree whose state is a tab bar's. */
+function tabNavigatorOf(nav: any) {
+  for (let n = nav; n; n = n.getParent?.()) {
+    if (n.getState?.()?.type === 'tab') return n;
+  }
+  return null;
+}
+
 /**
- * A surface's entrance: it rises a short way out of the material and comes up to full strength, once, the first time
- * its screen is really in view. That is after the intro has left, and for a tab the first time it is opened, not
- * while it is being built out of sight. Returns the style to put on the surface.
+ * Counts the times this screen's tab is opened again from the bar after another tab was shown. A page pushed over the
+ * tab and closed again does not count: the tab stayed in view beneath it, so nothing should replay there. `onGone`
+ * runs once a tab that was left has slid out of sight (the bar's shift is over), the moment to ready it unseen for its
+ * next entrance. With `active` false nothing is listened to, for the many parts that never replay.
+ *
+ * A tab's screens get the bar's focus and blur from the navigators between: a slot's stack hands its parent's focus and
+ * blur on to the page it shows, so a tool in a slot counts exactly like Today does.
+ */
+export function useTabReturns(onGone?: () => void, active = true) {
+  const nav = React.useContext(NavigationContext);
+  const [returns, setReturns] = React.useState(0);
+  const gone = React.useRef(onGone);
+  gone.current = onGone;
+  React.useEffect(() => {
+    if (!nav || !active) return;
+    let shownAt = -1; // the bar's index while this tab was in view
+    let left = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const barIndex = () => tabNavigatorOf(nav)?.getState()?.index ?? -1;
+    if (nav.isFocused()) shownAt = barIndex();
+    const offFocus = nav.addListener('focus', () => {
+      clearTimeout(timer);
+      if (left) {
+        left = false;
+        setReturns((n) => n + 1);
+      }
+      shownAt = barIndex();
+    });
+    const offBlur = nav.addListener('blur', () => {
+      const now = barIndex();
+      if (now === -1 || now === shownAt) return;
+      left = true;
+      clearTimeout(timer);
+      timer = setTimeout(() => gone.current?.(), TAB_SHIFT.duration + 40);
+    });
+    return () => { clearTimeout(timer); offFocus(); offBlur(); };
+  }, [nav, active]);
+  return returns;
+}
+
+/** How long a page waits for its stack to start the transition before it plays its entrance regardless. */
+const START_WAIT = 320;
+/** When each pushed page was first built, by route key, so a part that turns up later has no transition to wait for. */
+const BUILT = new Map<string, number>();
+/** The pages whose stack has started their transition (see noteTransitionStart). */
+const STARTED = new Set<string>();
+
+/**
+ * Give a stack these as its `screenListeners`. It notes when each page's transition starts, so a part that first turns up
+ * in a page long after that (the content of a page behind a lock, once the lock is opened) finds nothing to wait for
+ * instead of sitting unseen until the fallback.
+ */
+export const noteTransitionStart = {
+  transitionStart: (e: any) => {
+    if (e?.data?.closing || !e?.target) return;
+    STARTED.add(e.target);
+    if (STARTED.size > 64) STARTED.delete(STARTED.values().next().value as string);
+  },
+};
+
+/**
+ * False while a page pushed onto a stack is still being set down, true once the stack starts its transition. A page is
+ * built a little before it can be seen; an entrance that began at once would spend its first frames unseen and arrive
+ * partly played. Anything not pushed (a tab, a stack's first page) is ready at once, and so is a part that turns up in a
+ * page that has been up for a while. If the stack's cue never comes, a short wait stands in for it.
+ */
+function useReadyToShow(active: boolean) {
+  const nav = React.useContext(NavigationContext);
+  const route = React.useContext(NavigationRouteContext);
+  const [wait] = React.useState(() => {
+    if (!active || !nav || !route) return 0;
+    const state: any = nav.getState?.();
+    if (state?.type !== 'stack' || !(state.routes.findIndex((r: any) => r.key === route.key) > 0)) return 0;
+    if (STARTED.has(route.key)) return 0;
+    const now = Date.now();
+    const since = BUILT.get(route.key);
+    if (since == null) {
+      BUILT.set(route.key, now);
+      if (BUILT.size > 64) BUILT.delete(BUILT.keys().next().value as string);
+    }
+    return Math.max(0, START_WAIT - (since == null ? 0 : now - since));
+  });
+  const [ready, setReady] = React.useState(wait === 0);
+  React.useEffect(() => {
+    if (ready) return;
+    const off = (nav as any).addListener('transitionStart', (e: any) => { if (!e?.data?.closing) setReady(true); });
+    const fallback = setTimeout(() => setReady(true), wait);
+    return () => { off(); clearTimeout(fallback); };
+  }, []);
+  return ready;
+}
+
+/**
+ * A surface's entrance: it rises a short way out of the material and comes up to full strength when its screen is
+ * really in view. That is after the intro has left, for a page pushed onto a stack when its transition has started, and
+ * for a tab when it is opened, not while it is being built out of sight. A tab plays it again every time it is opened
+ * from the bar, exactly as the first time; coming back from a page pushed over it does not, since the tab stayed in
+ * view beneath. Returns the style to put on the surface.
  */
 export function useEntrance(index = 0, enabled = true) {
   const level = useAnimLevel();
@@ -161,14 +302,25 @@ export function useEntrance(index = 0, enabled = true) {
   const introOver = useIntro((s) => s.phase !== 'playing');
   const still = level === 'none' || !enabled;
   const shown = useSharedValue(still ? 1 : 0);
+  // A tab that was left goes back to the material once it has slid out of sight, so its next entrance starts from
+  // nothing and no frame of it can show the old state. Back on the tab within the shift, the effect below does it.
+  const returns = useTabReturns(() => { shown.value = 0; }, !still);
+  const ready = useReadyToShow(!still);
   const played = React.useRef(still);
+  const playedFor = React.useRef(0);
   React.useEffect(() => {
-    if (played.current || !focused || !introOver) return;
+    if (!focused || !introOver || !ready) return;
+    // nothing to play: the surface is simply there, whatever the tab put it back to while it was away
+    if (still) { shown.value = 1; return; }
+    if (played.current && returns === playedFor.current) return;
+    const again = played.current;
     played.current = true;
+    playedFor.current = returns;
+    if (again) shown.value = 0;
     shown.value = level === 'full'
       ? withDelay(Math.min(index * 60, 360), withTiming(1, ENTER))
       : withDelay(Math.min(index * 30, 150), withTiming(1, { duration: 200 }));
-  }, [focused, introOver, level]);
+  }, [focused, introOver, ready, level, returns]);
   const rise = level === 'full' ? 14 : 0;
   return useAnimatedStyle(() => ({
     opacity: shown.value,
@@ -176,7 +328,7 @@ export function useEntrance(index = 0, enabled = true) {
   }));
 }
 
-/** Soft entrance: the surface rises out of the material, no overshoot, the first time its screen is in view. */
+/** Soft entrance: the surface rises out of the material, no overshoot, each time its screen comes into view. */
 export function Enter({
   index = 0, children, style,
 }: { index?: number; children: React.ReactNode; style?: ViewStyle | ViewStyle[] }) {

@@ -3,7 +3,7 @@ import { View, Text, ScrollView, StyleSheet, BackHandler, useWindowDimensions } 
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import YoutubePlayer, { YoutubeIframeRef } from 'react-native-youtube-iframe';
 import Animated from 'react-native-reanimated';
-import { C, F, S, T } from '../theme';
+import { C, F, S, T, TRACK } from '../theme';
 import { useStore, TimedNote, Bookmark } from '../store';
 import { fmtMediaTime } from '../utils';
 import {
@@ -71,7 +71,10 @@ const ItemRow = React.memo(function ItemRow({ item, isBookmark, index, live, onS
   onSeek: (sec: number) => void; onMenu: (m: { item: TimedNote | Bookmark; isBookmark: boolean }) => void;
 }) {
   const level = useAnimLevel();
-  const entrance = useEntrance(Math.min(index, 6), !live);
+  // settled as the row mounts: a row the page was built with rises with it (and again whenever the page's tab is
+  // opened again), however the screen re-renders after; one that arrived later fades in instead and never rises
+  const [withPage] = useState(() => !live);
+  const entrance = useEntrance(Math.min(index, 6), withPage);
   const tint = isBookmark ? C.pink : C.green;
   return (
     <Animated.View entering={live ? rowIn(level) : undefined} exiting={rowOut(level)} layout={glide(level)}>
@@ -79,12 +82,12 @@ const ItemRow = React.memo(function ItemRow({ item, isBookmark, index, live, onS
         <Card pad={12} onPress={() => onSeek(item.time)}>
           <Row>
             <View style={[st.timePill, { borderColor: tint + '66', backgroundColor: tint + '14' }]}>
-              <Text style={{ color: tint, fontSize: 11, fontFamily: F.semi, fontVariant: ['tabular-nums'] }}>
+              <Text style={{ color: tint, fontSize: 11, letterSpacing: TRACK.fine, fontFamily: F.semi, fontVariant: ['tabular-nums'] }}>
                 {fmtMediaTime(item.time)}
                 {'endTime' in item && item.endTime ? '-' + fmtMediaTime(item.endTime) : ''}
               </Text>
             </View>
-            <Text style={[T.body, { flex: 1, marginLeft: 10, fontSize: 14 }]}>
+            <Text style={[T.body, { flex: 1, marginLeft: 10, fontSize: 14, letterSpacing: TRACK.small }]}>
               {isBookmark ? (item as Bookmark).label : (item as TimedNote).text}
             </Text>
             <IconBtn name="ellipsis-vertical" size={16} onPress={() => onMenu({ item, isBookmark })} accessibilityLabel="More" />

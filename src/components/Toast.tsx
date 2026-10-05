@@ -2,7 +2,7 @@ import React from 'react';
 import { AccessibilityInfo, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { C, F, MIN, NEU } from '../theme';
+import { C, F, MIN, NEU, TRACK } from '../theme';
 import { useTheme } from './UI';
 import { EASE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
@@ -131,9 +131,9 @@ const st = StyleSheet.create({
   wrap: { position: 'absolute', left: 20, right: 20, alignItems: 'center' },
   card: { borderRadius: 16, paddingVertical: 12, paddingHorizontal: 18, maxWidth: 420 },
   rowWithAction: { flexDirection: 'row', alignItems: 'center', marginRight: -10 },
-  text: { color: C.text, fontFamily: F.med, fontSize: 14, lineHeight: 19, textAlign: 'center' },
+  text: { color: C.text, fontFamily: F.med, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 19, textAlign: 'center' },
   action: { marginLeft: 14, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
   actionPressed: { opacity: 0.55 },
   // the accent is applied at the call site: a StyleSheet would freeze it at import and miss a change of accent
-  actionText: { fontFamily: F.semi, fontSize: 14, lineHeight: 19 },
+  actionText: { fontFamily: F.semi, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 19 },
 });

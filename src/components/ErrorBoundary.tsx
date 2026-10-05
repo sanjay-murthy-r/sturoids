@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, NEU, bgFor } from '../theme';
+import { C, F, MIN, NEU, TRACK, bgFor } from '../theme';
 import { PillButton, useTheme } from './UI';
 
 function Fallback({ onRestart }: { onRestart: () => void }) {
@@ -48,6 +48,6 @@ export class ErrorBoundary extends React.Component<{ children: React.ReactNode }
 const st = StyleSheet.create({
   wrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
   well: { width: 76, height: 76, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-  title: { color: C.text, fontFamily: F.semi, fontSize: 17, marginTop: 18 },
-  body: { color: C.textFaint, fontFamily: F.reg, fontSize: 13, lineHeight: 19, marginTop: 6, textAlign: 'center' },
+  title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title, marginTop: 18 },
+  body: { color: C.textFaint, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 19, marginTop: 6, textAlign: 'center' },
 });

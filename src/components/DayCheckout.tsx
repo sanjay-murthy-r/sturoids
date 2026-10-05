@@ -2,11 +2,12 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, FadeOut, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
-import { C, F, MIN, NEU, S } from '../theme';
+import { C, F, MIN, NEU, S, TRACK } from '../theme';
 import { JournalEntry } from '../store';
 import { MOODS, journalDateParts, shiftKey } from '../journal';
 import { todayKey } from '../utils';
-import { Bouncy, CHANGE, FadeSwap, riseIn, useAnimLevel } from './Motion';
+import { Bouncy, CHANGE, FadeSwap, useAnimLevel } from './Motion';
+import { swapIn } from './Swap';
 import { useTheme } from './UI';
 import { tick } from '../haptics';
 
@@ -36,7 +37,7 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
 
   return (
     <Animated.View
-      entering={level === 'none' ? undefined : riseIn}
+      entering={swapIn(level)}
       exiting={level === 'none' ? undefined : FadeOut.duration(160).easing(Easing.in(Easing.quad))}
       style={[st.card, surface]}
     >
@@ -145,18 +146,18 @@ function Star({ n, rating, onRating }: { n: number; rating: Scale; onRating: (r:
 const st = StyleSheet.create({
   card: { marginHorizontal: S.pad, marginBottom: 12, borderRadius: S.radius, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  title: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: -0.1 },
-  action: { fontFamily: F.semi, fontSize: 13 },
+  title: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
+  action: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   moods: { flexDirection: 'row', justifyContent: 'space-between' },
   mood: { flex: 1, alignItems: 'center', paddingVertical: 8, marginHorizontal: 2, borderRadius: 14 },
   /** the picked mood's tint, a layer that fades in under its icon */
   moodTint: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 14 },
-  moodLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 5, textAlign: 'center' },
+  moodLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 5, textAlign: 'center' },
   moodOn: { fontFamily: F.semi },
   /** a second ink laid exactly over the first, for colours that cross over */
   ink: { position: 'absolute', top: 0, left: 0, right: 0 },
   rateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline },
-  rateLabel: { color: C.textDim, fontFamily: F.med, fontSize: 13 },
+  rateLabel: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
   stars: { flexDirection: 'row' },
   star: { paddingHorizontal: 3 },
   starLit: { position: 'absolute', top: 0, left: 3 },

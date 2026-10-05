@@ -1,7 +1,7 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, T } from '../theme';
+import { C, F, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import { ScoreNode, fmtExamDate, fmtMark, indexScores, marksProblem, parseMark } from '../scores';
 import { todayKey } from '../utils';
@@ -10,6 +10,7 @@ import { Sheet, Field, PillButton, Chip, Row } from './UI';
 import { TagPicker } from './ScoreTags';
 import { SegmentedControl } from './SegmentedControl';
 import { JournalCalendar } from './JournalCalendar';
+import { Appear } from './Motion';
 
 export type ScoreEditTarget =
   | { mode: 'new'; kind: 'group' | 'exam'; parentId: string | null }
@@ -168,7 +169,7 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
         autoFocus={shown?.mode === 'new'}
         maxLength={80}
       />
-      {problems.title ? <Text style={st.problem}>{problems.title}</Text> : null}
+      {problems.title ? <Appear><Text style={st.problem}>{problems.title}</Text></Appear> : null}
 
       {kind === 'exam' ? (
         <>
@@ -182,10 +183,11 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
           <Text style={[T.caption, { marginBottom: calendar ? 10 : 14 }]}>
             {d.date ? fmtExamDate(d.date, true) : isSub ? 'Takes the date of the exam it belongs to' : 'No date'}
           </Text>
+          {/* the calendar and the extra details open where they stand, fading in, rather than appearing in one frame */}
           {calendar ? (
-            <View style={{ marginBottom: 14 }}>
+            <Appear style={{ marginBottom: 14 }}>
               <JournalCalendar value={d.date} onPick={(k) => { set({ date: k }); setCalendar(false); }} />
-            </View>
+            </Appear>
           ) : null}
 
           <Row style={{ alignItems: 'flex-start', gap: 14 }}>
@@ -235,7 +237,7 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
             <Ionicons name={more ? 'chevron-up' : 'chevron-down'} size={15} color={C.accent} />
           </Pressable>
           {more ? (
-            <>
+            <Appear>
               <Row style={{ alignItems: 'flex-start', gap: 14 }}>
                 <Field label="Target %" value={d.target} onChangeText={(v) => set({ target: v })} placeholder="75" keyboardType="numeric" style={{ flex: 1 }} />
                 <Field label="Rank" value={d.rank} onChangeText={(v) => set({ rank: v })} placeholder="1204" keyboardType="numeric" style={{ flex: 1 }} />
@@ -245,13 +247,13 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
                 <Field label="Grade" value={d.grade} onChangeText={(v) => set({ grade: v })} placeholder="A or 8.6" maxLength={12} style={{ flex: 1 }} />
               </Row>
               <Field label="Note" value={d.note} onChangeText={(v) => set({ note: v })} placeholder="What went well, what to fix next time" multiline maxLength={600} />
-            </>
+            </Appear>
           ) : null}
         </>
       ) : (
         <Field label="Target %" value={d.target} onChangeText={(v) => set({ target: v })} placeholder="Optional, like 75" keyboardType="numeric" />
       )}
-      {problems.details ? <Text style={st.problem}>{problems.details}</Text> : null}
+      {problems.details ? <Appear><Text style={st.problem}>{problems.details}</Text></Appear> : null}
 
       <PillButton
         label={shown?.mode === 'edit' ? 'Save' : kind === 'group' ? 'Add group' : isSub ? 'Add subject' : 'Add exam'}
@@ -263,9 +265,9 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
 }
 
 const st = StyleSheet.create({
-  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2, marginLeft: 2, marginBottom: 8 },
-  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 17, marginTop: 6, marginBottom: 14 },
-  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, lineHeight: 17, marginTop: 6, marginBottom: 14 },
+  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
+  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6, marginBottom: 14 },
+  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6, marginBottom: 14 },
   moreRow: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', paddingVertical: 4, marginBottom: 12 },
-  moreText: { fontFamily: F.semi, fontSize: 13 },
+  moreText: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
 });

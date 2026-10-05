@@ -1,6 +1,6 @@
 import React from 'react';
 import { Text, StyleSheet } from 'react-native';
-import { C, F, T } from '../theme';
+import { C, F, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import { todayKey } from '../utils';
 import { shiftKey } from '../journal';
@@ -132,5 +132,5 @@ const DuePicker = React.memo(function DuePicker({ due, calendar, onDue, onCalend
 });
 
 const st = StyleSheet.create({
-  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2, marginLeft: 2, marginBottom: 8 },
+  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
 });

@@ -5,10 +5,10 @@ import type { SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useToolNav } from '../toolNav';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, neuRaised } from '../theme';
+import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, Note } from '../store';
 import { ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, NeuHeader, useTheme } from '../components/UI';
-import { Bouncy, EASE_OUT, glide, useAnimLevel } from '../components/Motion';
+import { Bouncy, EASE_OUT, Enter, glide, useAnimLevel } from '../components/Motion';
 import { tap } from '../haptics';
 import { deleteAttachmentFiles } from '../attachments';
 import { ToolGate } from '../components/LockGate';
@@ -64,13 +64,13 @@ function FolderNameSheet({ visible, onClose, title, initial, label, check, onSav
 }
 
 /** One note in the list, memoised: a change to one note re-renders its own row, not the screenful. */
-const NoteRow = React.memo(function NoteRow({ note: n, first, last, enter, dip, onOpen, onMenu }: {
-  note: Note; first: boolean; last: boolean; enter: boolean; dip: SharedValue<number>;
+const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, onOpen, onMenu }: {
+  note: Note; first: boolean; last: boolean; dip: SharedValue<number>;
   onOpen: (id: string) => void; onMenu: (n: Note) => void;
 }) {
   const dipStyle = useAnimatedStyle(() => ({ opacity: dip.value }));
   return (
-    <ListSlice first={first} last={last} enter={enter}>
+    <ListSlice first={first} last={last}>
       <Animated.View style={dipStyle}>
         <ListRow onPress={() => onOpen(n.id)} onLongPress={() => onMenu(n)} style={st.note}>
           <View style={{ flex: 1 }}>
@@ -127,10 +127,6 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
   }, [notes, settledQ, folder]);
 
-  // the first screenful rises as one card; rows that mount later (scrolling, searching) appear at once
-  const firstPaint = React.useRef(true);
-  React.useEffect(() => { firstPaint.current = false; }, []);
-
   // a pin, an unpin or a delete moves rows within the same list: they glide to their new places. A new search or
   // folder is a different list, so its rows are simply there (a glide would send every row sliding at once)
   const filterKey = (folder ?? '') + '|' + settledQ;
@@ -145,7 +141,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
     shownFolder.current = folder;
     if (level === 'none') return;
     dip.value = 0.3;
-    dip.value = withTiming(1, { duration: 240, easing: EASE_OUT });
+    dip.value = withTiming(1, { duration: level === 'full' ? 240 : 180, easing: EASE_OUT });
   }, [folder, level]);
 
   const newNote = () => {
@@ -157,7 +153,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const count = filtered.length;
   const renderItem = React.useCallback(({ item, index }: { item: Note; index: number }) => (
     <NoteRow
-      note={item} first={index === 0} last={index === count - 1} enter={firstPaint.current}
+      note={item} first={index === 0} last={index === count - 1}
       dip={dip} onOpen={openNote} onMenu={openMenu}
     />
   ), [count, openNote, openMenu]);
@@ -165,47 +161,51 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   return (
     <ScreenBG guard={mode === 'tab'}>
       <NeuHeader title="Notes" variant={mode === 'tab' ? 'tab' : 'page'} />
-      <Animated.FlatList
-        data={filtered}
-        keyExtractor={(n) => n.id}
-        renderItem={renderItem}
-        itemLayoutAnimation={sameList ? glide(level) : undefined}
-        // Reanimated's list asks for a scroll event every frame unless told otherwise: the list only needs the default
-        scrollEventThrottle={50}
-        contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 110 + (mode === 'tab' ? 0 : insets.bottom) }}
-        keyboardShouldPersistTaps="handled"
-        initialNumToRender={10}
-        windowSize={9}
-        ListHeaderComponent={
-          <>
-            <Field value={q} onChangeText={setQ} placeholder="Search titles & bodies…" />
-            {/* the scroller runs to the screen edges, so chip shadows are never clipped at its bounds */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={{ marginBottom: 2, marginHorizontal: -S.pad }}
-              contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: S.pad }}
-            >
-              <Chip label="All" active={!folder} onPress={() => setFolder(null)} />
-              {folders.map((f) => (
-                <Chip
-                  key={f} label={f} active={folder === f} onPress={() => setFolder(f)}
-                  onLongPress={f === 'General' ? undefined : () => setFolderMenu(f)}
-                />
-              ))}
-              <Chip icon="add" label="Folder" onPress={() => setFolderSheet(true)} />
-            </ScrollView>
-          </>
-        }
-        ListEmptyComponent={
-          settledQ.trim() ? (
-            // a search that finds nothing says so, instead of offering a new note as if the folder were empty
-            <EmptyState icon="search-outline" title="No notes match that search" body="Search looks through titles, and through the text of notes that are not locked." />
-          ) : (
-            <EmptyState icon="document-text-outline" title="No notes here yet" body="Folders, pins, search, voice, photos and files all live inside a note." actionLabel="New note" onAction={newNote} />
-          )
-        }
-      />
+      {/* the list rises as one surface, the search and the folders with its rows, on every visit: whatever rows are in
+          the window then, however they got there */}
+      <Enter index={0} style={{ flex: 1 }}>
+        <Animated.FlatList
+          data={filtered}
+          keyExtractor={(n) => n.id}
+          renderItem={renderItem}
+          itemLayoutAnimation={sameList ? glide(level) : undefined}
+          // Reanimated's list asks for a scroll event every frame unless told otherwise: the list only needs the default
+          scrollEventThrottle={50}
+          contentContainerStyle={{ padding: S.pad, paddingTop: 8, paddingBottom: 110 + (mode === 'tab' ? 0 : insets.bottom) }}
+          keyboardShouldPersistTaps="handled"
+          initialNumToRender={10}
+          windowSize={9}
+          ListHeaderComponent={
+            <>
+              <Field value={q} onChangeText={setQ} placeholder="Search titles & bodies…" />
+              {/* the scroller runs to the screen edges, so chip shadows are never clipped at its bounds */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginBottom: 2, marginHorizontal: -S.pad }}
+                contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: S.pad }}
+              >
+                <Chip label="All" active={!folder} onPress={() => setFolder(null)} />
+                {folders.map((f) => (
+                  <Chip
+                    key={f} label={f} active={folder === f} onPress={() => setFolder(f)}
+                    onLongPress={f === 'General' ? undefined : () => setFolderMenu(f)}
+                  />
+                ))}
+                <Chip icon="add" label="Folder" onPress={() => setFolderSheet(true)} />
+              </ScrollView>
+            </>
+          }
+          ListEmptyComponent={
+            settledQ.trim() ? (
+              // a search that finds nothing says so, instead of offering a new note as if the folder were empty
+              <EmptyState icon="search-outline" title="No notes match that search" body="Search looks through titles, and through the text of notes that are not locked." />
+            ) : (
+              <EmptyState icon="document-text-outline" title="No notes here yet" body="Folders, pins, search, voice, photos and files all live inside a note." actionLabel="New note" onAction={newNote} />
+            )
+          }
+        />
+      </Enter>
 
       <Bouncy
         radius={999}
@@ -305,7 +305,7 @@ const st = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   note: { alignItems: 'flex-start', paddingVertical: 14 },
-  noteTitle: { flex: 1, color: C.text, fontFamily: F.semi, fontSize: 16 },
-  noteBody: { color: C.textDim, fontFamily: F.reg, fontSize: 13, lineHeight: 18, marginTop: 4 },
-  noteMeta: { color: C.textFaint, fontFamily: F.reg, fontSize: 11, marginTop: 6 },
+  noteTitle: { flex: 1, color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
+  noteBody: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 18, marginTop: 4 },
+  noteMeta: { color: C.textFaint, fontFamily: F.reg, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 6 },
 });

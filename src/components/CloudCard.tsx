@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, Alert, Pressable } from 'react-native';
-import { C, F, T } from '../theme';
+import { C, F, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import {
   QUOTA_BYTES, changePassword, deleteAccount, deleteCloudCopy, initCloud, keepThisPhone, restoreFromCloud, setAuto,
@@ -9,7 +9,9 @@ import {
 import { eraseThisPhone } from '../wipe';
 import { pinStatus } from '../lock';
 import { Card, Field, Hairline, InfoDot, PillButton, Row, SectionTitle, Sheet, Toggle } from './UI';
-import { FadeSwap } from './Motion';
+import Animated from 'react-native-reanimated';
+import { Appear, FadeSwap } from './Motion';
+import { useSwapIn } from './Swap';
 import { SegmentedControl } from './SegmentedControl';
 import { PinSheet } from './LockGate';
 import { toast } from './Toast';
@@ -51,6 +53,8 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
   const [pinFor, setPinFor] = React.useState<null | 'auth'>(null);
   const [pwOpen, setPwOpen] = React.useState(false);
   const [, tick] = React.useState(0);
+  // signing in turns the form into the account's card, and signing out turns it back: the new card comes up in its place
+  const accountIn = useSwapIn(c.status !== 'signed-out' && !!c.email ? 'in' : 'out');
 
   React.useEffect(() => { initCloud().catch(() => {}); }, []);
   // "12 min ago" moves on while Settings is open
@@ -147,86 +151,93 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
       ) : null}
 
       {signedIn && c.status === 'choice' && c.remote ? (
-        <Card>
-          <Text style={st.title}>{c.lastSyncedAt ? 'A newer copy is in the cloud' : 'There is a copy in the cloud'}</Text>
-          <Text style={[T.caption, { marginTop: 4 }]}>
-            {'From ' + (c.remote.device || 'another phone') + ', ' + ago(new Date(c.remote.updatedAt).getTime())
-              + '. Bring it here to replace this phone\'s data, or keep this phone\'s data and replace the cloud copy.'}
-          </Text>
-          <PillButton label="Bring it here" icon="cloud-download-outline" onPress={restore} style={{ marginTop: 16 }} />
-          <PillButton label="Keep this phone's data" icon="phone-portrait-outline" outline onPress={keepHere} style={{ marginTop: 10 }} />
-        </Card>
+        <Appear>
+          <Card>
+            <Text style={st.title}>{c.lastSyncedAt ? 'A newer copy is in the cloud' : 'There is a copy in the cloud'}</Text>
+            <Text style={[T.caption, { marginTop: 4 }]}>
+              {'From ' + (c.remote.device || 'another phone') + ', ' + ago(new Date(c.remote.updatedAt).getTime())
+                + '. Bring it here to replace this phone\'s data, or keep this phone\'s data and replace the cloud copy.'}
+            </Text>
+            <PillButton label="Bring it here" icon="cloud-download-outline" onPress={restore} style={{ marginTop: 16 }} />
+            <PillButton label="Keep this phone's data" icon="phone-portrait-outline" outline onPress={keepHere} style={{ marginTop: 10 }} />
+          </Card>
+        </Appear>
       ) : null}
 
-      {signedIn ? (
-        <Card>
-          <Text style={T.caption}>Signed in as</Text>
-          <Text style={[st.title, { marginTop: 2 }]} numberOfLines={1}>{c.email}</Text>
-          <FadeSwap swapKey={c.status + ':' + (c.error || '') + ':' + (syncing ? '' : String(c.lastSyncedAt))}>
-            <Text style={[T.caption, { marginTop: 6 }, c.status === 'error' && { color: C.danger }]}>{statusLine}</Text>
-          </FadeSwap>
-          {c.note ? <Text style={[T.caption, { marginTop: 3 }]}>{c.note}</Text> : null}
-          {c.usedBytes != null && c.usedBytes > 0 ? (
-            <Text style={[T.caption, { marginTop: 3 }]}>Attachments use {mb(c.usedBytes)} of {mb(QUOTA_BYTES)} MB</Text>
-          ) : null}
+      <Animated.View key={signedIn ? 'in' : 'out'} entering={accountIn}>
+        {signedIn ? (
+          <Card>
+            <Text style={T.caption}>Signed in as</Text>
+            <Text style={[st.title, { marginTop: 2 }]} numberOfLines={1}>{c.email}</Text>
+            <FadeSwap swapKey={c.status + ':' + (c.error || '') + ':' + (syncing ? '' : String(c.lastSyncedAt))}>
+              <Text style={[T.caption, { marginTop: 6 }, c.status === 'error' && { color: C.danger }]}>{statusLine}</Text>
+            </FadeSwap>
+            {c.note ? <Text style={[T.caption, { marginTop: 3 }]}>{c.note}</Text> : null}
+            {c.usedBytes != null && c.usedBytes > 0 ? (
+              <Text style={[T.caption, { marginTop: 3 }]}>Attachments use {mb(c.usedBytes)} of {mb(QUOTA_BYTES)} MB</Text>
+            ) : null}
 
-          <Hairline />
-          <Row style={{ justifyContent: 'space-between', marginVertical: 12 }}>
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={[T.body, { fontFamily: F.med }]}>Back up automatically</Text>
-              <Text style={[T.caption, { marginTop: 2 }]}>A little after each change, and when you leave the app.</Text>
+            <Hairline />
+            <Row style={{ justifyContent: 'space-between', marginVertical: 12 }}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={[T.body, { fontFamily: F.med }]}>Back up automatically</Text>
+                <Text style={[T.caption, { marginTop: 2 }]}>A little after each change, and when you leave the app.</Text>
+              </View>
+              <Toggle value={c.auto} onChange={(v) => { setAuto(v); }} color={C.accent} label="Back up automatically" />
+            </Row>
+            <Hairline />
+
+            <PillButton
+              label={syncing ? 'Backing up' : 'Back up now'} icon="cloud-upload-outline"
+              onPress={() => { if (!syncing) syncNow().then(() => { if (useCloud.getState().status === 'idle') toast('Backed up'); }); }}
+              style={{ marginTop: 16 }}
+            />
+            <PillButton
+              label={busy === 'restore' ? 'Bringing it here' : 'Bring the cloud copy here'} icon="cloud-download-outline"
+              color={C.amber} outline onPress={() => { if (!busy) restore(); }} style={{ marginTop: 10 }}
+            />
+            <View style={st.links}>
+              <Pressable onPress={() => setPwOpen(true)} hitSlop={8} accessibilityRole="button">
+                <Text style={[st.link, { color: C.accent }]}>Change password</Text>
+              </Pressable>
+              <Pressable onPress={leave} hitSlop={8} accessibilityRole="button">
+                <Text style={[st.link, { color: C.textDim }]}>Sign out</Text>
+              </Pressable>
             </View>
-            <Toggle value={c.auto} onChange={(v) => { setAuto(v); }} color={C.accent} label="Back up automatically" />
-          </Row>
-          <Hairline />
-
-          <PillButton
-            label={syncing ? 'Backing up' : 'Back up now'} icon="cloud-upload-outline"
-            onPress={() => { if (!syncing) syncNow().then(() => { if (useCloud.getState().status === 'idle') toast('Backed up'); }); }}
-            style={{ marginTop: 16 }}
-          />
-          <PillButton
-            label={busy === 'restore' ? 'Bringing it here' : 'Bring the cloud copy here'} icon="cloud-download-outline"
-            color={C.amber} outline onPress={() => { if (!busy) restore(); }} style={{ marginTop: 10 }}
-          />
-          <View style={st.links}>
-            <Pressable onPress={() => setPwOpen(true)} hitSlop={8} accessibilityRole="button">
-              <Text style={[st.link, { color: C.accent }]}>Change password</Text>
-            </Pressable>
-            <Pressable onPress={leave} hitSlop={8} accessibilityRole="button">
-              <Text style={[st.link, { color: C.textDim }]}>Sign out</Text>
-            </Pressable>
-          </View>
-        </Card>
-      ) : (
-        <Card>
-          <Text style={[T.label, { marginBottom: 14 }]}>
-            Keep a copy of everything in the cloud, private to your account, and bring it to a new phone.
-          </Text>
-          <SegmentedControl
-            size="sm" stretch style={{ marginBottom: 16 }}
-            options={[{ key: 'in', label: 'Sign in' }, { key: 'up', label: 'Create account' }]}
-            value={mode} onChange={(k) => { setMode(k as 'in' | 'up'); setError(''); setInfo(''); }}
-          />
-          <Field
-            label="Email" value={email} onChangeText={(v) => { setEmail(v); if (error) setError(''); }}
-            autoCapitalize="none" autoCorrect={false} keyboardType="email-address" autoComplete="email" textContentType="emailAddress"
-            placeholder="you@example.com"
-          />
-          <Field
-            label="Password" value={password} onChangeText={(v) => { setPassword(v); if (error) setError(''); }}
-            secureTextEntry autoCapitalize="none" autoCorrect={false}
-            autoComplete={mode === 'up' ? 'new-password' : 'current-password'} textContentType={mode === 'up' ? 'newPassword' : 'password'}
-            placeholder={mode === 'up' ? 'At least 6 characters' : ''} returnKeyType="go" onSubmitEditing={() => submit()}
-          />
-          {error ? <Text style={st.problem}>{error}</Text> : info ? <Text style={st.info}>{info}</Text> : null}
-          <PillButton
-            label={busy === 'auth' ? (mode === 'up' ? 'Creating account' : 'Signing in') : mode === 'up' ? 'Create account' : 'Sign in'}
-            icon={mode === 'up' ? 'person-add-outline' : 'log-in-outline'}
-            onPress={() => { if (!busy) submit(); }} style={{ marginTop: 6 }}
-          />
-        </Card>
-      )}
+          </Card>
+        ) : (
+          <Card>
+            <Text style={[T.label, { marginBottom: 14 }]}>
+              Keep a copy of everything in the cloud, private to your account, and bring it to a new phone.
+            </Text>
+            <SegmentedControl
+              size="sm" stretch style={{ marginBottom: 16 }}
+              options={[{ key: 'in', label: 'Sign in' }, { key: 'up', label: 'Create account' }]}
+              value={mode} onChange={(k) => { setMode(k as 'in' | 'up'); setError(''); setInfo(''); }}
+            />
+            <Field
+              label="Email" value={email} onChangeText={(v) => { setEmail(v); if (error) setError(''); }}
+              autoCapitalize="none" autoCorrect={false} keyboardType="email-address" autoComplete="email" textContentType="emailAddress"
+              placeholder="you@example.com"
+            />
+            <Field
+              label="Password" value={password} onChangeText={(v) => { setPassword(v); if (error) setError(''); }}
+              secureTextEntry autoCapitalize="none" autoCorrect={false}
+              autoComplete={mode === 'up' ? 'new-password' : 'current-password'} textContentType={mode === 'up' ? 'newPassword' : 'password'}
+              placeholder={mode === 'up' ? 'At least 6 characters' : ''} returnKeyType="go" onSubmitEditing={() => submit()}
+            />
+            {/* a problem, or a word of news, dips in and out rather than appearing in one frame */}
+            <FadeSwap swapKey={error ? 'e:' + error : info ? 'i:' + info : ''}>
+              {error ? <Text style={st.problem}>{error}</Text> : info ? <Text style={st.info}>{info}</Text> : null}
+            </FadeSwap>
+            <PillButton
+              label={busy === 'auth' ? (mode === 'up' ? 'Creating account' : 'Signing in') : mode === 'up' ? 'Create account' : 'Sign in'}
+              icon={mode === 'up' ? 'person-add-outline' : 'log-in-outline'}
+              onPress={() => { if (!busy) submit(); }} style={{ marginTop: 6 }}
+            />
+          </Card>
+        )}
+      </Animated.View>
 
       <PinSheet
         visible={!!pinFor} mode="enter" onClose={() => setPinFor(null)}
@@ -363,10 +374,10 @@ export function DeleteSection({ title = 'Delete' }: { title?: string | null }) {
 }
 
 const st = StyleSheet.create({
-  title: { color: C.text, fontFamily: F.semi, fontSize: 16 },
-  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, lineHeight: 17, marginTop: -4, marginBottom: 12 },
-  info: { color: C.textDim, fontFamily: F.med, fontSize: 12, lineHeight: 17, marginTop: -4, marginBottom: 12 },
+  title: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
+  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -4, marginBottom: 12 },
+  info: { color: C.textDim, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -4, marginBottom: 12 },
   links: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 18, paddingHorizontal: 4 },
-  link: { fontFamily: F.semi, fontSize: 13 },
-  danger: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 17, marginTop: 8, marginLeft: 4 },
+  link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
+  danger: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 8, marginLeft: 4 },
 });

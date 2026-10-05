@@ -5,14 +5,14 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
-import { C, F, S, T } from '../theme';
+import { C, F, S, T, TRACK } from '../theme';
 import { useStore, JournalEntry, flushSaves } from '../store';
 import { todayKey } from '../utils';
 import {
   Chip, DotMenu, Field, Hairline, IconBtn, NeuHeader, NeuIconBtn, PillButton, ProgressBar, Row, ScreenBG, Sheet, Toggle, useTheme,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Bouncy, EASE_OUT, FadeSwap, shiftIn, useAnimLevel } from '../components/Motion';
+import { Bouncy, EASE_OUT, Enter, FadeSwap, shiftIn, useAnimLevel } from '../components/Motion';
 import { PinSheet, ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
@@ -103,14 +103,16 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const dim = useSharedValue(0);
   const saved = useSharedValue(0);
   const idle = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const headStyle = useAnimatedStyle(() => ({ opacity: 1 - 0.6 * dim.value, transform: [{ translateY: -6 * dim.value }] }));
-  const footStyle = useAnimatedStyle(() => ({ opacity: 1 - 0.6 * dim.value, transform: [{ translateY: 6 * dim.value }] }));
+  // with only some motion the chrome fades back and nothing travels
+  const drift = level === 'full' ? 6 : 0;
+  const headStyle = useAnimatedStyle(() => ({ opacity: 1 - 0.6 * dim.value, transform: [{ translateY: -drift * dim.value }] }));
+  const footStyle = useAnimatedStyle(() => ({ opacity: 1 - 0.6 * dim.value, transform: [{ translateY: drift * dim.value }] }));
   const tickStyle = useAnimatedStyle(() => ({ opacity: saved.value }));
   const markTyping = () => {
     if (level === 'none') return;
     dim.value = withTiming(1, { duration: 220, easing: EASE_OUT });
     if (idle.current) clearTimeout(idle.current);
-    idle.current = setTimeout(() => { dim.value = withTiming(0, { duration: 420, easing: Easing.inOut(Easing.quad) }); }, 1400);
+    idle.current = setTimeout(() => { dim.value = withTiming(0, { duration: level === 'full' ? 420 : 200, easing: Easing.inOut(Easing.quad) }); }, 1400);
   };
 
   // ---- the page turns the way time runs: a later day arrives from the right, an earlier one from the left. The page
@@ -468,68 +470,74 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
 
   return (
     <ScreenBG guard={tabMode}>
-      <Animated.View style={[st.head, { paddingTop: insets.top + (tabMode ? 14 : 8) }, headStyle]}>
-        <View style={st.side}>
-          {tabMode ? null : <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={() => router.back()} accessibilityLabel="Back" />}
-        </View>
-        <Bouncy onPress={() => { tick(); setDateSheet(true); }} scaleTo={0.97} radius={14} style={st.dateBtn}>
-          {/* a new day's date dips out and comes back with the page, instead of changing under it in one frame */}
-          <FadeSwap swapKey={dateKey + '|' + sub} style={st.dateWords}>
-            <Text style={st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
-            <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
-          </FadeSwap>
-        </Bouncy>
-        <View style={[st.side, { justifyContent: 'flex-end' }]}>
-          <NeuIconBtn name="albums-outline" dim={38} size={18} color={C.textDim} onPress={openArchive} accessibilityLabel="Archive" />
-          <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => setMenu(true)} style={{ marginLeft: 8 }} accessibilityLabel="More" />
-        </View>
-      </Animated.View>
-      {goal > 0 ? (
-        <View style={{ paddingHorizontal: S.pad + 4, marginBottom: 4 }}>
-          <ProgressBar value={Math.min(1, words / goal)} height={4} color={C.gold} />
-        </View>
-      ) : null}
+      {/* the chrome, the page and the footer rise with the screen on every visit, as every other tool does; a page
+          turn (below) is its own entrance, inside the surface */}
+      <Enter index={0}>
+        <Animated.View style={[st.head, { paddingTop: insets.top + (tabMode ? 14 : 8) }, headStyle]}>
+          <View style={st.side}>
+            {tabMode ? null : <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={() => router.back()} accessibilityLabel="Back" />}
+          </View>
+          <Bouncy onPress={() => { tick(); setDateSheet(true); }} scaleTo={0.97} radius={14} style={st.dateBtn}>
+            {/* a new day's date dips out and comes back with the page, instead of changing under it in one frame */}
+            <FadeSwap swapKey={dateKey + '|' + sub} style={st.dateWords}>
+              <Text style={st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
+              <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
+            </FadeSwap>
+          </Bouncy>
+          <View style={[st.side, { justifyContent: 'flex-end' }]}>
+            <NeuIconBtn name="albums-outline" dim={38} size={18} color={C.textDim} onPress={openArchive} accessibilityLabel="Archive" />
+            <NeuIconBtn name="ellipsis-horizontal" dim={38} size={18} color={C.textDim} onPress={() => setMenu(true)} style={{ marginLeft: 8 }} accessibilityLabel="More" />
+          </View>
+        </Animated.View>
+        {goal > 0 ? (
+          <View style={{ paddingHorizontal: S.pad + 4, marginBottom: 4 }}>
+            <ProgressBar value={Math.min(1, words / goal)} height={4} color={C.gold} />
+          </View>
+        ) : null}
+      </Enter>
 
-      <Animated.View key={page} entering={pageEnter} style={st.page}>
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingHorizontal: S.pad + 4, paddingTop: 8, paddingBottom: 40 }}
-        >
-          <TextInput
-            value={title}
-            onChangeText={onTitle}
-            editable={loaded}
-            placeholder="Title, if you want one"
-            placeholderTextColor={C.textFaint}
-            style={st.title}
-            maxLength={120}
-            returnKeyType="next"
-            blurOnSubmit={false}
-            onSubmitEditing={() => bodyRef.current?.focus()}
-          />
-          {showPrompt ? (
-            <Bouncy onPress={usePrompt} scaleTo={0.98} radius={12} style={st.prompt}>
-              <Ionicons name="bulb-outline" size={15} color={C.gold} />
-              <Text style={st.promptText}>{prompt.text}</Text>
-            </Bouncy>
-          ) : null}
-          <TextInput
-            ref={bodyRef}
-            value={body}
-            onChangeText={onBody}
-            onSelectionChange={(e) => { selection.current = e.nativeEvent.selection; }}
-            onFocus={() => { bodyFocused.current = true; }}
-            onBlur={() => { bodyFocused.current = false; }}
-            editable={loaded}
-            placeholder="Start writing"
-            placeholderTextColor={C.textFaint}
-            multiline
-            scrollEnabled={false}
-            textAlignVertical="top"
-            style={st.body}
-          />
-        </ScrollView>
-      </Animated.View>
+      <Enter index={1} style={st.page}>
+        <Animated.View key={page} entering={pageEnter} style={st.page}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingHorizontal: S.pad + 4, paddingTop: 8, paddingBottom: 40 }}
+          >
+            <TextInput
+              value={title}
+              onChangeText={onTitle}
+              editable={loaded}
+              placeholder="Title, if you want one"
+              placeholderTextColor={C.textFaint}
+              style={st.title}
+              maxLength={120}
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => bodyRef.current?.focus()}
+            />
+            {showPrompt ? (
+              <Bouncy onPress={usePrompt} scaleTo={0.98} radius={12} style={st.prompt}>
+                <Ionicons name="bulb-outline" size={15} color={C.gold} />
+                <Text style={st.promptText}>{prompt.text}</Text>
+              </Bouncy>
+            ) : null}
+            <TextInput
+              ref={bodyRef}
+              value={body}
+              onChangeText={onBody}
+              onSelectionChange={(e) => { selection.current = e.nativeEvent.selection; }}
+              onFocus={() => { bodyFocused.current = true; }}
+              onBlur={() => { bodyFocused.current = false; }}
+              editable={loaded}
+              placeholder="Start writing"
+              placeholderTextColor={C.textFaint}
+              multiline
+              scrollEnabled={false}
+              textAlignVertical="top"
+              style={st.body}
+            />
+          </ScrollView>
+        </Animated.View>
+      </Enter>
 
       {checkout ? (
         <DayCheckout
@@ -543,41 +551,43 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           onDone={() => setCheckout(null)}
         />
       ) : null}
-      <Animated.View style={[st.foot, { paddingBottom: 10 + (tabMode ? 0 : insets.bottom) }, footStyle]}>
-        <Row style={{ flex: 1 }}>
-          <Bouncy
-            onPress={() => { tick(); setCheckout(checkout ? null : 'asked'); }}
-            scaleTo={0.9}
-            radius={17}
-            style={st.dayWell}
-            accessibilityRole="button"
-            accessibilityLabel={'How the day went' + (mood ? ', ' + MOODS.find((m) => m.value === mood)?.label : '') + (rating ? ', ' + rating + ' of 5 stars' : '')}
-          >
-            <Animated.View pointerEvents="none" style={[st.dayTint, { backgroundColor: C.gold + '24' }, tintStyle]} />
-            <Ionicons name={dayIcon as any} size={18} color={mood || rating ? C.gold : C.textFaint} />
-          </Bouncy>
-          <IconBtn
-            name={tags.length ? 'pricetag' : 'pricetag-outline'} size={19} pad={8} color={tags.length ? C.gold : C.textDim}
-            onPress={() => setTagSheet(true)} accessibilityLabel={tags.length ? 'Tags, ' + tags.length : 'Add tags'}
-          />
-          {tasksArchived ? null : (
-            <IconBtn name="checkbox-outline" size={19} pad={8} color={C.textDim} onPress={openTask} accessibilityLabel="Add a task" />
-          )}
-        </Row>
-        <View style={{ alignItems: 'flex-end' }}>
-          <FadeSwap swapKey={saveFailed ? 'failed' : 'count'}>
-            <Text
-              style={[st.words, saveFailed && { color: C.danger }]}
-              onPress={saveFailed ? () => { flush(); } : undefined}
-              suppressHighlighting
+      <Enter index={2}>
+        <Animated.View style={[st.foot, { paddingBottom: 10 + (tabMode ? 0 : insets.bottom) }, footStyle]}>
+          <Row style={{ flex: 1 }}>
+            <Bouncy
+              onPress={() => { tick(); setCheckout(checkout ? null : 'asked'); }}
+              scaleTo={0.9}
+              radius={17}
+              style={st.dayWell}
+              accessibilityRole="button"
+              accessibilityLabel={'How the day went' + (mood ? ', ' + MOODS.find((m) => m.value === mood)?.label : '') + (rating ? ', ' + rating + ' of 5 stars' : '')}
             >
-              {/* an empty page states no count at all */}
-              {saveFailed ? 'Not saved, tap to retry' : words ? words + (words === 1 ? ' word' : ' words') : ' '}
-            </Text>
-          </FadeSwap>
-          <Animated.View style={[st.tick, { backgroundColor: C.accent }, tickStyle]} />
-        </View>
-      </Animated.View>
+              <Animated.View pointerEvents="none" style={[st.dayTint, { backgroundColor: C.gold + '24' }, tintStyle]} />
+              <Ionicons name={dayIcon as any} size={18} color={mood || rating ? C.gold : C.textFaint} />
+            </Bouncy>
+            <IconBtn
+              name={tags.length ? 'pricetag' : 'pricetag-outline'} size={19} pad={8} color={tags.length ? C.gold : C.textDim}
+              onPress={() => setTagSheet(true)} accessibilityLabel={tags.length ? 'Tags, ' + tags.length : 'Add tags'}
+            />
+            {tasksArchived ? null : (
+              <IconBtn name="checkbox-outline" size={19} pad={8} color={C.textDim} onPress={openTask} accessibilityLabel="Add a task" />
+            )}
+          </Row>
+          <View style={{ alignItems: 'flex-end' }}>
+            <FadeSwap swapKey={saveFailed ? 'failed' : 'count'}>
+              <Text
+                style={[st.words, saveFailed && { color: C.danger }]}
+                onPress={saveFailed ? () => { flush(); } : undefined}
+                suppressHighlighting
+              >
+                {/* an empty page states no count at all */}
+                {saveFailed ? 'Not saved, tap to retry' : words ? words + (words === 1 ? ' word' : ' words') : ' '}
+              </Text>
+            </FadeSwap>
+            <Animated.View style={[st.tick, { backgroundColor: C.accent }, tickStyle]} />
+          </View>
+        </Animated.View>
+      </Enter>
 
       {dateSheetEl}
       {menuSheet}
@@ -697,11 +707,11 @@ const st = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 8 },
   side: { width: 84, flexDirection: 'row', alignItems: 'center' },
   dateBtn: { flex: 1, alignItems: 'center', paddingVertical: 4 },
-  date: { color: C.text, fontFamily: F.head, fontSize: 21, lineHeight: 27, letterSpacing: -0.3 },
-  title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1, paddingVertical: 8 },
+  date: { color: C.text, fontFamily: F.head, fontSize: 21, lineHeight: 27, letterSpacing: TRACK.large },
+  title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title, paddingVertical: 8 },
   prompt: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, marginBottom: 2 },
-  promptText: { flex: 1, color: C.textDim, fontFamily: F.reg, fontSize: 14, lineHeight: 20 },
-  body: { color: C.text, fontFamily: F.reg, fontSize: 16, lineHeight: 26, minHeight: 320, paddingTop: 6 },
+  promptText: { flex: 1, color: C.textDim, fontFamily: F.reg, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 20 },
+  body: { color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, lineHeight: 26, minHeight: 320, paddingTop: 6 },
   foot: {
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: S.pad, paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,
@@ -712,7 +722,7 @@ const st = StyleSheet.create({
   /** the page, keyed on each load so it arrives with its own entrance */
   page: { flex: 1 },
   dateWords: { alignItems: 'center', alignSelf: 'stretch' },
-  words: { color: C.textFaint, fontFamily: F.med, fontSize: 12, fontVariant: ['tabular-nums'] },
+  words: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, fontVariant: ['tabular-nums'] },
   tick: { width: 16, height: 2, borderRadius: 1, marginTop: 4 },
   prefLabel: { ...T.label, marginTop: 10, marginBottom: 8 },
   prefRow: { paddingVertical: 10 },

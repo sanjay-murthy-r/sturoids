@@ -3,7 +3,7 @@ import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, ThemeMode, neuInset } from '../../src/theme';
+import { C, F, MIN, S, T, TRACK, ThemeMode, neuInset } from '../../src/theme';
 import { ScreenBG, ListCard, ListRow, SectionTitle, DotMenu, useTheme } from '../../src/components/UI';
 import { Enter, FadeSwap, useFocusKey } from '../../src/components/Motion';
 import { ToolArchiveSheet } from '../../src/components/ToolArchiveSheet';
@@ -133,9 +133,9 @@ export default function More() {
           </ListCard>
         </Enter>
 
-        {/* system, deliberately separated: settings is not a tool */}
-        <SectionTitle>System</SectionTitle>
+        {/* system, deliberately separated: settings is not a tool; its title rises with its card */}
         <Enter index={1}>
+          <SectionTitle>System</SectionTitle>
           <ListCard>
             <ListRow key="settings" onPress={() => router.push('/settings')} style={st.row}>
               <View style={[st.iconWell, wellFor(theme)]}>
@@ -167,6 +167,6 @@ export default function More() {
 const st = StyleSheet.create({
   row: { paddingVertical: 12 },
   iconWell: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: -0.1 },
-  count: { color: C.textFaint, fontFamily: F.med, fontSize: 13, marginRight: 8, fontVariant: ['tabular-nums'] },
+  title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title },
+  count: { color: C.textFaint, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, marginRight: 8, fontVariant: ['tabular-nums'] },
 });

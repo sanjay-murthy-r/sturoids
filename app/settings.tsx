@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import type { SharedValue } from 'react-native-reanimated';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
@@ -8,12 +9,12 @@ import Constants from 'expo-constants';
 import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, ThemeMode, AnimLevel, ACCENT_CHOICES, neuInset, neuRaised } from '../src/theme';
+import { C, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, bgFor, neuInset, neuRaised } from '../src/theme';
 import { useStore, exportSnapshot, importSnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves } from '../src/store';
 import { compareVersions, todayKey } from '../src/utils';
 import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu, useTheme } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
-import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, shiftIn, useAnimLevel, useBuilt, useEntrance } from '../src/components/Motion';
+import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt, useEntrance } from '../src/components/Motion';
 import { tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
 import { PinSheet } from '../src/components/LockGate';
@@ -379,13 +380,48 @@ function CategoryRow({ icon, title, summary, onPress, danger, first }: {
 }
 
 /**
- * The list's entrance the first time Settings opens. Whether it plays is decided as the list mounts, so coming back
- * from a page (a fresh mount, with `first` false) never replays it, and nothing remounts when `first` changes later.
+ * The list's entrance the first time Settings opens. Whether it plays is decided as the list mounts. The list stays
+ * mounted under an open page, so coming back from one never replays it, and nothing remounts when `first` changes later.
  */
 function Arrive({ first, index, children }: { first: boolean; index: number; children: React.ReactNode }) {
   const entrance = useEntrance(index, first);
   return <Animated.View style={entrance}>{children}</Animated.View>;
 }
+
+/** How far a page travels as it comes in or leaves, and how far the list under it drifts the other way. */
+const PAGE_DRIFT = 28;
+const LIST_DRIFT = 18;
+/** What a page arrives on and the list returns on: quick to answer, long to settle. */
+const PUSH_OUT = Easing.bezier(0.16, 1, 0.3, 1);
+
+/** A page opened from the list comes in from the right, a short way, and up to full strength. */
+const pagePush = () => {
+  'worklet';
+  const ease = { duration: 320, easing: Easing.bezier(0.16, 1, 0.3, 1) };
+  return {
+    initialValues: { opacity: 0, transform: [{ translateX: PAGE_DRIFT }] },
+    animations: { opacity: withTiming(1, ease), transform: [{ translateX: withTiming(0, ease) }] },
+  };
+};
+
+/**
+ * A page going back leaves to the right, quicker than it came, gathering speed as it goes. A page's exit is registered
+ * once, as it mounts, and the motion level can change under it (the Motion page is where it is set), so the level is
+ * read as the page leaves: moving, a short fade, or gone at once.
+ */
+const pagePop = (now: SharedValue<AnimLevel>) => () => {
+  'worklet';
+  const level = now.value;
+  if (level === 'none') return { initialValues: { opacity: 0 }, animations: { opacity: withTiming(0, { duration: 0 }) } };
+  if (level === 'some') {
+    return { initialValues: { opacity: 1 }, animations: { opacity: withTiming(0, { duration: 160, easing: Easing.in(Easing.quad) }) } };
+  }
+  const ease = { duration: 220, easing: Easing.in(Easing.quad) };
+  return {
+    initialValues: { opacity: 1, transform: [{ translateX: 0 }] },
+    animations: { opacity: withTiming(0, ease), transform: [{ translateX: withTiming(PAGE_DRIFT, ease) }] },
+  };
+};
 
 type Page = 'account' | 'appearance' | 'tools' | 'motion' | 'time' | 'deepwork' | 'privacy' | 'backup' | 'updates' | 'delete';
 
@@ -555,22 +591,49 @@ const UpdatesCard = React.memo(function UpdatesCard() {
 });
 
 export default function Settings() {
-  useTheme(); // a new accent or theme repaints the page's toggles and pills, which take the accent as a prop
+  const theme = useTheme(); // a new accent or theme repaints the page's toggles and pills, which take the accent as a prop
   const level = useAnimLevel();
   const router = useRouter();
-  // Settings opens on its list of categories; each opens as its own page within the screen, and back returns to the
-  // list. `dir` is the way the page moves: in from the right going in, from the left coming back
+  // Settings opens on its list of categories; each opens as its own page, a layer over the list within the screen, and
+  // back returns to the list. The list stays mounted under the page, so it is as it was left (its scroll included)
   const [page, setPage] = useState<Page | null>(null);
-  const dir = useRef<1 | -1>(1);
-  const open = useCallback((p: Page) => { dir.current = 1; setPage(p); }, []);
+  const open = useCallback((p: Page) => setPage(p), []);
   const pageRef = useRef(page);
   pageRef.current = page;
   const back = useCallback(() => {
     if (!pageRef.current) return false;
-    dir.current = -1;
     setPage(null);
     return true;
   }, []);
+  // the list under an open page drifts a little left and fades as the page comes over it, and comes back as the page
+  // leaves. A change of motion level under an open page just settles it, out of sight
+  const listFade = useSharedValue(1);
+  const listShift = useSharedValue(0);
+  const listShown = useRef(true);
+  // the level a page leaves by, read on the UI thread as it goes (see `pagePop`)
+  const levelNow = useSharedValue<AnimLevel>(level);
+  useEffect(() => {
+    levelNow.value = level;
+    const shown = page === null;
+    const turned = shown !== listShown.current;
+    listShown.current = shown;
+    const x = shown || level !== 'full' ? 0 : -LIST_DRIFT;
+    const o = shown ? 1 : 0;
+    if (!turned || level === 'none') {
+      listShift.value = x;
+      listFade.value = o;
+    } else if (level === 'some') {
+      listFade.value = withTiming(o, { duration: shown ? 180 : 160, easing: EASE_OUT });
+    } else {
+      const ease = { duration: shown ? 300 : 240, easing: PUSH_OUT };
+      listShift.value = withTiming(x, ease);
+      listFade.value = withTiming(o, ease);
+    }
+  }, [page, level]);
+  const listStyle = useAnimatedStyle(() => ({ opacity: listFade.value, transform: [{ translateX: listShift.value }] }));
+  // a page comes in the way the level allows when it opens: moving, a short fade, or at once
+  const pageIn = React.useMemo(() => (level === 'full' ? pagePush : rowIn(level)), [level]);
+  const pageOut = React.useMemo(() => pagePop(levelNow), [levelNow]);
   useFocusEffect(useCallback(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', back);
     return () => sub.remove();
@@ -1072,7 +1135,6 @@ export default function Settings() {
     }
   };
 
-  const moving = level === 'none' ? undefined : level === 'some' ? rowIn(level) : shiftIn(dir.current * 24);
   const groups: { title: string; rows: { p: Page; icon: string; danger?: boolean }[] }[] = [
     { title: 'Look and feel', rows: [{ p: 'appearance', icon: 'color-palette-outline' }, { p: 'tools', icon: 'apps-outline' }, { p: 'motion', icon: 'sparkles-outline' }] },
     { title: 'Your day', rows: [{ p: 'time', icon: 'time-outline' }, { p: 'deepwork', icon: (toolByKey('focus')?.icon || 'hourglass-outline') }, { p: 'privacy', icon: 'lock-closed-outline' }] },
@@ -1083,37 +1145,51 @@ export default function Settings() {
   return (
     <ScreenBG>
       <NeuHeader title={page ? PAGE_TITLES[page] : 'Settings'} onBack={() => { if (!back()) router.back(); }} />
-      <ScrollView key={page || 'list'} contentContainerStyle={{ padding: S.pad, paddingTop: 4, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-        <Animated.View key={page || 'list'} entering={built.current ? moving : undefined}>
-          {page ? (
-            // the page's first heading sits close under the header, like the list's first card
-            <View style={{ marginTop: -S.section + 10 }}>{pageBody(page)}</View>
-          ) : (
-            <>
-              {/* the list rises in once, as Settings opens; coming back from a page it simply slides back */}
-              <Arrive first={!built.current} index={0}>
-                <ProfileHeader onOpen={() => open('account')} />
+      <View style={st.body}>
+        {/* the list never remounts: while a page is open it takes no touches and is hidden from screen readers */}
+        <Animated.View
+          style={[st.body, listStyle]}
+          pointerEvents={page ? 'none' : 'auto'}
+          importantForAccessibility={page ? 'no-hide-descendants' : 'auto'}
+          accessibilityElementsHidden={!!page}
+        >
+          <ScrollView contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
+            {/* the list rises in once, as Settings opens; coming back from a page it is simply there as it was left */}
+            <Arrive first={!built.current} index={0}>
+              <ProfileHeader onOpen={() => open('account')} />
+            </Arrive>
+            {groups.map((g, gi) => (
+              <Arrive key={g.title} first={!built.current} index={gi + 1}>
+                <SectionTitle>{g.title}</SectionTitle>
+                <ListCard>
+                  {g.rows.map((r, i) => (
+                    <CategoryRow
+                      key={r.p} first={i === 0} icon={r.icon} danger={r.danger}
+                      title={PAGE_TITLES[r.p]} summary={summaries[r.p]} onPress={() => open(r.p)}
+                    />
+                  ))}
+                </ListCard>
               </Arrive>
-              {groups.map((g, gi) => (
-                <Arrive key={g.title} first={!built.current} index={gi + 1}>
-                  <SectionTitle>{g.title}</SectionTitle>
-                  <ListCard>
-                    {g.rows.map((r, i) => (
-                      <CategoryRow
-                        key={r.p} first={i === 0} icon={r.icon} danger={r.danger}
-                        title={PAGE_TITLES[r.p]} summary={summaries[r.p]} onPress={() => open(r.p)}
-                      />
-                    ))}
-                  </ListCard>
-                </Arrive>
-              ))}
-              <Text style={[T.caption, { textAlign: 'center', marginTop: 24 }]}>
-                Sturoids v{APP_VERSION} · local-first · made for focused work
-              </Text>
-            </>
-          )}
+            ))}
+            <Text style={[T.caption, { textAlign: 'center', marginTop: 24 }]}>
+              Sturoids v{APP_VERSION} · local-first · made for focused work
+            </Text>
+          </ScrollView>
         </Animated.View>
-      </ScrollView>
+        {page ? (
+          // an open page is its own layer over the list, with its own scroll that starts at the top. It is opaque so the
+          // list does not show through it, and what it holds from the start is simply there: only parts that turn up
+          // later (see `arrive`) fade in
+          <Animated.View key={page} entering={pageIn} exiting={pageOut} style={[st.pageLayer, { backgroundColor: bgFor(theme) }]}>
+            <LayoutAnimationConfig skipEntering>
+              <ScrollView style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
+                {/* the page's first heading sits close under the header, like the list's first card */}
+                <View style={{ marginTop: -S.section + 10 }}>{pageBody(page)}</View>
+              </ScrollView>
+            </LayoutAnimationConfig>
+          </Animated.View>
+        ) : null}
+      </View>
       <PinSheet
         visible={!!pinStep} mode={pinStep?.mode ?? 'enter'} tint={pinTint}
         onClose={() => setPinStep(null)} onDone={pinDone}
@@ -1123,10 +1199,14 @@ export default function Settings() {
 }
 
 const st = StyleSheet.create({
+  body: { flex: 1 },
+  scroll: { padding: S.pad, paddingTop: 4, paddingBottom: 40 },
+  // an open page covers the list exactly (a layer within the body, below the header)
+  pageLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   avatar: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   statusDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
   catRow: { paddingVertical: 13 },
-  link: { fontFamily: F.semi, fontSize: 13 },
+  link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   recovery: {
     marginTop: 16, paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,
@@ -1134,13 +1214,13 @@ const st = StyleSheet.create({
   recoveryTitle: { ...T.label, color: C.text },
   recoveryBody: { ...T.caption, marginTop: 4 },
   slotRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 10 },
-  slotIndex: { width: 58, color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2 },
+  slotIndex: { width: 58, color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine },
   /** a slot's tool (its icon and its name), which dips and comes back as a new tool takes the slot */
   slotTool: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   archivedLine: { flex: 1, marginLeft: 10 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 4 },
-  label: { color: C.textDim, fontFamily: F.med, fontSize: 13, marginBottom: 8 },
-  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, marginTop: 10, lineHeight: 17 },
+  label: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, marginBottom: 8 },
+  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 10, lineHeight: 17 },
   optRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 6 },
   // the dot is raised inside a carved well, so the well clips its light and shadow at the rim
   radioWell: {

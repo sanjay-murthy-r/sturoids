@@ -13,7 +13,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { C, F, MIN, S, T, neuInset, neuPressedInner, neuRaised, NEU } from '../theme';
+import { C, F, MIN, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU } from '../theme';
 import { columnWidth } from '../layout';
 import { useStore, Attachment, Note, flushSaves } from '../store';
 import { todayKey, uid } from '../utils';
@@ -607,7 +607,7 @@ const Attachments = React.memo(function Attachments({ items, width, onRemove, li
           {a.kind === 'file' && (
             <Bouncy onPress={() => openFile(a)} style={[st.fileRow, { borderColor: C.accent + '44', backgroundColor: C.accent + '18' }]}>
               <Ionicons name="document-attach-outline" size={18} color={C.accent} />
-              <Text style={{ color: C.accent, fontFamily: F.med, marginLeft: 8, fontSize: 13, maxWidth: width * 1.6 }} numberOfLines={1}>
+              <Text style={{ color: C.accent, fontFamily: F.med, marginLeft: 8, fontSize: 13, letterSpacing: TRACK.small, maxWidth: width * 1.6 }} numberOfLines={1}>
                 {a.name}
               </Text>
             </Bouncy>
@@ -655,10 +655,10 @@ function InlineVideo({ uri, width }: { uri: string; width: number }) {
 }
 
 const st = StyleSheet.create({
-  title: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 36, letterSpacing: -0.3, paddingVertical: 6 },
-  body: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: LINE_H, minHeight: 300, paddingTop: 4 },
+  title: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 36, letterSpacing: TRACK.display, paddingVertical: 6 },
+  body: { color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body, lineHeight: LINE_H, minHeight: 300, paddingTop: 4 },
   // only the upright Geist ships, so Android would synthesise a slant: live text reads as faint instead
-  liveInline: { color: C.textFaint, fontFamily: F.reg, fontSize: 15, lineHeight: LINE_H },
+  liveInline: { color: C.textFaint, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body, lineHeight: LINE_H },
   toolbar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center',
@@ -680,7 +680,7 @@ const st = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 9,
   },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.danger, marginRight: 10 },
-  liveBarText: { color: C.textDim, fontFamily: F.reg, fontSize: 13, flex: 1 },
+  liveBarText: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, flex: 1 },
   pulseRing: {
     position: 'absolute', width: 44, height: 44, borderRadius: 22,
     borderWidth: 2, borderColor: C.danger,

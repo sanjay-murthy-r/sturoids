@@ -2,12 +2,12 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming } from 'react-native-reanimated';
 import { StackActions } from '@react-navigation/native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { C, F, MIN, bgFor } from '../theme';
+import { C, F, MIN, TRACK, bgFor } from '../theme';
 import { useTheme } from './UI';
-import { RISE_OUT, SINK_IN, useAnimLevel } from './Motion';
+import { EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, RISE_OUT, SINK_IN, TAB_FADE, TAB_SHIFT, useAnimLevel } from './Motion';
 import { useStore } from '../store';
 import { normaliseSlots, toolByKey } from '../tools';
 import { TAB_ROUTES } from '../toolNav';
@@ -37,7 +37,6 @@ const ITEM_PAD = 2;
 const GAP = 3;
 /** where the dot's row sits: under the icon and the name of every tab */
 const DOT_TOP = BAR_PAD_TOP + ITEM_PAD + ICON + GAP + LABEL_H + GAP;
-const SWITCH = { duration: 200, easing: Easing.out(Easing.cubic) };
 
 // the rail: the same tabs standing in a column on the left of a wide window
 const RAIL_PAD_TOP = 18;
@@ -56,15 +55,17 @@ function TabItem({ meta, focused, onPress, vertical }: { meta: ItemMeta; focused
   const level = useAnimLevel();
   const press = useSharedValue(0);
   const on = useSharedValue(focused ? 1 : 0);
+  // the colour and the name change on the scene's own timing, so the tab you open lights up as its scene arrives
   React.useEffect(() => {
-    on.value = level === 'none' ? (focused ? 1 : 0) : withTiming(focused ? 1 : 0, SWITCH);
+    on.value = level === 'none' ? (focused ? 1 : 0) : withTiming(focused ? 1 : 0, level === 'full' ? TAB_SHIFT : TAB_FADE);
   }, [focused, level]);
+  const rises = level === 'full';
   const sink = useAnimatedStyle(() => ({ transform: [{ scale: 1 - 0.08 * press.value }] }));
   const lit = useAnimatedStyle(() => ({ opacity: on.value }));
   const unlit = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
   const nameStyle = useAnimatedStyle(() => ({
     opacity: on.value,
-    transform: [{ translateY: 3 * (1 - on.value) }],
+    transform: [{ translateY: rises ? 3 * (1 - on.value) : 0 }],
   }));
   return (
     <Pressable
@@ -115,46 +116,61 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
 
   // While the keyboard is up the bar leaves the layout at once, so the screen takes the room, and slides below
   // the edge. When the keyboard closes the bar takes its room back and slides up into it. It stays mounted
-  // throughout, so a keyboard toggle never rebuilds the tabs.
+  // throughout, so a keyboard toggle never rebuilds the tabs. With only some motion it fades out and in instead.
+  const travels = level === 'full';
   const barH = useSharedValue(0);
   const hide = useSharedValue(0);
   React.useEffect(() => {
     const to = stepAside ? 1 : 0;
     hide.value = level === 'none'
       ? to
-      : withTiming(to, stepAside
-        ? { duration: 180, easing: Easing.in(Easing.quad) }
-        : { duration: 240, easing: Easing.out(Easing.cubic) });
+      : withTiming(to, travels
+        ? { duration: stepAside ? 180 : 240, easing: stepAside ? EASE_EXIT : EASE_OUT }
+        : (stepAside ? FADE_OUT : FADE_IN));
   }, [stepAside, level]);
   // the bar arrives last, once the intro has left and the day has begun to rise into its place
   const introOver = useIntro((s) => s.phase !== 'playing');
   const arrive = useSharedValue(introOver || level === 'none' ? 1 : 0);
   React.useEffect(() => {
     if (!introOver) return;
-    arrive.value = level === 'none' ? 1 : withDelay(320, withTiming(1, { duration: 520, easing: Easing.out(Easing.cubic) }));
+    arrive.value = level === 'none'
+      ? 1
+      : travels
+        ? withDelay(320, withTiming(1, { duration: 520, easing: EASE_OUT }))
+        : withDelay(160, withTiming(1, FADE_IN));
   }, [introOver, level]);
   const slideStyle = useAnimatedStyle(() => (vertical
-    ? { opacity: arrive.value, transform: [{ translateX: -18 * (1 - arrive.value) }] }
-    : { opacity: arrive.value, transform: [{ translateY: hide.value * (barH.value + 2) + 18 * (1 - arrive.value) }] }), [vertical]);
+    ? { opacity: arrive.value, transform: [{ translateX: travels ? -18 * (1 - arrive.value) : 0 }] }
+    : {
+      opacity: arrive.value * (travels ? 1 : 1 - hide.value),
+      transform: [{ translateY: travels ? hide.value * (barH.value + 2) + 18 * (1 - arrive.value) : 0 }],
+    }), [vertical, travels]);
 
-  // the one dot, under the current tab's name: it glides from tab to tab instead of appearing at the new one. On
-  // the first paint it is already in place, and with animations off it moves without travelling.
+  // the one dot, under the current tab's name: it glides from tab to tab, on the scene's own shift, instead of
+  // appearing at the new one. On the first paint it is already in place. With only some motion it does not travel: it
+  // fades out where it was and back in at the new tab. With animations off it simply moves.
   const focusIndex = routeNames.indexOf(focusedName as string);
   const [slotW, setSlotW] = React.useState(0);
   const dotAt = useSharedValue(Math.max(0, focusIndex));
+  const dotFade = useSharedValue(1);
   const lastIndex = React.useRef(focusIndex);
   React.useEffect(() => {
     if (focusIndex < 0) return;
-    // a longer way takes a little longer, so a hop to the far end glides at the same calm pace as a step
-    const hops = Math.abs(focusIndex - (lastIndex.current < 0 ? focusIndex : lastIndex.current));
+    const moved = lastIndex.current !== focusIndex;
     lastIndex.current = focusIndex;
-    dotAt.value = level === 'none' || (!vertical && slotW === 0)
-      ? focusIndex
-      : withTiming(focusIndex, { duration: Math.min(320, 170 + 40 * hops), easing: SWITCH.easing });
+    if (level === 'none' || (!vertical && slotW === 0)) {
+      dotAt.value = focusIndex;
+    } else if (level === 'some') {
+      if (!moved) return;
+      dotFade.value = withSequence(withTiming(0, { duration: 80, easing: EASE_EXIT }), withTiming(1, { duration: 120, easing: EASE_OUT }));
+      dotAt.value = withDelay(80, withTiming(focusIndex, { duration: 1 }));
+    } else {
+      dotAt.value = withTiming(focusIndex, TAB_SHIFT);
+    }
   }, [focusIndex, level]);
   const dotStyle = useAnimatedStyle(() => (vertical
-    ? { transform: [{ translateY: dotAt.value * RAIL_PITCH }] }
-    : { transform: [{ translateX: dotAt.value * slotW }] }), [slotW, vertical]);
+    ? { opacity: dotFade.value, transform: [{ translateY: dotAt.value * RAIL_PITCH }] }
+    : { opacity: dotFade.value, transform: [{ translateX: dotAt.value * slotW }] }), [slotW, vertical]);
 
   const metaFor = (name: string): ItemMeta => {
     if (name === 'index') return TODAY;
@@ -229,7 +245,7 @@ const st = StyleSheet.create({
   glyph: { position: 'absolute', top: 0, left: 0 },
   label: {
     height: LABEL_H, lineHeight: LABEL_H, marginTop: GAP, textAlign: 'center',
-    fontFamily: F.semi, fontSize: 11, letterSpacing: 0.2,
+    fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.fine,
   },
   dotRoom: { width: DOT, height: DOT, marginTop: GAP },
   dotTrack: { position: 'absolute', top: DOT_TOP, left: BAR_PAD_X, height: DOT, alignItems: 'center' },

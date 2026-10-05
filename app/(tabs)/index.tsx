@@ -2,20 +2,22 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, InteractionManager, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRouter } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   FadeIn, FadeOut, ZoomIn, ZoomOut, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { C, F, MIN, S, T, neuInset } from '../../src/theme';
+import { C, F, MIN, S, T, TRACK, neuInset } from '../../src/theme';
 import { useStore, QuickItem, FocusSession, Habit, PlannerWeek } from '../../src/store';
 import { uid, fmtDate, todayKey, dayName, DAY_NAMES, toMinutes, fmtClockTime, daysUntil } from '../../src/utils';
 import {
   ScreenBG, Card, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Hairline, Chip, IconBtn,
   ListCard, ListRow, ProgressBar, StrikeText, useTheme,
 } from '../../src/components/UI';
-import { CountUp, EASE_OUT, Enter, Bouncy, FadeSwap, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
+import { CHANGE, CountUp, EASE_OUT, Enter, Bouncy, FadeSwap, RISE_OUT, useAnimLevel, useFocusKey } from '../../src/components/Motion';
+import { useSwapIn } from '../../src/components/Swap';
 import { tap } from '../../src/haptics';
 import { ROUTE_CATALOG, launchExternal, sameSite, siteHost, siteName, siteUrl } from '../../src/quickAccess';
 import { ToolKey, colorOf, toolByKey } from '../../src/tools';
@@ -32,6 +34,22 @@ const NO_SESSIONS: FocusSession[] = [];
 const NO_HABITS: Habit[] = [];
 const NO_PLAN = {} as PlannerWeek;
 
+/**
+ * A figure that changed while Today was out of sight is held where it was, and moves to its new value once Today is back
+ * in view: the count or the bar plays where it can be seen, not behind another tab.
+ */
+function useWhenSeen<T>(value: T): T {
+  const focused = useIsFocused();
+  const held = React.useRef(value);
+  if (focused) held.current = value;
+  return held.current;
+}
+
+/** A count that waits for Today to be in view before it moves to a new figure. */
+function SeenCount(props: React.ComponentProps<typeof CountUp>) {
+  const value = useWhenSeen(props.value);
+  return <CountUp {...props} value={value} />;
+}
 
 /** A shortcut to an archived tool stays in the saved list but is not shown. */
 const hiddenTile = (q: QuickItem, archived: ReadonlySet<string>) => q.kind === 'tool' && archived.has(q.target);
@@ -129,6 +147,8 @@ export default function Today() {
     ...dueMissions.map((m) => ({ kind: 'mission' as const, id: m.id, title: m.title, done: m.done })),
   ], [dailyTasks, dueMissions, today]);
   const doneCount = todayList.filter((t) => t.done).length;
+  // the first ToDo takes the place of the empty note, and the last one done away with gives it back
+  const listIn = useSwapIn(todayList.length === 0 ? 'none' : 'list');
 
   const greeting = useGreeting({
     now, name: settings.name,
@@ -398,13 +418,15 @@ export default function Today() {
               </View>
             </Enter>
             <Enter index={4}>
-              {todayList.length === 0 ? (
-                <Card pad={6}>
-                  <EmptyState compact icon="checkbox-outline" title="Nothing on the list yet" body="Add ToDos from Tasks." actionLabel="Open Tasks" onAction={() => openTool('tasks')} />
-                </Card>
-              ) : (
-                <TodayList items={todayList} onToggleDaily={toggleDaily} onToggleMission={toggleMission} />
-              )}
+              <Animated.View key={todayList.length === 0 ? 'none' : 'list'} entering={listIn}>
+                {todayList.length === 0 ? (
+                  <Card pad={6}>
+                    <EmptyState compact icon="checkbox-outline" title="Nothing on the list yet" body="Add ToDos from Tasks." actionLabel="Open Tasks" onAction={() => openTool('tasks')} />
+                  </Card>
+                ) : (
+                  <TodayList items={todayList} onToggleDaily={toggleDaily} onToggleMission={toggleMission} />
+                )}
+              </Animated.View>
             </Enter>
           </>
   );
@@ -448,7 +470,7 @@ export default function Today() {
                   <>
                     <Hairline />
                     <Text style={[T.caption, { textAlign: 'center', marginTop: 10 }]}>
-                      <CountUp value={weekTotal} style={{ color: C.accent, fontFamily: F.semi }}> min</CountUp> focused in the last 7 days
+                      <SeenCount value={weekTotal} style={{ color: C.accent, fontFamily: F.semi }}> min</SeenCount> focused in the last 7 days
                     </Text>
                   </>
                 ) : null}
@@ -597,10 +619,10 @@ function Glance({ value, total, label, color, suffix }: { value: number; total?:
       {total === 0 ? (
         <Text style={[st.glanceValue, { color }]}>–</Text>
       ) : (
-        <CountUp value={value} style={[st.glanceValue, { color }]}>
+        <SeenCount value={value} style={[st.glanceValue, { color }]}>
           {total != null ? '/' + total : null}
-          {suffix ? <Text style={{ fontSize: 13, fontFamily: F.semi }}>{suffix}</Text> : null}
-        </CountUp>
+          {suffix ? <Text style={{ fontSize: 13, letterSpacing: TRACK.small, fontFamily: F.semi }}>{suffix}</Text> : null}
+        </SeenCount>
       )}
       <Text style={st.glanceLabel}>{label}</Text>
     </View>
@@ -700,15 +722,20 @@ function QuickTile({ q, meta, index, rect, wide, rects, isDragging, onDragState,
     if (level === 'none') {
       x.value = rect.x; y.value = rect.y; w.value = rect.w;
     } else if (dropped) {
-      // the tile the finger lets go of settles into its slot: one tile answering a touch may spring
-      x.value = withSpring(rect.x, RISE_OUT);
-      y.value = withSpring(rect.y, RISE_OUT);
-      w.value = withSpring(rect.w, RISE_OUT);
-    } else {
+      // the tile the finger lets go of settles into its slot: one tile answering a touch may spring (with some
+      // motion it eases, as a pop does)
+      const settle = (to: number) => (level === 'full' ? withSpring(to, RISE_OUT) : withTiming(to, CHANGE));
+      x.value = settle(rect.x);
+      y.value = settle(rect.y);
+      w.value = settle(rect.w);
+    } else if (level === 'full') {
       // the others make way on an eased glide: springs across a whole grid overshoot against each other
       x.value = withTiming(rect.x, REFLOW);
       y.value = withTiming(rect.y, REFLOW);
       w.value = withTiming(rect.w, REFLOW);
+    } else {
+      // with some motion nothing slides across the grid: the tiles take their places
+      x.value = rect.x; y.value = rect.y; w.value = rect.w;
     }
   }, [rect.x, rect.y, rect.w, isDragging, level]);
 
@@ -770,9 +797,9 @@ function QuickTile({ q, meta, index, rect, wide, rects, isDragging, onDragState,
       <Animated.View style={[st.qaTile, { zIndex: isDragging ? 10 : 0, elevation: isDragging ? 10 : 0 }, aStyle]}>
         <Animated.View
           style={st.qaFill}
-          entering={fadeIn && level !== 'none' ? FadeIn.duration(220) : undefined}
+          entering={fadeIn && level !== 'none' ? FadeIn.duration(level === 'full' ? 220 : 180) : undefined}
           // a removed shortcut shrinks away while the others slide into its place
-          exiting={level === 'none' ? undefined : ZoomOut.duration(180)}
+          exiting={level === 'none' ? undefined : level === 'full' ? ZoomOut.duration(180) : FadeOut.duration(160)}
         >
           <Bouncy
             onPress={() => onRun(q)}
@@ -797,8 +824,8 @@ function QuickTile({ q, meta, index, rect, wide, rects, isDragging, onDragState,
           </Bouncy>
           {edit ? (
             <Animated.View
-              entering={level === 'none' ? undefined : ZoomIn.duration(200)}
-              exiting={level === 'none' ? undefined : ZoomOut.duration(140)}
+              entering={level === 'none' ? undefined : level === 'full' ? ZoomIn.duration(200) : FadeIn.duration(180)}
+              exiting={level === 'none' ? undefined : level === 'full' ? ZoomOut.duration(140) : FadeOut.duration(140)}
               style={st.qaX}
             >
               <IconBtn name="close-circle" size={18} color={C.danger} pad={4} onPress={() => onRemove(q.id)} accessibilityLabel={'Remove ' + q.label} />
@@ -913,15 +940,19 @@ const QuickGrid = React.memo(function QuickGrid({ items, metas, edit, onRun, onR
   );
 });
 
-function WeekBar({ label, mins, maxMins, isToday }: {
+function WeekBar({ label, mins: minsNow, maxMins: maxNow, isToday }: {
   label: string; mins: number; maxMins: number; isToday: boolean;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
+  // a week that changed behind another tab moves once Today is back in view
+  const mins = useWhenSeen(minsNow);
+  const maxMins = useWhenSeen(maxNow);
   const target = Math.max(4, (mins / maxMins) * 56);
   const h = useSharedValue(target);
   React.useEffect(() => {
-    h.value = level === 'none' ? target : withTiming(target, BAR_EASE);
+    // the fill is a change in place: the full ease with every animation on, a short one with some
+    h.value = level === 'none' ? target : withTiming(target, level === 'full' ? BAR_EASE : CHANGE);
   }, [target, level]);
   // a full-height fill rises from the trough floor: a transform, never a height
   const fillStyle = useAnimatedStyle(() => ({ transform: [{ translateY: 56 - h.value }] }));
@@ -962,46 +993,46 @@ const st = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, marginLeft: 10,
   },
-  tagText: { fontFamily: F.bold, fontSize: 11, letterSpacing: 1.2 },
+  tagText: { fontFamily: F.bold, fontSize: 11, letterSpacing: TRACK.caps },
   vDivider: { width: StyleSheet.hairlineWidth, backgroundColor: C.hairline, alignSelf: 'stretch', marginVertical: 12 },
   glanceValue: { ...T.numStat },
-  glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: 0.4 },
+  glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: TRACK.fine },
   qaTile: { position: 'absolute', left: 0, top: 0, height: QA_ROW_H },
   qaFill: { flex: 1 },
   qaFace: { flex: 1, borderRadius: 18 },
   qaWide: { padding: 12, justifyContent: 'space-between' },
   qaSmall: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-  qaLabel: { flex: 1, marginLeft: 8, color: C.text, fontFamily: F.med, fontSize: 13 },
-  qaSmallLabel: { maxWidth: '100%', marginTop: 6, color: C.textDim, fontFamily: F.med, fontSize: 11 },
-  qaMeta: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 15 },
+  qaLabel: { flex: 1, marginLeft: 8, color: C.text, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
+  qaSmallLabel: { maxWidth: '100%', marginTop: 6, color: C.textDim, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.small },
+  qaMeta: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 15 },
   qaX: { position: 'absolute', top: 1, right: 1 },
   qaAddWrap: { position: 'absolute', left: 0, right: 0, height: QA_ADD_H },
   qaAdd: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     borderRadius: 18, borderWidth: 1, borderStyle: 'dashed',
   },
-  qaAddText: { color: C.textDim, fontFamily: F.med, fontSize: 13 },
-  link: { fontFamily: F.semi, fontSize: 13 },
+  qaAddText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
+  link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   journalNudge: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingVertical: 14, paddingHorizontal: 16, borderRadius: S.radiusSm, marginTop: 18, marginBottom: 4,
   },
-  journalNudgeText: { flex: 1, color: C.textDim, fontFamily: F.med, fontSize: 14 },
+  journalNudgeText: { flex: 1, color: C.textDim, fontFamily: F.med, fontSize: 14, letterSpacing: TRACK.small },
   taskWrap: { flex: 1, marginLeft: 12 },
-  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: 0.1 },
+  taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body },
   missionPill: {
     backgroundColor: C.amber + '1C', borderColor: C.amber + '55', borderWidth: 1,
     borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8,
   },
-  missionPillText: { color: C.amber, fontFamily: F.bold, fontSize: 11, letterSpacing: 1 },
-  barValue: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginBottom: 4, fontVariant: ['tabular-nums'] },
-  barLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 7 },
+  missionPillText: { color: C.amber, fontFamily: F.bold, fontSize: 11, letterSpacing: TRACK.caps },
+  barValue: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginBottom: 4, fontVariant: ['tabular-nums'] },
+  barLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 7 },
   barTrough: {
     width: 16, height: 56, borderRadius: 8,
     overflow: 'hidden', justifyContent: 'flex-end',
   },
   sheetSection: {
     color: C.textFaint, fontFamily: F.semi, fontSize: 11,
-    textTransform: 'uppercase', letterSpacing: 1.6, marginTop: 14, marginBottom: 8,
+    textTransform: 'uppercase', letterSpacing: TRACK.caps, marginTop: 14, marginBottom: 8,
   },
 });

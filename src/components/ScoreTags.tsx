@@ -1,10 +1,11 @@
 import React from 'react';
 import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, S, T } from '../theme';
+import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import { ScoreTag, TAG_COLORS, categoriesOf, plainTagsOf, promoteToCategory, tagUse, tagsOf } from '../scores';
 import { toast } from './Toast';
+import { Appear } from './Motion';
 import { Chip, Field, IconBtn, PillButton, Row, Sheet, Hairline, Toggle } from './UI';
 import { tick } from '../haptics';
 
@@ -94,7 +95,7 @@ export function TagPicker({ value, onChange, label = 'Tags' }: {
         />
         <IconBtn name="add-circle" color={draft.trim() ? C.accent : C.textFaint} size={26} style={{ marginLeft: 8, marginTop: 6 }} onPress={add} accessibilityLabel="Add this tag" />
       </Row>
-      {clash ? <Text style={[st.problem, { marginTop: 6, marginBottom: 14 }]}>{clash}</Text> : null}
+      {clash ? <Appear><Text style={[st.problem, { marginTop: 6, marginBottom: 14 }]}>{clash}</Text></Appear> : null}
     </>
   );
 }
@@ -185,7 +186,9 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
       <Sheet visible={!!edit} onClose={() => setEdit(null)} title={edit ? edit.label : 'Tag'}>
         <Field label="Name" value={name} onChangeText={(v) => { setName(v); setTaken(''); }} maxLength={40} />
         {taken ? (
-          <Text style={st.problem}>{taken === 'empty' ? 'Give the tag a name.' : 'Another tag already has that name.'}</Text>
+          <Appear>
+            <Text style={st.problem}>{taken === 'empty' ? 'Give the tag a name.' : 'Another tag already has that name.'}</Text>
+          </Appear>
         ) : null}
         <Row style={{ alignItems: 'center', marginBottom: 6 }}>
           <View style={{ flex: 1, marginRight: 12 }}>
@@ -262,9 +265,9 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
 
 const st = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
-  section: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: 2.2, textTransform: 'uppercase', marginBottom: 8, marginLeft: 2 },
-  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2, marginLeft: 2, marginBottom: 8 },
-  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, lineHeight: 17, marginTop: -8, marginBottom: 12 },
+  section: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.caps, textTransform: 'uppercase', marginBottom: 8, marginLeft: 2 },
+  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
+  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -8, marginBottom: 12 },
   manageRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 2 },
   dot: { width: 26, height: 26, borderRadius: 13, borderWidth: 1 },
   dots: { flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: 6 },

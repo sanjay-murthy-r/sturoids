@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
-import { C, F, T } from '../theme';
+import { C, F, T, TRACK } from '../theme';
 import { NeuIconBtn, useTheme } from './UI';
 import { Bouncy, EASE_OUT, shiftIn, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
@@ -133,11 +133,11 @@ const st = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   row: { flexDirection: 'row' },
   cellBox: { width: `${100 / 7}%`, alignItems: 'center', justifyContent: 'center', paddingVertical: 4 },
-  weekday: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: 0.6 },
+  weekday: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.fine },
   cell: {
     width: CELL, height: CELL, borderRadius: CELL / 2, borderWidth: 1.5, borderColor: 'transparent',
     alignItems: 'center', justifyContent: 'center',
   },
-  day: { color: C.textDim, fontFamily: F.med, fontSize: 14, fontVariant: ['tabular-nums'] },
+  day: { color: C.textDim, fontFamily: F.med, fontSize: 14, letterSpacing: TRACK.small, fontVariant: ['tabular-nums'] },
   mark: { position: 'absolute', bottom: 6, width: 4, height: 4, borderRadius: 2, backgroundColor: C.gold },
 });

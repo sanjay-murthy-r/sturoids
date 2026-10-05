@@ -4,7 +4,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, S, T } from '../theme';
+import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import {
   ScoreIndex, ScoreNode, ScoreResult, ScoreTag, categoriesOf, categoryOf, combineParts, fmtExamDate, fmtMark, fmtPct,
@@ -13,7 +13,7 @@ import {
 import { todayKey } from '../utils';
 import { shiftKey } from '../journal';
 import { ScreenBG, Card, Chip, Field, Hairline, IconBtn, NeuHeader, PillButton, Row, SectionTitle, Toggle } from '../components/UI';
-import { Enter, useAnimLevel } from '../components/Motion';
+import { EASE_OUT, Enter, useAnimLevel, useBuilt } from '../components/Motion';
 import { TagPicker } from '../components/ScoreTags';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { JournalCalendar } from '../components/JournalCalendar';
@@ -148,6 +148,10 @@ export function ExamFormScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const level = useAnimLevel();
+  // what turns up after the form was built (the marks row, a weight, the total, a new category's field) fades in where
+  // it stands; what the form is built with arrives with the form's own entrance
+  const built = useBuilt();
+  const popIn = built.current && level !== 'none' ? FadeIn.duration(level === 'full' ? 220 : 180).easing(EASE_OUT) : undefined;
   const scores = useStore((s) => s.scores);
   const tags = useStore((s) => s.scoreTags);
   const saveExam = useStore((s) => s.saveExam);
@@ -349,7 +353,7 @@ export function ExamFormScreen() {
           <Field
             label="Exam" value={d.title} onChangeText={(v) => { set({ title: v }); if (problems.title) setProblems((p) => ({ ...p, title: '' })); }}
             placeholder={suggestion || 'e.g. Mock test 7'} autoFocus={!editing && !suggestion} maxLength={80}
-            style={{ fontSize: 20, fontFamily: F.semi, marginBottom: 0 }}
+            style={{ fontSize: 20, letterSpacing: TRACK.large, fontFamily: F.semi, marginBottom: 0 }}
           />
           {problems.title ? <Text style={st.problem}>{problems.title}</Text> : null}
           {!d.title.trim() && suggestion ? (
@@ -370,16 +374,18 @@ export function ExamFormScreen() {
             ) : null}
           </View>
           {newCat != null ? (
-            <Row style={{ alignItems: 'flex-start' }}>
-              <Field
-                value={newCat} onChangeText={setNewCat} placeholder="e.g. JEE Main mocks" maxLength={40} autoFocus
-                style={{ flex: 1, marginBottom: 0 }} onSubmitEditing={makeCategory} returnKeyType="done"
-              />
-              <IconBtn
-                name="add-circle" color={newCat.trim() ? C.accent : C.textFaint} size={26} style={{ marginLeft: 8, marginTop: 4 }}
-                onPress={makeCategory} accessibilityLabel="Make this category"
-              />
-            </Row>
+            <Animated.View entering={popIn}>
+              <Row style={{ alignItems: 'flex-start' }}>
+                <Field
+                  value={newCat} onChangeText={setNewCat} placeholder="e.g. JEE Main mocks" maxLength={40} autoFocus
+                  style={{ flex: 1, marginBottom: 0 }} onSubmitEditing={makeCategory} returnKeyType="done"
+                />
+                <IconBtn
+                  name="add-circle" color={newCat.trim() ? C.accent : C.textFaint} size={26} style={{ marginLeft: 8, marginTop: 4 }}
+                  onPress={makeCategory} accessibilityLabel="Make this category"
+                />
+              </Row>
+            </Animated.View>
           ) : null}
           <Text style={[st.hint, { marginTop: newCat != null ? 8 : 0 }]}>
             {categories.length
@@ -427,109 +433,111 @@ export function ExamFormScreen() {
               </Pressable>
             </View>
           ) : null}
-          {hasSubjects ? (
-            <Card pad={16}>
-              <View style={st.headRow}>
-                <Text style={[st.colHead, { flex: 1 }]}>Subject</Text>
-                <Text style={[st.colHead, st.numCol]}>Score</Text>
-                <View style={st.slash} />
-                <Text style={[st.colHead, st.numCol]}>Out of</Text>
-                <View style={st.removeCol} />
-              </View>
-              {rowsShown.map((r, i) => {
-                const lockedNode = r.locked && r.id ? ix.byId.get(r.id) : undefined;
-                const lockedRes = lockedNode ? resultOf(lockedNode, ix) : null;
-                return (
-                  <Animated.View
-                    key={r.key}
-                    entering={firstRows.has(r.key) || level === 'none' ? undefined : FadeIn.duration(220)}
-                    exiting={level === 'none' ? undefined : FadeOut.duration(140)}
-                  >
-                    {i > 0 ? <View style={{ height: 6 }} /> : null}
-                    <View style={st.subjectRow}>
-                      <Field
-                        value={r.title} onChangeText={(v) => setRow(r.key, { title: v })} placeholder={i === 0 ? 'Physics' : 'Subject'}
-                        maxLength={60} autoFocus={r.key === init.focusKey || (!firstRows.has(r.key) && !r.title)}
-                        style={{ flex: 1, marginBottom: 0 }}
-                      />
-                      {r.locked ? (
-                        <Text style={[st.lockedPct, { width: 56 * 2 + 16 }]} numberOfLines={1}>
-                          {lockedRes ? fmtPct(lockedRes.pct) : 'Not marked'}
-                        </Text>
-                      ) : (
-                        <>
-                          <Field
-                            value={r.score} onChangeText={(v) => setRow(r.key, { score: v })} placeholder="-"
-                            keyboardType="numeric" style={[st.numField, { marginBottom: 0 }]} maxLength={8}
-                            accessibilityLabel={(r.title || 'Subject') + ' score'}
-                          />
-                          <Text style={st.slashText}>/</Text>
-                          <Field
-                            value={r.outOf} onChangeText={(v) => setRow(r.key, { outOf: v })} placeholder="100"
-                            keyboardType="numeric" style={[st.numField, { marginBottom: 0 }]} maxLength={8}
-                            accessibilityLabel={(r.title || 'Subject') + ' out of'}
-                          />
-                        </>
-                      )}
-                      <IconBtn
-                        name="remove-circle-outline" size={19} color={C.textFaint} pad={6} style={{ marginLeft: 2 }}
-                        onPress={() => removeRow(r.key)} accessibilityLabel={'Take out ' + (r.title || 'this subject')}
-                      />
-                    </View>
-                    {weighted ? (
-                      <View style={st.weightRow}>
-                        <Text style={st.colHead}>Weight</Text>
+          <Animated.View key={hasSubjects ? 'rows' : 'none'} entering={popIn}>
+            {hasSubjects ? (
+              <Card pad={16}>
+                <View style={st.headRow}>
+                  <Text style={[st.colHead, { flex: 1 }]}>Subject</Text>
+                  <Text style={[st.colHead, st.numCol]}>Score</Text>
+                  <View style={st.slash} />
+                  <Text style={[st.colHead, st.numCol]}>Out of</Text>
+                  <View style={st.removeCol} />
+                </View>
+                {rowsShown.map((r, i) => {
+                  const lockedNode = r.locked && r.id ? ix.byId.get(r.id) : undefined;
+                  const lockedRes = lockedNode ? resultOf(lockedNode, ix) : null;
+                  return (
+                    <Animated.View
+                      key={r.key}
+                      entering={firstRows.has(r.key) || level === 'none' ? undefined : FadeIn.duration(level === 'full' ? 220 : 180)}
+                      exiting={level === 'none' ? undefined : FadeOut.duration(140)}
+                    >
+                      {i > 0 ? <View style={{ height: 6 }} /> : null}
+                      <View style={st.subjectRow}>
                         <Field
-                          value={r.weight} onChangeText={(v) => setRow(r.key, { weight: v })} placeholder="1"
-                          keyboardType="numeric" style={[st.numField, { marginBottom: 0, marginLeft: 10 }]} maxLength={6}
-                          accessibilityLabel={(r.title || 'Subject') + ' weight'}
+                          value={r.title} onChangeText={(v) => setRow(r.key, { title: v })} placeholder={i === 0 ? 'Physics' : 'Subject'}
+                          maxLength={60} autoFocus={r.key === init.focusKey || (!firstRows.has(r.key) && !r.title)}
+                          style={{ flex: 1, marginBottom: 0 }}
+                        />
+                        {r.locked ? (
+                          <Text style={[st.lockedPct, { width: 56 * 2 + 16 }]} numberOfLines={1}>
+                            {lockedRes ? fmtPct(lockedRes.pct) : 'Not marked'}
+                          </Text>
+                        ) : (
+                          <>
+                            <Field
+                              value={r.score} onChangeText={(v) => setRow(r.key, { score: v })} placeholder="-"
+                              keyboardType="numeric" style={[st.numField, { marginBottom: 0 }]} maxLength={8}
+                              accessibilityLabel={(r.title || 'Subject') + ' score'}
+                            />
+                            <Text style={st.slashText}>/</Text>
+                            <Field
+                              value={r.outOf} onChangeText={(v) => setRow(r.key, { outOf: v })} placeholder="100"
+                              keyboardType="numeric" style={[st.numField, { marginBottom: 0 }]} maxLength={8}
+                              accessibilityLabel={(r.title || 'Subject') + ' out of'}
+                            />
+                          </>
+                        )}
+                        <IconBtn
+                          name="remove-circle-outline" size={19} color={C.textFaint} pad={6} style={{ marginLeft: 2 }}
+                          onPress={() => removeRow(r.key)} accessibilityLabel={'Take out ' + (r.title || 'this subject')}
                         />
                       </View>
-                    ) : null}
-                    {r.locked ? <Text style={st.hint}>Has subjects of its own. Its marks are theirs; change them on its page.</Text> : null}
-                    {rowError(r.key) ? <Text style={st.problem}>{rowError(r.key)}</Text> : null}
-                  </Animated.View>
-                );
-              })}
-              <View style={{ flexDirection: 'row', marginTop: 16 }}>
-                <Chip small icon="add" label="Add a subject" onPress={addRow} />
-              </View>
-              {live ? (
-                <>
-                  <Hairline />
-                  <View style={st.totalRow}>
-                    <Text style={T.kicker}>{d.ownMarks ? 'Subjects add up to' : 'Total'}</Text>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      {live.result ? (
-                        <Text style={st.totalPct}>
-                          {live.result.score != null && live.result.outOf != null
-                            ? fmtMark(live.result.score) + ' / ' + fmtMark(live.result.outOf) + '  ·  '
-                            : ''}
-                          {fmtPct(live.result.pct)}
-                        </Text>
-                      ) : (
-                        <Text style={[st.totalPct, { color: C.textFaint }]}>
-                          {live.full != null && live.full > 0 ? 'Out of ' + fmtMark(live.full) : 'Not marked yet'}
-                        </Text>
-                      )}
-                      {live.result && live.result.marked != null && live.result.parts != null && live.result.marked < live.result.parts ? (
-                        <Text style={[T.caption, { marginTop: 2 }]}>{live.result.marked} of {live.result.parts} marked</Text>
+                      {weighted ? (
+                        <Animated.View entering={popIn} style={st.weightRow}>
+                          <Text style={st.colHead}>Weight</Text>
+                          <Field
+                            value={r.weight} onChangeText={(v) => setRow(r.key, { weight: v })} placeholder="1"
+                            keyboardType="numeric" style={[st.numField, { marginBottom: 0, marginLeft: 10 }]} maxLength={6}
+                            accessibilityLabel={(r.title || 'Subject') + ' weight'}
+                          />
+                        </Animated.View>
                       ) : null}
+                      {r.locked ? <Text style={st.hint}>Has subjects of its own. Its marks are theirs; change them on its page.</Text> : null}
+                      {rowError(r.key) ? <Text style={st.problem}>{rowError(r.key)}</Text> : null}
+                    </Animated.View>
+                  );
+                })}
+                <View style={{ flexDirection: 'row', marginTop: 16 }}>
+                  <Chip small icon="add" label="Add a subject" onPress={addRow} />
+                </View>
+                {live ? (
+                  <Animated.View entering={popIn}>
+                    <Hairline />
+                    <View style={st.totalRow}>
+                      <Text style={T.kicker}>{d.ownMarks ? 'Subjects add up to' : 'Total'}</Text>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        {live.result ? (
+                          <Text style={st.totalPct}>
+                            {live.result.score != null && live.result.outOf != null
+                              ? fmtMark(live.result.score) + ' / ' + fmtMark(live.result.outOf) + '  ·  '
+                              : ''}
+                            {fmtPct(live.result.pct)}
+                          </Text>
+                        ) : (
+                          <Text style={[st.totalPct, { color: C.textFaint }]}>
+                            {live.full != null && live.full > 0 ? 'Out of ' + fmtMark(live.full) : 'Not marked yet'}
+                          </Text>
+                        )}
+                        {live.result && live.result.marked != null && live.result.parts != null && live.result.marked < live.result.parts ? (
+                          <Text style={[T.caption, { marginTop: 2 }]}>{live.result.marked} of {live.result.parts} marked</Text>
+                        ) : null}
+                      </View>
                     </View>
-                  </View>
-                </>
-              ) : null}
-            </Card>
-          ) : (
-            <Card pad={18}>
-              <Text style={T.label}>
-                Split it into subjects, like Physics, Chemistry and Maths, and their marks add up as you type. Or give the whole exam one mark below.
-              </Text>
-              <View style={{ flexDirection: 'row', marginTop: 14 }}>
-                <Chip small icon="add" label="Add a subject" onPress={addRow} />
-              </View>
-            </Card>
-          )}
+                  </Animated.View>
+                ) : null}
+              </Card>
+            ) : (
+              <Card pad={18}>
+                <Text style={T.label}>
+                  Split it into subjects, like Physics, Chemistry and Maths, and their marks add up as you type. Or give the whole exam one mark below.
+                </Text>
+                <View style={{ flexDirection: 'row', marginTop: 14 }}>
+                  <Chip small icon="add" label="Add a subject" onPress={addRow} />
+                </View>
+              </Card>
+            )}
+          </Animated.View>
           {rowsShown.length >= 2 ? (
             <View style={{ marginTop: 18 }}>
               <Text style={st.label}>How subjects add up</Text>
@@ -555,16 +563,18 @@ export function ExamFormScreen() {
             </Row>
           ) : null}
           {!hasSubjects || d.ownMarks ? (
-            <Row style={{ alignItems: 'flex-start', gap: 14, marginTop: hasSubjects ? 12 : 0 }}>
-              <Field
-                label="Score" value={d.score} onChangeText={(v) => set({ score: v })} placeholder="68"
-                keyboardType="numeric" style={{ flex: 1, marginBottom: 0 }} maxLength={10}
-              />
-              <Field
-                label="Out of" value={d.outOf} onChangeText={(v) => set({ outOf: v })} placeholder="100"
-                keyboardType="numeric" style={{ flex: 1, marginBottom: 0 }} maxLength={10}
-              />
-            </Row>
+            <Animated.View entering={popIn}>
+              <Row style={{ alignItems: 'flex-start', gap: 14, marginTop: hasSubjects ? 12 : 0 }}>
+                <Field
+                  label="Score" value={d.score} onChangeText={(v) => set({ score: v })} placeholder="68"
+                  keyboardType="numeric" style={{ flex: 1, marginBottom: 0 }} maxLength={10}
+                />
+                <Field
+                  label="Out of" value={d.outOf} onChangeText={(v) => set({ outOf: v })} placeholder="100"
+                  keyboardType="numeric" style={{ flex: 1, marginBottom: 0 }} maxLength={10}
+                />
+              </Row>
+            </Animated.View>
           ) : null}
           <Text style={problems.marks ? st.problem : st.hint}>
             {problems.marks
@@ -613,23 +623,23 @@ export function ExamFormScreen() {
 
 const st = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
-  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2, marginLeft: 2, marginBottom: 8 },
-  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 17, marginTop: 6 },
-  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, lineHeight: 17, marginTop: 6 },
-  link: { fontFamily: F.semi, fontSize: 13 },
+  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
+  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6 },
+  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6 },
+  link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   templateRow: { flexDirection: 'row', alignItems: 'center', marginTop: -4, marginBottom: 12, paddingHorizontal: 2 },
   headRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
-  colHead: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: 0.3 },
+  colHead: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine },
   numCol: { width: 56, textAlign: 'center' },
   slash: { width: 16 },
   removeCol: { width: 33 },
   subjectRow: { flexDirection: 'row', alignItems: 'flex-end' },
   numField: { width: 56, textAlign: 'center', fontVariant: ['tabular-nums'], marginLeft: 0 },
-  slashText: { width: 16, textAlign: 'center', color: C.textFaint, fontFamily: F.reg, fontSize: 15, paddingBottom: 11 },
-  lockedPct: { color: C.textDim, fontFamily: F.med, fontSize: 14, textAlign: 'center', paddingBottom: 11, fontVariant: ['tabular-nums'] },
+  slashText: { width: 16, textAlign: 'center', color: C.textFaint, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body, paddingBottom: 11 },
+  lockedPct: { color: C.textDim, fontFamily: F.med, fontSize: 14, letterSpacing: TRACK.small, textAlign: 'center', paddingBottom: 11, fontVariant: ['tabular-nums'] },
   weightRow: { flexDirection: 'row', alignItems: 'flex-end', marginTop: 4, marginLeft: 2 },
   totalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 14 },
-  totalPct: { ...T.numStat, fontSize: 17, lineHeight: 22, letterSpacing: 0 },
+  totalPct: { ...T.numStat, fontSize: 17, lineHeight: 22, letterSpacing: TRACK.title },
   moreRow: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', paddingVertical: 4, marginTop: 22, marginBottom: 14 },
   bar: { paddingHorizontal: S.pad, paddingTop: 10 },
 });

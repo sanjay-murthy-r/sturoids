@@ -10,10 +10,11 @@ import Animated, {
   Easing, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming, LayoutAnimationConfig } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, SH, T, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
+import { C, F, MIN, S, SH, T, TRACK, ThemeMode, bgFor, neuRaised, neuInset, neuPressedInner } from '../theme';
 import { useStore } from '../store';
 import {
-  Bouncy, CHANGE, EASE_OUT, RISE_OUT, glide, rowIn, rowOut, useAnimLevel, useAppear, useEntrance,
+  ARRIVE, Bouncy, CHANGE, EASE_OUT, FADE_IN, FADE_OUT, FadeSwap, LEAVE, RISE_OUT, glide, rowIn, rowOut, useAnimLevel,
+  useAppear, useEntrance,
 } from './Motion';
 import { tap, tick } from '../haptics';
 import { stepTab } from '../toolNav';
@@ -87,7 +88,11 @@ export function NeuHeader({ title, right, onBack, variant = 'page', compact = fa
           flexDirection: 'row', alignItems: 'center', backgroundColor: bgFor(theme),
         }}
       >
-        <Text numberOfLines={1} style={[T.display, { flex: 1 }]}>{title}</Text>
+        {/* a title that changes in place (a tab's tool swapped, a page named differently) dips and comes back as
+            the new words instead of snapping */}
+        <FadeSwap swapKey={title} style={{ flex: 1 }}>
+          <Text numberOfLines={1} style={T.display}>{title}</Text>
+        </FadeSwap>
         {right}
       </View>
     );
@@ -103,12 +108,9 @@ export function NeuHeader({ title, right, onBack, variant = 'page', compact = fa
       {page ? (
         <NeuIconBtn name="arrow-back" dim={38} size={19} color={C.textDim} onPress={onBack || (() => router.back())} accessibilityLabel="Back" />
       ) : null}
-      <Text
-        numberOfLines={1}
-        style={[T.head, { flex: 1, marginLeft: page ? 12 : 0 }]}
-      >
-        {title}
-      </Text>
+      <FadeSwap swapKey={title} style={{ flex: 1, marginLeft: page ? 12 : 0 }}>
+        <Text numberOfLines={1} style={T.head}>{title}</Text>
+      </FadeSwap>
       {right}
     </View>
   );
@@ -158,7 +160,7 @@ export function InfoDot({ text, size = 15 }: { text: string; size?: number }) {
                 : { backgroundColor: C.card, ...neuRaised('high') },
             ]}
           >
-            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 12, lineHeight: 17 }}>{text}</Text>
+            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17 }}>{text}</Text>
           </View>
         </Pressable>
       </Modal>
@@ -243,7 +245,7 @@ export function Chip({
   }, [active, level]);
   const litStyle = useAnimatedStyle(() => ({ opacity: on.value }));
   const restStyle = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
-  const textStyle = [st.chipText, small && { fontSize: 12 }, active && { fontFamily: F.semi }];
+  const textStyle = [st.chipText, small && { fontSize: 12, letterSpacing: TRACK.fine }, active && { fontFamily: F.semi }];
   const iconSize = small ? 13 : 15;
   return (
     <Bouncy
@@ -298,7 +300,7 @@ export function PillButton({
       ]}
     >
       {icon ? <Ionicons name={icon} size={small ? 14 : 16} color={c} style={{ marginRight: 7 }} /> : null}
-      <Text style={{ color: c, fontFamily: F.semi, fontSize: small ? 13 : 15, letterSpacing: 0.1 }}>{label}</Text>
+      <Text style={{ color: c, fontFamily: F.semi, fontSize: small ? 13 : 15, letterSpacing: small ? TRACK.small : TRACK.body }}>{label}</Text>
     </Bouncy>
   );
 }
@@ -590,11 +592,15 @@ export function Hairline() {
   return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: C.hairline, marginVertical: 2 }} />;
 }
 
-/** a sheet rises on a decelerating ease, quick off the mark and soft to land, and leaves on a short accelerating one */
-const SHEET_OPEN = { duration: 320, easing: EASE_OUT };
-const SHEET_CLOSE = { duration: 210, easing: Easing.in(Easing.quad) };
+/** a sheet's motion at each level: what it arrives and leaves on (see Sheet) */
+const SLIDE = { arrive: ARRIVE, leave: LEAVE };
+const FADE = { arrive: FADE_IN, leave: FADE_OUT };
 
-/** Bottom sheet: the backdrop fades while the panel rises from below the screen's edge, its whole height. */
+/**
+ * Bottom sheet: the backdrop fades while the panel rises from below the screen's edge, its whole height. It rises on the
+ * emphasised out-curve, quick off the mark and long to settle, and leaves in about two thirds of the time on an
+ * accelerating one. With only some motion nothing travels: the panel fades in place, a little quicker out than in.
+ */
 export function Sheet({
   visible, onClose, onClosed, title, children,
 }: {
@@ -614,7 +620,13 @@ export function Sheet({
   const [render, setRender] = React.useState(visible);
   // a sheet built already open still rises into view, so it starts below the edge unless motion is off
   const prog = useSharedValue(visible && level === 'none' ? 1 : 0);
+  // the backdrop fades on its own value beside the panel's, so correcting where the panel is never makes it flicker
+  const dim = useSharedValue(visible && level === 'none' ? 1 : 0);
   const drag = useSharedValue(0);
+  // the motion this render's level calls for, read by the callbacks below (they are made once)
+  const slides = level === 'full';
+  const motion = React.useRef(slides ? SLIDE : FADE);
+  motion.current = slides ? SLIDE : FADE;
   // the panel's own height, so it can start wholly below the edge; a screen's height until it has measured, so its
   // first frame is always out of sight
   const panelH = useSharedValue(winH);
@@ -634,26 +646,32 @@ export function Sheet({
   }, []);
   const rise = React.useCallback(() => {
     waiting.current = false;
-    prog.value = withTiming(1, SHEET_OPEN);
+    dim.value = withTiming(1, motion.current.arrive);
+    prog.value = withTiming(1, motion.current.arrive);
   }, []);
   React.useEffect(() => {
     if (visible) {
-      drag.value = 0;
       tap();
       if (level === 'none') {
+        drag.value = 0;
         leaving.current = false;
         mounted.current = true;
         prog.value = 1;
+        dim.value = 1;
         setRender(true);
         return undefined;
       }
       if (leaving.current) {
-        // opened again while it was still leaving: it turns round from where it is
+        // opened again while it was still leaving: it turns round from where it is, and a pull it had been taken
+        // down by eases back with it instead of jumping
         leaving.current = false;
+        drag.value = withTiming(0, motion.current.arrive);
         rise();
         return undefined;
       }
+      drag.value = 0;
       prog.value = 0;
+      dim.value = 0;
       panelH.value = winH;
       waiting.current = true;
       mounted.current = true;
@@ -665,10 +683,11 @@ export function Sheet({
     // closed before it had risen: it must not rise once its layout arrives
     waiting.current = false;
     if (mounted.current) {
-      if (level === 'none') { prog.value = 0; finishClose(); }
+      if (level === 'none') { prog.value = 0; dim.value = 0; finishClose(); }
       else {
         leaving.current = true;
-        prog.value = withTiming(0, SHEET_CLOSE, (fin) => {
+        dim.value = withTiming(0, motion.current.leave);
+        prog.value = withTiming(0, motion.current.leave, (fin) => {
           if (fin) runOnJS(finishClose)();
         });
       }
@@ -678,13 +697,13 @@ export function Sheet({
   const onPanelLayout = React.useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
     const h = e.nativeEvent.layout.height;
     const p = prog.value;
-    if (!waiting.current && p > 0 && p < 1 && !leaving.current && Math.abs(h - panelH.value) > 1) {
+    if (motion.current === SLIDE && !waiting.current && p > 0 && p < 1 && !leaving.current && Math.abs(h - panelH.value) > 1) {
       // the real height landed mid-rise (after the fallback or a turn-round started it on a guess): keep the panel
-      // where it is on screen and rise the rest of the way, instead of jumping
+      // where it is on screen and rise the rest of the way, instead of jumping. The backdrop is not touched.
       const off = (1 - p) * (panelH.value + 24);
       panelH.value = h;
       prog.value = Math.max(0, Math.min(1, 1 - off / (h + 24)));
-      prog.value = withTiming(1, SHEET_OPEN);
+      prog.value = withTiming(1, ARRIVE);
       return;
     }
     panelH.value = h;
@@ -692,13 +711,13 @@ export function Sheet({
   }, []);
   // the backdrop comes and goes with the panel, and thins a little as a pull takes the panel down
   const backdropStyle = useAnimatedStyle(() => ({
-    opacity: Math.min(1, prog.value) * (1 - 0.5 * Math.min(1, drag.value / Math.max(1, panelH.value))),
+    opacity: Math.min(1, dim.value) * (1 - 0.5 * Math.min(1, drag.value / Math.max(1, panelH.value))),
   }));
-  // NOTE: the panel keeps full opacity — only the slide is animated. (An
-  // animated panel opacity read as a "transparent popup" bug on device.)
-  const panelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: (1 - prog.value) * (panelH.value + 24) + drag.value }],
-  }));
+  // NOTE: with full motion the panel keeps full opacity and only slides. (An animated opacity on top of the slide read
+  // as a "transparent popup" bug on device.) With some motion nothing slides, so it fades in place instead.
+  const panelStyle = useAnimatedStyle(() => (slides
+    ? { opacity: 1, transform: [{ translateY: (1 - prog.value) * (panelH.value + 24) + drag.value }] }
+    : { opacity: prog.value, transform: [{ translateY: drag.value }] }));
   // a pull on the handle or the title follows the finger; far enough, or flicked, it closes the sheet
   const closeRef = React.useRef(onClose);
   closeRef.current = onClose;
@@ -1002,7 +1021,7 @@ const st = StyleSheet.create({
   chipSmall: { paddingVertical: 5, paddingHorizontal: 11 },
   /** the resting outline, or the chosen tint with its coloured edge: two layers that cross over */
   chipEdge: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999, borderWidth: 1 },
-  chipText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: 0.1 },
+  chipText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
   /** a second ink laid exactly over the first, for colours that cross over */
   ink: { position: 'absolute', top: 0, left: 0, right: 0 },
   pill: {
@@ -1026,18 +1045,18 @@ const st = StyleSheet.create({
     ...neuRaised('low'),
   },
   knobFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: KNOB / 2 },
-  fieldLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: 0.2, marginLeft: 2, marginBottom: 2 },
+  fieldLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 2 },
   fieldInner: {
-    color: C.text, fontFamily: F.reg, paddingHorizontal: 2, paddingVertical: 10, fontSize: 15,
+    color: C.text, fontFamily: F.reg, paddingHorizontal: 2, paddingVertical: 10, fontSize: 15, letterSpacing: TRACK.body,
     marginBottom: 0,
   },
   fieldLine: { height: 1 },
   fieldLineOn: { position: 'absolute', left: 0, right: 0, top: -0.5, height: 2, transformOrigin: 'left' },
   emptyWrap: { alignItems: 'center', marginVertical: 24, paddingHorizontal: 16 },
   emptyWell: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  emptyTitle: { color: C.text, fontFamily: F.semi, fontSize: 15, textAlign: 'center' },
+  emptyTitle: { color: C.text, fontFamily: F.semi, fontSize: 15, letterSpacing: TRACK.body, textAlign: 'center' },
   emptyBody: {
-    color: C.textFaint, fontFamily: F.reg, fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 4, maxWidth: 300,
+    color: C.textFaint, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 19, textAlign: 'center', marginTop: 4, maxWidth: 300,
   },
   sheetOverlay: { flex: 1, backgroundColor: C.scrim },
   /** the handle and title: a taller target for the pull that closes a sheet */
@@ -1054,7 +1073,7 @@ const st = StyleSheet.create({
     backgroundColor: C.inset, marginBottom: 18,
     ...neuInset('hairline'),
   },
-  sheetTitle: { color: C.text, fontFamily: F.head, fontSize: 22, lineHeight: 28, letterSpacing: -0.3, marginBottom: 18 },
+  sheetTitle: { color: C.text, fontFamily: F.semi, fontSize: 20, lineHeight: 26, letterSpacing: TRACK.large, marginBottom: 18 },
   menuRow: {
     flexDirection: 'row', alignItems: 'center', paddingVertical: 15, paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.hairline,
