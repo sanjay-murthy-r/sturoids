@@ -7,12 +7,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
-  Easing, Extrapolation, interpolate, runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue, withDelay,
-  withSequence, withSpring, withTiming, LayoutAnimationConfig } from 'react-native-reanimated';
+  Easing, Extrapolation, interpolate, runOnJS, useAnimatedReaction, useAnimatedScrollHandler, useAnimatedStyle,
+  useDerivedValue, useSharedValue, withDelay, withSequence, withSpring, withTiming, LayoutAnimationConfig } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner } from '../theme';
+import {
+  AnimLevel, C, F, MIN, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner,
+} from '../theme';
 import { useStore } from '../store';
 import {
   ARRIVE, Bouncy, CHANGE, EASE_OUT, FADE_IN, FADE_OUT, FadeSwap, LEAVE, RISE_OUT, glide, rowIn, rowOut, useAnimLevel,
@@ -98,9 +100,14 @@ export interface ToolHeaderOptions {
   covered?: boolean;
   /** at most two sit in the tray; with more, the first stays beside an overflow button that opens the rest in a menu */
   actions?: ToolAction[];
-  /** free-form tray content, for the screens that have not moved to `actions` yet */
+  /** free-form tray content, for the screens that have not moved to `actions` yet (a tab's big title leaves no room for it) */
   right?: React.ReactNode;
   onBack?: () => void;
+  /**
+   * An animated style for what the bar holds (the compact title and the tray) and not for its ground, so a screen whose
+   * chrome stands back while the page is written in can fade and move it without the page showing through the ground.
+   */
+  contentStyle?: React.ComponentProps<typeof Animated.View>['style'];
 }
 
 /** The compact title and the context line, set as the Header Lab drew them. */
@@ -108,15 +115,36 @@ const CTX_SIZE = 12.5; // the lab's size, which falls between the type scale's w
 const CTX_EM_MAX = 26;
 /** the bar: a 40 high row between 8 above (below the status bar) and 8 below, so 56 with the status bar's inset */
 const BAR_ROW = 40;
+const BAR_PAD = 8;
 const BAR_SIDE = 12;
 const BACK_W = 40;
 const TITLE_GAP = 4;
+/** the tray's pill: its buttons, the padding and gaps between them, and the space before it, which the big title leaves free */
+const TRAY_BTN = 36;
+const TRAY_PAD = 2;
+const TRAY_GAP = 2;
+const TRAY_LEAD = 12;
 /** where a page's compact title starts, less the content's own side padding: its context line is indented to meet it */
 const PAGE_INDENT = BAR_SIDE + BACK_W + TITLE_GAP - S.pad;
-/** the scroll offsets over which the compact title takes the big title's place (the big title spans 4 to 40) */
+/** a tab's big title (the hero's first line) and the space above it inside the hero */
+const DISPLAY_LINE = T.display.lineHeight as number;
+const HERO_TOP = 4;
+/** the scroll offsets over which the compact title takes the big title's place (the big title leaves the bar's row by 36) */
 const TITLE_FROM = 12;
 const TITLE_TO = 36;
 const SHADE = [darkSh(0.3), darkSh(0)] as const;
+
+/** How much of an edge shows at a scroll offset: none at the top, all of it once the content has moved 14; a step with no motion. */
+export const edgeStrength = (y: number, level: AnimLevel) => {
+  'worklet';
+  return level === 'none' ? (y > 2 ? 1 : 0) : interpolate(y, [2, 14], [0, 1], Extrapolation.CLAMP);
+};
+
+/** How far the compact title has taken the big title's place: 0 at rest, 1 once the big title has scrolled away; a step with no motion. */
+const swapProgress = (y: number, level: AnimLevel) => {
+  'worklet';
+  return level === 'none' ? (y > (TITLE_FROM + TITLE_TO) / 2 ? 1 : 0) : interpolate(y, [TITLE_FROM, TITLE_TO], [0, 1], Extrapolation.CLAMP);
+};
 
 const clipEm = (p: ContextPart): ContextPart => (
   typeof p === 'string' || p.em.length <= CTX_EM_MAX ? p : { em: p.em.slice(0, CTX_EM_MAX - 1).trimEnd() + '…' }
@@ -158,34 +186,52 @@ const partsOf = (context: ToolHeaderOptions['context']): ContextPart[] | null =>
  *     <Animated.ScrollView {...header.scrollProps} contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop }}>
  *       <Enter index={0}>{header.hero}{firstBlock}</Enter>
  *
- * `bar` is fixed above the scroll, opaque in the screen's colour: a flat back chevron (page mode), the compact title,
- * and a carved tray of at most two icon actions. Once the content has scrolled, a hairline and a soft shade fade in under
- * it. `hero` is the first thing in the scroll and joins the screen's first entrance (put it inside that Enter, not in one
+ * `bar` holds a flat back chevron (page mode), the compact title, and a carved tray of at most two icon actions. In page
+ * mode it sits above the scroll, opaque in the screen's colour. In tab mode it is laid over the top of its parent (the
+ * screen's area, or a wrapper at its top), so the big title sits level with the tray: its ground is clear at rest and
+ * fills in with the screen's colour as the big title scrolls away, and touches in the clear parts reach the scroll
+ * beneath (once the ground is more than half in, it takes them). Once the content has scrolled, a hairline and a soft shade fade in under it (in tab mode, with the ground).
+ * `hero` is the first thing in the scroll and joins the screen's first entrance (put it inside that Enter, not in one
  * of its own): in tab mode the big title, with the compact one in the bar fading in as it scrolls away, and the context
  * line under it; in page mode only the context line, indented to start under the compact title. It is laid out inside
  * a scroll content that has S.pad on its sides. `scrollProps` goes on the Animated ScrollView or FlatList: the scroll
- * offset runs on the UI thread, and nothing is animated in height or layout. `padTop` is the content's top padding.
+ * offset runs on the UI thread, and nothing is animated in height or layout. `padTop` is the content's top padding: in
+ * tab mode it lifts the hero to the bar's row, in page mode it clears the bar above. `barH` is how much of the top the
+ * bar covers (tab mode; 0 in page mode, where the bar has its own space), for a screen that sets something other than
+ * the hero first. `scrollY` is the offset the bar follows, for a screen that sends its scroll back to the top without the
+ * user's hand (a new level of Scores): it sets the offset to 0 with the scroll, so the bar never keeps the old page's.
  *
  * The title and the context line cross-fade when they change. `live` is for something happening this minute and
  * nothing else: it adds a 7 dp accent dot before the context line that breathes at full motion, while the screen is in
  * front and the app is open. A line that changes with the clock (a block ends, a deadline nears) needs its screen to
  * re-render on the minute: useNow does that, only while the screen is in front.
  */
-export function useToolHeader({ title, mode = 'page', context, live = false, covered = false, actions, right, onBack }: ToolHeaderOptions) {
+export function useToolHeader({
+  title, mode = 'page', context, live = false, covered = false, actions, right, onBack, contentStyle,
+}: ToolHeaderOptions) {
+  const insets = useSafeAreaInsets();
   const scrollY = useSharedValue(0);
   const onScroll = useAnimatedScrollHandler((e) => { scrollY.value = e.contentOffset.y; });
   const scrollProps = React.useMemo(() => ({ onScroll, scrollEventThrottle: 16 }), [onScroll]);
   const parts = partsOf(context);
   const tab = mode === 'tab';
+  // the big title shares the tray's row, so it leaves the tray's width free on its right (the overflow button takes the
+  // second place when there are more than two actions)
+  const slots = Math.min(2, (actions ?? []).length);
+  const reserve = slots ? TRAY_LEAD + TRAY_PAD * 2 + TRAY_BTN * slots + TRAY_GAP * (slots - 1) : 0;
   return {
     bar: (
       <ToolBar
-        title={title} back={!tab} onBack={onBack} actions={actions} right={right} scrollY={scrollY} titleOnScroll={tab}
+        title={title} back={!tab} onBack={onBack} actions={actions} right={right} scrollY={scrollY} overlay={tab}
+        contentStyle={contentStyle}
       />
     ),
-    hero: <ToolHero title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} />,
+    hero: <ToolHero title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} reserve={tab ? reserve : 0} />,
     scrollProps,
-    padTop: tab ? 0 : parts ? 4 : 12,
+    scrollY,
+    // tab: the big title's line is centred on the bar's row, beside the tray; the hero's own top padding is part of the lift
+    padTop: tab ? insets.top + BAR_PAD + (BAR_ROW - DISPLAY_LINE) / 2 - HERO_TOP : parts ? 4 : 12,
+    barH: tab ? insets.top + BAR_PAD * 2 + BAR_ROW : 0,
   };
 }
 
@@ -212,12 +258,14 @@ function TrayButton({ action }: { action: ToolAction }) {
   );
 }
 
-function ToolBar({ title, back, onBack, actions, right, scrollY, titleOnScroll = false }: {
+function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false, contentStyle }: {
   title: string; back: boolean; onBack?: () => void; actions?: ToolAction[]; right?: React.ReactNode;
   /** the offset the edge follows; without it (the older NeuHeader) the bar has no hairline or shade */
   scrollY?: SharedValue<number>;
-  /** the compact title waits for the hero's big title to scroll away, instead of always showing */
-  titleOnScroll?: boolean;
+  /** the tab-mode bar: laid over the top of its parent with a ground that fills in as the big title scrolls away, and
+      a compact title that waits for it, instead of an opaque bar above the scroll that always shows its title */
+  overlay?: boolean;
+  contentStyle?: ToolHeaderOptions['contentStyle'];
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
@@ -229,26 +277,42 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, titleOnScroll =
   const minimal = theme === 'minimal';
 
   // the compact title takes the big title's place as it scrolls up under the bar: it rises a few points and fills in
-  // with full motion, only fills in with some, and is a step with none. All on the UI thread
-  const titleStyle = useAnimatedStyle(() => {
-    if (!titleOnScroll) return { opacity: 1, transform: [{ translateY: 0 }] };
-    if (level === 'none') return { opacity: y.value > (TITLE_FROM + TITLE_TO) / 2 ? 1 : 0, transform: [{ translateY: 0 }] };
-    const p = interpolate(y.value, [TITLE_FROM, TITLE_TO], [0, 1], Extrapolation.CLAMP);
-    return { opacity: p, transform: [{ translateY: level === 'full' ? 4 * (1 - p) : 0 }] };
-  });
+  // with full motion, only fills in with some, and is a step with none. The ground fills in over the same offsets, so
+  // the big title leaves behind it, and the hairline and shade come with the ground, never before it. All on the UI thread
+  const swap = useDerivedValue(() => (overlay ? swapProgress(y.value, level) : 0));
+  const titleStyle = useAnimatedStyle(() => (overlay
+    ? { opacity: swap.value, transform: [{ translateY: level === 'full' ? 4 * (1 - swap.value) : 0 }] }
+    : { opacity: 1, transform: [{ translateY: 0 }] }));
+  const groundStyle = useAnimatedStyle(() => ({ opacity: swap.value }));
+  // a ground that is more than half in takes touches too, so a tap on a bar that looks solid never reaches what has
+  // scrolled up behind it. Only the flip crosses to the JS thread, never the scroll itself
+  const [solid, setSolid] = React.useState(false);
+  useAnimatedReaction(() => swap.value > 0.5, (now, was) => { if (now !== was) runOnJS(setSolid)(now); });
   // the hairline and the shade under the bar, once the content has moved
-  const edgeStyle = useAnimatedStyle(() => ({
-    opacity: level === 'none' ? (y.value > 2 ? 1 : 0) : interpolate(y.value, [2, 14], [0, 1], Extrapolation.CLAMP),
-  }));
+  const edge = useDerivedValue(() => (overlay ? swap.value : edgeStrength(y.value, level)));
 
   const list = actions ?? [];
   const shown = list.length > 2 ? list.slice(0, 1) : list;
   const rest = list.length > 2 ? list.slice(1) : [];
   const hasTray = shown.length > 0 || rest.length > 0 || !!right;
+  // an overlay lets touches through wherever it holds nothing (the tray is the one thing in it that takes them)
+  const through = overlay ? 'box-none' : 'auto';
 
   return (
-    <View style={[hdr.bar, { paddingTop: insets.top + 8, paddingLeft: back ? BAR_SIDE : S.pad, backgroundColor: bgFor(theme) }]}>
-      <View style={hdr.row}>
+    <View
+      pointerEvents={through}
+      style={[
+        hdr.bar, overlay && hdr.over,
+        { paddingTop: insets.top + BAR_PAD, paddingLeft: back ? BAR_SIDE : S.pad },
+        !overlay && { backgroundColor: bgFor(theme) },
+      ]}
+    >
+      {overlay ? (
+        <Animated.View
+          pointerEvents={solid ? 'auto' : 'none'} style={[StyleSheet.absoluteFill, { backgroundColor: bgFor(theme) }, groundStyle]}
+        />
+      ) : null}
+      <Animated.View pointerEvents={through} style={[hdr.row, contentStyle]}>
         {back ? (
           <Bouncy
             onPress={onBack || (() => router.back())} scaleTo={1} sink={false} radius={BACK_W / 2} hitSlop={4}
@@ -257,14 +321,14 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, titleOnScroll =
             <Ionicons name="chevron-back" size={24} color={C.text} />
           </Bouncy>
         ) : null}
-        <Animated.View style={[hdr.titleBox, { marginLeft: back ? TITLE_GAP : 0 }, titleStyle]}>
+        <Animated.View pointerEvents={overlay ? 'none' : 'auto'} style={[hdr.titleBox, { marginLeft: back ? TITLE_GAP : 0 }, titleStyle]}>
           {/* a title that changes in place (a tab's tool swapped, a page named differently) dips and comes back as
               the new words instead of snapping */}
           <FadeSwap swapKey={title}>
             <Text
               numberOfLines={1} style={hdr.title}
-              accessibilityRole={titleOnScroll ? undefined : 'header'}
-              importantForAccessibility={titleOnScroll ? 'no' : 'auto'}
+              accessibilityRole={overlay ? undefined : 'header'}
+              importantForAccessibility={overlay ? 'no' : 'auto'}
             >
               {title}
             </Text>
@@ -285,26 +349,69 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, titleOnScroll =
             {right}
           </View>
         ) : null}
-      </View>
-      {scrollY ? (
-        <Animated.View pointerEvents="none" style={[hdr.edge, edgeStyle]}>
-          <View style={[hdr.hair, { backgroundColor: minimal ? MIN.border : C.border }]} />
-          <LinearGradient colors={SHADE} style={hdr.shade} />
-        </Animated.View>
-      ) : null}
+      </Animated.View>
+      {scrollY ? <ScrollEdge at={edge} style={hdr.under} /> : null}
       {rest.length ? <DotMenu visible={overflow} onClose={() => setOverflow(false)} items={rest} /> : null}
     </View>
   );
 }
 
+/**
+ * The tool header's edge: a 1 px hairline and a soft 10 px shade, drawn at the top of its container, over whatever
+ * scrolls there. `at` is 0 to 1 (edgeStrength) and runs on the UI thread. The bar draws its own just under itself; a
+ * screen that holds more than one scroll under the same bar (Settings' list and its pages, the Vault's three lists)
+ * draws it at the top of the scroll it belongs to, which starts right under the bar, so it falls where the bar's would.
+ */
+export function ScrollEdge({ at, style }: { at: SharedValue<number>; style?: ViewStyle }) {
+  const theme = useTheme();
+  const fade = useAnimatedStyle(() => ({ opacity: at.value }));
+  return (
+    <Animated.View pointerEvents="none" style={[hdr.edge, style, fade]}>
+      <View style={[hdr.hair, { backgroundColor: theme === 'minimal' ? MIN.border : C.border }]} />
+      <LinearGradient colors={SHADE} style={hdr.shade} />
+    </Animated.View>
+  );
+}
+
+/** A scroll view and the edge at its top, for a layer that is one scroll: put it where the scroll view would go. */
+export function EdgeScroll({ children, ...props }: React.ComponentProps<typeof Animated.ScrollView>) {
+  const level = useAnimLevel();
+  const y = useSharedValue(0);
+  const onScroll = useAnimatedScrollHandler((e) => { y.value = e.contentOffset.y; });
+  const at = useDerivedValue(() => edgeStrength(y.value, level));
+  return (
+    <>
+      <Animated.ScrollView {...props} onScroll={onScroll} scrollEventThrottle={16}>{children}</Animated.ScrollView>
+      <ScrollEdge at={at} />
+    </>
+  );
+}
+
+/**
+ * What a lock screen wears in place of a tool (and of its archive, or a note): the same bar and, on a tab, the same big
+ * title, and no line of context, so nothing of what is locked (a count, a streak, a date) shows before the PIN is given.
+ * Nothing scrolls under it, so the big title simply sits where it sits at the top of the open tool.
+ */
+export function GateHeader({ title, tab }: { title: string; tab: boolean }) {
+  const header = useToolHeader({ title, mode: tab ? 'tab' : 'page' });
+  return (
+    <>
+      {header.bar}
+      <View style={{ paddingHorizontal: S.pad, paddingTop: tab ? header.padTop : 0 }}>{header.hero}</View>
+    </>
+  );
+}
+
 /** The first thing in the scroll: the big title in tab mode, and the context line, if there is one. */
-function ToolHero({ title, tab, parts, live, covered }: {
+function ToolHero({ title, tab, parts, live, covered, reserve }: {
   title: string; tab: boolean; parts: ContextPart[] | null; live: boolean; covered: boolean;
+  /** the width the big title leaves free on its right, for the tray beside it */
+  reserve: number;
 }) {
   if (tab) {
     return (
       <View style={hdr.heroTab}>
-        <FadeSwap swapKey={title}>
+        <FadeSwap swapKey={title} style={reserve ? { paddingRight: reserve } : undefined}>
           <Text numberOfLines={1} accessibilityRole="header" style={T.display}>{title}</Text>
         </FadeSwap>
         {parts ? <ContextLine parts={parts} live={live} covered={covered} style={{ marginTop: 2 }} /> : null}
@@ -348,19 +455,25 @@ function LiveDot({ covered }: { covered: boolean }) {
 
 const hdr = StyleSheet.create({
   // above the scroll that follows it, so its shade falls over the content
-  bar: { paddingRight: S.pad, paddingBottom: 8, zIndex: 2 },
+  bar: { paddingRight: S.pad, paddingBottom: BAR_PAD, zIndex: 2 },
+  // a tab's bar: over the top of its parent instead of above the scroll
+  over: { position: 'absolute', top: 0, left: 0, right: 0 },
   row: { minHeight: BAR_ROW, flexDirection: 'row', alignItems: 'center' },
   back: { width: BACK_W, height: BACK_W, borderRadius: BACK_W / 2, alignItems: 'center', justifyContent: 'center' },
   titleBox: { flex: 1, minWidth: 0 },
   title: { color: C.text, fontFamily: F.semi, fontSize: 18, lineHeight: 24, letterSpacing: -0.3 },
   // the carved pill the actions sit in; it clips each button's carve at its rim
-  tray: { flexDirection: 'row', alignItems: 'center', padding: 2, gap: 2, borderRadius: 999, overflow: 'hidden', marginLeft: 12 },
-  trayBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  edge: { position: 'absolute', left: 0, right: 0, top: '100%', height: 10 },
+  tray: {
+    flexDirection: 'row', alignItems: 'center', padding: TRAY_PAD, gap: TRAY_GAP, borderRadius: 999, overflow: 'hidden', marginLeft: TRAY_LEAD,
+  },
+  trayBtn: { width: TRAY_BTN, height: TRAY_BTN, borderRadius: TRAY_BTN / 2, alignItems: 'center', justifyContent: 'center' },
+  edge: { position: 'absolute', left: 0, right: 0, top: 0, height: 10 },
+  // the bar's own edge falls from its lower rim
+  under: { top: '100%' },
   hair: { position: 'absolute', left: 0, right: 0, top: 0, height: StyleSheet.hairlineWidth },
   shade: { position: 'absolute', left: 0, right: 0, top: 0, height: 10 },
-  // the big title sits close under the bar; 18 below the hero is the gap to the first block
-  heroTab: { paddingTop: 4, paddingBottom: 18 },
+  // the big title is level with the bar's row (padTop lifts the hero to it); 18 below the hero is the gap to the first block
+  heroTab: { paddingTop: HERO_TOP, paddingBottom: 18 },
   heroPage: { paddingBottom: 18, paddingLeft: PAGE_INDENT },
   ctxRow: { flexDirection: 'row', alignItems: 'center' },
   ctx: { flexShrink: 1, color: C.textFaint, fontFamily: F.med, fontSize: CTX_SIZE, lineHeight: 17, letterSpacing: 0.2 },

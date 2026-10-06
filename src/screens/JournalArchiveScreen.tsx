@@ -9,12 +9,11 @@ import { C, F, MIN, NEU, S, T, TRACK, bgFor } from '../theme';
 import { useStore, JournalEntry } from '../store';
 import { todayKey } from '../utils';
 import {
-  Card, Chip, DotMenu, EmptyState, Field, Hairline, ListRow, ListSlice, PillButton, Row, ScreenBG, Sheet, useTheme, useToolHeader,
-  contextLine,
+  Card, Chip, DotMenu, EmptyState, Field, GateHeader, Hairline, ListRow, ListSlice, PillButton, Row, ScreenBG, Sheet, useTheme,
+  useToolHeader, contextLine,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { ToolGate } from '../components/LockGate';
-import { GateHeader } from './JournalScreen';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, deleteEntry, entryMatches, formatJournalDate, journalDayFor, journalStats, keyToDate, loadBodies, onThisDay,

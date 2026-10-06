@@ -17,7 +17,7 @@ import { C, F, MIN, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU } fro
 import { columnWidth } from '../layout';
 import { useStore, Attachment, Note, flushSaves } from '../store';
 import { fmtClockTime, todayKey, uid, yesterdayKey } from '../utils';
-import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuIconBtn, PillButton, DotMenu, useTheme, useToolHeader } from '../components/UI';
+import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuIconBtn, PillButton, DotMenu, GateHeader, useTheme, useToolHeader } from '../components/UI';
 import { toast } from '../components/Toast';
 import { NoteGate, PinSheet, ToolGate } from '../components/LockGate';
 import { markOpen, noteScope, pinStatus } from '../lock';
@@ -27,7 +27,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ATT_DIR, deleteAttachmentFiles } from '../attachments';
 import { useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
-import { GateHeader } from './NotesListScreen';
 
 const LINE_H = 24;
 const FREE_LINES = 9; // keep ~8-10 lines of breathing room while dictating

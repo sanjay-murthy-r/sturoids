@@ -11,9 +11,8 @@ import { useStore, VaultVideo, VaultFolder, TimedNote, Bookmark } from '../store
 import { parseYouTubeId, fmtMediaTime } from '../utils';
 import {
   ScreenBG, Card, Field, EmptyState, ListCard, ListRow, ListSlice, Row, Chip, Sheet, PillButton, IconBtn, NeuIconBtn, DotMenu,
-  useToolHeader, contextLine,
+  ScrollEdge, edgeStrength, useToolHeader, contextLine,
 } from '../components/UI';
-import { ScrollEdge, edgeStrength } from '../components/ScrollEdge';
 import { toast } from '../components/Toast';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Appear, EASE_OUT, Enter, rowIn, shiftIn, useAnimLevel, useBuilt } from '../components/Motion';
@@ -503,7 +502,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // context line is the count of videos, none when there are none. The hero sits above the controls: they are fixed
   // above three lists, so the big title never scrolls away and the bar's own title stays out of the way. On a phone the
   // hero steps aside while the keyboard is up: the fixed controls take most of a short screen, and a search would be left
-  // a sliver of results to show
+  // a sliver of results to show. They then start below the bar (barH: a tab's bar lies over the top, a page's has its own space)
   const typing = useKeyboardOpen() && width < WIDE_AT;
   const header = useToolHeader({
     title: cwdFolder ? cwdFolder.name : 'YT Vault',
@@ -517,7 +516,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
       {header.bar}
       <View style={{ flex: 1 }}>
         <Enter index={0}>
-          <View style={{ paddingHorizontal: S.pad, paddingTop: typing ? 12 : header.padTop }}>
+          <View style={{ paddingHorizontal: S.pad, paddingTop: typing ? header.barH + 12 : header.padTop }}>
             {typing ? null : header.hero}
             <AddCard cwd={cwd} folderName={cwdFolder?.name} onAdded={openVideo} />
 

@@ -194,7 +194,12 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const go = React.useCallback((to: Loc) => setStack((cur) => (sameLoc(cur[cur.length - 1], to) ? cur : [...cur, to])), []);
   const openNode = (id: string) => go({ kind: 'node', id });
-  const openNotebook = () => go({ kind: 'notebook' });
+  // the notebook is never on the trail twice: from an exam it led to, its button goes back to the one already there
+  const openNotebook = () => setStack((cur) => {
+    const at = cur.findIndex((l) => l.kind === 'notebook');
+    if (at < 0) return [...cur, { kind: 'notebook' }];
+    return at === cur.length - 1 ? cur : cur.slice(0, at + 1);
+  });
   const openAnalytics = () => { setAnalyticsView(null); go({ kind: 'analytics' }); };
 
   // Back, for the arrow and the hardware key alike: a sheet that is open closes first, then the page goes one step back
@@ -388,11 +393,17 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     onBack: () => { if (!back()) router.back(); },
   });
 
-  // the page's own scroll resets as the level changes, so the bar's hairline and compact title never keep the last
-  // page's offset; the content below is keyed to the level, so it rises anew while the scroll view itself stays
+  // the page's own scroll resets as the level changes, and the offset the bar follows with it instead of a frame later,
+  // so the bar never keeps the last page's offset: back at the root from far down a level, its ground would otherwise
+  // cover the big title for a frame. The content below is keyed to the level, so it rises anew while the scroll view
+  // itself stays (the bar and the scroll are the same two elements in the root's tab mode and a level's page mode)
   const scrollRef = useRef<Animated.ScrollView>(null);
   const pageKey = loc ? loc.kind + (loc.kind === 'node' ? ':' + loc.id : '') : 'top';
-  useLayoutEffect(() => { scrollRef.current?.scrollTo({ y: 0, animated: false }); }, [pageKey]);
+  const barOffset = header.scrollY;
+  useLayoutEffect(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+    barOffset.value = 0;
+  }, [pageKey, barOffset]);
 
   // the sheet that opens a learning keeps the exam's name while it closes, so its title never flips to "New learning"
   const learnFor = useRef<string | undefined>(undefined);

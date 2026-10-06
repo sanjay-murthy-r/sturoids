@@ -9,7 +9,8 @@ import { C, F, S, T, TRACK } from '../theme';
 import { useStore, JournalEntry, flushSaves } from '../store';
 import { todayKey } from '../utils';
 import {
-  Chip, DotMenu, Field, Hairline, IconBtn, PillButton, ProgressBar, Row, ScreenBG, Sheet, Toggle, useTheme, useToolHeader,
+  Chip, DotMenu, Field, GateHeader, Hairline, IconBtn, PillButton, ProgressBar, Row, ScreenBG, Sheet, Toggle, useTheme,
+  useToolHeader,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Bouncy, EASE_OUT, Enter, FadeSwap, shiftIn, useAnimLevel } from '../components/Motion';
@@ -48,21 +49,6 @@ export function JournalScreen({ mode }: { mode: 'tab' | 'stack' }) {
     <ToolGate tool="journal" guard={tabMode} header={<GateHeader title="Journal" tab={tabMode} />}>
       <WritingSpace tabMode={tabMode} />
     </ToolGate>
-  );
-}
-
-/**
- * What a lock screen wears in place of the journal (and of its archive): the same bar and, on a tab, the same big
- * title, and no line of context, so nothing of what is locked (a streak, a count) shows before the PIN is given. Nothing
- * scrolls under it, so the big title simply sits below the bar, where it sits at the top of the open tool.
- */
-export function GateHeader({ title, tab }: { title: string; tab: boolean }) {
-  const header = useToolHeader({ title, mode: tab ? 'tab' : 'page' });
-  return (
-    <>
-      {header.bar}
-      <View style={{ paddingHorizontal: S.pad }}>{header.hero}</View>
-    </>
   );
 }
 
@@ -512,12 +498,14 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       { icon: 'albums-outline', label: 'Archive', onPress: openArchive },
       { icon: 'ellipsis-horizontal', label: 'More', onPress: () => setMenu(true) },
     ],
+    // the bar recedes while typing, as the footer does, and comes back when the writing pauses. Only what it holds
+    // recedes: on a tab it lies over the page, and a ground gone faint would let the writing show through it
+    contentStyle: headStyle,
   });
 
   return (
     <ScreenBG guard={tabMode}>
-      {/* the bar recedes while typing, as the footer does, and comes back when the writing pauses */}
-      <Animated.View style={[st.bar, headStyle]}>{tool.bar}</Animated.View>
+      {tool.bar}
 
       {/* the page and the footer rise with the screen on every visit, as every other tool does; a page turn (below)
           is its own entrance, inside the surface. The header's hero is the first thing in the page's scroll, so it
@@ -749,8 +737,6 @@ function JournalPrefs({ visible, onClose, onLock }: {
 }
 
 const st = StyleSheet.create({
-  // above the page that follows it, so the bar's shade falls over the page
-  bar: { zIndex: 2 },
   // the date is the page's heading: it starts where the page's text does, and is only as wide as it is
   dateBtn: { alignSelf: 'flex-start', maxWidth: '100%', paddingVertical: 4, marginBottom: 6 },
   date: { color: C.text, fontFamily: F.head, fontSize: 21, lineHeight: 27, letterSpacing: TRACK.large },
@@ -767,7 +753,7 @@ const st = StyleSheet.create({
   dayWell: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 4 },
   /** the day button's gold tint, a layer that fades in and out under the icon */
   dayTint: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 17 },
-  /** the page's scroll: it fills what the bar and the footer leave */
+  /** the page's scroll: it fills what the footer leaves, and the bar too on a page (on a tab the bar lies over it) */
   page: { flex: 1 },
   dateWords: { alignItems: 'flex-start' },
   words: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, fontVariant: ['tabular-nums'] },

@@ -8,7 +8,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, Note } from '../store';
 import {
-  ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, useTheme, useToolHeader, contextLine,
+  ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, GateHeader, useTheme, useToolHeader,
+  contextLine,
 } from '../components/UI';
 import { Bouncy, EASE_OUT, Enter, glide, useAnimLevel } from '../components/Motion';
 import { tap } from '../haptics';
@@ -21,21 +22,6 @@ export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
     <ToolGate tool="notes" guard={mode === 'tab'} header={<GateHeader title="Notes" tab={mode === 'tab'} />}>
       <NotesList mode={mode} />
     </ToolGate>
-  );
-}
-
-/**
- * What a lock screen wears in place of the tool: the same bar and, on a tab, the same big title, and no line of context,
- * so nothing of what is locked (a count, a date) shows before the PIN is given. Nothing scrolls under it, so the big
- * title simply sits below the bar, where it sits at the top of the open tool.
- */
-export function GateHeader({ title, tab }: { title: string; tab: boolean }) {
-  const header = useToolHeader({ title, mode: tab ? 'tab' : 'page' });
-  return (
-    <>
-      {header.bar}
-      <View style={{ paddingHorizontal: S.pad }}>{header.hero}</View>
-    </>
   );
 }
 
