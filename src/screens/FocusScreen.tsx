@@ -1,31 +1,35 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Alert, AppState } from 'react-native';
+import { View, Text, StyleSheet, Alert, AppState, Dimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
-import { todayKey, uid, toMinutes, fmtClockTime } from '../utils';
+import { todayKey, yesterdayKey, uid, toMinutes, fmtClockTime, dayName } from '../utils';
 import {
   ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, ProgressBar,
   ListCard, ListRow, StrikeText, useToolHeader, contextLine,
 } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
 import {
-  Bouncy, EASE_OUT, Enter, FadeSwap, glide, rowOut, useAnimLevel, useBuilt, useFocusKey,
+  Bouncy, EASE_OUT, Enter, FadeSwap, glide, rowOut, useAnimLevel, useAppActive, useBuilt, useFocusKey,
 } from '../components/Motion';
 import { swapIn, useSwapIn } from '../components/Swap';
 import { Wheel } from '../components/Wheel';
 import { tick as haptic } from '../haptics';
 import { NOTIF_CHANNEL_ID, cancelCountdownEnd, ensurePermission, scheduleCountdownEnd } from '../notifications';
-import { FINISH_NOTIF_ID, TimerState } from '../deepWork';
+import { FINISH_NOTIF_ID, TimerState, displayOf, elapsedOf } from '../deepWork';
 import { AmbientView } from '../components/AmbientView';
 import { ClockDigits } from '../components/ClockDigits';
 import { SessionStage } from '../components/SessionStage';
-import { READ_MAX, TWO_COL_AT, WIDE_MAX, frame } from '../layout';
-import { useToday } from '../hooks/useNow';
+import { READ_MAX, TWO_COL_AT, WIDE_MAX, columnWidth, frame } from '../layout';
+import { useNow, useToday } from '../hooks/useNow';
+import { toast, ToastAction } from '../components/Toast';
+import { openTool } from '../toolNav';
+import { useIntro } from '../intro';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
@@ -37,11 +41,14 @@ const STOPWATCH_CAP_SEC = 12 * 3600;
 
 /** the countdown lengths the wheel offers, in minutes; a custom length joins them */
 const LENGTHS = Array.from({ length: 48 }, (_, i) => 5 + 5 * i);
+/** the longest block, typed or until a clock time: ten hours */
+const LONGEST_MIN = 600;
 
 export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const insets = useSafeAreaInsets();
   const fk = useFocusKey();
   const router = useRouter();
+  const navigation = useNavigation();
   const params = useLocalSearchParams<{ subject?: string; minutes?: string }>();
 
   const dailyTasks = useStore((s) => s.dailyTasks);
@@ -50,6 +57,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const toggleMission = useStore((s) => s.toggleMission);
   const logSession = useStore((s) => s.logSession);
   const sessions = useStore((s) => s.sessions);
+  const planner = useStore((s) => s.planner);
   const hour24 = useStore((s) => s.settings.hour24);
   const setDeepWork = useStore((s) => s.setDeepWork);
   const patchDeepWork = useStore((s) => s.patchDeepWork);
@@ -58,6 +66,12 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const [timerMode, setTimerMode] = useState<'stopwatch' | 'countdown'>(saved?.mode ?? 'countdown');
   const [targetMin, setTargetMin] = useState(saved?.targetMin ?? 50);
+  // the length chosen at Start, which the wheel goes back to when the session ends: five more minutes, or a block that
+  // ran until a clock time, belongs to that session alone
+  const chosenRef = useRef(saved?.targetMin ?? 50);
+  // a countdown set to run until a clock time: the time (minutes of the day), the length it gave, and the length the
+  // wheel had before. Start works the length out again from the time, so a block started a while later still ends then
+  const untilRef = useRef<{ at: number; min: number; prev: number } | null>(null);
   const [customMin, setCustomMin] = useState('');
   const [customSheet, setCustomSheet] = useState(false);
   const untilNext = useRef(false);
@@ -67,12 +81,19 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [subject, setSubject] = useState(saved?.subject ?? '');
   const [attached, setAttached] = useState<Attached[]>(saved?.attached ?? []);
   const [subjectSheet, setSubjectSheet] = useState(false);
-  const [areaW, setAreaW] = useState(0);
+  // a sideways tablet is known before it lays out, so its first frame already has its two columns
+  const [areaW, setAreaW] = useState(() => columnWidth(Dimensions.get('window').width, mode === 'tab', WIDE_MAX));
   const startedAtRef = useRef<number | null>(saved?.startedAt ?? null);
   const [pickSheet, setPickSheet] = useState(false);
   const [customTask, setCustomTask] = useState('');
   const [ambient, setAmbient] = useState(false);
-  const [review, setReview] = useState<{ items: Attached[]; choices: Record<string, ReviewChoice> } | null>(null);
+  // the review of a session that has ended: `byHand` offers Keep going; `finishAt` is a finish line still ahead, which
+  // Keep going puts back
+  const [review, setReview] = useState<{
+    items: Attached[]; choices: Record<string, ReviewChoice>; byHand: boolean; finishAt: number | null;
+  } | null>(null);
+  // a review or a finish-line question that came up behind another tab waits for Deep Work to be in front
+  const [held, setHeld] = useState(false);
   const endedRef = useRef(false);
   // the wrap-up the completion pulse schedules, kept so ending by hand first can call it off
   const wrapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -97,10 +118,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const subjectRef = useRef(subject);
   subjectRef.current = subject;
   const timer: TimerState = { mode: timerMode, targetMin, running, startTs, accumSec };
-  // the wheel's lengths; a custom length joins them in order
+  // the wheel's lengths; every custom length set while the screen is open joins them in order and stays, so moving off
+  // one never shifts the lengths under the wheel
+  const [extras, setExtras] = useState<number[]>([]);
+  if (!LENGTHS.includes(targetMin) && !extras.includes(targetMin)) setExtras([...extras, targetMin]);
   const lengths = React.useMemo(
-    () => (LENGTHS.includes(targetMin) ? LENGTHS : [...LENGTHS, targetMin].sort((a, b) => a - b)),
-    [targetMin],
+    () => (extras.length ? [...LENGTHS, ...extras].sort((a, b) => a - b) : LENGTHS),
+    [extras],
   );
   // the wheel's props hold still between renders, so typing a subject never re-renders the wheel
   const targetRef = useRef(targetMin);
@@ -112,13 +136,15 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const openCustomLength = useCallback(() => { setCustomMin(String(targetRef.current)); setCustomSheet(true); }, []);
 
   // planner deep link: a subject (or a length) seeds only a session that has not started, and the params
-  // are cleared after, so the same link works again and can never rewrite a session in progress
+  // are cleared after, so the same link works again and can never rewrite a session in progress (it says so instead)
   useFocusEffect(useCallback(() => {
     if (!params.subject && !params.minutes) return;
     if (!startedRef.current) {
       if (params.subject) setSubject(String(params.subject));
       const m = parseInt(String(params.minutes || ''), 10);
-      if (m > 0) { setTimerMode('countdown'); setTargetMin(m); }
+      if (m > 0) { setTimerMode('countdown'); clearFinishLine(); setTargetMin(Math.min(m, LONGEST_MIN)); }
+    } else {
+      toast('A session is already running');
     }
     router.setParams({ subject: undefined, minutes: undefined });
   }, [params.subject, params.minutes]));
@@ -134,16 +160,25 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       startedAt: startedAtRef.current ?? Date.now(), subject: subjectRef.current,
     });
   }, [started, timerMode, targetMin, running, startTs, accumSec, finishAt, attached]);
+  // the countdown's end notice names the subject, so a new subject lays it out again, from the live session
+  const timerRef = useRef(timer);
+  timerRef.current = timer;
+  const renewEndNotice = () => {
+    const t = timerRef.current;
+    if (t.mode === 'countdown' && t.running && t.startTs) {
+      void scheduleCountdownEnd(t.startTs + (t.targetMin * 60 - t.accumSec) * 1000, t.targetMin, subjectRef.current);
+    }
+  };
   // typing a subject writes once it settles, not on every keystroke
   useEffect(() => {
     if (!startedRef.current) return undefined;
-    const t = setTimeout(() => patchDeepWork({ subject }), 500);
+    const t = setTimeout(() => { patchDeepWork({ subject }); renewEndNotice(); }, 500);
     return () => clearTimeout(t);
   }, [subject]);
 
   // countdown auto-finish: one timeout for the moment it runs out, which fires at once for a resumed
   // session that ran out while the app was closed. Live, the clock gives one soft pulse as the bar fills, then
-  // the session wraps up.
+  // the session wraps up; behind another tab nobody sees the pulse, so it wraps up at once.
   const level = useAnimLevel();
   const pulse = useSharedValue(1);
   const pulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulse.value }] }));
@@ -154,7 +189,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       if (endedRef.current) return;
       endedRef.current = true;
       // the completion pulse is a scale: only full motion plays it, and a resumed session that ran out ends at once
-      if (level !== 'full' || left < -1) {
+      if (level !== 'full' || left < -1 || !navigation.isFocused()) {
         endSessionRef.current();
         return;
       }
@@ -191,14 +226,29 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     // the block has run out and is wrapping up: there is nothing left to resume
     if (wrapTimer.current) return;
     endedRef.current = false;
-    if (startedAtRef.current == null) startedAtRef.current = Date.now();
+    if (startedAtRef.current == null) {
+      startedAtRef.current = Date.now();
+      // the length the session was set up with; a block until a clock time is measured again from now, as long as the
+      // wheel still has the length that time gave
+      const u = untilRef.current;
+      untilRef.current = null;
+      chosenRef.current = targetMin;
+      if (timerMode === 'countdown' && u && u.min === targetMin) {
+        chosenRef.current = u.prev;
+        const m = minutesUntil(u.at);
+        if (m <= LONGEST_MIN && m !== targetMin) setTargetMin(m);
+      }
+    }
     setStartTs(Date.now());
     setRunning(true);
+    // the finish line's heads-up is for a session under way, so it is set here rather than with the line
+    if (finishAt != null && finishAt > Date.now()) void noticeFinish(finishAt);
   };
   const pause = () => {
     // the block has run out and is wrapping up: pausing now would only stall the wrap-up
     if (wrapTimer.current) return;
-    if (startTs) setAccumSec((a) => a + (Date.now() - startTs) / 1000);
+    // a phone clock set back never takes time away
+    if (startTs) setAccumSec((a) => a + Math.max(0, (Date.now() - startTs) / 1000));
     setRunning(false); setStartTs(null);
   };
 
@@ -207,16 +257,19 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const startedLiveRef = useRef(started); startedLiveRef.current = started;
   const endSessionRef = useRef<() => void>(() => {});
 
-  /** Minutes from now until the next occurrence of a wall-clock HH:MM. */
-  const minutesUntil = (hhmm: string): number | null => {
-    const t = toMinutes(hhmm);
-    if (t < 0) return null;
-    const now = new Date();
-    let diff = t - (now.getHours() * 60 + now.getMinutes());
-    if (diff <= 0) diff += 24 * 60;
-    return diff;
+  // the clock time typed for "until", read forgivingly, and how far ahead it is (of its readings, the nearest)
+  const untilAt = nearestAhead(readClock(untilTime, hour24));
+  const untilPreviewMin = untilAt == null ? null : minutesUntil(untilAt);
+  const timeExample = hour24 ? '17:30' : '5:30 pm';
+
+  const setUntil = () => {
+    if (untilAt == null) { Alert.alert('Time format', 'Type a time like ' + timeExample + '.'); return; }
+    const m = minutesUntil(untilAt);
+    if (m > LONGEST_MIN) { Alert.alert('Too far ahead', 'A block runs up to 10 hours. Pick a time within the next 10 hours.'); return; }
+    const u = untilRef.current;
+    untilRef.current = { at: untilAt, min: m, prev: u && u.min === targetMin ? u.prev : targetMin };
+    setTargetMin(m); setCustomMin(''); setUntilSheet(false);
   };
-  const untilPreviewMin = minutesUntil(untilTime.trim());
 
   const clearFinishLine = () => {
     if (autoConcludeTimer.current) { clearTimeout(autoConcludeTimer.current); autoConcludeTimer.current = null; }
@@ -228,26 +281,39 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setFinishAt(null);
   };
 
-  const setFinishLine = async () => {
-    const t = toMinutes(finishTime.trim());
-    if (t < 0) { Alert.alert('Time format', 'Use 24h HH:MM, e.g. 17:30'); return; }
-    const d = new Date();
-    d.setHours(Math.floor(t / 60), t % 60, 0, 0);
-    if (finishDay === 'tomorrow') d.setDate(d.getDate() + 1);
-    else if (d.getTime() <= Date.now()) { Alert.alert('Already passed', 'That time has already passed today. Pick Tomorrow or a later time.'); return; }
-    clearFinishLine();
-    setFinishAt(d.getTime());
-    setFinishSheet(false);
-    // heads-up for when the app is backgrounded; the in-app flow below is primary
+  const finishAtRef = useRef(finishAt);
+  finishAtRef.current = finishAt;
+  /** The finish line's heads-up for when the app is away; the in-app flow below is primary. */
+  const noticeFinish = async (at: number) => {
     try {
-      if (await ensurePermission()) {
-        finishNotifId.current = await Notifications.scheduleNotificationAsync({
-          identifier: FINISH_NOTIF_ID,
-          content: { title: 'Finish line reached', body: 'Your Deep Work finish line has passed. Open Sturoids to wrap up.' },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: d, channelId: NOTIF_CHANNEL_ID } as any,
-        });
-      }
+      // a line cleared or moved while permission was asked is not announced
+      if (!(await ensurePermission()) || finishAtRef.current !== at) return;
+      finishNotifId.current = await Notifications.scheduleNotificationAsync({
+        identifier: FINISH_NOTIF_ID,
+        content: { title: 'Finish line reached', body: 'Your Deep Work finish line has passed. Open Sturoids to wrap up.' },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(at), channelId: NOTIF_CHANNEL_ID } as any,
+      });
     } catch {}
+  };
+
+  const setFinishLine = () => {
+    const times = readClock(finishTime, hour24);
+    if (!times.length) { Alert.alert('Time format', 'Type a time like ' + timeExample + '.'); return; }
+    const on = (t: number, days: number) => {
+      const d = new Date();
+      d.setHours(Math.floor(t / 60), t % 60, 0, 0);
+      d.setDate(d.getDate() + days);
+      return d.getTime();
+    };
+    // today, the first reading still ahead (on the 12-hour clock a bare 5:30 is the evening once the morning has
+    // gone); tomorrow, the first reading
+    const when = finishDay === 'tomorrow' ? on(times[0], 1) : times.map((t) => on(t, 0)).find((ms) => ms > Date.now());
+    if (when == null) { Alert.alert('Already passed', 'That time has already passed today. Pick Tomorrow or a later time.'); return; }
+    clearFinishLine();
+    setFinishAt(when);
+    setFinishSheet(false);
+    // a session that has not begun gets its heads-up at Start
+    if (startedRef.current) void noticeFinish(when);
   };
 
   // unmount safety: never leave the 10-minute timer behind. The finish-line notification stays: the
@@ -264,8 +330,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       if (Date.now() < finishAt) return;
       finishHandled.current = true;
       if (runningRef.current) {
-        // running: ask, auto-conclude after 10 minutes of silence
+        // running: ask, auto-conclude after 10 minutes of silence. Behind another tab the question waits for Deep Work
+        // to be in front, with a toast meanwhile; the 10 minutes run all the same
         setFinishPrompt(true);
+        if (!navigation.isFocused()) {
+          setHeld(true);
+          toastWhenSeen('Finish line reached', { label: 'Open', onPress: () => openTool('focus') }, () => !navigation.isFocused());
+        }
         autoConcludeTimer.current = setTimeout(() => {
           if (runningRef.current) {
             setFinishPrompt(false);
@@ -273,12 +344,16 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           }
         }, 10 * 60 * 1000);
       } else if (startedLiveRef.current) {
-        // paused at the finish line: conclude immediately, notify
-        Notifications.scheduleNotificationAsync({
-          content: { title: 'Session wrapped up', body: 'The stopwatch was paused at your finish line, so the session ended on its own.' },
-          trigger: null,
-        }).catch(() => {});
+        // paused at the finish line: conclude at once. A phone that is away is told, in place of the heads-up; in the
+        // app the session ending is plain to see
         endSessionRef.current();
+        if (AppState.currentState !== 'active') {
+          Notifications.scheduleNotificationAsync({
+            identifier: FINISH_NOTIF_ID,
+            content: { title: 'Session wrapped up', body: 'The stopwatch was paused at your finish line, so the session ended on its own.' },
+            trigger: { channelId: NOTIF_CHANNEL_ID },
+          }).catch(() => {});
+        }
       } else {
         // never started — nothing to conclude
         clearFinishLine();
@@ -294,31 +369,43 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     };
   }, [finishAt]);
 
-  function endSession() {
+  /** Ends the session: `byHand` when the student ended it (End, or End session at the finish line). */
+  function endSession(byHand = false) {
     // one wrap-up per session: a countdown running out and a tap on End must never both build the review
     if (wrapTimer.current) { clearTimeout(wrapTimer.current); wrapTimer.current = null; }
     if (review) return;
     const reachedFinish = finishAt != null && Date.now() >= finishAt;
     clearFinishLine();
-    let net = accumSec + (running && startTs ? (Date.now() - startTs) / 1000 : 0);
-    // never log more than the block, or time after a finish line that passed while away
+    let net = Math.max(0, accumSec + (running && startTs ? (Date.now() - startTs) / 1000 : 0));
+    // never log more than the block, or running time after a finish line that passed while away (time paused in
+    // between was never counted, so only the stretch past the line comes off)
     if (timerMode === 'countdown') net = Math.min(net, targetMin * 60);
-    else if (reachedFinish && finishAt != null && startedAtRef.current != null) {
-      net = Math.min(net, Math.max(0, (finishAt - startedAtRef.current) / 1000));
+    else if (reachedFinish && finishAt != null && running && startTs) {
+      net = Math.max(0, net - Math.max(0, Date.now() - Math.max(finishAt, startTs)) / 1000);
     }
     if (timerMode === 'stopwatch') net = Math.min(net, STOPWATCH_CAP_SEC);
     setRunning(false); setStartTs(null); setAccumSec(net); setAmbient(false);
-    const unchecked = attached.filter((a) => !a.done);
+    const unchecked = live.filter((a) => !a.done);
     if (net < 5 && attached.length === 0) { reset(); return; }
+    // a session that ends behind another tab (its block ran out, its finish line passed) says so in a toast, and its
+    // review waits for Deep Work to be in front instead of opening over another tool
+    if (!byHand && !navigation.isFocused()) {
+      const name = subject.trim();
+      const line = timerMode === 'countdown'
+        ? (name ? name + ' block done' : 'Block done')
+        : (name ? name + ' session wrapped up' : 'Session wrapped up');
+      toastWhenSeen(line, { label: 'Open', onPress: () => openTool('focus') }, () => !navigation.isFocused());
+      if (unchecked.length > 0) setHeld(true);
+    }
     if (unchecked.length === 0) { commit(net, {}); return; }
     const choices: Record<string, ReviewChoice> = {};
     unchecked.forEach((u) => (choices[u.key] = 'pending'));
-    setReview({ items: unchecked, choices });
+    setReview({ items: unchecked, choices, byHand, finishAt: reachedFinish ? null : finishAt });
   }
 
   function commit(netSeconds: number, choices: Record<string, ReviewChoice>) {
     // apply review outcomes
-    for (const a of attached) {
+    for (const a of live) {
       if (choices[a.key] === 'done' && !a.done) completeInStore(a);
     }
     if (netSeconds >= 5) {
@@ -334,10 +421,40 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }
 
   function reset() {
-    setReview(null); setAttached([]); setAccumSec(0); setRunning(false); setStartTs(null);
+    setReview(null); setHeld(false); setAttached([]); setAccumSec(0); setRunning(false); setStartTs(null);
     setSubject(''); endedRef.current = false; startedAtRef.current = null;
+    // the wheel goes back to the length the session was set up with
+    setTargetMin(chosenRef.current);
   }
-  useEffect(() => { endSessionRef.current = endSession; });
+
+  // The review's way back: the session carries on from where it stopped, with its finish line if that was still ahead.
+  const keepGoing = () => {
+    const r = review;
+    if (!r) return;
+    setReview(null);
+    const line = r.finishAt != null && r.finishAt > Date.now() ? r.finishAt : null;
+    if (line != null) { setFinishAt(line); void noticeFinish(line); }
+    start();
+  };
+
+  // Erasing the phone, importing a backup or restoring from the cloud ends the session in the store. The screen stands
+  // down with it, so no timer of the old session logs it into the new data or writes it back. The screen's own clear
+  // runs only once its session has ended, so it never comes this way.
+  function standDown() {
+    if (wrapTimer.current) { clearTimeout(wrapTimer.current); wrapTimer.current = null; }
+    if (autoConcludeTimer.current) { clearTimeout(autoConcludeTimer.current); autoConcludeTimer.current = null; }
+    clearFinishLine();
+    cancelCountdownEnd();
+    setAmbient(false); setFinishPrompt(false); setSubjectSheet(false);
+    reset();
+  }
+  const standDownRef = useRef<() => void>(() => {});
+  useEffect(() => useStore.subscribe((s, prev) => {
+    if (prev.deepWork && !s.deepWork && startedRef.current) standDownRef.current();
+  }), []);
+  useEffect(() => { endSessionRef.current = endSession; standDownRef.current = standDown; });
+  // a review or a question held back behind another tab opens once Deep Work is in front
+  useFocusEffect(useCallback(() => { setHeld(false); }, []));
 
   /** Completes a task's store copy, only ever forward: a task already done elsewhere stays done. */
   const completeInStore = (a: Attached) => {
@@ -351,12 +468,25 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
   };
 
-  // ticking completes the task for real; un-ticking inside the session only clears the session's mark
+  /** Opens a task's store copy again, for a tick taken back here. */
+  const reopenInStore = (a: Attached) => {
+    const st0 = useStore.getState();
+    if (a.kind === 'daily' && a.refId) {
+      const t = st0.dailyTasks.find((x) => x.id === a.refId);
+      if (t && t.doneOn === todayKey()) toggleDaily(a.refId);
+    } else if (a.kind === 'mission' && a.refId) {
+      const m = st0.missions.find((x) => x.id === a.refId);
+      if (m && m.done) toggleMission(a.refId);
+    }
+  };
+
+  // a tick here is the task's own tick, both ways: the list shows the store's copy (see `live`)
   const markAttached = (key: string) => {
-    const a = attached.find((x) => x.key === key);
+    const a = live.find((x) => x.key === key);
     if (!a) return;
     if (!a.done) completeInStore(a);
-    setAttached((list) => list.map((x) => (x.key === key ? { ...x, done: !x.done } : x)));
+    else reopenInStore(a);
+    setAttached((list) => list.map((x) => (x.key === key ? { ...x, done: !a.done } : x)));
   };
 
   const attach = (kind: Attached['kind'], title: string, refId?: string) => {
@@ -365,9 +495,47 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   // today turns over at midnight, so the focused time in the header does too
   const today = useToday();
+  // A ToDo or a long-term task ticked in Tasks mid-session is ticked here too: its store copy says whether it is done,
+  // on the plate, on the ambient screen and in the review. The session's own mark counts only for a task made on the
+  // spot, or one deleted since.
+  const live = attached.map((a) => {
+    let done = a.done;
+    if (a.kind === 'daily' && a.refId) {
+      const t = dailyTasks.find((x) => x.id === a.refId);
+      if (t) done = t.doneOn === today;
+    } else if (a.kind === 'mission' && a.refId) {
+      const m = missions.find((x) => x.id === a.refId);
+      if (m) done = m.done;
+    }
+    return done === a.done ? a : { ...a, done };
+  });
   const pickableDaily = dailyTasks.filter((t) => t.doneOn !== today && !attached.some((a) => a.refId === t.id));
   const pickableMissions = missions.filter((m) => !m.done && !attached.some((a) => a.refId === m.id));
-  const currentTask = attached.find((a) => !a.done);
+  const currentTask = live.find((a) => !a.done);
+
+  // today's planned blocks, the one on now and the next; the minute turns them over (useNow, only while in front)
+  const now = useNow();
+  const blocks = React.useMemo(() => {
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const todays = [...(planner[dayName(now)] || [])].sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+    // of two blocks on now (allowed, on purpose), the one that ends first, as the Planner's header says
+    let onNow: (typeof todays)[number] | undefined;
+    for (const b of todays) {
+      if (toMinutes(b.start) <= nowMin && nowMin < toMinutes(b.end) && (!onNow || toMinutes(b.end) < toMinutes(onNow.end))) onNow = b;
+    }
+    return { todays, onNow, next: todays.find((b) => toMinutes(b.start) > nowMin) };
+  }, [planner, now]);
+  // subjects to tap instead of typing: today's planned ones first, then those of recent sessions; four at most
+  const subjectPicks = React.useMemo(() => {
+    const out: string[] = [];
+    const add = (name?: string) => {
+      const t = (name || '').trim();
+      if (t && out.length < 4 && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t);
+    };
+    blocks.todays.forEach((b) => add(b.subject));
+    for (let i = sessions.length - 1; i >= 0 && out.length < 4; i--) add(sessions[i].subject);
+    return out;
+  }, [blocks.todays, sessions]);
 
   const todayFocusMin = React.useMemo(
     () => Math.round(sessions.filter((s) => s.dateKey === today).reduce((a, s) => a + s.netSeconds, 0) / 60),
@@ -396,21 +564,33 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     : currentTask ? { title: currentTask.title, color: currentTask.kind === 'mission' ? C.amber : C.green } : null;
   const twoCol = areaW >= TWO_COL_AT;
 
-  // The header's line, with no ticking seconds in it (the plate has the clock): while a session runs, its subject and
-  // when it ends (a countdown's end, or the finish line), or for a stopwatch with neither, since when; paused, that it
-  // is paused; idle, today's focused time if there is any. Only a running session is live: not paused, not set up. A
-  // session being reviewed has ended, so it is neither running nor paused and the line says nothing.
+  // The header's line, with no ticking seconds in it and nothing the plate already shows (its subject, when it ends).
+  // While a session runs: its subject, then the next block planned today, or else the focus already logged today, or
+  // else when it ends (or since when it runs). Paused: what is left, or done so far, which holds still while paused.
+  // Idle: a block planned for now, then today's focused time. Only a running session is live: not paused, not set up.
+  // A session being reviewed has ended, so it is neither running nor paused and the line says nothing. A fact whose
+  // value is zero is left out.
   const clockAt = (ms: number) => fmtClockTime(new Date(ms).getHours() * 60 + new Date(ms).getMinutes(), hour24);
   const lead = shownSubject ? { em: shownSubject } : timerMode === 'stopwatch' ? 'Stopwatch' : 'Countdown';
   const endsAt = timerMode === 'countdown' && startTs ? startTs + (targetMin * 60 - accumSec) * 1000 : finishAt;
+  const after = blocks.next
+    ? (blocks.next.subject.trim() || 'Next block') + ' at ' + fmtClockTime(toMinutes(blocks.next.start), hour24)
+    : todayFocusMin > 0 ? fmtMins(todayFocusMin) + ' earlier today' : null;
+  // rounded as the clock rounds: up for what is left, down for what is done
+  const pausedMin = timerMode === 'countdown' ? Math.ceil(displayOf(timer) / 60) : Math.floor(elapsedOf(timer) / 60);
+  const planned = blocks.onNow && blocks.onNow.subject.trim()
+    ? [{ em: blocks.onNow.subject.trim() }, ' planned until ' + fmtClockTime(toMinutes(blocks.onNow.end), hour24)]
+    : null;
   const focusContext = review ? null : !started
-    ? (todayFocusMin > 0 ? contextLine(focusedToday(todayFocusMin)) : null)
+    ? contextLine(planned, todayFocusMin > 0 && focusedToday(todayFocusMin))
     : !running
-      ? contextLine([lead, ' paused'])
-      : contextLine([
-        lead,
-        endsAt ? ' until ' + clockAt(endsAt) : startedAtRef.current ? ' since ' + clockAt(startedAtRef.current) : '',
-      ]);
+      ? contextLine([lead, ' paused'], pausedMin > 0 && fmtMins(pausedMin) + (timerMode === 'countdown' ? ' left' : ' so far'))
+      : after
+        ? contextLine(lead, after)
+        : contextLine([
+          lead,
+          endsAt ? ' until ' + clockAt(endsAt) : startedAtRef.current ? ' since ' + clockAt(startedAtRef.current) : '',
+        ]);
   const header = useToolHeader({
     title: 'Deep Work',
     mode: mode === 'tab' ? 'tab' : 'page',
@@ -419,6 +599,37 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     // the ambient screen covers this one: the dot rests until it is gone
     covered: ambient,
   });
+
+  // The subject field tapped half under the tab-mode bar: Android brings a focused field into view only when it is
+  // outside the scroll, and the bar lies over the scroll's top, so it would stay there. It is moved to just below the bar.
+  const scrollRef = useRef<Animated.ScrollView>(null);
+  const subjectBox = useRef<View>(null);
+  const revealSubject = () => {
+    const box = subjectBox.current;
+    if (mode !== 'tab' || !box) return;
+    const y0 = header.scrollY.value;
+    box.measureInWindow((_x, y) => {
+      const clear = header.barH + 12;
+      if (y < clear) scrollRef.current?.scrollTo({ y: Math.max(0, y0 - (clear - y)), animated: level !== 'none' });
+    });
+  };
+
+  // subjects to tap, under the idle field and in the subject sheet: flat chips, as small choices are
+  const subjectChips = subjectPicks.length > 0 ? (
+    <Row style={st.picks}>
+      {subjectPicks.map((name) => (
+        <Chip
+          key={name} small label={name}
+          active={name.toLowerCase() === shownSubject.toLowerCase()}
+          onPress={() => setSubject(name)}
+        />
+      ))}
+    </Row>
+  ) : null;
+
+  // a plate nobody can see (under the ambient screen, behind another tab, the app away) does not tick
+  const focused = useIsFocused();
+  const appActive = useAppActive();
 
   const stageBlock = (
     <Enter index={0}>
@@ -486,7 +697,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               <PillButton label="Start" icon="play" onPress={start} />
             </Row>
           </GlassCard>
-          <Field value={subject} onChangeText={setSubject} placeholder="Subject, like Physics (optional)" />
+          <View ref={subjectBox} collapsable={false}>
+            <Field
+              value={subject} onChangeText={setSubject} placeholder="Subject, like Physics (optional)"
+              maxLength={60} returnKeyType="done" onFocus={revealSubject}
+            />
+          </View>
+          {subjectChips}
         </Animated.View>
       ) : (
         <Animated.View key="running" entering={switchIn}>
@@ -499,13 +716,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             current={current}
             onSubject={() => setSubjectSheet(true)}
             onToggle={running ? pause : start}
-            onEnd={endSession}
+            onEnd={() => endSession(true)}
             onAmbient={() => setAmbient(true)}
             onAddFive={addFive}
             onFinishLine={() => setFinishSheet(true)}
             onTickCurrent={() => { if (currentTask) markAttached(currentTask.key); }}
             clockStyle={pulseStyle}
-            hold={ambient}
+            hold={ambient || !focused || !appActive}
           />
         </Animated.View>
       )}
@@ -518,7 +735,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <Enter index={2}>
         <SectionTitle
           right={(
-            <Bouncy onPress={() => setPickSheet(true)} scaleTo={0.92} radius={8} hitSlop={8} accessibilityRole="button" accessibilityLabel="Attach tasks">
+            <Bouncy
+              onPress={() => setPickSheet(true)} scaleTo={0.92} radius={8} hitSlop={8} style={st.attachKey}
+              accessibilityRole="button" accessibilityLabel="Attach tasks"
+            >
               <Text style={{ color: C.accent, fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small }}>+ Attach</Text>
             </Bouncy>
           )}
@@ -533,7 +753,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           ) : (
             // one card for the list: a task attached or taken off folds in or out, and the card follows its rows
             <ListCard>
-              {attached.map((a) => (
+              {live.map((a) => (
                 <ListRow key={a.key} style={st.taskRow}>
                   <CheckCircle done={a.done} color={a.kind === 'mission' ? C.amber : C.green} onPress={() => markAttached(a.key)} label={a.title} />
                   <StrikeText done={a.done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{a.title}</StrikeText>
@@ -556,14 +776,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               {recent.map((s) => (
                 <ListRow key={s.id} style={{ paddingVertical: 12 }}>
                   <View style={{ flex: 1 }}>
-                    <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14, letterSpacing: TRACK.small }}>
+                    <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14, letterSpacing: TRACK.small }} numberOfLines={1}>
                       {sessionLength(s.netSeconds)}{s.subject ? ` · ${s.subject}` : ''}
                     </Text>
                     <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 2 }} numberOfLines={1}>
                       {sessionDay(s.dateKey)}{s.taskTitles.length ? ` · ${s.taskTitles.join(', ')}` : ''}
                     </Text>
                   </View>
-                  <Ionicons name="flash" size={18} color={C.accent} />
                 </ListRow>
               ))}
             </ListCard>
@@ -578,7 +797,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // the subject sheet closes onto the store at once, not half a second later
   const closeSubject = () => {
     setSubjectSheet(false);
-    if (startedRef.current) patchDeepWork({ subject: subjectRef.current });
+    if (startedRef.current) { patchDeepWork({ subject: subjectRef.current }); renewEndNotice(); }
   };
 
   return (
@@ -587,7 +806,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <View style={[frame(twoCol ? WIDE_MAX : READ_MAX), st.barLayer]}>{header.bar}</View>
       <Animated.ScrollView
         key={fk}
+        ref={scrollRef}
         {...header.scrollProps}
+        // a tap on Start (or the wheel, or the mode) while the keyboard is up acts at once, instead of only closing it
+        keyboardShouldPersistTaps="handled"
         onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}
         contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
       >
@@ -595,18 +817,12 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           {/* the hero rises with the session: both are the screen's first entrance */}
           <Enter index={0}>{header.hero}</Enter>
 
-          {twoCol ? (
-            // a sideways tablet: the session on the left, its tasks and the history beside it
-            <View style={st.cols}>
-              <View style={st.col}>{stageBlock}</View>
-              <View style={[st.col, st.colSide]}>{tasksBlock}</View>
-            </View>
-          ) : (
-            <>
-              {stageBlock}
-              {tasksBlock}
-            </>
-          )}
+          {/* a sideways tablet: the session on the left, its tasks and the history beside it. One tree either way, so
+              turning the tablet only changes styles and never builds the stage again; a phone has no styles here */}
+          <View style={twoCol ? st.cols : undefined}>
+            <View style={twoCol ? st.col : undefined}>{stageBlock}</View>
+            <View style={twoCol ? [st.col, st.colSide] : undefined}>{tasksBlock}</View>
+          </View>
         </View>
       </Animated.ScrollView>
 
@@ -617,9 +833,11 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           onChangeText={setSubject}
           placeholder="Subject, like Physics"
           autoFocus
+          maxLength={60}
           returnKeyType="done"
           onSubmitEditing={closeSubject}
         />
+        {subjectChips}
         <PillButton label="Done" onPress={closeSubject} />
       </Sheet>
 
@@ -629,6 +847,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <Field
             value={customTask} onChangeText={setCustomTask} placeholder="On-the-spot task…"
             style={{ flex: 1 }}
+            // the field keeps the keyboard, so several tasks go in one after another
+            returnKeyType="done" submitBehavior="submit"
             onSubmitEditing={() => { if (customTask.trim()) { attach('custom', customTask.trim()); setCustomTask(''); } }}
           />
           <IconBtn
@@ -662,9 +882,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </Sheet>
 
       {/* post-session review */}
-      <Sheet visible={!!review} onClose={() => review && commit(accumSec, review.choices)} title="Session review">
+      <Sheet visible={!!review && !held} onClose={() => review && commit(accumSec, review.choices)} title="Session review">
         <Text style={{ color: C.textDim, fontFamily: F.reg, marginBottom: 12, fontSize: 13, letterSpacing: TRACK.small }}>
-          {reviewMin > 0 ? reviewMin + (reviewMin === 1 ? ' focused minute. ' : ' focused minutes. ') : ''}
+          {reviewMin > 0 ? fmtMins(reviewMin) + ' focused. ' : ''}
           What happened to the unchecked items?
         </Text>
         {review?.items.map((it) => (
@@ -683,30 +903,29 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           </View>
         ))}
         <PillButton label="Save session" onPress={() => review && commit(accumSec, review.choices)} />
+        {/* a session ended by hand can be taken back up: a quiet way out, under the answer */}
+        {review?.byHand ? (
+          <Bouncy onPress={keepGoing} scaleTo={1} sink={false} radius={12} accessibilityRole="button" style={st.quietKey}>
+            <Text style={st.quietText}>Keep going</Text>
+          </Bouncy>
+        ) : null}
       </Sheet>
 
       {/* countdown until a time of day */}
       <Sheet visible={untilSheet} onClose={() => setUntilSheet(false)} title="Count down until…">
         <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, marginBottom: 10 }}>
-          Pick a time of day. The gap from now becomes the countdown length, and nothing stops on its own at that time.
+          Pick a time of day. The block ends at that time.
         </Text>
         <Field
           value={untilTime} onChangeText={setUntilTime}
-          placeholder="24h HH:MM, e.g. 17:30" keyboardType="numbers-and-punctuation" autoFocus
+          placeholder={'Time, like ' + timeExample} keyboardType="numbers-and-punctuation" autoFocus
         />
         {untilPreviewMin != null && (
           <Text style={{ color: C.accent, fontSize: 13, letterSpacing: TRACK.small, fontFamily: F.med, marginBottom: 10 }}>
-            ≈ {Math.floor(untilPreviewMin / 60) > 0 ? `${Math.floor(untilPreviewMin / 60)}h ` : ''}{untilPreviewMin % 60}m from now
+            ≈ {fmtMins(untilPreviewMin)} from now
           </Text>
         )}
-        <PillButton
-          label="Set countdown"
-          onPress={() => {
-            const m = minutesUntil(untilTime.trim());
-            if (m == null) { Alert.alert('Time format', 'Use 24h HH:MM, e.g. 17:30'); return; }
-            setTargetMin(m); setCustomMin(''); setUntilSheet(false);
-          }}
-        />
+        <PillButton label="Set countdown" onPress={setUntil} />
       </Sheet>
 
       {/* a length that is not a preset: minutes, or until a clock time */}
@@ -717,11 +936,11 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <Field
           value={customMin} onChangeText={setCustomMin} placeholder="Minutes"
           keyboardType="number-pad" autoFocus
-          onSubmitEditing={() => { const n = parseInt(customMin, 10); if (n > 0) { setTargetMin(Math.min(n, 600)); setCustomSheet(false); } }}
+          onSubmitEditing={() => { const n = parseInt(customMin, 10); if (n > 0) { setTargetMin(Math.min(n, LONGEST_MIN)); setCustomSheet(false); } }}
         />
         <PillButton
           label="Set length"
-          onPress={() => { const n = parseInt(customMin, 10); if (n > 0) { setTargetMin(Math.min(n, 600)); setCustomSheet(false); } }}
+          onPress={() => { const n = parseInt(customMin, 10); if (n > 0) { setTargetMin(Math.min(n, LONGEST_MIN)); setCustomSheet(false); } }}
         />
         <Bouncy
           onPress={() => { untilNext.current = true; setCustomSheet(false); }}
@@ -740,7 +959,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       {/* stopwatch finish line */}
       <Sheet visible={finishSheet} onClose={() => setFinishSheet(false)} title="Finish line">
         <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, marginBottom: 10 }}>
-          A soft endpoint for the stopwatch. When it passes while running you'll be asked to wrap up (auto-concludes after 10 quiet minutes); if you're paused at that moment, the session wraps up on its own.
+          A soft end for the stopwatch. If it passes while the clock runs, you are asked to wrap up, and the session ends on its own after 10 quiet minutes. If the clock is paused then, it ends at once.
         </Text>
         <Row style={{ marginBottom: 4 }}>
           <Chip small label="Today" active={finishDay === 'today'} onPress={() => setFinishDay('today')} />
@@ -748,7 +967,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         </Row>
         <Field
           value={finishTime} onChangeText={setFinishTime}
-          placeholder="24h HH:MM, e.g. 22:00" keyboardType="numbers-and-punctuation"
+          placeholder={'Time, like ' + timeExample} keyboardType="numbers-and-punctuation"
         />
         <Row style={{ gap: 10 }}>
           <PillButton label="Set finish line" onPress={setFinishLine} style={{ flex: 1 }} />
@@ -760,7 +979,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
       {/* finish line reached — approval window */}
       <Sheet
-        visible={finishPrompt}
+        visible={finishPrompt && !held}
         onClose={() => { if (autoConcludeTimer.current) clearTimeout(autoConcludeTimer.current); clearFinishLine(); }}
         title="Finish line reached"
       >
@@ -769,7 +988,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         </Text>
         <PillButton
           label="End session" color={C.danger}
-          onPress={() => { setFinishPrompt(false); endSession(); }}
+          onPress={() => { setFinishPrompt(false); endSession(true); }}
         />
         <PillButton
           label="Skip finish line" outline style={{ marginTop: 10 }}
@@ -785,26 +1004,92 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   );
 }
 
-/** Today's focused time for the header, in minutes, or hours and minutes from the first hour. */
-function focusedToday(min: number): string {
-  if (min < 60) return min + ' min focused today';
+/** A length of time, the one way this screen writes it: "45 min", "1 h", "1 h 35 min", never a zero part. */
+function fmtMins(min: number): string {
   const h = Math.floor(min / 60);
-  return (h + ' h' + (min % 60 > 0 ? ' ' + (min % 60) + ' m' : '')) + ' focused today';
+  const m = min % 60;
+  if (h === 0) return m + ' min';
+  return m === 0 ? h + ' h' : h + ' h ' + m + ' min';
+}
+
+/** Today's focused time for the header. */
+function focusedToday(min: number): string {
+  return fmtMins(min) + ' focused today';
 }
 
 /** A logged session's length: whole minutes, or less than one said plainly instead of "0 min". */
 function sessionLength(secs: number): string {
   const m = Math.round(secs / 60);
-  return m > 0 ? m + ' min' : 'Under a minute';
+  return m > 0 ? fmtMins(m) : 'Under a minute';
 }
 
-/** The day a session was logged on, as the notes list writes a date (26 Sep), with the year when it is not this one. */
+/**
+ * The day a session was logged on: Today, Yesterday, or as the notes list writes a date (26 Sep), with the year when it
+ * is not this one.
+ */
 function sessionDay(key: string): string {
+  if (key === todayKey()) return 'Today';
+  if (key === yesterdayKey()) return 'Yesterday';
   const d = new Date(key + 'T00:00:00');
   if (isNaN(d.getTime())) return key;
   const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
   if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
   return d.toLocaleDateString('en-IN', opts);
+}
+
+/**
+ * A typed time of day, read forgivingly: "17:30", "5:30 pm", "5.30pm", "1730", "930", "5", "5pm". Returns the minutes
+ * of the day it can mean, earliest first, or none when it is not a time. On the 12-hour clock a bare "5:30" is the
+ * morning or the evening, so both come back and the caller takes the one that fits.
+ */
+function readClock(text: string, hour24: boolean): number[] {
+  const m = /^(\d{1,2})(?:[:.]?(\d{2}))?\s*(?:([ap])\.?\s*m?\.?)?$/.exec(text.trim().toLowerCase());
+  if (!m) return [];
+  const h = +m[1];
+  const min = m[2] ? +m[2] : 0;
+  if (min > 59) return [];
+  if (m[3]) {
+    if (h < 1 || h > 12) return [];
+    return [((h % 12) + (m[3] === 'p' ? 12 : 0)) * 60 + min];
+  }
+  if (h > 23) return [];
+  // a leading zero ("09:30") is a 24-hour time on any clock
+  if (!hour24 && h >= 1 && h <= 12 && m[1][0] !== '0') return [(h % 12) * 60 + min, (h % 12 + 12) * 60 + min];
+  return [h * 60 + min];
+}
+
+/** Minutes from now until the clock next reads `at` (minutes of the day); a time just gone is tomorrow's. */
+function minutesUntil(at: number): number {
+  const now = new Date();
+  let diff = at - (now.getHours() * 60 + now.getMinutes());
+  if (diff <= 0) diff += 24 * 60;
+  return diff;
+}
+
+/** Of the times a typed time can mean, the one that comes round first. */
+function nearestAhead(times: number[]): number | null {
+  let best: number | null = null;
+  for (const t of times) if (best == null || minutesUntil(t) < minutesUntil(best)) best = t;
+  return best;
+}
+
+/**
+ * A toast from a session that ended out of sight. It waits until it can be seen (the app in front, the intro gone),
+ * and is dropped if `still` says it no longer needs saying (Deep Work came to the front first).
+ */
+function toastWhenSeen(message: string, action: ToastAction, still: () => boolean) {
+  const seen = () => AppState.currentState === 'active' && useIntro.getState().phase !== 'playing';
+  if (seen()) { toast(message, action); return; }
+  let done = false;
+  const tryNow = () => {
+    if (done || !seen()) return;
+    done = true;
+    app.remove();
+    intro();
+    if (still()) toast(message, action);
+  };
+  const app = AppState.addEventListener('change', tryNow);
+  const intro = useIntro.subscribe(tryNow);
 }
 
 const st = StyleSheet.create({
@@ -820,6 +1105,11 @@ const st = StyleSheet.create({
   sheetSection: { color: C.textFaint, fontSize: 12, fontFamily: F.semi, textTransform: 'uppercase', letterSpacing: TRACK.caps, marginTop: 10, marginBottom: 6 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border },
   pickText: { color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body, marginLeft: 10, flex: 1 },
+  /** "+ Attach" reaches a finger's height without moving: the padding is taken back by the margin */
+  attachKey: { paddingVertical: 6, marginVertical: -6 },
+  picks: { flexWrap: 'wrap' },
+  quietKey: { alignSelf: 'center', paddingVertical: 14, paddingHorizontal: 18, marginTop: 6 },
+  quietText: { color: C.textDim, fontFamily: F.med, fontSize: 14, letterSpacing: TRACK.small },
   cols: { flexDirection: 'row', alignItems: 'flex-start', gap: 28 },
   col: { flex: 1, minWidth: 0 },
   /** the side column's first title lines up with the top of the session instead of a section's gap below it */

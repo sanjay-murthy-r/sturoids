@@ -38,7 +38,8 @@ export function clockWidth(text: string, size: number) {
  * Counting digits in fixed cells, so a count never shifts sideways, and a digit that changes rolls over: the new one
  * arrives from above as the old one drops away. Cells are keyed from the right, so the seconds keep their place when
  * the hours arrive. The digits never scale with the system font size: the clock is sized to fit its place, and a
- * larger face would be cut by its cells. Memoised: a clock re-rendering each second leaves its minutes alone.
+ * larger face would be cut by its cells. Memoised: a clock re-rendering each second leaves its minutes alone. A screen
+ * reader never hears the digits ("41", then ":06"): the clock around them says the time once, in words.
  */
 export const ClockDigits = React.memo(function ClockDigits({ text, size, lineHeight, color = C.text, roll = true, style }: {
   text: string;
@@ -56,7 +57,7 @@ export const ClockDigits = React.memo(function ClockDigits({ text, size, lineHei
   const animate = roll && level !== 'none';
   const travel = level === 'full' ? 0.6 : 0;
   return (
-    <View style={[st.row, { height: h }, style]} accessible accessibilityLabel={text}>
+    <View style={[st.row, { height: h }, style]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
       {text.split('').map((ch, i) => {
         const colon = ch === ':';
         return (

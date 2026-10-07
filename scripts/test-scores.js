@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /*
  * Checks for src/scores.ts, run against the real source in Node: results (own marks, sums, weights, nesting, partial
- * marking, negative marks), summaries, what is coming up, deltas, moving, duplicating, and repairing a damaged tree.
+ * marking, negative marks), summaries, what is coming up and what waits for marks, deltas, moving, duplicating, local
+ * dates, and repairing a damaged tree.
  * Usage: node scripts/test-scores.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -144,6 +145,68 @@ const checks = {
     assert.equal(S.nextTitle('Paper 09'), 'Paper 10');
     assert.equal(S.nextTitle('JEE 2026 Mock 7 (Allen)'), 'JEE 2026 Mock 8 (Allen)');
     assert.equal(S.nextTitle('Unit test'), 'Unit test 2');
+  },
+  "a year at the end of a title is the series' year, not its count"() {
+    assert.equal(S.nextTitle('JEE Mock 7 (2026)'), 'JEE Mock 8 (2026)');
+    assert.equal(S.nextTitle('Term 1 2026'), 'Term 2 2026');
+    assert.equal(S.nextTitle('Batch 2026'), 'Batch 2027', 'a year alone still moves on');  },
+  'an exam with no date reads as the local day it was added'() {
+    const was = process.env.TZ;
+    process.env.TZ = 'Asia/Kolkata';
+    try {
+      // 01:30 on 6 Oct in India is still 5 Oct in UTC
+      const at = Date.UTC(2026, 9, 5, 20, 0);
+      assert.equal(new Date(at).getHours(), 1, 'the zone took effect');
+      assert.equal(S.whenOf({ id: 'x', parentId: null, kind: 'exam', title: 'X', createdAt: at, updatedAt: at }), '2026-10-06');
+      assert.equal(S.whenOf({ id: 'y', parentId: null, kind: 'exam', title: 'Y', date: '2026-09-01', createdAt: at, updatedAt: at }), '2026-09-01');
+    } finally {
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+    }
+  },
+  'the result table matches each exam worked out alone'() {
+    const tree = [...TREE, node('m5', 'mocks', 'exam', { date: '2026-09-12', score: 200, outOf: 300 })];
+    const ix = S.indexScores(tree);
+    const table = S.resultTable(ix);
+    for (const n of tree) {
+      if (n.kind !== 'exam') continue;
+      const want = S.resultOf(n, ix);
+      assert.deepEqual(table.result.get(n.id), want, 'result of ' + n.id);
+      const d = S.deltaVsPrevious(n, ix);
+      const got = table.delta.get(n.id);
+      assert.ok(d == null ? got == null : Math.abs(got - d) < 1e-9, 'delta of ' + n.id + ': ' + got + ' vs ' + d);
+    }
+  },
+  'exams sat lately and still unmarked wait for their marks'() {
+    const tree = [
+      node('a', null, 'exam', { date: '2026-10-05' }),
+      node('b', null, 'exam', { date: '2026-10-01' }),
+      node('c', null, 'exam', { date: '2026-09-20' }),
+      node('d', null, 'exam', { date: '2026-09-30', score: 5, outOf: 10 }),
+      node('e', null, 'exam', { date: '2026-10-06' }),
+      node('f', null, 'exam'),
+      node('g', null, 'exam', { date: '2026-09-25' }),
+    ];
+    const ix = S.indexScores(tree);
+    assert.deepEqual(S.waitingForMarks(ix, null, '2026-10-06').map((n) => n.id), ['a', 'b', 'g'], 'newest first, at most three');
+    assert.deepEqual(S.waitingForMarks(ix, null, '2026-10-06', 10).map((n) => n.id), ['a', 'b', 'g'], 'two weeks back at most, marked and undated left out');
+    assert.deepEqual(S.waitingForMarks(ix, null, '2026-10-04', 10).map((n) => n.id), ['b', 'g', 'c'], 'today and later are coming up instead');
+  },
+  'a duplicated group keeps the category of every exam inside it'() {
+    const nodes = [
+      { id: 't1', parentId: null, kind: 'group', title: 'Term 1', createdAt: 1, updatedAt: 1 },
+      { id: 'u1', parentId: 't1', kind: 'exam', title: 'Unit test 1', tags: ['unit', 'hard'], createdAt: 1, updatedAt: 1 },
+      { id: 'p1', parentId: 'u1', kind: 'exam', title: 'Physics', tags: ['careless'], score: 4, outOf: 10, createdAt: 1, updatedAt: 1 },
+      { id: 'inner', parentId: 't1', kind: 'group', title: 'Labs', createdAt: 1, updatedAt: 1 },
+      { id: 'l1', parentId: 'inner', kind: 'exam', title: 'Lab 1', tags: ['unit'], createdAt: 1, updatedAt: 1 },
+    ];
+    let n = 0;
+    const copy = S.duplicateStructure(nodes, 't1', 5, () => 'c' + ++n);
+    const by = (title) => copy.nodes.find((x) => x.title === title);
+    assert.equal(copy.nodes.find((x) => x.id === copy.rootId).title, 'Term 2');
+    assert.deepEqual(by('Unit test 1').tags, ['unit', 'hard'], 'an exam in the group keeps its tags');
+    assert.deepEqual(by('Lab 1').tags, ['unit'], 'so does one in a group inside it');
+    assert.ok(!('tags' in by('Physics')), "a subject's tags still start blank");
   },
   'marks read as typed and are checked'() {
     assert.deepEqual(S.parseMark('42.5'), { value: 42.5, bad: false });

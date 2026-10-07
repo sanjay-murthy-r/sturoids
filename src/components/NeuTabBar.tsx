@@ -183,6 +183,7 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
   return (
     <Animated.View
       pointerEvents={stepAside ? 'none' : 'auto'}
+      accessibilityRole="tablist"
       onLayout={vertical ? undefined : (e) => {
         barH.value = e.nativeEvent.layout.height;
         setSlotW((e.nativeEvent.layout.width - BAR_PAD_X * 2) / routeNames.length);

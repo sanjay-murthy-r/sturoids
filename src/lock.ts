@@ -28,7 +28,8 @@ const PIN_KEY = 'sturoids.pin.v2';
 const LEGACY_KEYS = ['sturoids.pin.v1', 'sturoids.journalPass.v1'];
 const ATTEMPTS_KEY = 'sturoids.pinAttempts.v2';
 const MAX_TRIES = 5;
-const COOLDOWN_MS = 30_000;
+/** the wait after each run of five wrong PINs, longer each time until a right one; the last repeats */
+const COOLDOWNS_MS = [30_000, 60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000];
 
 // ---------- sessions ----------
 
@@ -50,7 +51,7 @@ function session() {
       open = false;
       emit();
     },
-    away() { if (leftAt == null) leftAt = Date.now(); },
+    away(at = Date.now()) { if (leftAt == null) leftAt = at; },
     back(graceMs: number) {
       if (open && leftAt != null && Date.now() - leftAt >= graceMs) {
         open = false;
@@ -71,18 +72,66 @@ function sessionOf(scope: LockScope) {
   }
   return s;
 }
-let authInFlight = false;
+// Trips out of the app that the app itself started: a photo or file picker, a share sheet, a permission dialog, the
+// phone's own lock screen. Each backgrounds the app on Android, and none of them is the owner leaving, so they never
+// start the grace clock. A trip that runs on far longer than any pick or share counts as leaving after all, timed
+// from when the app went.
+let expected = 0;
+let expectedLeftAt: number | null = null;
+const TRIP_CAP_MS = 10 * 60_000;
+/** how long the app stays in front after a call settles before its trip is over (a share sheet is still opening) */
+const SETTLE_MS = 800;
 
 AppState.addEventListener('change', (next) => {
-  // the phone's own lock screen backgrounds the app; that is not the owner leaving
-  if (authInFlight) return;
+  const graceMs = useStore.getState().settings.lockGraceSec * 1000;
+  if (expected > 0) {
+    if (next !== 'active') {
+      if (expectedLeftAt == null) expectedLeftAt = Date.now();
+    } else if (expectedLeftAt != null) {
+      const leftAt = expectedLeftAt;
+      expectedLeftAt = null;
+      if (Date.now() - leftAt > TRIP_CAP_MS) sessions.forEach((s) => { s.away(leftAt); s.back(graceMs); });
+    }
+    return;
+  }
   if (next === 'active') {
-    const graceMs = useStore.getState().settings.lockGraceSec * 1000;
     sessions.forEach((s) => s.back(graceMs));
   } else {
     sessions.forEach((s) => s.away());
   }
 });
+
+/** Ends one expected trip once the app is back in front and stays there a moment. */
+function releaseWhenBack() {
+  const done = () => { expected = Math.max(0, expected - 1); };
+  const settle = () => {
+    // Android's share sheet settles as soon as it is shown, before the app has gone: wait to see the app stay
+    setTimeout(() => { if (AppState.currentState === 'active') done(); else waitForActive(); }, SETTLE_MS);
+  };
+  // registered after the listener above, so that one still sees the trip when the app comes back
+  const waitForActive = () => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s !== 'active') return;
+      sub.remove();
+      settle();
+    });
+  };
+  if (AppState.currentState === 'active') settle();
+  else waitForActive();
+}
+
+/**
+ * Runs a call that takes the app out of view on purpose (a picker, a share sheet, a permission dialog), so that coming
+ * back from it never locks what was open. The grace rules hold for every other trip out of the app.
+ */
+export async function expectAway<T>(fn: () => Promise<T>): Promise<T> {
+  expected += 1;
+  try {
+    return await fn();
+  } finally {
+    releaseWhenBack();
+  }
+}
 
 export const markOpen = (scope: LockScope) => sessionOf(scope).mark();
 export const isOpen = (scope: LockScope) => sessionOf(scope).isOpen();
@@ -109,16 +158,14 @@ export async function deviceAuthAvailable(): Promise<boolean> {
 /** The phone's fingerprint, face or screen lock, for a tool whose owner allowed it. True when it opened. */
 export async function unlockWithScreenLock(reason: string): Promise<boolean> {
   if (!(await deviceAuthAvailable())) return false;
-  authInFlight = true;
   try {
-    const r = await LocalAuthentication.authenticateAsync({
+    // the phone's own lock screen backgrounds the app; that is not the owner leaving
+    const r = await expectAway(() => LocalAuthentication.authenticateAsync({
       promptMessage: reason, cancelLabel: 'Use PIN', disableDeviceFallback: false,
-    });
+    }));
     return r.success;
   } catch {
     return false;
-  } finally {
-    authInFlight = false;
   }
 }
 
@@ -152,8 +199,10 @@ export async function pinStatus(): Promise<'set' | 'legacy' | 'none'> {
   return 'none';
 }
 
-// Wrong guesses and the cooldown live in the keystore too, so closing the app does not reset them.
+// Wrong guesses, the waits already served and the cooldown live in the keystore too, so closing the app resets none
+// of them. Only a right PIN (or a new one) starts the count over.
 let failures = 0;
+let rounds = 0;
 let coolUntil = 0;
 let attemptsLoaded: Promise<void> | null = null;
 function loadAttempts(): Promise<void> {
@@ -163,6 +212,7 @@ function loadAttempts(): Promise<void> {
         if (!raw) return;
         const a = JSON.parse(raw);
         failures = Math.max(failures, Number(a?.failures) || 0);
+        rounds = Math.max(rounds, Number(a?.rounds) || 0);
         coolUntil = Math.max(coolUntil, Number(a?.coolUntil) || 0);
       })
       .catch(() => {});
@@ -170,7 +220,13 @@ function loadAttempts(): Promise<void> {
   return attemptsLoaded;
 }
 function saveAttempts() {
-  SecureStore.setItemAsync(ATTEMPTS_KEY, JSON.stringify({ failures, coolUntil })).catch(() => {});
+  SecureStore.setItemAsync(ATTEMPTS_KEY, JSON.stringify({ failures, rounds, coolUntil })).catch(() => {});
+}
+function resetAttempts() {
+  failures = 0;
+  rounds = 0;
+  coolUntil = 0;
+  saveAttempts();
 }
 // read at launch, so a cooldown still running shows as soon as the keypad appears
 void loadAttempts();
@@ -195,15 +251,15 @@ export async function verifyPin(code: string): Promise<'ok' | 'wrong' | 'cooldow
     }
   }
   if (ok) {
-    failures = 0;
-    coolUntil = 0;
-    saveAttempts();
+    resetAttempts();
     return 'ok';
   }
   failures += 1;
   if (failures >= MAX_TRIES) {
     failures = 0;
-    coolUntil = Date.now() + COOLDOWN_MS;
+    // 30 s, a minute, 5, 15, then an hour for every further five: trying all 10,000 PINs would take months
+    coolUntil = Date.now() + COOLDOWNS_MS[Math.min(rounds, COOLDOWNS_MS.length - 1)];
+    rounds += 1;
     saveAttempts();
     return 'cooldown';
   }
@@ -216,14 +272,10 @@ export async function setPin(code: string): Promise<void> {
   const salt = toHex(Crypto.getRandomBytes(16));
   await SecureStore.setItemAsync(PIN_KEY, JSON.stringify({ salt, hash: await digest(code, salt) }));
   await Promise.all(LEGACY_KEYS.map((k) => SecureStore.deleteItemAsync(k).catch(() => {})));
-  failures = 0;
-  coolUntil = 0;
-  saveAttempts();
+  resetAttempts();
 }
 
 export async function removePin(): Promise<void> {
   await Promise.all([PIN_KEY, ...LEGACY_KEYS].map((k) => SecureStore.deleteItemAsync(k).catch(() => {})));
-  failures = 0;
-  coolUntil = 0;
-  saveAttempts();
+  resetAttempts();
 }

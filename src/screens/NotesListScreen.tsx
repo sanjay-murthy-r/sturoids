@@ -11,10 +11,55 @@ import {
   ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, GateHeader, useTheme, useToolHeader,
   contextLine,
 } from '../components/UI';
-import { Bouncy, EASE_OUT, Enter, glide, useAnimLevel } from '../components/Motion';
+import { ARRIVE, Bouncy, EASE_OUT, Enter, FADE_IN, glide, useAnimLevel } from '../components/Motion';
 import { tap } from '../haptics';
 import { deleteAttachmentFiles } from '../attachments';
 import { ToolGate } from '../components/LockGate';
+import { fmtClockTime, todayKey, yesterdayKey } from '../utils';
+import { useToday } from '../hooks/useNow';
+import { useKeyboardOpen } from '../hooks/useKeyboard';
+
+/**
+ * Notes made here with New note that nobody has written in yet. The note's page takes one away again if it is still
+ * blank when the page closes, so backing out never leaves an "Untitled" row behind.
+ */
+const freshNotes = new Set<string>();
+/** True once, for a note New note made, the first time its page closes. */
+export function takeFreshNote(id: string): boolean {
+  return freshNotes.delete(id);
+}
+
+/** A second tap on a row or on New note while the first one's page is on its way is the same tap. */
+const PUSH_GAP_MS = 600;
+
+/**
+ * Whether a sheet that has just opened has finished rising, so its field takes the keyboard then: a keyboard that
+ * comes up while the panel is still moving resizes the window under it, and the panel jumps in mid-flight.
+ */
+function useRisen(visible: boolean) {
+  const level = useAnimLevel();
+  const [risen, setRisen] = useState(false);
+  React.useEffect(() => {
+    if (!visible) { setRisen(false); return undefined; }
+    const wait = level === 'full' ? ARRIVE.duration + 60 : level === 'some' ? FADE_IN.duration + 40 : 0;
+    if (!wait) { setRisen(true); return undefined; }
+    const t = setTimeout(() => setRisen(true), wait);
+    return () => clearTimeout(t);
+  }, [visible, level]);
+  return risen;
+}
+
+/** When a note was last written to, for its row: the time today, "Yesterday", then the date, with the year when it is not this one. */
+function rowWhen(updatedAt: number, today: string, hour24: boolean): string {
+  const d = new Date(updatedAt);
+  if (!updatedAt || isNaN(d.getTime())) return '';
+  const key = todayKey(d);
+  if (key === today) return fmtClockTime(d.getHours() * 60 + d.getMinutes(), hour24);
+  if (key === yesterdayKey()) return 'Yesterday';
+  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString('en-IN', opts);
+}
 
 /** Notes, behind the Notes lock when it is on. A single note locks from inside the note. */
 export function NotesListScreen({ mode }: { mode: 'tab' | 'stack' }) {
@@ -34,14 +79,16 @@ function useHeld<T>(value: T | null): T | null {
 
 /**
  * A folder's name: a new one, or a new name for one. It keeps its own draft, so typing re-renders the sheet and not
- * the list under it; `check` names what is wrong with a name ('' when it is fine).
+ * the list under it; `check` names what is wrong with a name ('' when it is fine). The field takes the keyboard once
+ * the sheet has risen.
  */
-function FolderNameSheet({ visible, onClose, title, initial, label, check, onSave }: {
+export function FolderNameSheet({ visible, onClose, title, initial, label, check, onSave }: {
   visible: boolean; onClose: () => void; title: string; initial: string; label: string;
   check: (name: string) => string; onSave: (name: string) => void;
 }) {
   const [draft, setDraft] = useState(initial);
   const [problem, setProblem] = useState('');
+  const risen = useRisen(visible);
   React.useEffect(() => {
     if (!visible) return;
     setDraft(initial);
@@ -55,8 +102,10 @@ function FolderNameSheet({ visible, onClose, title, initial, label, check, onSav
   };
   return (
     <Sheet visible={visible} onClose={onClose} title={title}>
+      {/* made again once the sheet has risen, and only then asks for the keyboard */}
       <Field
-        value={draft} onChangeText={(v) => { setDraft(v); setProblem(''); }} placeholder="Folder name" autoFocus maxLength={40}
+        key={risen ? 'risen' : 'rising'}
+        value={draft} onChangeText={(v) => { setDraft(v); setProblem(''); }} placeholder="Folder name" autoFocus={risen} maxLength={40}
         onSubmitEditing={save}
       />
       {/* the caption token carries a colour of its own, so the danger ink goes after it */}
@@ -67,11 +116,15 @@ function FolderNameSheet({ visible, onClose, title, initial, label, check, onSav
 }
 
 /** One note in the list, memoised: a change to one note re-renders its own row, not the screenful. */
-const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, onOpen, onMenu }: {
+const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, showFolder, today, hour24, onOpen, onMenu }: {
   note: Note; first: boolean; last: boolean; dip: SharedValue<number>;
+  /** off while the list shows one folder, whose name every row would only repeat */
+  showFolder: boolean;
+  today: string; hour24: boolean;
   onOpen: (id: string) => void; onMenu: (n: Note) => void;
 }) {
   const dipStyle = useAnimatedStyle(() => ({ opacity: dip.value }));
+  const meta = [showFolder ? n.folder : '', n.subject ?? '', rowWhen(n.updatedAt, today, hour24)].filter(Boolean).join(' · ');
   return (
     <ListSlice first={first} last={last}>
       <Animated.View style={dipStyle}>
@@ -82,10 +135,9 @@ const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, onOpen,
               {n.pinned && <Ionicons name="pin" size={14} color={C.amber} style={{ marginLeft: 6 }} />}
               {n.locked && <Ionicons name="lock-closed" size={13} color={C.textFaint} style={{ marginLeft: 6 }} />}
             </Row>
-            {!!n.body && !n.locked && <Text style={st.noteBody} numberOfLines={2}>{n.body}</Text>}
-            <Text style={st.noteMeta} numberOfLines={1}>
-              {n.folder}{n.subject ? ` · ${n.subject}` : ''} · {new Date(n.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-            </Text>
+            {/* two lines show, so a long pasted note never has its whole text laid out for them */}
+            {!!n.body && !n.locked && <Text style={st.noteBody} numberOfLines={2}>{n.body.slice(0, 240)}</Text>}
+            {meta ? <Text style={st.noteMeta} numberOfLines={1}>{meta}</Text> : null}
           </View>
         </ListRow>
       </Animated.View>
@@ -169,12 +221,15 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const openNote = React.useCallback((id: string) => nav.openNote(id), [nav]);
   const openMenu = React.useCallback((n: Note) => { tap(); setMenuNote(n); }, []);
   const count = filtered.length;
+  const today = useToday();
+  const hour24 = useStore((s) => s.settings.hour24);
+  const showFolder = !folder;
   const renderItem = React.useCallback(({ item, index }: { item: Note; index: number }) => (
     <NoteRow
       note={item} first={index === 0} last={index === count - 1}
-      dip={dip} onOpen={openNote} onMenu={openMenu}
+      dip={dip} showFolder={showFolder} today={today} hour24={hour24} onOpen={openNote} onMenu={openMenu}
     />
-  ), [count, openNote, openMenu]);
+  ), [count, showFolder, today, hour24, openNote, openMenu]);
 
   return (
     <ScreenBG guard={tabMode}>

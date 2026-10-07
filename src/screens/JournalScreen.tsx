@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, AppState, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, AppState, Platform, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
@@ -7,23 +7,26 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T, TRACK } from '../theme';
 import { useStore, JournalEntry, flushSaves } from '../store';
-import { todayKey } from '../utils';
+import { fmtClockTime, todayKey, toMinutes } from '../utils';
 import {
   Chip, DotMenu, Field, GateHeader, Hairline, IconBtn, PillButton, ProgressBar, Row, ScreenBG, Sheet, Toggle, useTheme,
   useToolHeader,
 } from '../components/UI';
+import type { ToolAction } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
+import { Wheel } from '../components/Wheel';
+import { toast } from '../components/Toast';
 import { Bouncy, EASE_OUT, Enter, FadeSwap, shiftIn, useAnimLevel } from '../components/Motion';
 import { PinSheet, ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
-  MOODS, countWords, deleteEntry, formatJournalDate, journalDateParts, journalDayFor, promptFor, readBody, relativeDay, saveEntry,
-  shiftKey, takeJournalOpenRequest, onBodiesRestored,
+  MOODS, countWords, deleteEntry, formatJournalDate, journalDateParts, journalDayFor, journalDayIsYesterday, journalStreak,
+  promptFor, readBody, relativeDay, saveEntry, shiftKey, takeJournalOpenRequest, onBodiesRestored,
 } from '../journal';
 import { useToolNav } from '../toolNav';
 import { tap, tick } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
-import { markOpen, pinStatus } from '../lock';
+import { expectAway, markOpen, pinStatus } from '../lock';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { useNow } from '../hooks/useNow';
 import { DayCheckout } from '../components/DayCheckout';
@@ -39,7 +42,9 @@ interface Draft {
 }
 
 const SAVE_DEBOUNCE_MS = 400;
-const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** the reminder's wheel turns in quarter hours, round the clock */
+const REMIND_STEP = 15;
+const REMIND_STOPS = (24 * 60) / REMIND_STEP;
 /** the check-out offers itself only after a real page has been written */
 const CHECKOUT_MIN_WORDS = 30;
 
@@ -92,7 +97,10 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const queue = React.useRef<Promise<void>>(Promise.resolve());
   const booted = React.useRef(false);
-  const autoDay = React.useRef(true); // the page follows the journal day until the user picks one
+  // The page follows the journal day. A pick of another day (the date sheet, the archive, an entry moved) holds for
+  // the rest of the journal day it was made on; a pick of the journal day itself follows the day again
+  const autoDay = React.useRef(true);
+  const chosenOn = React.useRef('');
   const bodyRef = React.useRef<TextInput>(null);
   // what is selected in the page, to start a task with it, and whether the page had the keyboard, to give it back
   const selection = React.useRef({ start: 0, end: 0 });
@@ -209,36 +217,56 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     await loadEntry(key, id === undefined ? day[0]?.id ?? null : id, key > from ? 1 : key < from ? -1 : 0);
   }, [flush, loadEntry]);
 
+  const journalDayNow = () => journalDayFor(new Date(), useStore.getState().settings.journalCutoffHour);
+  /** Notes a day the page was taken to on purpose, and whether that leaves the page following the journal day. */
+  const chose = React.useCallback((key: string) => {
+    const day = journalDayNow();
+    autoDay.current = key === day;
+    chosenOn.current = day;
+  }, []);
+  /**
+   * On coming back (another tab, the app): a page that follows the day moves along once the cutoff has passed. A day
+   * picked on an earlier journal day lets go too, unless something typed is still waiting, and the page follows again.
+   */
+  const catchUp = React.useCallback(() => {
+    const day = journalDayNow();
+    if (autoDay.current) {
+      if (day !== draft.current.dateKey) openDay(day);
+      return;
+    }
+    if (day !== chosenOn.current && !draft.current.dirty && !timer.current) {
+      autoDay.current = true;
+      openDay(day);
+    }
+  }, [openDay]);
+
   useFocusEffect(React.useCallback(() => {
     const req = takeJournalOpenRequest();
     if (req) {
-      autoDay.current = false;
+      chose(req.dateKey);
       openDay(req.dateKey, req.entryId ?? undefined);
     } else if (!booted.current) {
-      openDay(journalDayFor(new Date(), useStore.getState().settings.journalCutoffHour));
-    } else if (autoDay.current) {
-      // back from another tab: a page that follows the day moves along once the cutoff has passed
-      const day = journalDayFor(new Date(), useStore.getState().settings.journalCutoffHour);
-      if (day !== draft.current.dateKey) openDay(day);
+      openDay(journalDayNow());
+    } else {
+      catchUp();
     }
     booted.current = true;
     return () => { flush(); };
-  }, [openDay, flush]));
+  }, [openDay, flush, chose, catchUp]));
 
   // leaving the app saves; coming back on a new journal day moves an untouched page along
   React.useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
       // the entry lands in the store only once its file is written, so storage is written after that, not before
       if (s !== 'active') { flush().then(flushSaves); return; }
-      const day = journalDayFor(new Date(), useStore.getState().settings.journalCutoffHour);
-      if (autoDay.current && day !== draft.current.dateKey) openDay(day);
+      catchUp();
     });
     return () => {
       sub.remove();
       if (idle.current) clearTimeout(idle.current);
       flush().then(flushSaves);
     };
-  }, [flush, openDay]);
+  }, [flush, catchUp]);
 
   // an entry deleted elsewhere (the archive) leaves a blank page for its day; one changed elsewhere (a restored
   // backup) reloads when nothing typed is waiting, so a later keystroke never writes the old text back over it; one
@@ -252,11 +280,11 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     } else if (idleNow && e.updatedAt !== draft.current.seen) {
       loadEntry(e.dateKey, e.id);
     } else if (e.dateKey !== draft.current.dateKey) {
-      autoDay.current = false;
+      chose(e.dateKey);
       draft.current.dateKey = e.dateKey;
       setDateKey(e.dateKey);
     }
-  }, [journal, entryId, loadEntry]);
+  }, [journal, entryId, loadEntry, chose]);
 
   // a restore writes the texts after the index: once they are in, an idle page reads its text again
   React.useEffect(() => onBodiesRestored(() => {
@@ -294,7 +322,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     schedule();
   }, [schedule]);
 
-  const prompt = promptFor(dateKey);
+  // what follows from the day alone is worked out once per day, not on every keystroke
+  const prompt = React.useMemo(() => promptFor(dateKey), [dateKey]);
   const showPrompt = loaded && settings.journalPromptsOn && !body.trim();
   const usePrompt = () => {
     tap();
@@ -309,13 +338,16 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     [journal, dateKey],
   );
   const at = entryId ? dayEntries.findIndex((e) => e.id === entryId) : -1;
-  const words = countWords(body);
+  // the count follows the words a beat behind, so a long entry never makes each keystroke count the whole page
+  const settledBody = React.useDeferredValue(body);
+  const words = React.useMemo(() => countWords(settledBody), [settledBody]);
   const goal = settings.journalWordGoal;
   // the whole date never fits one line beside the buttons, so the day leads and the weekday sits under it
-  const parts = journalDateParts(dateKey);
+  const parts = React.useMemo(() => journalDateParts(dateKey), [dateKey]);
+  const relative = React.useMemo(() => relativeDay(dateKey), [dateKey, today]);
   const hint = dayEntries.length > 1 && at >= 0
     ? 'Entry ' + (at + 1) + ' of ' + dayEntries.length
-    : relativeDay(dateKey);
+    : relative;
   const sub = parts.weekday + (hint ? ' · ' + hint : '');
   const marked = React.useMemo(() => new Set(journal.map((e) => e.dateKey)), [journal]);
   const current = entryId ? journal.find((e) => e.id === entryId) : undefined;
@@ -354,14 +386,24 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     setTaskSheet(true);
   };
 
-  const openArchive = async () => { tick(); await flush(); nav.openArchive(); };
-  const pickDay = React.useCallback((key: string) => { setDateSheet(false); autoDay.current = false; openDay(key); }, [openDay]);
+  // a second tap while the archive is on its way in is the same tap, never a second archive
+  const archiveAt = React.useRef(0);
+  const openArchive = React.useCallback(async () => {
+    const t = Date.now();
+    if (t - archiveAt.current < 600) return;
+    archiveAt.current = t;
+    tick();
+    await flush();
+    nav.openArchive();
+  }, [flush, nav]);
+  const pickDay = React.useCallback((key: string) => { setDateSheet(false); chose(key); openDay(key); }, [openDay, chose]);
 
   // the menu reads the page when an action runs, so typing never rebuilds it
   const shareText = () => {
     const d = draft.current;
     const text = [formatJournalDate(d.dateKey), d.title.trim(), d.body.trim()].filter(Boolean).join('\n\n');
-    Share.share({ message: text });
+    // the share sheet takes the app out of view; coming back from it never locks the journal
+    expectAway(() => Share.share({ message: text })).catch(() => {});
   };
   const confirmDelete = () => {
     if (!entryId) return;
@@ -421,7 +463,12 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           { label: 'Share as text', icon: 'share-outline', onPress: shareText },
           {
             label: 'Copy text', icon: 'copy-outline',
-            onPress: () => Clipboard.setStringAsync([draft.current.title.trim(), draft.current.body.trim()].filter(Boolean).join('\n\n')),
+            // Android before 13 says nothing of its own when something is copied
+            onPress: () => {
+              Clipboard.setStringAsync([draft.current.title.trim(), draft.current.body.trim()].filter(Boolean).join('\n\n'))
+                .then(() => toast('Copied.'))
+                .catch(() => {});
+            },
           },
         ] : []),
         { label: 'Journal settings', icon: 'options-outline', onPress: () => setPrefs(true) },
@@ -438,9 +485,76 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       <JournalCalendar value={dateKey} onPick={pickDay} marked={marked} maxKey={today} />
     </Sheet>
   ), [dateSheet, dateKey, today, marked, pickDay]);
+  // ---- a tag held in the sheet: rename it, or delete it from every entry, one sheet at a time ----
+  const [tagMenu, setTagMenu] = React.useState<string | null>(null);
+  const [tagRename, setTagRename] = React.useState<string | null>(null);
+  const heldTag = React.useRef<string | null>(null);
+  const tagFromSheet = React.useRef<string | null>(null);
+  if (tagMenu) heldTag.current = tagMenu;
+  /** The page's tags follow a change made to every entry, so its next save never writes the old ones back. */
+  const setPageTags = React.useCallback((next: string[]) => {
+    draft.current.tags = next;
+    setTags(next);
+  }, []);
+  const renameTag = React.useCallback((from: string, to: string) => {
+    const s = useStore.getState();
+    const swap = (list: string[]) => [...new Set(list.map((x) => (x === from ? to : x)))];
+    s.setJournalTags(swap(s.journalTags).sort());
+    s.journal.forEach((e) => { if (e.tags.includes(from)) s.patchJournalEntry(e.id, { tags: swap(e.tags) }); });
+    if (draft.current.tags.includes(from)) setPageTags(swap(draft.current.tags));
+  }, [setPageTags]);
+  const deleteTag = React.useCallback((t: string) => {
+    const s = useStore.getState();
+    const touched = s.journal.filter((e) => e.tags.includes(t)).map((e) => e.id);
+    const page = draft.current;
+    const onPage = page.tags.includes(t);
+    s.setJournalTags(s.journalTags.filter((x) => x !== t));
+    touched.forEach((id) => {
+      const e = s.journal.find((x) => x.id === id);
+      if (e) s.patchJournalEntry(id, { tags: e.tags.filter((x) => x !== t) });
+    });
+    if (onPage) setPageTags(page.tags.filter((x) => x !== t));
+    toast('Deleted the ' + t + ' tag.', {
+      label: 'Undo',
+      onPress: () => {
+        const now = useStore.getState();
+        if (!now.journalTags.includes(t)) now.setJournalTags([...now.journalTags, t].sort());
+        touched.forEach((id) => {
+          const e = now.journal.find((x) => x.id === id);
+          if (e && !e.tags.includes(t)) now.patchJournalEntry(id, { tags: [...e.tags, t] });
+        });
+        if (onPage && draft.current === page && !page.tags.includes(t)) setPageTags([...page.tags, t]);
+      },
+    });
+  }, [setPageTags]);
   const tagSheetEl = React.useMemo(() => (
-    <TagSheet visible={tagSheet} onClose={() => setTagSheet(false)} tags={tags} onToggle={toggleTag} />
+    <TagSheet
+      visible={tagSheet} onClose={() => setTagSheet(false)} tags={tags} onToggle={toggleTag}
+      onHold={(t) => { tick(); tagFromSheet.current = t; setTagSheet(false); }}
+      onClosed={() => {
+        const t = tagFromSheet.current;
+        tagFromSheet.current = null;
+        if (t) setTagMenu(t);
+      }}
+    />
   ), [tagSheet, tags, toggleTag]);
+  const tagMenuEl = React.useMemo(() => (
+    <DotMenu
+      visible={!!tagMenu}
+      onClose={() => setTagMenu(null)}
+      items={heldTag.current ? [
+        { label: 'Rename', icon: 'create-outline', onPress: () => setTagRename(heldTag.current) },
+        { label: 'Delete tag', icon: 'trash-outline', color: C.danger, onPress: () => { if (heldTag.current) deleteTag(heldTag.current); } },
+      ] : []}
+    />
+  ), [tagMenu, deleteTag]);
+  const tagRenameEl = React.useMemo(() => (
+    <TagRenameSheet
+      tag={tagRename}
+      onClose={() => setTagRename(null)}
+      onSave={(from, to) => { setTagRename(null); if (to !== from) renameTag(from, to); }}
+    />
+  ), [tagRename, renameTag]);
   const prefsEl = React.useMemo(() => (
     <JournalPrefs visible={prefs} onClose={() => setPrefs(false)} onLock={setLock} />
   ), [prefs, setLock]);
@@ -473,39 +587,47 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   // in a row. No live dot: nothing here is happening this minute. The minute ticker (only while this screen is in
   // front) turns "today" over when the journal day does, at its cutoff hour.
   const now = useNow();
-  const todayDay = journalDayFor(now, settings.journalCutoffHour);
-  const writtenDays = React.useMemo(() => new Set(journal.filter((e) => e.wordCount > 0).map((e) => e.dateKey)), [journal]);
-  // The run of days written, ending today (or yesterday while today is still blank), counted from the journal's own
-  // day: before the cutoff hour the calendar has already turned over and the journal has not, and a calendar count
-  // would lose the run in those small hours
-  const streak = React.useMemo(() => {
-    let run = 0;
-    let key = writtenDays.has(todayDay) ? todayDay : shiftKey(todayDay, -1);
-    while (writtenDays.has(key)) { run++; key = shiftKey(key, -1); }
-    return run;
-  }, [writtenDays, todayDay]);
-  const todayLine = writtenDays.has(todayDay) ? 'Written today' : streak > 1 ? 'Today not written yet' : '';
+  const cutoff = settings.journalCutoffHour;
+  const todayDay = journalDayFor(now, cutoff);
+  const writtenToday = React.useMemo(() => journal.some((e) => e.dateKey === todayDay && e.wordCount > 0), [journal, todayDay]);
+  // the same run the archive's stats count, from the journal's own day
+  const streak = React.useMemo(() => journalStreak(journal, cutoff, now).current, [journal, cutoff, now]);
+  // between midnight and the cutoff the journal's day is the calendar's yesterday, and the page under this line says
+  // "Yesterday": the line names it the same way
+  const lateNight = journalDayIsYesterday(now, cutoff);
+  const todayLine = writtenToday
+    ? (lateNight ? "Yesterday's page written" : 'Written today')
+    : streak > 1 ? (lateNight ? "Yesterday's page not written yet" : 'Today not written yet') : '';
   const line = [todayLine, streak > 1 ? streak + ' day streak' : ''].filter(Boolean).join(' · ');
   // The line reads at rest. With the keyboard up the page is being written, and the line's first words (a line that
   // appears pushes the page down) or a changed fact (a dip under the title) would move things under the writer's eye.
   const [lineHeld, setLineHeld] = React.useState(line);
   React.useEffect(() => { if (!keyboardOpen) setLineHeld(line); }, [keyboardOpen, line]);
+  const openMenu = React.useCallback(() => setMenu(true), []);
+  const actions = React.useMemo<ToolAction[]>(() => [
+    { icon: 'albums-outline', label: 'Archive', onPress: openArchive },
+    { icon: 'ellipsis-horizontal', label: 'More', onPress: openMenu },
+  ], [openArchive, openMenu]);
   const tool = useToolHeader({
     title: 'Journal',
     mode: tabMode ? 'tab' : 'page',
     context: lineHeld,
-    actions: [
-      { icon: 'albums-outline', label: 'Archive', onPress: openArchive },
-      { icon: 'ellipsis-horizontal', label: 'More', onPress: () => setMenu(true) },
-    ],
+    actions,
     // the bar recedes while typing, as the footer does, and comes back when the writing pauses. Only what it holds
     // recedes: on a tab it lies over the page, and a ground gone faint would let the writing show through it
     contentStyle: headStyle,
   });
+  // the bar and the hero are kept while their inputs hold, so a keystroke never rebuilds them
+  const toolBar = React.useMemo(() => tool.bar, [actions, tabMode, headStyle]);
+  const toolHero = React.useMemo(() => tool.hero, [lineHeld, tabMode]);
+  // Android keeps a caret it brings into view clear of a scroll's fading edge: while the page is written in on a tab,
+  // an edge as tall as the bar keeps the line being written out from under the bar that lies over the page
+  const [writing, setWriting] = React.useState(false);
+  const caretMargin = tabMode && writing && Platform.OS === 'android' ? tool.barH : 0;
 
   return (
     <ScreenBG guard={tabMode}>
-      {tool.bar}
+      {toolBar}
 
       {/* the page and the footer rise with the screen on every visit, as every other tool does; a page turn (below)
           is its own entrance, inside the surface. The header's hero is the first thing in the page's scroll, so it
@@ -514,9 +636,10 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         <Animated.ScrollView
           {...tool.scrollProps}
           keyboardShouldPersistTaps="handled"
+          fadingEdgeLength={caretMargin}
           contentContainerStyle={{ paddingHorizontal: S.pad, paddingTop: tool.padTop, paddingBottom: 40 }}
         >
-          {tool.hero}
+          {toolHero}
           <Animated.View key={page} entering={pageEnter}>
             {/* the page's own heading: its date, in the serif, with the weekday under it. A new day's date dips out and
                 comes back with the page, instead of changing under it in one frame */}
@@ -537,6 +660,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
               returnKeyType="next"
               blurOnSubmit={false}
               onSubmitEditing={() => bodyRef.current?.focus()}
+              onFocus={() => setWriting(true)}
+              onBlur={() => setWriting(false)}
             />
             {showPrompt ? (
               <Bouncy onPress={usePrompt} scaleTo={0.98} radius={12} style={st.prompt}>
@@ -549,8 +674,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
               value={body}
               onChangeText={onBody}
               onSelectionChange={(e) => { selection.current = e.nativeEvent.selection; }}
-              onFocus={() => { bodyFocused.current = true; }}
-              onBlur={() => { bodyFocused.current = false; }}
+              onFocus={() => { bodyFocused.current = true; setWriting(true); }}
+              onBlur={() => { bodyFocused.current = false; setWriting(false); }}
               editable={loaded}
               placeholder="Start writing"
               placeholderTextColor={C.textFaint}
@@ -590,6 +715,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
                 onPress={() => { tick(); setCheckout(checkout ? null : 'asked'); }}
                 scaleTo={0.9}
                 radius={17}
+                hitSlop={5}
                 style={st.dayWell}
                 accessibilityRole="button"
                 accessibilityLabel={'How the day went' + (mood ? ', ' + MOODS.find((m) => m.value === mood)?.label : '') + (rating ? ', ' + rating + ' of 5 stars' : '')}
@@ -607,14 +733,18 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
             </Row>
             <View style={{ alignItems: 'flex-end' }}>
               <FadeSwap swapKey={saveFailed ? 'failed' : 'count'}>
-                <Text
-                  style={[st.words, saveFailed && { color: C.danger }]}
-                  onPress={saveFailed ? () => { flush(); } : undefined}
-                  suppressHighlighting
+                {/* the retry reaches past its small words to a full finger's height, without moving the footer */}
+                <Pressable
+                  disabled={!saveFailed}
+                  onPress={() => { flush(); }}
+                  hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
+                  accessibilityRole={saveFailed ? 'button' : undefined}
                 >
-                  {/* an empty page states no count at all */}
-                  {saveFailed ? 'Not saved, tap to retry' : words ? words + (words === 1 ? ' word' : ' words') : ' '}
-                </Text>
+                  <Text style={[st.words, saveFailed && { color: C.danger }]}>
+                    {/* an empty page states no count at all */}
+                    {saveFailed ? 'Not saved, tap to retry' : words ? words + (words === 1 ? ' word' : ' words') : ' '}
+                  </Text>
+                </Pressable>
               </FadeSwap>
               <Animated.View style={[st.tick, { backgroundColor: C.accent }, tickStyle]} />
             </View>
@@ -625,6 +755,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       {dateSheetEl}
       {menuSheet}
       {tagSheetEl}
+      {tagMenuEl}
+      {tagRenameEl}
       {prefsEl}
       {taskSheetEl}
       {pinSheetEl}
@@ -632,31 +764,60 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   );
 }
 
-/** The tags sheet keeps its own draft, so typing a new tag re-renders only the sheet. */
-function TagSheet({ visible, onClose, tags, onToggle }: {
-  visible: boolean; onClose: () => void; tags: string[]; onToggle: (t: string) => void;
+/** A tag as the journal keeps it: lower case, no leading #, a hyphen for each run of spaces. */
+const tagOf = (text: string) => text.trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-');
+
+/** The tags sheet keeps its own draft, so typing a new tag re-renders only the sheet. A tag held opens its menu. */
+function TagSheet({ visible, onClose, onClosed, tags, onToggle, onHold }: {
+  visible: boolean; onClose: () => void; onClosed?: () => void; tags: string[]; onToggle: (t: string) => void;
+  onHold: (t: string) => void;
 }) {
   const journalTags = useStore((s) => s.journalTags);
   const setJournalTags = useStore((s) => s.setJournalTags);
   const [draft, setDraft] = React.useState('');
   const addTag = () => {
-    const t = draft.trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-');
+    const t = tagOf(draft);
     if (!t) return;
     if (!journalTags.includes(t)) setJournalTags([...journalTags, t].sort());
     if (!tags.includes(t)) onToggle(t);
     setDraft('');
   };
   return (
-    <Sheet visible={visible} onClose={onClose} title="Tags">
+    <Sheet visible={visible} onClose={onClose} onClosed={onClosed} title="Tags">
       {journalTags.length ? (
-        <Row style={{ flexWrap: 'wrap', marginBottom: 8 }}>
-          {journalTags.map((t) => <Chip key={t} small label={t} active={tags.includes(t)} color={C.gold} onPress={() => onToggle(t)} />)}
-        </Row>
+        <>
+          <Row style={{ flexWrap: 'wrap', marginBottom: 4 }}>
+            {journalTags.map((t) => (
+              <Chip key={t} small label={t} active={tags.includes(t)} color={C.gold} onPress={() => onToggle(t)} onLongPress={() => onHold(t)} />
+            ))}
+          </Row>
+          <Text style={[T.caption, { marginBottom: 10 }]}>Hold a tag to rename or delete it.</Text>
+        </>
       ) : (
         <Text style={[T.caption, { marginBottom: 10 }]}>Tags group entries, like exams, family or sport.</Text>
       )}
       <Field value={draft} onChangeText={setDraft} placeholder="New tag" autoCapitalize="none" onSubmitEditing={addTag} returnKeyType="done" />
       <PillButton label="Add tag" icon="add-outline" color={C.gold} onPress={addTag} />
+    </Sheet>
+  );
+}
+
+/** A new name for a tag, with its own draft. A name another tag already has joins the two. */
+function TagRenameSheet({ tag, onClose, onSave }: {
+  tag: string | null; onClose: () => void; onSave: (from: string, to: string) => void;
+}) {
+  const [draft, setDraft] = React.useState(tag ?? '');
+  const shown = React.useRef(tag);
+  if (tag) shown.current = tag;
+  React.useEffect(() => { if (tag) setDraft(tag); }, [tag]);
+  const save = () => {
+    const to = tagOf(draft);
+    if (tag && to) onSave(tag, to);
+  };
+  return (
+    <Sheet visible={!!tag} onClose={onClose} title={'Rename ' + (shown.current ?? 'tag')}>
+      <Field value={draft} onChangeText={setDraft} placeholder="Tag name" autoCapitalize="none" maxLength={40} onSubmitEditing={save} returnKeyType="done" />
+      <PillButton label="Rename" color={C.gold} onPress={save} />
     </Sheet>
   );
 }
@@ -667,19 +828,32 @@ function JournalPrefs({ visible, onClose, onLock }: {
 }) {
   const settings = useStore((s) => s.settings);
   const setSetting = useStore((s) => s.setSetting);
+  const hour24 = settings.hour24;
   const [remindDraft, setRemindDraft] = React.useState(settings.journalReminderTime || '21:30');
   // each opening starts from the saved time
   React.useEffect(() => {
     if (visible) setRemindDraft(useStore.getState().settings.journalReminderTime || '21:30');
   }, [visible]);
-  const saveReminder = async (on: boolean) => {
-    if (on) {
-      if (!HHMM.test(remindDraft)) { Alert.alert('Use 24h HH:MM, e.g. 21:30'); return; }
-      if (!(await ensurePermission())) { Alert.alert('Permission needed', 'Allow notifications in system settings first.'); return; }
-    }
-    setSetting('journalReminderTime', on ? remindDraft : '');
+  const saveReminder = async (on: boolean, time = remindDraft) => {
+    if (on && !(await ensurePermission())) { Alert.alert('Permission needed', 'Allow notifications in system settings first.'); return; }
+    setSetting('journalReminderTime', on ? time : '');
     setTimeout(rescheduleAllReminders, 150);
   };
+  // the time turns on a wheel in quarter hours, written the way the rest of the app writes times; a time saved
+  // between two stops shows at the nearer one until the wheel is turned
+  const remindStop = Math.round(Math.max(0, toMinutes(remindDraft)) / REMIND_STEP) % REMIND_STOPS;
+  const stopLabel = React.useCallback((i: number) => ({ full: fmtClockTime(i * REMIND_STEP, hour24) }), [hour24]);
+  const turnTo = React.useCallback((i: number) => {
+    const m = i * REMIND_STEP;
+    const hhmm = String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+    setRemindDraft(hhmm);
+    if (useStore.getState().settings.journalReminderTime) {
+      setSetting('journalReminderTime', hhmm);
+      setTimeout(rescheduleAllReminders, 150);
+    }
+  }, [setSetting]);
+  // with reminders off app-wide nothing could fire, so the switch rests off and cannot be moved until they are on
+  const canRemind = settings.remindersEnabled;
   return (
     <Sheet visible={visible} onClose={onClose} title="Journal settings">
       <Text style={st.prefLabel}>Day starts at</Text>
@@ -713,11 +887,33 @@ function JournalPrefs({ visible, onClose, onLock }: {
       />
       <Hairline />
       <Row style={st.prefRow}>
-        <Text style={[T.body, { flex: 1 }]}>Reminder</Text>
-        <Toggle value={!!settings.journalReminderTime} onChange={saveReminder} color={C.gold} label="Daily journal reminder" />
+        <Text style={[T.body, { flex: 1 }, !canRemind && { color: C.textFaint }]}>Reminder</Text>
+        <View
+          pointerEvents={canRemind ? 'auto' : 'none'}
+          style={canRemind ? undefined : st.off}
+          accessibilityState={canRemind ? undefined : { disabled: true }}
+        >
+          <Toggle
+            value={canRemind && !!settings.journalReminderTime} onChange={(on) => { saveReminder(on); }} color={C.gold}
+            label="Daily journal reminder"
+          />
+        </View>
       </Row>
-      {settings.remindersEnabled ? (
-        <Field value={remindDraft} onChangeText={setRemindDraft} placeholder="21:30" keyboardType="numbers-and-punctuation" maxLength={5} onEndEditing={() => { if (settings.journalReminderTime && HHMM.test(remindDraft)) saveReminder(true); }} />
+      {canRemind ? (
+        <Wheel
+          loop
+          count={REMIND_STOPS}
+          index={remindStop}
+          onChange={turnTo}
+          label={stopLabel}
+          spacing={hour24 ? 92 : 108}
+          minScale={0.6}
+          colorOn={settings.journalReminderTime ? C.gold : C.textDim}
+          colorOff={C.textFaint}
+          height={56}
+          textStyle={st.remindText}
+          accessibilityLabel="Reminder time"
+        />
       ) : (
         <Text style={[T.caption, { marginBottom: 6 }]}>Turn on reminders in Settings first.</Text>
       )}
@@ -760,4 +956,7 @@ const st = StyleSheet.create({
   tick: { width: 16, height: 2, borderRadius: 1, marginTop: 4 },
   prefLabel: { ...T.label, marginTop: 10, marginBottom: 8 },
   prefRow: { paddingVertical: 10 },
+  /** a switch that cannot be moved yet */
+  off: { opacity: 0.4 },
+  remindText: { fontFamily: F.semi, fontSize: 20, lineHeight: 26, letterSpacing: TRACK.large, fontVariant: ['tabular-nums'] },
 });

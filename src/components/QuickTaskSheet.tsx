@@ -1,7 +1,7 @@
 import React from 'react';
 import { Text, StyleSheet } from 'react-native';
 import { C, F, T, TRACK } from '../theme';
-import { useStore } from '../store';
+import { useStore, DailyTask } from '../store';
 import { todayKey } from '../utils';
 import { shiftKey } from '../journal';
 import { fmtExamDate } from '../scores';
@@ -21,14 +21,30 @@ const DUE: { days: number; label: string }[] = [
 const KINDS: { key: TaskKind; label: string }[] = [{ key: 'daily', label: 'ToDo' }, { key: 'mission', label: 'Long-term' }];
 
 /**
- * Adding a task from anywhere: a ToDo for today's list, or a long-term task with a deadline picked from a few
- * chips or the calendar. Once it closes, a toast confirms it with Undo.
+ * Saves a ToDo's new title. The store has no rename yet, so the ToDo is taken out and put back where it stood in the
+ * same moment: one render, and its id, its tick and its place all stay.
  */
-export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'daily', initialTitle = '' }: {
+function renameDaily(id: string, title: string) {
+  const s = useStore.getState();
+  const index = s.dailyTasks.findIndex((t) => t.id === id);
+  if (index < 0) return;
+  const task = s.dailyTasks[index];
+  s.removeDaily(id);
+  s.restoreDaily({ ...task, title }, index);
+}
+
+/**
+ * Adding a task from anywhere: a ToDo for today's list, or a long-term task with a deadline picked from a few
+ * chips or the calendar. Once it closes, a toast confirms it with Undo. With `editing` it opens on that ToDo instead,
+ * its kind fixed, and saving it says so once the sheet has gone.
+ */
+export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'daily', initialTitle = '', editing = null }: {
   visible: boolean; onClose: () => void;
   /** runs after the sheet has gone, and after its toast */
   onClosed?: () => void;
   initialKind?: TaskKind; initialTitle?: string;
+  /** the ToDo being edited; none for a new task */
+  editing?: DailyTask | null;
 }) {
   const addDaily = useStore((s) => s.addDaily);
   const addMission = useStore((s) => s.addMission);
@@ -39,20 +55,34 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
   const [due, setDue] = React.useState(() => shiftKey(todayKey(), 7));
   const [calendar, setCalendar] = React.useState(false);
   const added = React.useRef<{ kind: TaskKind; id: string } | null>(null);
+  const saved = React.useRef(false);
+  // One task per opening. Return can land in the same frame as the button, and the sheet still takes a tap while it
+  // leaves: either would add the task twice, and Undo would take back only one of them.
+  const done = React.useRef(false);
 
   React.useEffect(() => {
     if (!visible) return;
-    setKind(initialKind);
-    setTitle(initialTitle);
+    done.current = false;
+    setKind(editing ? 'daily' : initialKind);
+    setTitle(editing ? editing.title : initialTitle);
     setDue(shiftKey(todayKey(), 7));
     setCalendar(false);
   }, [visible]);
 
   const add = () => {
+    if (done.current) return;
     const t = title.trim();
     if (!t) return;
-    const id = kind === 'daily' ? addDaily(t) : addMission(t, due);
-    added.current = { kind, id };
+    done.current = true;
+    if (editing) {
+      if (t !== editing.title) {
+        renameDaily(editing.id, t);
+        saved.current = true;
+      }
+    } else {
+      const id = kind === 'daily' ? addDaily(t) : addMission(t, due);
+      added.current = { kind, id };
+    }
     onClose();
   };
 
@@ -68,24 +98,32 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
             label: 'Undo',
             onPress: () => (a.kind === 'daily' ? removeDaily(a.id) : removeMission(a.id)),
           });
+        } else if (saved.current) {
+          toast('ToDo saved');
         }
+        saved.current = false;
         onClosed?.();
       }}
-      title="Add to Tasks"
+      title={editing ? 'Edit ToDo' : 'Add to Tasks'}
     >
-      <SegmentedControl
-        size="sm"
-        stretch
-        style={{ marginBottom: 8 }}
-        options={KINDS}
-        value={kind}
-        onChange={(k) => setKind(k)}
-      />
-      <FadeSwap swapKey={kind}>
-        <Text style={[T.caption, { marginBottom: 12 }]}>
-          {kind === 'daily' ? "Goes on today's list." : 'Stays until it is done, with a deadline.'}
-        </Text>
-      </FadeSwap>
+      {/* an edit keeps the task's kind, so there is no choice to offer */}
+      {editing ? null : (
+        <>
+          <SegmentedControl
+            size="sm"
+            stretch
+            style={{ marginBottom: 8 }}
+            options={KINDS}
+            value={kind}
+            onChange={(k) => setKind(k)}
+          />
+          <FadeSwap swapKey={kind}>
+            <Text style={[T.caption, { marginBottom: 12 }]}>
+              {kind === 'daily' ? "Goes on today's list." : 'Stays until it is done, with a deadline.'}
+            </Text>
+          </FadeSwap>
+        </>
+      )}
       <Field
         value={title}
         onChangeText={setTitle}
@@ -98,7 +136,7 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
       {kind === 'mission' ? (
         <DuePicker due={due} calendar={calendar} onDue={setDue} onCalendar={setCalendar} />
       ) : null}
-      <PillButton label="Add" icon="add-outline" onPress={add} />
+      {editing ? <PillButton label="Save" onPress={add} /> : <PillButton label="Add" icon="add-outline" onPress={add} />}
     </Sheet>
   );
 }

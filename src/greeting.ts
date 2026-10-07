@@ -13,6 +13,11 @@ export interface GreetingPart {
 }
 
 export interface Greeting {
+  /**
+   * Which sentence this is ('soon:Physics', 'clear'), and not its words: a figure inside it (the minutes to a block) can
+   * change in place, and only a new sentence makes the line dip out and back.
+   */
+  kind: string;
   parts: GreetingPart[];
   /** a second, quieter line, only when there is something worth adding */
   sub?: string;
@@ -57,24 +62,24 @@ export function pickGreeting(c: GreetingContext): Greeting {
   const say = (lead: string, nameless = lead + '.'): GreetingPart[] =>
     c.name ? [{ text: lead + ', ' }, { text: c.name, name: true }, { text: '.' }] : [{ text: nameless }];
 
-  if (c.firstLaunch) return { parts: say('Hello'), sub: "Let's set up your day." };
-  if (c.streakMilestone) return { parts: say(c.streakMilestone + ' days strong') };
-  if (c.listTotal > 0 && c.listDone === c.listTotal) return { parts: say('All clear') };
-  if (c.next?.now) return { parts: say(c.next.subject + ' is on') };
+  if (c.firstLaunch) return { kind: 'hello', parts: say('Hello'), sub: "Let's set up your day." };
+  if (c.streakMilestone) return { kind: 'streak:' + c.streakMilestone, parts: say(c.streakMilestone + ' days strong') };
+  if (c.listTotal > 0 && c.listDone === c.listTotal) return { kind: 'clear', parts: say('All clear') };
+  if (c.next?.now) return { kind: 'on:' + c.next.subject, parts: say(c.next.subject + ' is on') };
   if (c.next && c.next.startsInMin > 0 && c.next.startsInMin <= SOON_MIN) {
-    return { parts: say(c.next.subject + ' in ' + c.next.startsInMin + ' min') };
+    return { kind: 'soon:' + c.next.subject, parts: say(c.next.subject + ' in ' + c.next.startsInMin + ' min') };
   }
-  if (c.focusMinutesToday >= DEEP_MIN) return { parts: say('Deep in it') };
-  if (c.sessionsToday > 0) return { parts: say('Back at it') };
+  if (c.focusMinutesToday >= DEEP_MIN) return { kind: 'deep', parts: say('Deep in it') };
+  if (c.sessionsToday > 0) return { kind: 'back', parts: say('Back at it') };
   const left = c.listTotal - c.listDone;
-  if (c.planDoneToday && left > 0) return { parts: say('Plan done'), sub: left + ' still on the list.' };
+  if (c.planDoneToday && left > 0) return { kind: 'plan-done', parts: say('Plan done'), sub: left + ' still on the list.' };
   if (c.prevOpenedAt != null && daysBetween(c.prevOpenedAt, c.now) >= AWAY_DAYS) {
-    return { parts: say('Good to see you', 'Welcome back.') };
+    return { kind: 'away', parts: say('Good to see you', 'Welcome back.') };
   }
   if (c.prevOpenedAt != null && todayKey(new Date(c.prevOpenedAt)) === todayKey(c.now)) {
-    return { parts: say('Back again') };
+    return { kind: 'again', parts: say('Back again') };
   }
-  return { parts: say("Let's go") };
+  return { kind: 'go', parts: say("Let's go") };
 }
 
 // ---------- visits ----------
@@ -92,6 +97,8 @@ let stamped = false;
 let backgroundedAt: number | null = null;
 let appStateSub: { remove: () => void } | null = null;
 const listeners = new Set<() => void>();
+/** the open times this phone last wrote, so times brought in from elsewhere (an erase, a restore) can be told apart */
+let own: { first: number; last: number } | null = null;
 
 function readVisit(): Visit {
   const { settings } = useStore.getState();
@@ -101,12 +108,43 @@ function readVisit(): Visit {
 function stampVisit() {
   const { settings, setSetting } = useStore.getState();
   const now = Date.now();
+  own = { first: settings.firstOpenedAt ?? now, last: now };
   setSetting('lastOpenedAt', now);
   if (settings.firstOpenedAt == null) setSetting('firstOpenedAt', now);
 }
 
+/**
+ * Every erase and restore replaces the whole store, open times included. An erase leaves none, so this is a first
+ * launch again, stamped as one; a restore brings the backup's, so this phone puts its own back, and the next return
+ * never says "Good to see you" to someone who was here a minute ago.
+ */
+function followReplacements() {
+  // set while the times are being written back, so those writes are not taken for another replacement
+  let writing = false;
+  useStore.subscribe((s, prev) => {
+    const { firstOpenedAt, lastOpenedAt } = s.settings;
+    if (writing || !own || (firstOpenedAt === prev.settings.firstOpenedAt && lastOpenedAt === prev.settings.lastOpenedAt)) return;
+    if (firstOpenedAt === own.first && lastOpenedAt === own.last) return;
+    writing = true;
+    try {
+      if (firstOpenedAt == null) {
+        visit = { firstLaunch: true };
+        stampVisit();
+        listeners.forEach((l) => l());
+      } else {
+        const { setSetting } = useStore.getState();
+        if (firstOpenedAt !== own.first) setSetting('firstOpenedAt', own.first);
+        if (lastOpenedAt !== own.last) setSetting('lastOpenedAt', own.last);
+      }
+    } finally {
+      writing = false;
+    }
+  });
+}
+
 function trackVisits() {
   if (appStateSub) return;
+  followReplacements();
   appStateSub = AppState.addEventListener('change', (next: AppStateStatus) => {
     if (next === 'active') {
       if (backgroundedAt != null && Date.now() - backgroundedAt >= RETURN_AFTER_MS) {

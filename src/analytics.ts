@@ -452,6 +452,24 @@ export function fmtPoints(v: number): string {
   return (r > 0 ? '+' : '-') + (Number.isInteger(Math.abs(r)) ? String(Math.abs(r)) : Math.abs(r).toFixed(1));
 }
 
+/** 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st. */
+export function ordinal(n: number): string {
+  const t = n % 100;
+  if (t >= 11 && t <= 13) return n + 'th';
+  return n + (['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+}
+
+/**
+ * Where one result stands among others: its place, counted from the best (results that tie share a place), and how
+ * many there are. Null when it is not among them or there is nothing to stand against.
+ */
+export function standingIn(points: { id: string; pct: number }[], id: string): { place: number; of: number } | null {
+  const mine = points.find((p) => p.id === id);
+  if (!mine || points.length < 2) return null;
+  const above = points.filter((p) => p.pct > mine.pct + 1e-9).length;
+  return { place: above + 1, of: points.length };
+}
+
 /** "rising, 1.6 points an exam" or "flat". */
 export function trendText(slope: number): string {
   const w = trendWord(slope);

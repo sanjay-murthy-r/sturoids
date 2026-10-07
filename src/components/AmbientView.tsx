@@ -11,8 +11,8 @@ import * as NavigationBar from 'expo-navigation-bar';
 import { C, F } from '../theme';
 import { useStore } from '../store';
 import { fmtClockTime } from '../utils';
-import { TimerState, displayOf, shownSecondsOf, useSessionTick } from '../deepWork';
-import { EASE_OUT, useAnimLevel } from './Motion';
+import { TimerState, displayOf, shownSecondsOf, spokenTimeOf, useSessionTick } from '../deepWork';
+import { EASE_OUT, useAnimLevel, useAppActive } from './Motion';
 import { ClockDigits, clockWidth } from './ClockDigits';
 
 /** the ambient screen never brightens a dim room: it only ever lowers the phone to this */
@@ -124,9 +124,12 @@ interface FaceProps {
   hour24: boolean; width: number; height: number; topInset: number;
 }
 
-/** Everything on the ambient screen that counts: re-renders once a second, and once a minute for the time of day. */
+/**
+ * Everything on the ambient screen that counts: re-renders once a second, and once a minute for the time of day. With
+ * the app away it rests, and shows the right time again on return.
+ */
 function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width, height, topInset }: FaceProps) {
-  useSessionTick(timer);
+  useSessionTick(timer, !useAppActive());
   const level = useAnimLevel();
   const withSeconds = useStore((s) => s.settings.ambientSeconds);
   const showClock = useStore((s) => s.settings.ambientClock);
@@ -191,7 +194,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
       </View>
 
       <View style={st.mid} pointerEvents="none">
-        <Animated.View key={size} entering={resized ? FadeIn.duration(280).easing(EASE_OUT) : undefined} style={st.time}>
+        <Animated.View key={size} entering={resized ? FadeIn.duration(level === 'full' ? 280 : 180).easing(EASE_OUT) : undefined} style={st.time}>
           <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} color={INK.digit} />
           {withSeconds ? (
             <ClockDigits
@@ -219,7 +222,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
 
       <View style={[st.foot, { left: u * 0.11, right: u * 0.11, bottom: foot }]} pointerEvents="none">
         {task ? (
-          <Text allowFontScaling={false} style={[st.faint, st.task, { fontSize: taskSize, marginBottom: u * 0.045 }]} numberOfLines={1}>
+          <Text allowFontScaling={false} style={[st.soft, st.task, { fontSize: taskSize, marginBottom: u * 0.045 }]} numberOfLines={1}>
             {task}
           </Text>
         ) : null}
@@ -234,6 +237,8 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
 function AmbientBody({ onExit, ...face }: Omit<AmbientProps, 'visible'>) {
   useAmbientSystem();
   const level = useAnimLevel();
+  // the screen's spoken label carries the time in words, which change once a minute
+  useSessionTick(face.timer, !useAppActive(), 60);
   const insets = useSafeAreaInsets();
   // the face is laid out in the screen it fills: the window until the screen has measured itself
   const win = useWindowDimensions();
@@ -285,7 +290,7 @@ function AmbientBody({ onExit, ...face }: Omit<AmbientProps, 'visible'>) {
       onPress={showHint}
       onLongPress={onExit}
       delayLongPress={600}
-      accessibilityLabel="Deep Work clock. Hold anywhere to exit."
+      accessibilityLabel={'Deep Work clock, ' + spokenTimeOf(face.timer) + '. Hold anywhere to exit.'}
     >
       <StatusBar hidden />
       <Animated.View style={[StyleSheet.absoluteFill, driftStyle]} pointerEvents="none">
@@ -294,7 +299,7 @@ function AmbientBody({ onExit, ...face }: Omit<AmbientProps, 'visible'>) {
       {hint ? (
         <Animated.Text
           entering={level === 'none' ? undefined : FadeIn.duration(200).easing(EASE_OUT)}
-          exiting={level === 'none' ? undefined : FadeOut.duration(400).easing(Easing.inOut(Easing.quad))}
+          exiting={level === 'none' ? undefined : FadeOut.duration(level === 'full' ? 400 : 160).easing(Easing.inOut(Easing.quad))}
           allowFontScaling={false}
           style={[st.hint, { bottom: u * 0.08, fontSize: Math.max(12, u * 0.034) }]}
         >
@@ -338,6 +343,8 @@ const st = StyleSheet.create({
   // the kicker's colour is the accent, read at render: a sheet built at load would keep the first accent for good
   kicker: { opacity: 0.8, fontFamily: F.semi, textTransform: 'uppercase', maxWidth: '84%' },
   faint: { color: INK.faint, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
+  /** the words someone has to read on the dimmed screen (the task, how to leave) take the softer ink, not the faint one */
+  soft: { color: INK.soft, fontFamily: F.reg },
   mid: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   time: { flexDirection: 'row', alignItems: 'flex-start' },
   unit: { color: INK.soft, fontFamily: F.reg },
@@ -345,5 +352,5 @@ const st = StyleSheet.create({
   foot: { position: 'absolute' },
   task: { textAlign: 'center' },
   rule: { backgroundColor: INK.track, overflow: 'hidden' },
-  hint: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: INK.faint, fontFamily: F.reg },
+  hint: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: INK.soft, fontFamily: F.reg },
 });

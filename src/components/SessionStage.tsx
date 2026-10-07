@@ -3,9 +3,9 @@ import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-na
 import Animated, { FadeIn, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { fmtClockTime } from '../utils';
-import { TimerState, displayOf, shownSecondsOf, useSessionTick } from '../deepWork';
+import { TimerState, displayOf, shownSecondsOf, spokenTimeOf, useSessionTick } from '../deepWork';
 import { WIDE_AT } from '../layout';
-import { CHANGE, EASE_OUT, FadeSwap, useAnimLevel } from './Motion';
+import { Appear, CHANGE, EASE_OUT, FadeSwap, useAnimLevel, useBuilt } from './Motion';
 import { ClockDigits, clockWidth } from './ClockDigits';
 import { CheckCircle, Chip, NeuIconBtn, PillButton, ProgressBar, useTheme } from './UI';
 
@@ -73,7 +73,14 @@ function SlabClock({ timer, base, availW, startedAt, finishAt, hour24, clockStyl
 
   return (
     <>
-      <Animated.View key={size} entering={resized ? FadeIn.duration(level === 'full' ? 280 : 180).easing(EASE_OUT) : undefined} style={[st.time, clockStyle]}>
+      {/* one element for a screen reader, said in words, which change once a minute with the minutes */}
+      <Animated.View
+        key={size}
+        entering={resized ? FadeIn.duration(level === 'full' ? 280 : 180).easing(EASE_OUT) : undefined}
+        style={[st.time, clockStyle]}
+        accessible
+        accessibilityLabel={spokenTimeOf(timer)}
+      >
         <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} />
         <ClockDigits
           text={sec}
@@ -91,7 +98,7 @@ function SlabClock({ timer, base, availW, startedAt, finishAt, hour24, clockStyl
       )}
       <View style={st.meta}>
         <Text style={st.metaText} numberOfLines={1}>{left}</Text>
-        <Text style={st.metaText} numberOfLines={1}>{right}</Text>
+        <Text style={[st.metaText, st.metaRight]} numberOfLines={1}>{right}</Text>
       </View>
     </>
   );
@@ -146,6 +153,9 @@ export function SessionStage({
   }, [timer.running, level]);
   const moonStyle = useAnimatedStyle(() => ({ opacity: moon.value }));
   const block = timer.mode === 'countdown' ? `${timer.targetMin} min block` : 'Stopwatch';
+  // what the plate is built with is simply there; a current task that turns up later (the first task attached
+  // mid-session) fades in where it stands
+  const built = useBuilt();
 
   return (
     // the clock's digits never play their exits when the whole plate goes: it leaves as one
@@ -207,7 +217,7 @@ export function SessionStage({
       </View>
 
       {current !== undefined ? (
-        <View style={[st.current, { borderColor: minimal ? MIN.border : C.outline }]}>
+        <Arrive late={built.current} style={[st.current, { borderColor: minimal ? MIN.border : C.outline }]}>
           <View style={st.currentText}>
             <Text style={st.currentKick}>Current task</Text>
             <Animated.Text
@@ -220,10 +230,16 @@ export function SessionStage({
             </Animated.Text>
           </View>
           {current ? <CheckCircle done={false} color={current.color} onPress={onTickCurrent} label={current.title} /> : null}
-        </View>
+        </Arrive>
       ) : null}
     </LayoutAnimationConfig>
   );
+}
+
+/** A part that fades in (see Appear) only when it turns up after its surroundings were built; decided once, as it mounts. */
+function Arrive({ late, style, children }: { late: boolean; style: any; children: React.ReactNode }) {
+  const [fade] = React.useState(late);
+  return fade ? <Appear style={style}>{children}</Appear> : <View style={style}>{children}</View>;
 }
 
 const st = StyleSheet.create({
@@ -235,10 +251,13 @@ const st = StyleSheet.create({
   rule: { marginTop: 18, marginBottom: 9 },
   noRule: { height: 12 },
   meta: { flexDirection: 'row', justifyContent: 'space-between' },
-  metaText: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, fontVariant: ['tabular-nums'] },
+  // at a large font size the two times share the line instead of running off the plate
+  metaText: { flexShrink: 1, color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, fontVariant: ['tabular-nums'] },
+  metaRight: { textAlign: 'right', marginLeft: 12 },
   dock: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 20 },
   toggle: { flex: 1, height: 52, paddingVertical: 0 },
-  extra: { marginTop: 14, height: 30, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center' },
+  // at least the chip's height, and more when a large font size makes the chip taller
+  extra: { marginTop: 14, minHeight: 30, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center' },
   chipBox: { marginRight: -10, marginBottom: -10 },
   current: {
     flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 22,

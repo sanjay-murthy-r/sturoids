@@ -4,7 +4,7 @@
 // Every walk up or down the tree keeps a visited set, so a damaged tree (a cycle written by an old build or an edited
 // backup) can never loop or overflow the stack.
 
-import { uid } from './utils';
+import { todayKey, uid } from './utils';
 
 export interface ScoreNode {
   id: string;
@@ -66,8 +66,11 @@ export function indexScores(nodes: ScoreNode[]): ScoreIndex {
 const kids = (ix: ScoreIndex, id: string | null) => ix.children.get(id) || [];
 const examKids = (ix: ScoreIndex, id: string) => kids(ix, id).filter((k) => k.kind === 'exam');
 
-/** When the exam was sat, or failing that when it was added, for ordering. */
-export const whenOf = (n: ScoreNode) => n.date || new Date(n.createdAt).toISOString().slice(0, 10);
+/**
+ * When the exam was sat, or failing that the local day it was added, for ordering. Local, not UTC: an exam added just
+ * after midnight in India would otherwise read as the day before.
+ */
+export const whenOf = (n: ScoreNode) => n.date || todayKey(new Date(n.createdAt));
 
 function byWhen(a: ScoreNode, b: ScoreNode) {
   const d = whenOf(a).localeCompare(whenOf(b));
@@ -194,6 +197,46 @@ export function upcoming(ix: ScoreIndex, groupId: string | null, today: string):
     .sort((a, b) => (a.date as string).localeCompare(b.date as string) || a.createdAt - b.createdAt);
 }
 
+/**
+ * Unmarked exams sat in the last two weeks, most recent first: the ones still waiting for their marks once they have
+ * left Coming up. At most `limit` of them.
+ */
+export function waitingForMarks(ix: ScoreIndex, groupId: string | null, today: string, limit = 3): ScoreNode[] {
+  const from = dayNumber(today) - 14;
+  return examsUnder(ix, groupId)
+    .filter((n) => !!n.date && (n.date as string) < today && dayNumber(n.date as string) >= from && !resultOf(n, ix))
+    .sort((a, b) => (b.date as string).localeCompare(a.date as string) || b.createdAt - a.createdAt)
+    .slice(0, limit);
+}
+
+/**
+ * Every exam's result, and how far it moved from the marked exam before it in the same parent (what deltaVsPrevious
+ * gives for one), worked out in one pass per parent so a long list does not sort its siblings once per row.
+ */
+export function resultTable(ix: ScoreIndex): { result: Map<string, ScoreResult | null>; delta: Map<string, number | null> } {
+  const result = new Map<string, ScoreResult | null>();
+  const delta = new Map<string, number | null>();
+  for (const n of ix.byId.values()) if (n.kind === 'exam') result.set(n.id, resultOf(n, ix));
+  for (const list of ix.children.values()) {
+    const exams = list.filter((k) => k.kind === 'exam').sort(byWhen);
+    let before: number | null = null;
+    // exams that tie on when they were sat do not count as before one another, as in deltaVsPrevious
+    for (let i = 0; i < exams.length;) {
+      let j = i;
+      while (j < exams.length && byWhen(exams[i], exams[j]) === 0) j++;
+      let last: number | null = before;
+      for (let k = i; k < j; k++) {
+        const r = result.get(exams[k].id);
+        delta.set(exams[k].id, r && before != null ? r.pct - before : null);
+        if (r) last = r.pct;
+      }
+      before = last;
+      i = j;
+    }
+  }
+  return { result, delta };
+}
+
 /** How far an exam's result moved from the marked exam before it in the same group. */
 export function deltaVsPrevious(n: ScoreNode, ix: ScoreIndex): number | null {
   const mine = resultOf(n, ix);
@@ -308,12 +351,20 @@ export function marksProblem(score: number | undefined, outOf: number | undefine
   return null;
 }
 
-/** "Mock 7" becomes "Mock 8", "Paper 09" becomes "Paper 10", and a title with no number gains " 2". */
+/**
+ * "Mock 7" becomes "Mock 8", "Paper 09" becomes "Paper 10", and a title with no number gains " 2". A year at the end
+ * is the series' year, not its count: "Mock 7 (2026)" becomes "Mock 8 (2026)" when a number comes before it.
+ */
 export function nextTitle(title: string): string {
-  const m = /^(.*?)(\d+)(\D*)$/.exec(title);
+  const last = /^(.*?)(\d+)(\D*)$/;
+  const bump = (m: RegExpExecArray) => m[1] + String(Number(m[2]) + 1).padStart(m[2].length, '0') + m[3];
+  const m = last.exec(title);
   if (!m) return (title.trim() || 'Exam') + ' 2';
-  const next = String(Number(m[2]) + 1).padStart(m[2].length, '0');
-  return m[1] + next + m[3];
+  if (/^(19|20)\d\d$/.test(m[2])) {
+    const before = last.exec(m[1]);
+    if (before) return bump(before) + m[2] + m[3];
+  }
+  return bump(m);
 }
 
 /**
@@ -326,21 +377,22 @@ export function duplicateStructure(nodes: ScoreNode[], id: string, now = Date.no
   if (!root) return null;
   const out: ScoreNode[] = [];
   const seen = new Set<string>();
-  const copy = (n: ScoreNode, parentId: string | null, isRoot: boolean): string => {
+  const copy = (n: ScoreNode, parentId: string | null, isRoot: boolean, inExam: boolean): string => {
     seen.add(n.id);
     const c: ScoreNode = { id: makeId(), parentId, kind: n.kind, title: isRoot ? nextTitle(n.title) : n.title, createdAt: now, updatedAt: now };
     if (typeof n.outOf === 'number') c.outOf = n.outOf;
     if (n.combine) c.combine = n.combine;
     if (typeof n.weight === 'number') c.weight = n.weight;
     if (typeof n.target === 'number') c.target = n.target;
-    // the exam's own tags say what kind of paper it is, so the next one keeps them; its subjects' tags describe how
-    // that attempt went, and start blank like the marks
-    if (isRoot && n.tags?.length) c.tags = [...n.tags];
+    // an exam's own tags say what kind of paper it is (its category among them), so the next one keeps them, whether
+    // it is the copy's root or an exam in a copied group; a subject's tags describe how that attempt went, and start
+    // blank like the marks
+    if ((isRoot || !inExam) && n.tags?.length) c.tags = [...n.tags];
     out.push(c);
-    for (const k of kids(ix, n.id)) if (!seen.has(k.id)) copy(k, c.id, false);
+    for (const k of kids(ix, n.id)) if (!seen.has(k.id)) copy(k, c.id, false, n.kind === 'exam');
     return c.id;
   };
-  const rootId = copy(root, root.parentId, true);
+  const rootId = copy(root, root.parentId, true, false);
   return { nodes: out, rootId };
 }
 

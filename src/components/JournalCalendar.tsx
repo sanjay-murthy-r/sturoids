@@ -95,17 +95,24 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
       <Animated.View key={monthKey} entering={monthIn} style={[st.row, { flexWrap: 'wrap' }]}>
         {cells.map((day, i) => {
           if (day == null) return <View key={i} style={st.cellBox} />;
-          const key = todayKey(new Date(ym.y, ym.m, day));
+          const date = new Date(ym.y, ym.m, day);
+          const key = todayKey(date);
           const selected = key === value;
           const hasEntry = !!marked?.has(key);
           const outside = (!!maxKey && key > maxKey) || (!!minKey && key < minKey);
           return (
             <View key={i} style={st.cellBox}>
+              {/* 40 across, and 2 more on every side for the finger; TalkBack hears the whole date, not a bare number */}
               <Bouncy
                 disabled={outside}
                 onPress={() => { tick(); onPick(key); }}
                 scaleTo={0.9}
                 radius={CELL / 2}
+                hitSlop={2}
+                accessibilityRole="button"
+                accessibilityLabel={date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })
+                  + (key === today ? ', today' : '') + (hasEntry ? ', has an entry' : '')}
+                accessibilityState={{ selected, disabled: outside }}
                 style={[st.cell, selected ? { borderColor: C.accent } : null, outside ? { opacity: 0.35 } : null]}
               >
                 <Text

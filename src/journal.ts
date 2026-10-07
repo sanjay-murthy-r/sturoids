@@ -158,6 +158,11 @@ export function relativeDay(key: string, now = new Date()): string {
   return '';
 }
 
+/** True between midnight and the cutoff hour, while the journal's day is still the calendar's yesterday. */
+export function journalDayIsYesterday(now: Date, cutoffHour: number): boolean {
+  return journalDayFor(now, cutoffHour) !== todayKey(now);
+}
+
 // ---------- prompts, moods ----------
 
 export const PROMPTS = [
@@ -236,9 +241,24 @@ function averagePerDay(rated: JournalEntry[]): number | null {
   return sum / byDay.size;
 }
 
-export function journalStats(entries: JournalEntry[]) {
+/**
+ * The run of days written (an entry with words) that ends on the journal day, or on the day before while that day is
+ * still blank, and the longest run there has been. Counted from the journal's own day: before the cutoff hour the
+ * calendar has already turned over and the journal has not, and a calendar count would lose the run in those small
+ * hours. A mood alone is not writing, so it neither starts a run nor keeps one going.
+ */
+export function journalStreak(entries: JournalEntry[], cutoffHour: number, now = new Date()): { current: number; best: number } {
+  const written = new Set(entries.filter((e) => e.wordCount > 0).map((e) => e.dateKey));
+  const day = journalDayFor(now, cutoffHour);
+  let current = 0;
+  for (let key = written.has(day) ? day : shiftKey(day, -1); written.has(key); key = shiftKey(key, -1)) current++;
+  return { current, best: Math.max(current, streaks([...written]).best) };
+}
+
+export function journalStats(entries: JournalEntry[], cutoffHour: number, now = new Date()) {
   const days = [...new Set(entries.map((e) => e.dateKey))];
-  const { current, best } = streaks(days);
+  // the same run the Journal's own header counts
+  const { current, best } = journalStreak(entries, cutoffHour, now);
   const rated = entries.filter((e) => e.rating);
   return {
     entries: entries.length,
@@ -320,14 +340,21 @@ export async function restoreBodies(items: unknown): Promise<void> {
 // The archive picks an entry, then returns to the writing space, which takes the request on focus. The same
 // path works in a tab slot and on a full page.
 
-let pendingOpen: { dateKey: string; entryId?: string } | null = null;
+type OpenRequest = { dateKey: string; entryId?: string };
+let pendingOpen: OpenRequest | null = null;
 
-export function requestJournalOpen(dateKey: string, entryId?: string) {
+export function requestJournalOpen(dateKey: string, entryId?: string): OpenRequest {
   pendingOpen = { dateKey, entryId };
+  return pendingOpen;
 }
 
 export function takeJournalOpenRequest() {
   const p = pendingOpen;
   pendingOpen = null;
   return p;
+}
+
+/** Drops a request if nothing took it, so it never takes over the Journal the next time it is opened, days later. */
+export function clearJournalOpenRequest(req: OpenRequest) {
+  if (pendingOpen === req) pendingOpen = null;
 }

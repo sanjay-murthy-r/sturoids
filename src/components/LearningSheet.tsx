@@ -26,9 +26,12 @@ export function LearningSheet({ target, onClose, title }: {
   const [text, setText] = React.useState('');
   const [tags, setTags] = React.useState<string[]>([]);
   const [problem, setProblem] = React.useState(false);
+  // the button still answers while the sheet slides away, so a second tap would add the learning twice
+  const saved = React.useRef(false);
 
   React.useEffect(() => {
     if (!target) return;
+    saved.current = false;
     setShown(target);
     setProblem(false);
     setText(target.mode === 'edit' ? target.learning.text : '');
@@ -36,7 +39,9 @@ export function LearningSheet({ target, onClose, title }: {
   }, [target]);
 
   const save = () => {
+    if (saved.current) return;
     if (!text.trim()) { setProblem(true); return; }
+    saved.current = true;
     if (shown?.mode === 'edit') patchLearning(shown.learning.id, { text, tags });
     else if (shown) addLearning({ nodeId: shown.nodeId, text, tags });
     onClose();
@@ -55,6 +60,8 @@ export function LearningSheet({ target, onClose, title }: {
         multiline
         autoFocus={shown?.mode === 'new'}
         maxLength={600}
+        // Android centres a multiline field's text in its height; the first line belongs at the top of the box
+        textAlignVertical="top"
         style={{ minHeight: 76 }}
       />
       {/* a problem fades in where it stands, rather than appearing in one frame */}

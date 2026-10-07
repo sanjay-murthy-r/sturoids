@@ -22,6 +22,8 @@ const ROWS = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['side', '0', '
 const KEY_GAP_X = 26;
 const KEY_GAP_Y = 14;
 const KEY_MAX = 72;
+/** what TalkBack says for the keys that show an icon; a digit says itself */
+const KEY_LABEL: Record<string, string> = { del: 'Delete', ok: 'Confirm', bio: 'Use screen lock' };
 
 type Stage = 'enter' | 'legacy' | 'choose' | 'confirm';
 
@@ -173,7 +175,8 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
     : stage === 'choose' && fresh ? 'It opens locked notes, and the journal and Notes when they are locked. Only this phone keeps it, so it cannot be recovered if forgotten.'
       : screenKey ? 'Or use your screen lock.'
         : '';
-  const status = coolS > 0 ? 'Try again in ' + coolS + ' s' : message;
+  // the waits grow to an hour after many wrong PINs, so a long one counts in minutes
+  const status = coolS > 0 ? 'Try again in ' + (coolS < 60 ? coolS + ' s' : Math.ceil(coolS / 60) + ' min') : message;
   // while the PIN's state is being read, or a wait is on, the keys rest dimmed; they ease back up when they can be used
   const resting = coolS > 0 || !stage;
   const keysOn = useSharedValue(resting ? 0.45 : 1);
@@ -199,7 +202,14 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
       <FadeSwap swapKey={hint}>
         <Text style={[T.caption, st.hint]}>{hint}</Text>
       </FadeSwap>
-      <Animated.View style={[st.dots, shakeStyle]}>
+      {/* TalkBack reads the wells as one count, not as a row of empty shapes */}
+      <Animated.View
+        style={[st.dots, shakeStyle]}
+        accessible
+        accessibilityLabel={stage === 'legacy'
+          ? digits.length + (digits.length === 1 ? ' digit entered' : ' digits entered')
+          : digits.length + ' of ' + PIN_LEN + ' digits entered'}
+      >
         {Array.from({ length: wells }, (_, i) => (
           <Animated.View
             key={i}
@@ -219,7 +229,10 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
       </Animated.View>
       {/* a wait counts down in place; a new message dips in */}
       <FadeSwap swapKey={coolS > 0 ? 'wait' : message}>
-        <Text style={[T.caption, st.status, status ? { color: coolS > 0 ? C.textFaint : C.danger } : null]}>
+        <Text
+          accessibilityLiveRegion="polite"
+          style={[T.caption, st.status, status ? { color: coolS > 0 ? C.textFaint : C.danger } : null]}
+        >
           {status || ' '}
         </Text>
       </FadeSwap>
@@ -238,6 +251,9 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
                   scaleTo={0.92}
                   radius={key / 2}
                   style={[st.key, { width: key, height: key, borderRadius: key / 2 }, keyFace, off ? { opacity: 0.45 } : null]}
+                  accessibilityRole="button"
+                  accessibilityLabel={KEY_LABEL[kind] ?? kind}
+                  accessibilityState={resting || off ? { disabled: true } : undefined}
                 >
                   {kind === 'del' ? (
                     <Ionicons name="backspace-outline" size={24} color={C.textDim} />

@@ -17,6 +17,8 @@ const WINDOW = 4;
 const TAP_REACH = 2;
 /** on a wide window the wheel keeps a phone's reach instead of stretching across the card */
 const MAX_W = 480;
+/** how far the system's font size may grow a label */
+const MAX_FONT_SCALE = 1.15;
 
 const mod = (n: number, m: number) => ((n % m) + m) % m;
 
@@ -214,11 +216,14 @@ function WheelItem({ k, pos, lab, spacing, minScale, colorOn, colorOff, textStyl
       opacity: Math.min(1, ad / 0.55),
     };
   });
+  // the labels sit a fixed spacing apart, so a large system font may grow them only a little before neighbours collide
   return (
     <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, st.centre, box]}>
       <View style={st.stack}>
-        <Animated.Text numberOfLines={1} style={[textStyle, fullStyle]}>{lab.full}</Animated.Text>
-        {hasShort ? <Animated.Text numberOfLines={1} style={[textStyle, st.short, shortStyle]}>{lab.short}</Animated.Text> : null}
+        <Animated.Text numberOfLines={1} maxFontSizeMultiplier={MAX_FONT_SCALE} style={[textStyle, fullStyle]}>{lab.full}</Animated.Text>
+        {hasShort ? (
+          <Animated.Text numberOfLines={1} maxFontSizeMultiplier={MAX_FONT_SCALE} style={[textStyle, st.short, shortStyle]}>{lab.short}</Animated.Text>
+        ) : null}
       </View>
     </Animated.View>
   );

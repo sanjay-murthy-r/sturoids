@@ -317,6 +317,16 @@ const checks = {
     assert.deepEqual(A.columnLabels([{ title: 'Mock 07', when: '2026-08-01' }, { title: 'Mock 8', when: '2026-08-01' }]), ['#7', '#8']);
     assert.deepEqual(A.columnLabels([{ title: 'Physics', when: '2026-08-01' }, { title: 'Maths', when: '2026-08-01' }]), ['1', '2']);
   },
+  'a standing counts places from the best, ties sharing one'() {
+    assert.deepEqual(['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '102nd', '111th'], [1, 2, 3, 4, 11, 12, 13, 21, 102, 111].map(A.ordinal));
+    const pts = [{ id: 'a', pct: 60 }, { id: 'b', pct: 72 }, { id: 'c', pct: 72 }, { id: 'd', pct: 50 }];
+    assert.deepEqual(A.standingIn(pts, 'b'), { place: 1, of: 4 });
+    assert.deepEqual(A.standingIn(pts, 'c'), { place: 1, of: 4 }, 'a tie shares the place');
+    assert.deepEqual(A.standingIn(pts, 'a'), { place: 3, of: 4 });
+    assert.deepEqual(A.standingIn(pts, 'd'), { place: 4, of: 4 });
+    assert.equal(A.standingIn(pts, 'gone'), null, 'not among them');
+    assert.equal(A.standingIn([{ id: 'a', pct: 60 }], 'a'), null, 'nothing to stand against');
+  },
 };
 
 let failed = 0;

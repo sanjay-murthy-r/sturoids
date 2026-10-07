@@ -59,7 +59,7 @@ const ArchiveRow = React.memo(function ArchiveRow({
           </Bouncy>
           {/* Restore sinks and carves like every other press, instead of answering with nothing but a haptic */}
           <Bouncy
-            onPress={() => onRestore(tool.key)} scaleTo={0.94} radius={999} hitSlop={6} style={st.restore}
+            onPress={() => onRestore(tool.key)} scaleTo={0.94} radius={999} hitSlop={8} style={st.restore}
             accessibilityRole="button" accessibilityLabel={'Restore ' + tool.label}
           >
             <Text style={[st.restoreText, { color: C.accent }]}>Restore</Text>
@@ -72,9 +72,11 @@ const ArchiveRow = React.memo(function ArchiveRow({
 
 /**
  * The sheet's list. It is built each time the sheet opens, so the rows it opens with are simply there; a tool restored
- * from it fades out while the rows after it glide up, and the note that nothing is left fades in.
+ * from it fades out while the rows after it glide up. From More, once the last one has faded, `onEmpty` closes the
+ * sheet, so it never stands open on an empty list under a row that has already gone; elsewhere the note that nothing
+ * is left fades in.
  */
-function ArchiveList({ manage, onOpen }: { manage: boolean; onOpen: (key: ToolKey) => void }) {
+function ArchiveList({ manage, onOpen, onEmpty }: { manage: boolean; onOpen: (key: ToolKey) => void; onEmpty?: () => void }) {
   const level = useAnimLevel();
   const built = useBuilt();
   const rawSlots = useStore((s) => s.settings.tabSlots);
@@ -86,9 +88,21 @@ function ArchiveList({ manage, onOpen }: { manage: boolean; onOpen: (key: ToolKe
   const tools = React.useMemo(() => (manage ? TOOLS : TOOLS.filter((t) => archived.includes(t.key))), [manage, archived]);
   const toggle = React.useCallback((key: ToolKey, v: boolean) => { setToolArchived(key, v); }, [setToolArchived]);
   const restore = React.useCallback((key: ToolKey) => { tick(); setToolArchived(key, false); }, [setToolArchived]);
+  const emptyRef = React.useRef(onEmpty);
+  emptyRef.current = onEmpty;
+  // the list emptied while open, by a restore: from More that closes the sheet
+  const hadRows = React.useRef(tools.length > 0);
+  if (tools.length > 0) hadRows.current = true;
+  const closes = !manage && !!onEmpty && hadRows.current;
+  React.useEffect(() => {
+    if (!closes || tools.length > 0) return undefined;
+    // the row's fade (rowOut) is 160 ms; the sheet goes once it is over
+    const timer = setTimeout(() => emptyRef.current?.(), level === 'none' ? 0 : 180);
+    return () => clearTimeout(timer);
+  }, [closes, tools.length]);
 
   if (tools.length === 0) {
-    return <Appear><Text style={[T.label, { paddingVertical: 12 }]}>Nothing is archived.</Text></Appear>;
+    return closes ? null : <Appear><Text style={[T.label, { paddingVertical: 12 }]}>Nothing is archived.</Text></Appear>;
   }
   return (
     <>
@@ -136,7 +150,7 @@ export function ToolArchiveSheet({ visible, onClose, manage = false }: {
           ? 'An archived tool leaves More, quick access and Today, and its reminders pause, until you restore it. Nothing in it is deleted.'
           : 'Open one as it is, or restore it to More.'}
       </Text>
-      <ArchiveList manage={manage} onOpen={openRow} />
+      <ArchiveList manage={manage} onOpen={openRow} onEmpty={onClose} />
     </Sheet>
   );
 }

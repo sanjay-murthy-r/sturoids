@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, FadeOut, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
-import { C, F, MIN, NEU, S, TRACK } from '../theme';
+import { C, F, MIN, S, TRACK, neuRaised } from '../theme';
 import { JournalEntry } from '../store';
 import { MOODS, journalDateParts, shiftKey } from '../journal';
 import { todayKey } from '../utils';
@@ -33,7 +33,7 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
   const skip = offered && !mood && !rating;
   const surface = theme === 'minimal'
     ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
-    : { backgroundColor: C.card, ...NEU.raisedMid };
+    : { backgroundColor: C.card, ...neuRaised('mid') };
 
   return (
     <Animated.View
@@ -43,7 +43,7 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
     >
       <View style={st.head}>
         <Text style={[st.title, { flex: 1, marginRight: 12 }]} numberOfLines={1}>{title}</Text>
-        <Pressable onPress={skip ? onSkip : onDone} hitSlop={10} accessibilityRole="button">
+        <Pressable onPress={skip ? onSkip : onDone} hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }} accessibilityRole="button">
           {/* Skip turns into Done as the first answer lands: the word dips over instead of swapping */}
           <FadeSwap swapKey={skip ? 'skip' : 'done'}>
             <Text style={[st.action, { color: skip ? C.textDim : C.gold }]}>{skip ? 'Skip' : 'Done'}</Text>
@@ -58,8 +58,22 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
       </View>
 
       <View style={st.rateRow}>
-        <Text style={st.rateLabel}>Rate the day</Text>
-        <View style={st.stars} accessibilityRole="adjustable" accessibilityLabel={rating ? rating + ' of 5 stars' : 'Not rated'}>
+        <Text style={st.rateLabel} importantForAccessibility="no" accessibilityElementsHidden>Rate the day</Text>
+        {/* a screen reader meets the stars as one control that swipes up and down through the rating */}
+        <View
+          style={st.stars}
+          accessible
+          accessibilityRole="adjustable"
+          accessibilityLabel="Rate the day"
+          accessibilityValue={{ text: rating ? rating + ' of 5 stars' : 'Not rated' }}
+          accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+          onAccessibilityAction={(e) => {
+            const step = e.nativeEvent.actionName === 'increment' ? 1 : e.nativeEvent.actionName === 'decrement' ? -1 : 0;
+            if (!step || (!rating && step < 0)) return;
+            const next = Math.max(1, Math.min(5, (rating ?? 0) + step)) as Scale;
+            if (next !== rating) { tick(); onRating(next); }
+          }}
+        >
           {[1, 2, 3, 4, 5].map((n) => (
             <Star key={n} n={n} rating={rating} onRating={onRating} />
           ))}
@@ -132,9 +146,10 @@ function Star({ n, rating, onRating }: { n: number; rating: Scale; onRating: (r:
     <Pressable
       hitSlop={4}
       onPress={() => { tick(); onRating(rating === n ? undefined : (n as Scale)); }}
-      accessibilityLabel={n + (n === 1 ? ' star' : ' stars')}
-      accessibilityRole="button"
-      accessibilityState={{ selected: rating === n }}
+      // the row speaks for the stars, so they are not met one by one
+      accessible={false}
+      importantForAccessibility="no-hide-descendants"
+      accessibilityElementsHidden
       style={st.star}
     >
       <Animated.View style={restStyle}><Ionicons name="star-outline" size={24} color={C.textFaint} /></Animated.View>
@@ -144,7 +159,7 @@ function Star({ n, rating, onRating }: { n: number; rating: Scale; onRating: (r:
 }
 
 const st = StyleSheet.create({
-  card: { marginHorizontal: S.pad, marginBottom: 12, borderRadius: S.radius, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
+  card: { marginHorizontal: S.pad, marginBottom: S.gap, borderRadius: S.radius, paddingHorizontal: S.cardPad, paddingVertical: 16 },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   title: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
   action: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
@@ -156,9 +171,14 @@ const st = StyleSheet.create({
   moodOn: { fontFamily: F.semi },
   /** a second ink laid exactly over the first, for colours that cross over */
   ink: { position: 'absolute', top: 0, left: 0, right: 0 },
-  rateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline },
+  // each star carries 10 above and below, so its target reaches 44 dp: they stand for the row's own top padding, and
+  // the row gives the 10 below back to the card's, so the card still shows 16 under the stars
+  rateRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: -10,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,
+  },
   rateLabel: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
   stars: { flexDirection: 'row' },
-  star: { paddingHorizontal: 3 },
-  starLit: { position: 'absolute', top: 0, left: 3 },
+  star: { paddingHorizontal: 3, paddingVertical: 10 },
+  starLit: { position: 'absolute', top: 10, left: 3 },
 });

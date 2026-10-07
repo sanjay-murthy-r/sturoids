@@ -16,3 +16,15 @@ export function deleteAttachmentFiles(list: Attachment[] | Attachment | undefine
     }
   }
 }
+
+/** How long a removed attachment's file waits for an Undo: the toast that offers it, and its fade, with a margin. */
+export const UNDO_WINDOW_MS = 4800;
+
+/**
+ * Deletes a removed attachment's file once its Undo has had its time, unless `cancel` (the Undo) runs first. A file
+ * still on its way out when the app is killed stays behind in the folder, which costs space and never a picture.
+ */
+export function deleteAttachmentLater(a: Attachment): { cancel: () => void } {
+  const timer = setTimeout(() => deleteAttachmentFiles(a), UNDO_WINDOW_MS);
+  return { cancel: () => clearTimeout(timer) };
+}

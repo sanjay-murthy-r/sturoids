@@ -1,7 +1,7 @@
 import React from 'react';
-import { Alert, ScrollView, SectionList, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, SectionList, Share, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
@@ -16,10 +16,11 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
-  MOODS, deleteEntry, entryMatches, formatJournalDate, journalDayFor, journalStats, keyToDate, loadBodies, onThisDay,
-  readBody, requestJournalOpen, searchTokens, shiftKey,
+  MOODS, PROMPTS, clearJournalOpenRequest, deleteEntry, entryMatches, formatJournalDate, journalDayFor, journalStats, keyToDate,
+  loadBodies, onThisDay, readBody, requestJournalOpen, searchTokens, shiftKey,
 } from '../journal';
 import { openTool } from '../toolNav';
+import { expectAway } from '../lock';
 import { tick } from '../haptics';
 import { Appear, Bouncy, CountUp, EASE_OUT, useAnimLevel } from '../components/Motion';
 import { swapIn } from '../components/Swap';
@@ -53,6 +54,27 @@ function Highlighted({ text, tokens, style, lines }: { text: string; tokens: str
   );
 }
 
+/**
+ * What an untitled entry's row is titled with, and how much of the text that title used up. The first sentence is
+ * the title, its punctuation kept, and the line under it starts after that sentence, so the row never says it twice.
+ * An entry begun from the day's prompt opens with the prompt, so the writer's own first sentence titles it instead,
+ * or the prompt itself when nothing follows it yet.
+ */
+function untitledLead(e: JournalEntry): { title: string; used: string } {
+  let text = e.excerpt;
+  let skipped = '';
+  const prompt = e.promptId ? PROMPTS[Number(e.promptId.slice(1))] : undefined;
+  if (prompt && text.startsWith(prompt)) {
+    const after = text.slice(prompt.length).trimStart();
+    if (!after) return { title: prompt, used: text };
+    skipped = text.slice(0, text.length - after.length);
+    text = after;
+  }
+  const m = /^.*?[.!?…]+(?=\s|$)/.exec(text);
+  const sentence = m ? m[0] : text;
+  return { title: sentence.trim(), used: skipped + sentence };
+}
+
 /** One entry in the archive, memoised: a filter or a pin re-renders the rows that changed, not every row. */
 const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, snippet, well, dip, onOpen, onMenu }: {
   e: JournalEntry; first: boolean; last: boolean; enter: boolean; tokens: string[]; snippet: string; well: object;
@@ -61,6 +83,8 @@ const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, s
   useTheme(); // a memo row: its search matches follow a new accent, which its props never carry
   const d = keyToDate(e.dateKey);
   const moodIcon = MOODS.find((m) => m.value === e.mood)?.icon;
+  const lead = e.title ? null : untitledLead(e);
+  const shown = lead && snippet.startsWith(lead.used) ? snippet.slice(lead.used.length).trimStart() : snippet;
   // the words and the tags; an entry with neither (a mood alone) states no count of nothing
   const caption = [
     e.wordCount ? e.wordCount + (e.wordCount === 1 ? ' word' : ' words') : '',
@@ -80,7 +104,7 @@ const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, s
           </View>
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Row>
-              <Highlighted text={e.title || e.excerpt.split(/[.!?\n]/)[0] || 'Untitled'} tokens={tokens} style={[T.title, { flex: 1 }]} lines={1} />
+              <Highlighted text={e.title || lead?.title || 'Untitled'} tokens={tokens} style={[T.title, { flex: 1 }]} lines={1} />
               {e.pinned ? <Ionicons name="pin" size={14} color={C.gold} style={{ marginLeft: 6 }} /> : null}
               {moodIcon ? <Ionicons name={moodIcon as any} size={15} color={C.gold} style={{ marginLeft: 6 }} /> : null}
               {e.rating ? (
@@ -90,7 +114,7 @@ const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, s
                 </View>
               ) : null}
             </Row>
-            {e.excerpt ? <Highlighted text={snippet} tokens={tokens} style={st.excerpt} lines={2} /> : null}
+            {shown ? <Highlighted text={shown} tokens={tokens} style={st.excerpt} lines={2} /> : null}
             {caption ? <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>{caption}</Text> : null}
           </View>
         </ListRow>
@@ -184,14 +208,28 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     tags.length ? tags.length + (tags.length === 1 ? ' tag' : ' tags') : '',
     pinnedOnly ? 'pinned' : '',
   ].filter(Boolean).join(', ');
+  // the count only when there is one to give: an empty list's own note says that nothing matches
+  const filterLine = [visible.length ? visible.length + (visible.length === 1 ? ' entry' : ' entries') : '', summary]
+    .filter(Boolean).join(', ');
   const clearAll = () => { setMonth(null); setMoods([]); setRatings([]); setTags([]); setPinnedOnly(false); setQ(''); };
 
+  // One open per visit: a second tap on the way out would step back past the Journal too. A request the Journal never
+  // took (the archive left some other way) is dropped once the archive has gone, after the Journal has had its moment
+  // to take it, so it never takes the Journal over later
+  const sent = React.useRef<ReturnType<typeof requestJournalOpen> | null>(null);
   const open = React.useCallback((dateKey: string, id?: string) => {
+    if (sent.current) return;
     tick();
-    requestJournalOpen(dateKey, id);
+    sent.current = requestJournalOpen(dateKey, id);
     if (router.canGoBack()) router.back();
     else openTool('journal');
   }, [router]);
+  React.useEffect(() => () => {
+    const req = sent.current;
+    if (req) setTimeout(() => clearJournalOpenRequest(req), 1500);
+  }, []);
+  // an archive still standing when it comes back into view (it was left by the Journal's own path) is a new visit
+  useFocusEffect(React.useCallback(() => { sent.current = null; }, []));
   const openMenu = React.useCallback((e: JournalEntry) => setMenu(e), []);
 
   // a new filter or order is a different list: its rows come up from a faint start together, so the change reads as
@@ -213,12 +251,17 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     const low = text.toLowerCase();
     const at = Math.min(...tokens.map((t) => { const i = low.indexOf(t); return i < 0 ? Infinity : i; }));
     if (!isFinite(at) || at < 80) return text.replace(/\s+/g, ' ').slice(0, 200);
-    return '...' + text.slice(at - 60, at + 160).replace(/\s+/g, ' ');
+    // a little before the match, from the start of a word
+    let from = at - 60;
+    while (from > 0 && !/\s/.test(text[from - 1])) from--;
+    return '…' + text.slice(from, at + 160).replace(/\s+/g, ' ');
   };
 
   const shareEntry = async (e: JournalEntry) => {
     const body = await readBody(e.id);
-    Share.share({ message: [formatJournalDate(e.dateKey), e.title, body.trim()].filter(Boolean).join('\n\n') });
+    // the share sheet takes the app out of view; coming back from it never locks the journal
+    expectAway(() => Share.share({ message: [formatJournalDate(e.dateKey), e.title, body.trim()].filter(Boolean).join('\n\n') }))
+      .catch(() => {});
   };
   const confirmDelete = (e: JournalEntry) => {
     Alert.alert('Delete this entry?', 'This cannot be undone.', [
@@ -227,7 +270,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     ]);
   };
 
-  const s = React.useMemo(() => journalStats(journal), [journal]);
+  const s = React.useMemo(() => journalStats(journal, cutoff), [journal, cutoff]);
   const today = todayKey();
   const echoes = React.useMemo(() => onThisDay(journal, today), [journal, today]);
   const heat = React.useMemo(() => {
@@ -288,9 +331,9 @@ function Archive({ tabMode }: { tabMode: boolean }) {
         <Appear>
           <Row style={{ justifyContent: 'space-between', marginTop: -4, marginBottom: 10 }}>
             <Text style={[T.caption, { flex: 1 }]} numberOfLines={1}>
-              {visible.length} {visible.length === 1 ? 'entry' : 'entries'}{summary ? ', ' + summary : ''}
+              {filterLine.charAt(0).toUpperCase() + filterLine.slice(1)}
             </Text>
-            <Bouncy onPress={clearAll} scaleTo={0.92} radius={8} hitSlop={8} accessibilityRole="button" style={st.linkBox}>
+            <Bouncy onPress={clearAll} scaleTo={0.92} radius={8} hitSlop={13} accessibilityRole="button" style={st.linkBox}>
               <Text style={[st.link, { color: C.accent }]}>Clear</Text>
             </Bouncy>
           </Row>
@@ -332,10 +375,13 @@ function Archive({ tabMode }: { tabMode: boolean }) {
           {echoes.length ? (
             <View style={{ marginTop: 14 }}>
               <Text style={T.kicker}>On this day</Text>
+              {/* each line is a row a finger can find, not a strip of small text */}
               {echoes.slice(0, 3).map((e) => (
-                <Text key={e.id} style={st.echo} numberOfLines={1} onPress={() => open(e.dateKey, e.id)}>
-                  {formatJournalDate(e.dateKey)}: {e.title || e.excerpt || 'Untitled'}
-                </Text>
+                <Pressable key={e.id} onPress={() => open(e.dateKey, e.id)} accessibilityRole="button" style={st.echoRow}>
+                  <Text style={st.echo} numberOfLines={1}>
+                    {formatJournalDate(e.dateKey)}: {e.title || e.excerpt || 'Untitled'}
+                  </Text>
+                </Pressable>
               ))}
             </View>
           ) : null}
@@ -379,7 +425,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
           {months.map(([m, n]) => (
             <Chip
               key={m} small active={month === m} onPress={() => setMonth(month === m ? null : m)}
-              label={keyToDate(m + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) + ' ' + n}
+              label={keyToDate(m + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) + ' · ' + n}
             />
           ))}
         </Row>
@@ -480,6 +526,7 @@ const st = StyleSheet.create({
   glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: TRACK.fine },
   heat: { flexDirection: 'row', gap: 3, justifyContent: 'center', marginTop: 16 },
   heatCell: { width: 12, height: 12, borderRadius: 3 },
-  echo: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, marginTop: 6 },
+  echo: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small },
+  echoRow: { minHeight: 44, justifyContent: 'center' },
   sheetLabel: { ...T.label, marginTop: 10, marginBottom: 8 },
 });

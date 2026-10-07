@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { useRouter } from 'expo-router';
+import { useScrollToTop } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, TRACK, ThemeMode, neuInset } from '../../src/theme';
 import { ScreenBG, ListCard, ListRow, SectionTitle, DotMenu, useTheme, useToolHeader } from '../../src/components/UI';
@@ -10,7 +10,12 @@ import { ToolArchiveSheet } from '../../src/components/ToolArchiveSheet';
 import { toast } from '../../src/components/Toast';
 import { useStore } from '../../src/store';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots } from '../../src/tools';
-import { openTool } from '../../src/toolNav';
+import { openPage, openTool } from '../../src/toolNav';
+
+/** what a tool's count is of, so a screen reader hears "12 notes" rather than a bare number */
+const COUNT_OF: Partial<Record<ToolKey, [string, string]>> = {
+  notes: ['note', 'notes'], vault: ['lecture saved', 'lectures saved'], journal: ['journal page', 'journal pages'],
+};
 
 /** the icon sits in a carved well: a raised boss on a raised card doubled the depth */
 const wellFor = (theme: ThemeMode) =>
@@ -26,6 +31,7 @@ const ToolRow = React.memo(function ToolRow({ tool, count, locked, onOpen, onMen
   tool: Tool; count: number; locked: boolean; onOpen: (key: ToolKey) => void; onMenu: (tool: Tool) => void;
 }) {
   const theme = useTheme();
+  const countOf = COUNT_OF[tool.key];
   return (
     <ListRow onPress={() => onOpen(tool.key)} onLongPress={() => onMenu(tool)} style={st.row}>
       <View style={[st.iconWell, wellFor(theme)]}>
@@ -38,7 +44,9 @@ const ToolRow = React.memo(function ToolRow({ tool, count, locked, onOpen, onMen
       {locked ? (
         <Ionicons name="lock-closed-outline" size={15} color={C.textFaint} style={{ marginRight: 8 }} />
       ) : null}
-      {count ? <Text style={st.count}>{count}</Text> : null}
+      {count ? (
+        <Text style={st.count} accessibilityLabel={countOf ? count + ' ' + countOf[count === 1 ? 0 : 1] : undefined}>{count}</Text>
+      ) : null}
       <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
     </ListRow>
   );
@@ -77,8 +85,10 @@ const ArchivedRow = React.memo(function ArchivedRow({ names, count, onPress }: {
  */
 export default function More() {
   const fk = useFocusKey();
-  const router = useRouter();
   const theme = useTheme();
+  // a tap on More in the bar, with More already open, takes the list back to its top
+  const scrollRef = React.useRef<any>(null);
+  useScrollToTop(scrollRef);
   const rawSlots = useStore((s) => s.settings.tabSlots);
   const rawArchived = useStore((s) => s.settings.archivedTools);
   const notes = useStore((s) => s.notes.length);
@@ -105,8 +115,9 @@ export default function More() {
   // the page is a list: its header is the big title alone, with no line of context and nothing live
   const header = useToolHeader({ title: 'More', mode: 'tab' });
 
+  // an archive can be undone from its toast; Archived, at the end of the list, keeps it otherwise
   const archive = (t: Tool) => {
-    if (setToolArchived(t.key, true)) toast(t.label + ' archived. Restore it from Archived at the end of this list.');
+    if (setToolArchived(t.key, true)) toast(t.label + ' archived.', { label: 'Undo', onPress: () => { setToolArchived(t.key, false); } });
     else toast('End the Deep Work session first.');
   };
 
@@ -115,6 +126,7 @@ export default function More() {
       {header.bar}
       <Animated.ScrollView
         key={fk}
+        ref={scrollRef}
         {...header.scrollProps}
         contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 40 }}
       >
@@ -142,7 +154,7 @@ export default function More() {
         <Enter index={1}>
           <SectionTitle>System</SectionTitle>
           <ListCard>
-            <ListRow key="settings" onPress={() => router.push('/settings')} style={st.row}>
+            <ListRow key="settings" onPress={() => openPage('/settings')} style={st.row}>
               <View style={[st.iconWell, wellFor(theme)]}>
                 <Ionicons name="settings-outline" size={21} color={C.accent} />
               </View>

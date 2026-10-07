@@ -54,6 +54,14 @@ function rootStack(): any {
 }
 
 /**
+ * Opens a full page (a tool not in a slot, Settings) once. A push always adds a page, so a quick double tap would stack
+ * two copies and Back would land on the second; a singular push brings the page already open to the top instead.
+ */
+export function openPage(href: string, params?: Record<string, string>) {
+  router.push(params ? { pathname: href, params } : href, { dangerouslySingular: true });
+}
+
+/**
  * Opens a tool wherever it lives right now. In a bar slot: that tab, back at the tool's own screen
  * (pages the tool opened inside the slot, such as a note, close) with `params` delivered to it.
  * Not in a slot: its full page, with back.
@@ -64,7 +72,7 @@ export function openTool(key: ToolKey, params?: ToolParams) {
   const p = stringParams(params);
   const slot = normaliseSlots(useStore.getState().settings.tabSlots).indexOf(key);
   if (slot < 0) {
-    router.push(p ? { pathname: tool.stackPath, params: p } : tool.stackPath);
+    openPage(tool.stackPath, p);
     return;
   }
   const stack = rootStack();

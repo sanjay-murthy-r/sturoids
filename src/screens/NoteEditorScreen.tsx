@@ -1,11 +1,12 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, TextInput, Alert, Share, Keyboard, AppState, useWindowDimensions,
+  View, Text, StyleSheet, TextInput, Alert, Share, Keyboard, AppState, Modal, useWindowDimensions,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
-  useAnimatedStyle, useSharedValue, withRepeat, withSpring, withTiming, Easing, cancelAnimation, FadeIn, FadeOut,
+  useAnimatedStyle, useSharedValue, withRepeat, withTiming, Easing, cancelAnimation, FadeIn, FadeOut, runOnJS,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as CachedImage } from 'expo-image';
@@ -16,17 +17,20 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { C, F, MIN, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU } from '../theme';
 import { columnWidth } from '../layout';
 import { useStore, Attachment, Note, flushSaves } from '../store';
-import { fmtClockTime, todayKey, uid, yesterdayKey } from '../utils';
-import { ScreenBG, Sheet, Chip, Row, IconBtn, NeuIconBtn, PillButton, DotMenu, GateHeader, useTheme, useToolHeader } from '../components/UI';
+import { fmtClockTime, indexAfterNeighbours, todayKey, uid, yesterdayKey } from '../utils';
+import {
+  ScreenBG, Sheet, Chip, Row, IconBtn, NeuIconBtn, PillButton, DotMenu, EmptyState, GateHeader, useTheme, useToolHeader,
+} from '../components/UI';
 import { toast } from '../components/Toast';
 import { NoteGate, PinSheet, ToolGate } from '../components/LockGate';
-import { markOpen, noteScope, pinStatus } from '../lock';
-import { Bouncy, EASE_OUT, glide, rowIn, rowOut, useAnimLevel, useBuilt } from '../components/Motion';
+import { expectAway, markOpen, noteScope, pinStatus } from '../lock';
+import { Bouncy, EASE_OUT, Enter, glide, rowIn, rowOut, useAnimLevel, useBuilt } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ATT_DIR, deleteAttachmentFiles } from '../attachments';
+import { ATT_DIR, deleteAttachmentFiles, deleteAttachmentLater } from '../attachments';
 import { useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
+import { FolderNameSheet, takeFreshNote } from './NotesListScreen';
 
 const LINE_H = 24;
 const FREE_LINES = 9; // keep ~8-10 lines of breathing room while dictating
@@ -57,6 +61,9 @@ async function persistFile(uri: string, name: string): Promise<{ uri: string; ke
   }
 }
 const NOT_KEPT = 'Attached, but the phone is too full to keep a copy. Free some space and attach it again.';
+
+/** A line's own mark, as the toolbar writes it: a bullet, an open box or a ticked one, then two spaces. */
+const LINE_MARK = /^([•☐☑✓])[ \t]*/;
 
 /**
  * When a note was last written to, for the header: the time today, the word yesterday, the date after that. Nothing
@@ -93,15 +100,16 @@ function MicButton({ listening, onPress }: { listening: boolean; onPress: () => 
       return;
     }
     on.value = withTiming(listening ? 1 : 0, { duration: 160, easing: EASE_OUT });
+    // the button eases up and back, as everything else in the note does
     if (listening) {
-      scale.value = withSpring(1.06, { damping: 14, stiffness: 220 });
+      scale.value = withTiming(1.06, { duration: 160, easing: EASE_OUT });
       pulse.value = 0;
       if (level === 'full') {
         pulse.value = withRepeat(withTiming(1, { duration: 1100, easing: Easing.out(Easing.quad) }), -1, false);
       }
     } else {
       pulse.value = withTiming(0, { duration: 150 });
-      scale.value = withSpring(1, { damping: 16, stiffness: 240 });
+      scale.value = withTiming(1, { duration: 140, easing: EASE_OUT });
     }
   }, [listening, level]);
 
@@ -185,6 +193,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const voiceStarting = useRef(false);
   const alive = useRef(true);
   const selRef = useRef({ start: 0, end: 0 });
+  const bodyRef = useRef<TextInput>(null);
   const undoStack = useRef<string[]>([]);
   const redoStack = useRef<string[]>([]);
   const lastPush = useRef(0);
@@ -194,12 +203,37 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   // the toast waits for the sheet to go: a sheet is a window of its own and would cover it. A hook, so it sits above the
   // "Note not found" return: a note that vanishes from the store (a restored backup) must not change the hook count
   const promoted = React.useRef<{ kind: 'daily' | 'mission'; id: string } | null>(null);
+  // whether the words have the caret: without it, dictation and the line buttons work at the end of the note, never
+  // at a caret left at its very start
+  const bodyFocus = useRef(false);
+  // where the native caret is sent after a change made from here (dictation, a line mark): set for one render only
+  const [caretTo, setCaretTo] = useState<{ start: number; end: number } | null>(null);
+  React.useEffect(() => { if (caretTo) setCaretTo(null); }, [caretTo]);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const [newFolder, setNewFolder] = useState(false);
+  const newFolderNext = useRef(false);
 
   // a dictation still running when the note closes is stopped, never left listening
   React.useEffect(() => () => {
     alive.current = false;
     voiceRef.current?.stop();
   }, []);
+  // nor is one left listening behind another tab (a note in a bar slot stays open there), or with the app put away
+  const shown = useRef(true);
+  const stopVoice = React.useCallback(() => {
+    voiceRef.current?.stop();
+    voiceRef.current = null;
+    setListening(false);
+    setLiveText('');
+  }, []);
+  useFocusEffect(React.useCallback(() => {
+    shown.current = true;
+    return () => { shown.current = false; stopVoice(); };
+  }, [stopVoice]));
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => { if (next === 'background') stopVoice(); });
+    return () => sub.remove();
+  }, [stopVoice]);
 
   // ---- the draft: what is typed shows at once, and reaches the store after a pause ----
   const [title, setTitle] = useState(stored?.title ?? '');
@@ -237,6 +271,19 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     // back-then-kill can lose the last edit before the store's own pause finishes writing it out
     return () => { sub.remove(); commit(); flushSaves(); };
   }, [commit]);
+  // a note New note made and nobody wrote in goes again when its page is closed. Only a close counts: a lock that
+  // comes down over the page takes the editor away too, and the note must still be there once it is opened
+  const navigation = useNavigation();
+  React.useEffect(() => navigation.addListener('beforeRemove', () => {
+    commit();
+    if (!id || !takeFreshNote(id)) return;
+    const s = useStore.getState();
+    const n = s.notes.find((x) => x.id === id);
+    if (n && !n.title.trim() && !n.body.trim() && n.attachments.length === 0) {
+      leaving.current = true;
+      s.deleteNote(n.id);
+    }
+  }), [navigation, commit, id]);
 
   // a line offered as a task is its words: the bullet or box the toolbar put in front of it stays in the note. They are
   // read only while the sheet is open (not on every keystroke), and a closing sheet keeps the lines it opened with
@@ -249,10 +296,28 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const words = useMemo(() => countWords(body), [body]);
 
   const noteId = note?.id ?? '';
-  const removeOne = React.useCallback(
-    (attId: string) => deleteAttachmentFiles(removeAttachment(noteId, attId)),
-    [noteId, removeAttachment],
-  );
+  // A removed attachment leaves the note at once, and its file waits out the Undo before it is deleted. Undo puts the
+  // same attachment back where it stood
+  const removeOne = React.useCallback((attId: string) => {
+    const before = useStore.getState().notes.find((n) => n.id === noteId)?.attachments ?? [];
+    const at = before.findIndex((a) => a.id === attId);
+    const gone = removeAttachment(noteId, attId);
+    if (!gone) return;
+    const later = deleteAttachmentLater(gone);
+    toast('Attachment removed.', {
+      label: 'Undo',
+      onPress: () => {
+        const n = useStore.getState().notes.find((x) => x.id === noteId);
+        // a note deleted meanwhile took its other files with it; this one goes when its wait is over
+        if (!n || n.attachments.some((a) => a.id === gone.id)) return;
+        later.cancel();
+        const list = [...n.attachments];
+        list.splice(indexAfterNeighbours(before.slice(0, at).map((a) => a.id), list.map((a) => a.id)), 0, gone);
+        useStore.getState().updateNote(noteId, { attachments: list });
+      },
+    });
+  }, [noteId, removeAttachment]);
+  const viewPhoto = React.useCallback((uri: string) => { Keyboard.dismiss(); setViewing(uri); }, []);
 
   const toggleLock = async () => {
     if (!note) return;
@@ -305,7 +370,11 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         onPress: () => updateNote(note.id, { pinned: !note.pinned }),
       },
       { icon: 'folder-outline', label: 'Move to folder', onPress: () => setFolderSheet(true) },
-      ...(note.locked ? [] : [{ icon: 'share-outline' as const, label: 'Share note', onPress: () => { Share.share({ message: title + '\n\n' + body }); } }]),
+      ...(note.locked ? [] : [{
+        icon: 'share-outline' as const, label: 'Share note',
+        // an untitled note shares its words alone, with no blank lines in front; coming back never locks the note
+        onPress: () => { expectAway(() => Share.share({ message: [title.trim(), body.trim()].filter(Boolean).join('\n\n') })).catch(() => {}); },
+      }]),
       {
         icon: 'trash-outline', label: 'Delete note', color: C.danger,
         onPress: () => Alert.alert('Delete note', 'This cannot be undone.', [
@@ -317,10 +386,11 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   });
 
   if (!note) {
+    // the text face, like every other empty page (a bare Text fell back to the system font)
     return (
       <ScreenBG>
         {header.bar}
-        <Text style={{ color: C.textDim, textAlign: 'center', marginTop: 60 }}>Note not found.</Text>
+        <EmptyState icon="document-text-outline" title="Note not found" body="It may have been deleted." />
       </ScreenBG>
     );
   }
@@ -364,21 +434,49 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     writeBody(next);
   };
 
-  const insertAtCursor = (text: string) => {
-    const b = liveBody();
-    // clamp — the tracked selection may predate external inserts (dictation)
+  /**
+   * Where a change made from here goes: the caret while the words have it (clamped, as the tracked selection may
+   * predate an insert), otherwise the end of the note.
+   */
+  const insertionPoint = (b: string) => {
+    if (!bodyFocus.current) return { start: b.length, end: b.length };
     const start = Math.min(selRef.current.start, b.length);
-    const end = Math.min(Math.max(selRef.current.end, start), b.length);
-    setBody(b.slice(0, start) + text + b.slice(end));
-    const pos = start + text.length;
-    selRef.current = { start: pos, end: pos };
+    return { start, end: Math.min(Math.max(selRef.current.end, start), b.length) };
+  };
+  /** Changes the words and sends the native caret to `caret`, where the tracked one already is. */
+  const writeAt = (next: string, caret: number) => {
+    setBody(next);
+    selRef.current = { start: caret, end: caret };
+    setCaretTo({ start: caret, end: caret });
   };
 
-  const prefixLine = (prefix: string) => {
+  /** A dictated phrase, set apart from the word before it by a space. */
+  const insertPhrase = (phrase: string) => {
+    const b = liveBody(); // NOT the closed-over note.body — see liveBody()
+    const { start, end } = insertionPoint(b);
+    const text = (start > 0 && !/\s/.test(b[start - 1]) ? ' ' : '') + phrase;
+    writeAt(b.slice(0, start) + text + b.slice(end), start + text.length);
+  };
+
+  /**
+   * The bullet and box buttons toggle the mark of the caret's line (the last line when the words have no caret). The
+   * box goes from none to open to ticked and back to none; the bullet goes on and off; one mark replaces the other
+   * instead of stacking in front of it.
+   */
+  const markLine = (kind: 'bullet' | 'box') => {
     const b = liveBody();
-    const start = Math.min(selRef.current.start, b.length);
-    const lineStart = b.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
-    setBody(b.slice(0, lineStart) + prefix + b.slice(lineStart));
+    const { start } = insertionPoint(b);
+    const lineStart = start === 0 ? 0 : b.lastIndexOf('\n', start - 1) + 1;
+    const m = LINE_MARK.exec(b.slice(lineStart));
+    const had = m ? m[1] : '';
+    const next = kind === 'bullet'
+      ? (had === '•' ? '' : '•')
+      : had === '☐' ? '☑' : had === '☑' || had === '✓' ? '' : '☐';
+    const mark = next ? next + '  ' : '';
+    const oldLen = m ? m[0].length : 0;
+    const shift = mark.length - oldLen;
+    const caret = Math.max(lineStart + mark.length, start + shift);
+    writeAt(b.slice(0, lineStart) + mark + b.slice(lineStart + oldLen), bodyFocus.current ? caret : b.length + shift);
   };
 
   /** While dictating, keep the writing edge visible with ~9 free lines below it. */
@@ -406,8 +504,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       const session = await startVoice(
         (finalText) => {
           setLiveText('');
-          const b = liveBody(); // NOT the closed-over note.body — see liveBody()
-          insertAtCursor((b && !b.endsWith(' ') && !b.endsWith('\n') ? ' ' : '') + finalText);
+          insertPhrase(finalText);
           setTimeout(autoScroll, 60);
         },
         (interim) => setLiveText(interim),
@@ -415,8 +512,9 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         (msg) => { setListening(false); setLiveText(''); Alert.alert('Voice input', msg); }
       );
       if (!session) return;
-      // the note closed while the microphone was being set up: stop at once instead of listening unseen
-      if (!alive.current) { session.stop(); return; }
+      // the note closed, or went behind another tab, while the microphone was being set up: stop at once instead of
+      // listening unseen
+      if (!alive.current || !shown.current) { session.stop(); return; }
       voiceRef.current = session;
       setListening(true);
     } finally {
@@ -424,14 +522,15 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     }
   };
 
+  // The pickers and the camera take the app out of view; coming back from them never locks the note or the Notes tool
   const pickMedia = async () => {
     try {
-      const res = await ImagePicker.launchImageLibraryAsync({
+      const res = await expectAway(() => ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images', 'videos'],
         quality: 0.85,
         allowsMultipleSelection: true,
         selectionLimit: 5,
-      });
+      }));
       if (res.canceled) return;
       let lost = false;
       for (const a of res.assets) {
@@ -446,9 +545,26 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     }
   };
 
+  /** A photo of the board, straight from the camera into the note. */
+  const takePhoto = async () => {
+    try {
+      const res = await expectAway(() => ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.85 }));
+      if (res.canceled || !res.assets?.[0]) return;
+      const a = res.assets[0];
+      const name = a.fileName || 'photo.jpg';
+      const stored = await persistFile(a.uri, name);
+      addAttachment(note.id, { kind: 'image', uri: stored.uri, name });
+      if (!stored.kept) toast(NOT_KEPT);
+    } catch (e: any) {
+      toast(/permission/i.test(String(e?.code) + String(e?.message))
+        ? 'Allow the camera in the phone\'s settings to take a photo.'
+        : 'Could not take a photo.');
+    }
+  };
+
   const pickFile = async () => {
     try {
-      const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+      const res = await expectAway(() => DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true }));
       if (res.canceled || !res.assets?.[0]) return;
       const f = res.assets[0];
       const stored = await persistFile(f.uri, f.name || 'file');
@@ -476,9 +592,19 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
 
   // the note's column: the window on a phone, a capped column on a wide window
   const colW = columnWidth(width, mode === 'tab');
-  // under 372dp the nine toolbar targets overflow: media, file, undo and redo move into a menu
-  const narrow = colW < 372;
+  // The toolbar's ten targets need 402dp. Narrower, undo and redo move into a menu (the rest need 372dp); under 376dp
+  // the photo, camera and file buttons go into it too
+  const tools: 'all' | 'media' | 'menu' = colW >= 408 ? 'all' : colW >= 376 ? 'media' : 'menu';
   const mediaW = (colW - S.pad * 2 - 10) / 2;
+  const menuItems = [
+    ...(tools === 'menu' ? [
+      { label: 'Add a photo or video', icon: 'image-outline', onPress: pickMedia },
+      { label: 'Take a photo', icon: 'camera-outline', onPress: takePhoto },
+      { label: 'Attach a file', icon: 'attach-outline', onPress: pickFile },
+    ] : []),
+    { label: 'Undo', icon: 'arrow-undo-outline', onPress: undo },
+    { label: 'Redo', icon: 'arrow-redo-outline', onPress: redo },
+  ];
 
   return (
     <ScreenBG>
@@ -491,40 +617,55 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         onContentSizeChange={(w, h) => { sizesRef.current.content = h; if (listening) autoScroll(); }}
         onLayout={(e) => { sizesRef.current.viewport = e.nativeEvent.layout.height; }}
       >
-        {header.hero}
-        <TextInput
-          value={title}
-          onChangeText={(v) => { draft.current.title = v; setTitle(v); scheduleCommit(); }}
-          placeholder="Title"
-          placeholderTextColor={C.textFaint}
-          style={st.title}
-        />
-        {/* the date is the header's now; the count keeps its line when there are no words, so the first one typed
-            does not push the page down */}
-        <Text style={[T.caption, { marginBottom: 12 }]}>
-          {words ? words + (words === 1 ? ' word' : ' words') : ' '}
-        </Text>
-
-        {note.attachments.length > 0 && (
-          <Attachments items={note.attachments} width={mediaW} onRemove={removeOne} live={built.current} />
-        )}
-
-        <TextInput
-          value={body}
-          onChangeText={(v) => setBody(v)}
-          onSelectionChange={(e) => { selRef.current = e.nativeEvent.selection; }}
-          placeholder="Write…"
-          placeholderTextColor={C.textFaint}
-          selectionColor={C.accent}
-          multiline
-          textAlignVertical="top"
-          style={st.body}
-        />
-        {listening && (
-          <Text style={st.liveInline}>
-            {liveText || '…'}
+        {/* the note rises with its page, as the Journal's page and the Vault's rows do */}
+        <Enter index={0}>
+          {header.hero}
+          {/* a long title wraps instead of running off sideways; Enter goes on to the words */}
+          <TextInput
+            value={title}
+            onChangeText={(v) => { draft.current.title = v; setTitle(v); scheduleCommit(); }}
+            placeholder="Title"
+            placeholderTextColor={C.textFaint}
+            style={st.title}
+            multiline
+            scrollEnabled={false}
+            textAlignVertical="top"
+            maxLength={200}
+            blurOnSubmit
+            returnKeyType="next"
+            onSubmitEditing={() => bodyRef.current?.focus()}
+          />
+          {/* the date is the header's now; the count keeps its line when there are no words, so the first one typed
+              does not push the page down */}
+          <Text style={[T.caption, { marginBottom: 12 }]}>
+            {words ? words + (words === 1 ? ' word' : ' words') : ' '}
           </Text>
-        )}
+
+          {note.attachments.length > 0 && (
+            <Attachments items={note.attachments} width={mediaW} onRemove={removeOne} onView={viewPhoto} live={built.current} />
+          )}
+
+          <TextInput
+            ref={bodyRef}
+            value={body}
+            onChangeText={(v) => setBody(v)}
+            onSelectionChange={(e) => { selRef.current = e.nativeEvent.selection; }}
+            onFocus={() => { bodyFocus.current = true; }}
+            onBlur={() => { bodyFocus.current = false; }}
+            selection={caretTo ?? undefined}
+            placeholder="Write…"
+            placeholderTextColor={C.textFaint}
+            selectionColor={C.accent}
+            multiline
+            textAlignVertical="top"
+            style={st.body}
+          />
+          {listening && (
+            <Text style={st.liveInline}>
+              {liveText || '…'}
+            </Text>
+          )}
+        </Enter>
       </Animated.ScrollView>
 
       {/* live transcript strip */}
@@ -545,25 +686,30 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       {/* editor toolbar */}
       <View style={[st.toolbar, { paddingBottom: 9 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: undefined }]}>
         <MicButton listening={listening} onPress={toggleVoice} />
-        <IconBtn name="ellipse-outline" size={20} pad={6} onPress={() => prefixLine('•  ')} accessibilityLabel="Bullet" />
-        <IconBtn name="checkbox-outline" size={20} pad={6} onPress={() => prefixLine('☐  ')} accessibilityLabel="Checkbox" />
+        <IconBtn name="ellipse-outline" size={20} pad={6} onPress={() => markLine('bullet')} accessibilityLabel="Bullet" />
+        <IconBtn name="checkbox-outline" size={20} pad={6} onPress={() => markLine('box')} accessibilityLabel="Checkbox, then tick it" />
         <IconBtn name="checkmark-done-outline" size={20} pad={6} onPress={() => setLineSheet(true)} accessibilityLabel="Promote a line to a task" />
         <View style={{ flex: 1 }} />
-        {narrow ? (
-          <NeuIconBtn name="ellipsis-horizontal" dim={40} size={19} color={C.textDim} onPress={() => setToolMenu(true)} accessibilityLabel="More tools" />
-        ) : (
+        {tools === 'menu' ? null : (
           <>
             <NeuIconBtn name="image-outline" dim={40} size={19} color={C.accent} onPress={pickMedia} accessibilityLabel="Add a photo or video" />
+            <NeuIconBtn name="camera-outline" dim={40} size={19} color={C.accent} onPress={takePhoto} accessibilityLabel="Take a photo" />
             <NeuIconBtn name="attach-outline" dim={40} size={19} color={C.accent} onPress={pickFile} accessibilityLabel="Attach a file" />
+          </>
+        )}
+        {tools === 'all' ? (
+          <>
             <IconBtn name="arrow-undo-outline" size={20} pad={6} onPress={undo} accessibilityLabel="Undo" />
             <IconBtn name="arrow-redo-outline" size={20} pad={6} onPress={redo} accessibilityLabel="Redo" />
           </>
+        ) : (
+          <NeuIconBtn name="ellipsis-horizontal" dim={40} size={19} color={C.textDim} onPress={() => setToolMenu(true)} accessibilityLabel="More tools" />
         )}
       </View>
 
       <Sheet visible={lineSheet} onClose={() => setLineSheet(false)} onClosed={promotedToast} title="Promote a line to a task">
         {lines.length === 0 ? (
-          <Text style={{ color: C.textFaint }}>Write a few lines first.</Text>
+          <Text style={T.caption}>Write a few lines first.</Text>
         ) : (
           lines.slice(0, 30).map((l, i) => (
             <View key={i} style={{ marginBottom: 12 }}>
@@ -577,24 +723,36 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         )}
       </Sheet>
 
-      <Sheet visible={folderSheet} onClose={() => setFolderSheet(false)} title="Move to folder">
+      <Sheet
+        visible={folderSheet}
+        onClose={() => setFolderSheet(false)}
+        // a new folder is named in its own sheet, once this one has gone
+        onClosed={() => { if (newFolderNext.current) { newFolderNext.current = false; setNewFolder(true); } }}
+        title="Move to folder"
+      >
         <Row style={{ flexWrap: 'wrap' }}>
           {folders.map((f) => (
             <Chip key={f} label={f} active={note.folder === f}
               onPress={() => { updateNote(note.id, { folder: f }); setFolderSheet(false); }} />
           ))}
+          <Chip icon="add" label="New folder" onPress={() => { newFolderNext.current = true; setFolderSheet(false); }} />
         </Row>
       </Sheet>
-      <DotMenu
-        visible={toolMenu}
-        onClose={() => setToolMenu(false)}
-        items={[
-          { label: 'Add a photo or video', icon: 'image-outline', onPress: pickMedia },
-          { label: 'Attach a file', icon: 'attach-outline', onPress: pickFile },
-          { label: 'Undo', icon: 'arrow-undo-outline', onPress: undo },
-          { label: 'Redo', icon: 'arrow-redo-outline', onPress: redo },
-        ]}
+      <FolderNameSheet
+        visible={newFolder}
+        onClose={() => setNewFolder(false)}
+        title="New folder"
+        initial=""
+        label="Create and move"
+        check={(name) => (!name ? 'Give the folder a name.' : folders.includes(name) ? 'There is already a folder with that name.' : '')}
+        onSave={(name) => {
+          useStore.getState().addNoteFolder(name);
+          updateNote(note.id, { folder: name });
+          setNewFolder(false);
+        }}
       />
+      <DotMenu visible={toolMenu} onClose={() => setToolMenu(false)} items={menuItems} />
+      <PhotoViewer uri={viewing} onClose={() => setViewing(null)} />
 
       <PinSheet
         visible={lockPin}
@@ -614,18 +772,157 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
 
 async function openFile(a: Attachment) {
   try {
-    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(a.uri);
+    // the share sheet offers the apps that can open the file; coming back from it never locks the note
+    if (await Sharing.isAvailableAsync()) await expectAway(() => Sharing.shareAsync(a.uri));
   } catch {
     toast('Could not open ' + a.name);
   }
+}
+
+/** How far a picture can be looked into, the step a double tap takes, and how far down a pull puts it away. */
+const ZOOM_MAX = 5;
+const ZOOM_TAP = 2.5;
+const PULL_CLOSE = 120;
+const VIEW_EASE = { duration: 220, easing: EASE_OUT };
+
+/**
+ * An attached picture across the whole screen, drawn whole so a photo of a board or a page can be read. Pinch or
+ * double tap to look closer, drag to move about it while closer, and pull it down (or press back) to put it away. It
+ * fades in and out on an ease; with motion off it is simply there, and every settle is a step.
+ */
+function PhotoViewer({ uri, onClose }: { uri: string | null; onClose: () => void }) {
+  const level = useAnimLevel();
+  const still = level === 'none';
+  const insets = useSafeAreaInsets();
+  const { width: w, height: h } = useWindowDimensions();
+  const [shown, setShown] = useState<string | null>(uri);
+  const fade = useSharedValue(0);
+  const scale = useSharedValue(1);
+  const from = useSharedValue(1);
+  const x = useSharedValue(0);
+  const y = useSharedValue(0);
+  const startX = useSharedValue(0);
+  const startY = useSharedValue(0);
+  const pull = useSharedValue(0);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const requestClose = React.useCallback(() => closeRef.current(), []);
+  const gone = React.useCallback(() => setShown(null), []);
+
+  React.useEffect(() => {
+    if (uri) {
+      setShown(uri);
+      scale.value = 1; x.value = 0; y.value = 0; pull.value = 0;
+      fade.value = still ? 1 : withTiming(1, VIEW_EASE);
+    } else if (still) {
+      fade.value = 0;
+      setShown(null);
+    } else {
+      fade.value = withTiming(0, { duration: 160, easing: Easing.in(Easing.quad) }, (fin) => { if (fin) runOnJS(gone)(); });
+    }
+  }, [uri]);
+
+  const gesture = React.useMemo(() => {
+    const to = (v: number) => {
+      'worklet';
+      return still ? v : withTiming(v, VIEW_EASE);
+    };
+    // a closer picture can be moved only as far as its edges
+    const clamp = (v: number, s: number, side: number) => {
+      'worklet';
+      const m = (side * (s - 1)) / 2;
+      return Math.min(m, Math.max(-m, v));
+    };
+    const pinch = Gesture.Pinch()
+      .onStart(() => { from.value = scale.value; })
+      .onUpdate((e) => { scale.value = Math.min(ZOOM_MAX, Math.max(0.8, from.value * e.scale)); })
+      .onEnd(() => {
+        const s = Math.max(1, scale.value);
+        scale.value = to(s);
+        x.value = to(clamp(x.value, s, w));
+        y.value = to(clamp(y.value, s, h));
+      });
+    const pan = Gesture.Pan()
+      .averageTouches(true)
+      .onStart(() => { startX.value = x.value; startY.value = y.value; })
+      .onUpdate((e) => {
+        if (scale.value > 1.01) {
+          x.value = startX.value + e.translationX;
+          y.value = startY.value + e.translationY;
+        } else {
+          pull.value = Math.max(0, e.translationY);
+        }
+      })
+      .onEnd((e) => {
+        if (scale.value > 1.01) {
+          x.value = to(clamp(x.value, scale.value, w));
+          y.value = to(clamp(y.value, scale.value, h));
+        } else if (pull.value > PULL_CLOSE || e.velocityY > 900) {
+          runOnJS(requestClose)();
+        } else {
+          pull.value = to(0);
+        }
+      });
+    // a double tap looks closer at the point tapped, and a second one steps back out
+    const twice = Gesture.Tap()
+      .numberOfTaps(2)
+      .maxDelay(260)
+      .onEnd((e) => {
+        if (scale.value > 1.01) {
+          scale.value = to(1);
+          x.value = to(0);
+          y.value = to(0);
+          return;
+        }
+        scale.value = to(ZOOM_TAP);
+        x.value = to(clamp((w / 2 - e.x) * (ZOOM_TAP - 1), ZOOM_TAP, w));
+        y.value = to(clamp((h / 2 - e.y) * (ZOOM_TAP - 1), ZOOM_TAP, h));
+      });
+    return Gesture.Race(twice, Gesture.Simultaneous(pinch, pan));
+  }, [w, h, still, requestClose]);
+
+  // the ground thins as a pull takes the picture down, which shrinks a little with it
+  const ground = useAnimatedStyle(() => ({ opacity: fade.value * (1 - Math.min(0.6, pull.value / 400)) }));
+  const picture = useAnimatedStyle(() => ({
+    opacity: fade.value,
+    transform: [
+      { translateX: x.value },
+      { translateY: y.value + pull.value },
+      { scale: scale.value * (1 - Math.min(0.15, pull.value / 1200)) },
+    ] as const,
+  }));
+  const chrome = useAnimatedStyle(() => ({ opacity: fade.value }));
+
+  if (!shown) return null;
+  return (
+    <Modal visible transparent statusBarTranslucent animationType="none" onRequestClose={onClose}>
+      {/* a modal is its own window: gestures inside it need their own root */}
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: C.ambient }, ground]} />
+        <GestureDetector gesture={gesture}>
+          <Animated.View style={[StyleSheet.absoluteFill, picture]}>
+            <CachedImage
+              source={{ uri: shown }} style={{ width: w, height: h }} contentFit="contain" cachePolicy="memory"
+              accessible accessibilityLabel="Attached picture"
+            />
+          </Animated.View>
+        </GestureDetector>
+        <Animated.View style={[st.viewerClose, { top: insets.top + 8 }, chrome]}>
+          <IconBtn name="close" size={24} color={C.text} onPress={onClose} accessibilityLabel="Close the picture" />
+        </Animated.View>
+      </GestureHandlerRootView>
+    </Modal>
+  );
 }
 
 /**
  * The note's pictures, videos and files. Kept apart from the editor so a keystroke never re-renders a video; one added
  * later fades in where it lands, one removed fades as it goes, and the rest glide to their places.
  */
-const Attachments = React.memo(function Attachments({ items, width, onRemove, live }: {
+const Attachments = React.memo(function Attachments({ items, width, onRemove, onView, live }: {
   items: Attachment[]; width: number; onRemove: (id: string) => void;
+  /** a picture tapped: it opens across the whole screen */
+  onView: (uri: string) => void;
   /** the note was already open when these arrived: the first one fades in too */
   live: boolean;
 }) {
@@ -638,9 +935,9 @@ const Attachments = React.memo(function Attachments({ items, width, onRemove, li
       {items.map((a) => (
         <Animated.View key={a.id} entering={enter} exiting={rowOut(level)} layout={glide(level)}>
           {a.kind === 'image' && (
-            <AttachedImage uri={a.uri} width={width} />
+            <AttachedImage uri={a.uri} width={width} onPress={() => onView(a.uri)} />
           )}
-          {a.kind === 'video' && <InlineVideo uri={a.uri} width={width} />}
+          {a.kind === 'video' && <AttachedVideo uri={a.uri} name={a.name} width={width} />}
           {a.kind === 'file' && (
             <Bouncy onPress={() => openFile(a)} style={[st.fileRow, { borderColor: C.accent + '44', backgroundColor: C.accent + '18' }]}>
               <Ionicons name="document-attach-outline" size={18} color={C.accent} />
@@ -661,8 +958,11 @@ const Attachments = React.memo(function Attachments({ items, width, onRemove, li
   );
 });
 
-/** An attached picture; when its file is gone, a carved placeholder says so instead of an empty box. */
-function AttachedImage({ uri, width }: { uri: string; width: number }) {
+/**
+ * An attached picture, which a tap opens across the whole screen; when its file is gone, a carved placeholder says so
+ * instead of an empty box.
+ */
+function AttachedImage({ uri, width, onPress }: { uri: string; width: number; onPress: () => void }) {
   const [failed, setFailed] = React.useState(false);
   const box = { width, height: width * 0.75, borderRadius: 14 };
   if (failed) {
@@ -676,11 +976,33 @@ function AttachedImage({ uri, width }: { uri: string; width: number }) {
       </View>
     );
   }
-  return <CachedImage source={{ uri }} style={box} contentFit="cover" cachePolicy="memory" transition={180} onError={() => setFailed(true)} />;
+  return (
+    <Bouncy onPress={onPress} scaleTo={0.98} radius={14} accessibilityRole="button" accessibilityLabel="Open the picture">
+      <CachedImage source={{ uri }} style={box} contentFit="cover" cachePolicy="memory" transition={180} onError={() => setFailed(true)} />
+    </Bouncy>
+  );
+}
+
+/**
+ * An attached video. Until it is tapped it is a carved well with its name and a play mark, and no player, so a note
+ * with several clips keeps no decoders alive while it is written in. A tap makes the player and starts it.
+ */
+function AttachedVideo({ uri, name, width }: { uri: string; name: string; width: number }) {
+  const [on, setOn] = React.useState(false);
+  if (on) return <InlineVideo uri={uri} width={width} />;
+  return (
+    <Bouncy
+      onPress={() => setOn(true)} scaleTo={0.98} radius={14} accessibilityRole="button" accessibilityLabel={'Play ' + name}
+      style={[st.videoWell, { width, height: width * 0.62, backgroundColor: C.inset, ...NEU.insetLow }]}
+    >
+      <Ionicons name="play" size={22} color={C.accent} />
+      <Text style={[T.caption, { marginTop: 6, maxWidth: width - 24 }]} numberOfLines={1}>{name}</Text>
+    </Bouncy>
+  );
 }
 
 function InlineVideo({ uri, width }: { uri: string; width: number }) {
-  const player = useVideoPlayer(uri, (p) => { p.loop = false; });
+  const player = useVideoPlayer(uri, (p) => { p.loop = false; p.play(); });
   return (
     <VideoView
       player={player}
@@ -726,4 +1048,6 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', borderWidth: 1,
     borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
   },
+  videoWell: { borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  viewerClose: { position: 'absolute', right: 12 },
 });
