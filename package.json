@@ -9,7 +9,8 @@
     "test:store": "node scripts/test-store.js",
     "test:backup": "node scripts/test-backup.js",
     "test:scores": "node scripts/test-scores.js",
-    "test:analytics": "node scripts/test-analytics.js"
+    "test:analytics": "node scripts/test-analytics.js",
+    "test:cloud": "node scripts/test-cloud.js"
   },
   "dependencies": {
     "@expo-google-fonts/geist": "^0.4.2",

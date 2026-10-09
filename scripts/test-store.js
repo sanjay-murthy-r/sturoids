@@ -7,6 +7,8 @@
  *   - a backup round-trips through exportSnapshot / importSnapshot, and junk is refused
  *   - a blob that cannot be read is copied aside (or saving pauses) and the user is told
  *   - storage that answers after the wait replaces the defaults, resumes saving and says so
+ *   - a row that cannot be read back pauses saving and holds the cloud back; a failed save is kept and reported
+ *   - a restore keeps this phone's own visit times, and a change to them alone is not a data change
  * Usage: node scripts/test-store.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -20,12 +22,22 @@ const ts = projectRequire('typescript');
 const KEY = 'student-hub-v1';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Boots src/store.ts in a fresh module registry over its own storage map. */
-function boot(seed = {}, { gate } = {}) {
+/**
+ * Boots src/store.ts in a fresh module registry over its own storage map. `faults` can be changed while it runs:
+ * `unreadable` keys throw on read (a row Android cannot read back), `writesFail` makes every write throw.
+ */
+function boot(seed = {}, { gate, faults = {} } = {}) {
   const storage = new Map(Object.entries(seed));
   const asyncStorage = {
-    getItem: async (k) => { if (gate) await gate; return storage.has(k) ? storage.get(k) : null; },
-    setItem: async (k, v) => { storage.set(k, v); },
+    getItem: async (k) => {
+      if (gate) await gate;
+      if (faults.unreadable && faults.unreadable.includes(k)) throw new Error('Row too big to fit into CursorWindow');
+      return storage.has(k) ? storage.get(k) : null;
+    },
+    setItem: async (k, v) => {
+      if (faults.writesFail) throw new Error('database or disk is full');
+      storage.set(k, v);
+    },
     removeItem: async (k) => { storage.delete(k); },
   };
   const registry = new Map();
@@ -377,6 +389,80 @@ const scenarios = {
     assert.deepEqual(app.notices, ['failed-paused']);
   },
 
+  async 'a row that cannot be read back pauses saving, is never overwritten, and holds the cloud back'() {
+    const faults = { unreadable: [KEY] };
+    const app = boot({ [KEY]: JSON.stringify({ state: V4, version: 4 }) }, { faults });
+    await settled(app);
+    assert.equal(app.store.loadFailedThisLaunch(), true);
+    assert.equal(app.store.savedRowUnreadable(), true, 'the row itself could not be read');
+    assert.equal(app.store.savingPaused(), true);
+    assert.equal(app.store.localDataState(), 'failed', 'nothing may be sent over a copy elsewhere');
+    assert.deepEqual(app.notices, ['failed-paused']);
+    app.state().setSetting('name', 'typed on defaults');
+    await sleep(20);
+    app.store.flushSaves();
+    await sleep(5);
+    assert.equal(JSON.parse(app.storage.get(KEY)).state.settings.name, 'Sam', 'the saved row is untouched');
+    assert.equal(app.storage.has(app.store.RECOVERY_KEY), false);
+    // a backup brought in on purpose is the user's data again
+    const snap = JSON.stringify({ _app: 'student-hub', _v: 3, settings: { name: 'From backup' }, notes: [] });
+    assert.equal(app.store.importSnapshot(snap), true);
+    assert.equal(app.store.localDataState(), 'ok');
+    assert.equal(app.store.savingPaused(), false);
+  },
+
+  async 'a save that fails is kept, retried and reported until one goes through'() {
+    const faults = {};
+    const app = boot({}, { faults });
+    await settled(app);
+    assert.equal(app.store.localDataState(), 'ok');
+    const seen = [];
+    app.store.subscribeSaveProblems((failing) => seen.push(failing));
+    faults.writesFail = true;
+    app.state().setSetting('name', 'First');
+    app.store.flushSaves();
+    await sleep(5);
+    assert.equal(app.store.savesFailing(), true);
+    assert.ok(app.store.savedSize() > 0, 'the size of the save is known');
+    app.store.flushSaves(); // a second failure says nothing new
+    await sleep(5);
+    assert.deepEqual(seen, [true]);
+    faults.writesFail = false;
+    app.store.flushSaves(); // the kept save goes through on the next flush
+    await sleep(5);
+    assert.equal(JSON.parse(app.storage.get(KEY)).state.settings.name, 'First');
+    assert.equal(app.store.savesFailing(), false);
+    assert.deepEqual(seen, [true, false]);
+  },
+
+  async 'a restore keeps when this phone was opened, and those times alone are no change'() {
+    const app = boot();
+    await settled(app);
+    app.state().setSetting('firstOpenedAt', 111);
+    app.state().setSetting('lastOpenedAt', 222);
+    const backup = JSON.stringify({
+      _app: 'student-hub', _v: 3, _exportedAt: '2026-10-03T08:00:00.000Z',
+      settings: { name: 'Elsewhere', firstOpenedAt: 5, lastOpenedAt: 6 }, notes: [{ id: 'n', title: 'T', body: '', attachments: [] }],
+    });
+    const read = app.store.readSnapshot(backup);
+    assert.equal(read.exportedAt, '2026-10-03T08:00:00.000Z');
+    assert.equal(read.data.notes.length, 1);
+    assert.equal(app.state().notes.length, 0, 'reading changes nothing');
+    assert.equal(app.store.readSnapshot('{"hello":1}'), null);
+    assert.equal(app.store.importSnapshot(backup), true);
+    const s = app.state().settings;
+    assert.equal(s.name, 'Elsewhere');
+    assert.equal(s.firstOpenedAt, 111, "this phone's first visit stays");
+    assert.equal(s.lastOpenedAt, 222, "this phone's last visit stays");
+    const before = app.state();
+    app.state().setSetting('lastOpenedAt', 333);
+    assert.equal(app.store.isDeviceOnlyChange(app.state(), before), true);
+    const mid = app.state();
+    app.state().setSetting('name', 'Changed');
+    assert.equal(app.store.isDeviceOnlyChange(app.state(), mid), false);
+    assert.deepEqual(Object.keys(app.store.withoutDeviceSettings(app.state().settings)).filter((k) => /OpenedAt$/.test(k)), []);
+  },
+
   async 'storage that answers late replaces the defaults, resumes saving and says so'() {
     let release;
     const gate = new Promise((r) => { release = r; });
@@ -386,12 +472,14 @@ const scenarios = {
     app.store.giveUpWaitingForHydration();
     assert.equal(app.store.hydrationSettled(), true);
     assert.equal(app.store.savingPaused(), true);
+    assert.equal(app.store.localDataState(), 'waiting', 'defaults are never sent anywhere');
     app.state().setSetting('name', 'Typed while waiting');
     release();
     for (let i = 0; i < 100 && !app.notices.length; i++) await sleep(5);
     assert.deepEqual(app.notices, ['late-load']);
     assert.equal(app.state().settings.name, 'Saved');
     assert.equal(app.store.savingPaused(), false);
+    assert.equal(app.store.localDataState(), 'ok');
     app.state().setSetting('name', 'After');
     await sleep(20);
     app.store.flushSaves();

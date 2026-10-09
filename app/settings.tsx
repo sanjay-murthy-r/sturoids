@@ -1,16 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable } from 'react-native';
-import Animated, { Easing, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
-import type { SharedValue } from 'react-native-reanimated';
+import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo } from 'react-native';
+import Animated, { Easing, LayoutAnimationConfig, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import Constants from 'expo-constants';
 import { Image } from 'expo-image';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, bgFor, neuInset, neuRaised } from '../src/theme';
-import { useStore, exportSnapshot, importSnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves } from '../src/store';
+import {
+  useStore, exportSnapshot, importSnapshot, readSnapshot, applySnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves,
+  savedSize, savesFailing, subscribeSaveProblems, SAVE_WARN_CHARS, ReadSnapshot,
+} from '../src/store';
 import { compareVersions, todayKey } from '../src/utils';
 import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu, EdgeScroll, useTheme } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
@@ -19,19 +22,23 @@ import { tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
 import { PinSheet } from '../src/components/LockGate';
 import { journalForBackup, restoreBodies } from '../src/journal';
-import { estimateBackupBytes, openBackup, restoredPath, writeBackup } from '../src/backup';
+import { BackupOpened, estimateBackupBytes, openBackup, restoredPath, writeBackup } from '../src/backup';
 import { deviceAuthAvailable, isOpen, markOpen, pinStatus, removePin } from '../src/lock';
 import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
+import { afterReplace, sweepUnusedFiles } from '../src/wipe';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../src/tools';
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
-import { CloudSection, DeleteSection } from '../src/components/CloudCard';
+import { CloudSection, DeleteSection, ago, dayOf, locksNeedPin } from '../src/components/CloudCard';
 import { useCloud } from '../src/cloud';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
-const APP_VERSION = Constants.expoConfig?.version || '1.5.0';
+const APP_VERSION = Constants.expoConfig?.version || '1.6.0';
+
+/** When the last backup file was made, kept apart from the data so it never reaches the cloud's fingerprint. */
+const LAST_EXPORT_KEY = 'sturoids-last-export';
 
 const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
-  { key: 'default', label: 'Default', desc: 'Soft grey neumorphism, one continuous material' },
+  { key: 'default', label: 'Default', desc: 'Soft grey with raised surfaces' },
   { key: 'minimal', label: 'Minimalistic', desc: 'High contrast, flat, maximum legibility' },
 ];
 
@@ -229,13 +236,20 @@ const AccentCard = React.memo(function AccentCard() {
   const setSetting = useStore((s) => s.setSetting);
   const pick = useCallback((color: string) => setSetting('accent', color), [setSetting]);
   const name = ACCENT_CHOICES.find((a) => a.color === accent)?.label || 'Custom';
+  // two balanced rows (four over three), centred, so no swatch is ever left alone on a line of its own
+  const half = Math.ceil(ACCENT_CHOICES.length / 2);
+  const rows = [ACCENT_CHOICES.slice(0, half), ACCENT_CHOICES.slice(half)];
   return (
     <Card>
-      <Row style={{ flexWrap: 'wrap', gap: 12 }}>
-        {ACCENT_CHOICES.map((a) => (
-          <Swatch key={a.key} choice={a} active={accent === a.color} onPick={pick} />
+      <View style={{ gap: 12 }}>
+        {rows.map((r, i) => (
+          <Row key={i} style={{ justifyContent: 'center', gap: 12 }}>
+            {r.map((a) => (
+              <Swatch key={a.key} choice={a} active={accent === a.color} onPick={pick} />
+            ))}
+          </Row>
         ))}
-      </Row>
+      </View>
       <FadeSwap swapKey={name}>
         <Text style={st.hint}>{name}. Recolours highlights, links and controls everywhere.</Text>
       </FadeSwap>
@@ -269,6 +283,7 @@ function initialsOf(name: string, email: string | null): string {
 /** The profile photo, or initials on a tint of the accent when there is none. */
 function Avatar({ size }: { size: number }) {
   useTheme(); // the initials' tint is the accent
+  const level = useAnimLevel();
   const avatar = useStore((s) => s.settings.avatar);
   const name = useStore((s) => s.settings.name);
   const email = useCloud((c) => c.email);
@@ -276,7 +291,7 @@ function Avatar({ size }: { size: number }) {
   return (
     <View style={[st.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: C.accent + '26' }]}>
       {avatar ? (
-        <Image source={{ uri: avatar }} style={{ width: size, height: size }} contentFit="cover" transition={180} />
+        <Image source={{ uri: avatar }} style={{ width: size, height: size }} contentFit="cover" transition={level === 'none' ? 0 : 180} />
       ) : initials ? (
         <Text style={{ color: C.accent, fontFamily: F.semi, fontSize: Math.round(size * 0.38) }}>{initials}</Text>
       ) : (
@@ -309,12 +324,16 @@ const ProfileCard = React.memo(function ProfileCard() {
         >
           <Avatar size={88} />
         </Bouncy>
-        <Pressable onPress={() => (avatar ? setMenu(true) : choose())} hitSlop={8} accessibilityRole="button">
+        {/* 13 px words with a slop that makes the touch about 44 tall */}
+        <Pressable onPress={() => (avatar ? setMenu(true) : choose())} hitSlop={14} accessibilityRole="button">
           <Text style={[st.link, { color: C.accent, marginTop: 10 }]}>{avatar ? 'Change photo' : 'Add a photo'}</Text>
         </Pressable>
       </View>
       <Text style={st.label}>Name (used in the greeting)</Text>
-      <Field value={name.draft} onChangeText={name.change} onBlur={name.commit} placeholder="Your name" />
+      <Field
+        value={name.draft} onChangeText={name.change} onBlur={name.commit} placeholder="Your name"
+        autoCapitalize="words" autoComplete="name" textContentType="name"
+      />
       <DotMenu
         visible={menu} onClose={() => setMenu(false)}
         items={[
@@ -330,24 +349,45 @@ const ProfileCard = React.memo(function ProfileCard() {
 const ProfileHeader = React.memo(function ProfileHeader({ onOpen }: { onOpen: () => void }) {
   useTheme();
   const name = useStore((s) => s.settings.name);
-  const c = useCloud();
-  const signedIn = c.status !== 'signed-out' && !!c.email;
-  const status = !signedIn ? 'Sign in to back up to the cloud'
-    : c.status === 'choice' ? 'A newer copy in the cloud needs your choice'
-      : c.status === 'error' ? 'Backup needs attention'
-        : c.status === 'syncing' ? 'Backing up'
-          : c.lastSyncedAt ? 'Backed up' : 'Not backed up yet';
-  const tone = !signedIn ? C.textFaint : c.status === 'choice' || c.status === 'error' ? C.amber : C.green;
+  const hour24 = useStore((s) => s.settings.hour24);
+  // only what the header shows: a file's progress or the usage figure never re-renders it
+  const cloudStatus = useCloud((c) => c.status);
+  const email = useCloud((c) => c.email);
+  const ready = useCloud((c) => c.ready);
+  const lastSyncedAt = useCloud((c) => c.lastSyncedAt);
+  const reason = useCloud((c) => c.reason);
+  const lost = useCloud((c) => c.lost);
+  // "Backed up 12 min ago" moves on while Settings is open
+  const [, setMinute] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setMinute((n) => n + 1), 30 * 1000);
+    return () => clearInterval(t);
+  }, []);
+  const signedIn = cloudStatus !== 'signed-out' && !!email;
+  // after a launch, a signed-in student sees their account while the app looks at the cloud, never "Not signed in"
+  const checking = !ready && !!email;
+  const status = checking ? 'Checking backup'
+    : !signedIn ? (lost ? 'You were signed out. Sign in to keep backing up.' : 'Sign in to back up to the cloud')
+      : cloudStatus === 'choice'
+        ? (reason === 'newer' ? 'A newer copy in the cloud needs your choice' : 'Your cloud copy can bring your data back')
+        : cloudStatus === 'error' ? 'Backup needs attention'
+          : cloudStatus === 'syncing' ? 'Backing up'
+            : lastSyncedAt ? 'Backed up ' + ago(lastSyncedAt, hour24) : 'Not backed up yet';
+  const tone = checking || (!signedIn && !lost) ? C.textFaint
+    : !signedIn || cloudStatus === 'choice' || cloudStatus === 'error' ? C.amber : C.green;
+  // the line dips and comes back when what it says changes, not each time "12 min ago" moves on
+  const statusKey = checking ? 'checking' : !signedIn ? (lost ? 'lost' : 'out')
+    : cloudStatus + ':' + (reason || '') + ':' + (cloudStatus === 'idle' ? String(lastSyncedAt) : '');
   return (
     <Card hero onPress={onOpen} pad={18}>
       <Row style={{ alignItems: 'center' }}>
         <Avatar size={60} />
         <View style={{ flex: 1, marginLeft: 16 }}>
           <Text style={T.head} numberOfLines={1}>{name.trim() || 'Your profile'}</Text>
-          <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{signedIn ? c.email : 'Not signed in'}</Text>
+          <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{signedIn || checking ? email : 'Not signed in'}</Text>
           <Row style={{ alignItems: 'center', marginTop: 6 }}>
             <View style={[st.statusDot, { backgroundColor: tone }]} />
-            <FadeSwap swapKey={status}>
+            <FadeSwap swapKey={statusKey}>
               <Text style={[T.caption, { color: C.textDim }]} numberOfLines={1}>{status}</Text>
             </FadeSwap>
           </Row>
@@ -358,33 +398,32 @@ const ProfileHeader = React.memo(function ProfileHeader({ onOpen }: { onOpen: ()
   );
 });
 
-/** One category of Settings: its icon, its name, what it is set to now, and a way in. */
-function CategoryRow({ icon, title, summary, onPress, danger, first }: {
-  icon: any; title: string; summary: string; onPress: () => void; danger?: boolean; first?: boolean;
+/** One category of Settings: its icon, its name, what it is set to now, and a way in. The list card draws the seams. */
+function CategoryRow({ icon, title, summary, onPress, danger }: {
+  icon: any; title: string; summary: string; onPress: () => void; danger?: boolean;
 }) {
   return (
-    <>
-      {first ? null : <Hairline />}
-      <ListRow onPress={() => { tick(); onPress(); }} style={st.catRow}>
-        <Ionicons name={icon} size={21} color={danger ? C.danger : C.textDim} />
-        <View style={{ flex: 1, marginLeft: 14 }}>
-          <Text style={[T.body, { fontFamily: F.med }, danger && { color: C.danger }]}>{title}</Text>
-          <FadeSwap swapKey={summary}>
-            <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{summary}</Text>
-          </FadeSwap>
-        </View>
-        <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
-      </ListRow>
-    </>
+    <ListRow onPress={() => { tick(); onPress(); }} style={st.catRow}>
+      <Ionicons name={icon} size={21} color={danger ? C.danger : C.textDim} />
+      <View style={{ flex: 1, marginLeft: 14 }}>
+        <Text style={[T.body, { fontFamily: F.med }, danger && { color: C.danger }]}>{title}</Text>
+        <FadeSwap swapKey={summary}>
+          <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{summary}</Text>
+        </FadeSwap>
+      </View>
+      <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
+    </ListRow>
   );
 }
 
 /**
- * The list's entrance the first time Settings opens. Whether it plays is decided as the list mounts. The list stays
- * mounted under an open page, so coming back from one never replays it, and nothing remounts when `first` changes later.
+ * The list's entrance the first time Settings opens. Whether it plays is decided once, as the list mounts: the list
+ * stays mounted under an open page, so coming back from one never replays it, and a render before the stack's
+ * transition starts (the PIN's state arriving) never turns it off.
  */
 function Arrive({ first, index, children }: { first: boolean; index: number; children: React.ReactNode }) {
-  const entrance = useEntrance(index, first);
+  const [play] = useState(first);
+  const entrance = useEntrance(index, play);
   return <Animated.View style={entrance}>{children}</Animated.View>;
 }
 
@@ -393,35 +432,12 @@ const PAGE_DRIFT = 28;
 const LIST_DRIFT = 18;
 /** What a page arrives on and the list returns on: quick to answer, long to settle. */
 const PUSH_OUT = Easing.bezier(0.16, 1, 0.3, 1);
-
-/** A page opened from the list comes in from the right, a short way, and up to full strength. */
-const pagePush = () => {
-  'worklet';
-  const ease = { duration: 320, easing: Easing.bezier(0.16, 1, 0.3, 1) };
-  return {
-    initialValues: { opacity: 0, transform: [{ translateX: PAGE_DRIFT }] },
-    animations: { opacity: withTiming(1, ease), transform: [{ translateX: withTiming(0, ease) }] },
-  };
-};
-
-/**
- * A page going back leaves to the right, quicker than it came, gathering speed as it goes. A page's exit is registered
- * once, as it mounts, and the motion level can change under it (the Motion page is where it is set), so the level is
- * read as the page leaves: moving, a short fade, or gone at once.
- */
-const pagePop = (now: SharedValue<AnimLevel>) => () => {
-  'worklet';
-  const level = now.value;
-  if (level === 'none') return { initialValues: { opacity: 0 }, animations: { opacity: withTiming(0, { duration: 0 }) } };
-  if (level === 'some') {
-    return { initialValues: { opacity: 1 }, animations: { opacity: withTiming(0, { duration: 160, easing: Easing.in(Easing.quad) }) } };
-  }
-  const ease = { duration: 220, easing: Easing.in(Easing.quad) };
-  return {
-    initialValues: { opacity: 1, transform: [{ translateX: 0 }] },
-    animations: { opacity: withTiming(0, ease), transform: [{ translateX: withTiming(PAGE_DRIFT, ease) }] },
-  };
-};
+/** A page comes in from the right, a short way, up to full strength; at some motion it only fades in. */
+const PAGE_IN = { duration: 320, easing: PUSH_OUT };
+const PAGE_IN_SOME = { duration: 180, easing: EASE_OUT };
+/** Going back, it leaves to the right, quicker than it came, gathering speed as it goes; at some motion it fades. */
+const PAGE_OUT = { duration: 220, easing: Easing.in(Easing.quad) };
+const PAGE_OUT_SOME = { duration: 160, easing: Easing.in(Easing.quad) };
 
 type Page = 'account' | 'appearance' | 'tools' | 'motion' | 'time' | 'deepwork' | 'privacy' | 'backup' | 'updates' | 'delete';
 
@@ -430,6 +446,33 @@ const PAGE_TITLES: Record<Page, string> = {
   time: 'Time and reminders', deepwork: 'Deep Work', privacy: 'Privacy and locks', backup: 'Backup', updates: 'Updates',
   delete: 'Delete',
 };
+const isPage = (p: unknown): p is Page => typeof p === 'string' && Object.prototype.hasOwnProperty.call(PAGE_TITLES, p);
+
+/** Pages that open with a heading: it sits close under the bar. A page that opens with a card keeps the full gap. */
+const CARD_FIRST: Page[] = ['account', 'delete'];
+
+/**
+ * What a backup is, for the dialog that asks before it replaces everything: "From 3 Oct: 42 notes, 120 journal entries,
+ * 18 exams, 6 attachments. " Only what it holds is named; a count of nothing is left out.
+ */
+function describeBackup(read: ReadSnapshot): string {
+  const d = read.data || {};
+  const count = (n: number, one: string, many: string) => (n > 0 ? n + ' ' + (n === 1 ? one : many) : '');
+  const notes: any[] = Array.isArray(d.notes) ? d.notes : [];
+  const parts = [
+    count(notes.length, 'note', 'notes'),
+    count(Array.isArray(d.journal) ? d.journal.length : 0, 'journal entry', 'journal entries'),
+    count(Array.isArray(d.scores) ? d.scores.filter((n: any) => n?.kind === 'exam').length : 0, 'exam', 'exams'),
+    count(notes.reduce((sum, n) => sum + (Array.isArray(n?.attachments) ? n.attachments.length : 0), 0), 'attachment', 'attachments'),
+  ].filter(Boolean);
+  const at = read.exportedAt ? Date.parse(read.exportedAt) : NaN;
+  const year = Number.isFinite(at) ? new Date(at).getFullYear() : 0;
+  const when = Number.isFinite(at) ? 'From ' + dayOf(at) + (year !== new Date().getFullYear() ? ' ' + year : '') : '';
+  if (when && parts.length) return when + ': ' + parts.join(', ') + '. ';
+  if (when) return when + '. ';
+  if (parts.length) return 'It holds ' + parts.join(', ') + '. ';
+  return '';
+}
 
 /** One bar slot, memoised: a new tool in it dips in where the old one was. */
 const SlotRow = React.memo(function SlotRow({ index, toolKey, onOpen }: {
@@ -440,8 +483,11 @@ const SlotRow = React.memo(function SlotRow({ index, toolKey, onOpen }: {
   return (
     <View>
       {index > 0 && <Hairline />}
-      <Bouncy onPress={() => { tick(); onOpen(index); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}>
-        <Text style={st.slotIndex}>Slot {index + 1}</Text>
+      <Bouncy
+        onPress={() => { tick(); onOpen(index); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}
+        accessibilityRole="button" accessibilityLabel={'Slot ' + (index + 1) + ', ' + (tool?.label || 'empty')}
+      >
+        <Text style={st.slotIndex} numberOfLines={1}>Slot {index + 1}</Text>
         <FadeSwap swapKey={toolKey} style={st.slotTool}>
           <Ionicons name={(tool?.icon || 'ellipse-outline') as any} size={19} color={colorOf(tool?.colorKey)} />
           <Text style={[T.body, { flex: 1, marginLeft: 10, fontFamily: F.med }]} numberOfLines={1}>{tool?.label}</Text>
@@ -464,7 +510,10 @@ const PickRow = React.memo(function PickRow({ tool, first, active, elsewhere, ar
   return (
     <View>
       {first ? null : <Hairline />}
-      <Bouncy onPress={() => onPick(tool.key)} scaleTo={0.98} radius={S.radiusSm} style={st.pickRow}>
+      <Bouncy
+        onPress={() => onPick(tool.key)} scaleTo={0.98} radius={S.radiusSm} style={st.pickRow}
+        accessibilityRole="button" accessibilityLabel={tool.label} accessibilityState={{ selected: active }}
+      >
         <Ionicons name={tool.icon as any} size={20} color={colorOf(tool.colorKey)} />
         <View style={{ flex: 1, marginLeft: 12 }}>
           <Text style={[T.body, { fontFamily: active ? F.semi : F.med }]}>{tool.label}</Text>
@@ -524,8 +573,11 @@ const ToolsSection = React.memo(function ToolsSection() {
       <Card pad={6}>
         {slots.map((key, i) => <SlotRow key={i} index={i} toolKey={key} onOpen={openSlot} />)}
         <Hairline />
-        <Bouncy onPress={() => { tick(); setArchiveSheet(true); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}>
-          <Text style={st.slotIndex}>Archived</Text>
+        <Bouncy
+          onPress={() => { tick(); setArchiveSheet(true); }} scaleTo={0.98} radius={S.radiusSm} style={st.slotRow}
+          accessibilityRole="button" accessibilityLabel={'Archived tools, ' + archivedLine}
+        >
+          <Text style={st.slotIndex} numberOfLines={1}>Archived</Text>
           <Ionicons name="archive-outline" size={19} color={C.textDim} />
           <FadeSwap swapKey={archivedLine} style={st.archivedLine}>
             <Text style={[T.body, { fontFamily: F.med }]} numberOfLines={1}>{archivedLine}</Text>
@@ -550,8 +602,11 @@ const ToolsSection = React.memo(function ToolsSection() {
 const UpdatesCard = React.memo(function UpdatesCard() {
   const repoDraft = useSettingDraft('githubRepo');
   const [checking, setChecking] = useState(false);
+  // set at the tap, so a second tap while GitHub answers starts no second check
+  const checkingRef = useRef(false);
 
   const checkUpdate = async () => {
+    if (checkingRef.current) return;
     // what is in the field is what is checked, and it is kept, even if the pause has not come yet
     repoDraft.commit();
     const repo = repoDraft.draft.trim();
@@ -559,10 +614,16 @@ const UpdatesCard = React.memo(function UpdatesCard() {
       toast('Enter the repo as owner/repo first.');
       return;
     }
+    checkingRef.current = true;
     setChecking(true);
+    // a check that hangs on a poor connection gives up after a while instead of saying "Checking" for ever
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10 * 1000);
     try {
-      const r = await fetch('https://api.github.com/repos/' + repo + '/releases/latest');
-      if (!r.ok) throw new Error('GitHub said ' + r.status);
+      const r = await fetch('https://api.github.com/repos/' + repo + '/releases/latest', { signal: ctrl.signal });
+      if (r.status === 404) throw Object.assign(new Error('That repo has no releases yet.'), { shown: true });
+      if (r.status === 403 || r.status === 429) throw Object.assign(new Error('GitHub is busy. Try again in a few minutes.'), { shown: true });
+      if (!r.ok) throw new Error('status ' + r.status);
       const j = await r.json();
       const latest = String(j.tag_name || '');
       if (compareVersions(latest, APP_VERSION) > 0) {
@@ -574,8 +635,12 @@ const UpdatesCard = React.memo(function UpdatesCard() {
         toast('Up to date: v' + APP_VERSION + ' is the newest release.');
       }
     } catch (e: any) {
-      Alert.alert('Check failed', String(e?.message || e));
+      Alert.alert('Check failed', e?.shown ? e.message
+        : e?.name === 'AbortError' ? 'GitHub did not answer in time. Try again.'
+          : 'Could not reach GitHub. Check your connection and try again.');
     } finally {
+      clearTimeout(timer);
+      checkingRef.current = false;
       setChecking(false);
     }
   };
@@ -584,7 +649,8 @@ const UpdatesCard = React.memo(function UpdatesCard() {
     <Card>
       <Text style={st.label}>GitHub repo (owner/repo)</Text>
       <Field value={repoDraft.draft} onChangeText={repoDraft.change} onBlur={repoDraft.commit}
-        placeholder="e.g. sanjay/sturoids" autoCapitalize="none" />
+        placeholder="e.g. sanjay/sturoids" autoCapitalize="none" autoCorrect={false}
+        returnKeyType="go" onSubmitEditing={checkUpdate} />
       <PillButton label={checking ? 'Checking…' : 'Check for updates'} icon="cloud-download-outline" onPress={checkUpdate} />
     </Card>
   );
@@ -595,8 +661,10 @@ export default function Settings() {
   const level = useAnimLevel();
   const router = useRouter();
   // Settings opens on its list of categories; each opens as its own page, a layer over the list within the screen, and
-  // back returns to the list. The list stays mounted under the page, so it is as it was left (its scroll included)
-  const [page, setPage] = useState<Page | null>(null);
+  // back returns to the list. The list stays mounted under the page, so it is as it was left (its scroll included).
+  // A link can name the page to open on (/settings?page=backup), read once as Settings mounts
+  const params = useLocalSearchParams<{ page?: string }>();
+  const [page, setPage] = useState<Page | null>(() => (isPage(params.page) ? params.page : null));
   const open = useCallback((p: Page) => setPage(p), []);
   const pageRef = useRef(page);
   pageRef.current = page;
@@ -605,15 +673,26 @@ export default function Settings() {
     setPage(null);
     return true;
   }, []);
+  // the page in the layer: the one open now, or the last one, held while it leaves and let go once its exit is over
+  const layerRef = useRef<Page | null>(page);
+  if (page) layerRef.current = page;
+  const layerPage = layerRef.current;
+  const [, setLayerGone] = useState(0);
+  const letLayerGo = useCallback(() => {
+    if (pageRef.current) return; // a page opened again while the last one left
+    layerRef.current = null;
+    setLayerGone((n) => n + 1);
+  }, []);
   // the list under an open page drifts a little left and fades as the page comes over it, and comes back as the page
   // leaves. A change of motion level under an open page just settles it, out of sight
-  const listFade = useSharedValue(1);
+  const listFade = useSharedValue(page ? 0 : 1);
   const listShift = useSharedValue(0);
-  const listShown = useRef(true);
-  // the level a page leaves by, read on the UI thread as it goes (see `pagePop`)
-  const levelNow = useSharedValue<AnimLevel>(level);
+  const listShown = useRef(page === null);
+  // the page layer moves from wherever it is: a page left while it is still coming in turns back from there, instead
+  // of jumping to full strength first. A page linked to is simply there, under the stack's own transition
+  const pageFade = useSharedValue(page ? 1 : 0);
+  const pageShift = useSharedValue(page || level !== 'full' ? 0 : PAGE_DRIFT);
   useEffect(() => {
-    levelNow.value = level;
     const shown = page === null;
     const turned = shown !== listShown.current;
     listShown.current = shown;
@@ -629,16 +708,36 @@ export default function Settings() {
       listShift.value = withTiming(x, ease);
       listFade.value = withTiming(o, ease);
     }
+    if (!turned || level === 'none') {
+      pageFade.value = shown ? 0 : 1;
+      pageShift.value = shown && level === 'full' ? PAGE_DRIFT : 0;
+      // a page settled away (motion off, or the level changed while it left) lets go of its layer at once
+      if (shown && layerRef.current) letLayerGo();
+    } else if (!shown) {
+      // a page that is not on its way out yet starts a short way to the right
+      if (pageFade.value === 0) pageShift.value = level === 'full' ? PAGE_DRIFT : 0;
+      pageFade.value = withTiming(1, level === 'full' ? PAGE_IN : PAGE_IN_SOME);
+      pageShift.value = withTiming(0, level === 'full' ? PAGE_IN : PAGE_IN_SOME);
+    } else {
+      const ease = level === 'full' ? PAGE_OUT : PAGE_OUT_SOME;
+      pageFade.value = withTiming(0, ease, (finished) => { if (finished) runOnJS(letLayerGo)(); });
+      if (level === 'full') pageShift.value = withTiming(PAGE_DRIFT, ease);
+    }
+    // a screen reader hears which page opened, since the row it was on is now hidden under the page
+    if (turned && !shown) AccessibilityInfo.announceForAccessibility(PAGE_TITLES[page]);
   }, [page, level]);
   const listStyle = useAnimatedStyle(() => ({ opacity: listFade.value, transform: [{ translateX: listShift.value }] }));
-  // a page comes in the way the level allows when it opens: moving, a short fade, or at once
-  const pageIn = React.useMemo(() => (level === 'full' ? pagePush : rowIn(level)), [level]);
-  const pageOut = React.useMemo(() => pagePop(levelNow), [levelNow]);
+  const pageStyle = useAnimatedStyle(() => ({ opacity: pageFade.value, transform: [{ translateX: pageShift.value }] }));
   useFocusEffect(useCallback(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', back);
     return () => sub.remove();
   }, [back]));
-  const cloud = useCloud();
+  // only what the list and its pages show: a file's progress or the usage figure never re-renders all of Settings
+  const cloudStatus = useCloud((c) => c.status);
+  const cloudEmail = useCloud((c) => c.email);
+  const cloudAuto = useCloud((c) => c.auto);
+  const cloudReason = useCloud((c) => c.reason);
+  const cloudLost = useCloud((c) => c.lost);
   // parts that turn up after the first paint (the screen-lock choices, a kept copy, Remove PIN) fade in where they
   // stand. They leave at once: this page's cards do not glide, so a fading ghost would lie over the lines moving up
   const built = useBuilt();
@@ -650,7 +749,14 @@ export default function Settings() {
   const toggleReminders = async (v: boolean) => {
     if (v) {
       const ok = await ensurePermission();
-      if (!ok) { toast('Allow notifications in system settings first.'); return; }
+      if (!ok) {
+        // a way to the switch that is off, not only a word about it
+        Alert.alert('Notifications are off', 'Allow notifications for Sturoids in the phone\'s settings, then turn reminders on here.', [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Open settings', onPress: () => { Linking.openSettings().catch(() => {}); } },
+        ]);
+        return;
+      }
     }
     setSetting('remindersEnabled', v);
     setTimeout(rescheduleAllReminders, 200);
@@ -659,13 +765,26 @@ export default function Settings() {
   // the PIN, given for this one backup: it authorises the export without opening anything
   const exportAllowed = useRef(false);
 
-  // a backup with long videos takes a while to write or restore: its button shows how far along it is
-  const [busy, setBusy] = useState<null | { kind: 'export' | 'import'; pct: number }>(null);
+  // a backup with long videos takes a while to write or restore: its button shows how far along it is, and a stage
+  // that cannot count ('preparing', 'reading') says what it is doing
+  const [busy, setBusy] = useState<null | { kind: 'export' | 'import'; pct: number; stage?: 'preparing' | 'reading' }>(null);
   const busyRef = useRef(false);
   const progressOf = (kind: 'export' | 'import') => (share: number) => {
     const pct = Math.round(share * 100);
-    setBusy((b) => (b && b.kind === kind && b.pct === pct ? b : { kind, pct }));
+    setBusy((b) => (b && b.kind === kind && b.pct === pct && !b.stage ? b : { kind, pct }));
   };
+
+  // when the last backup file was made, for students who back up with files alone
+  const [lastExport, setLastExport] = useState<number | null>(null);
+  useEffect(() => {
+    AsyncStorage.getItem(LAST_EXPORT_KEY).then((v) => { if (v && Number(v) > 0) setLastExport(Number(v)); }).catch(() => {});
+  }, []);
+  // saves that fail, and data grown large for one storage row, are said on the Backup page
+  const [saveTrouble, setSaveTrouble] = useState(savesFailing);
+  useEffect(() => subscribeSaveProblems(setSaveTrouble), []);
+  const signedIn = cloudStatus !== 'signed-out' && !!cloudEmail;
+  // a replace sends the new data over the cloud copy too, once the usual short wait has passed
+  const cloudLine = signedIn && cloudAuto ? ' The copy in the cloud is replaced too.' : '';
 
   const exportData = async () => {
     if (busyRef.current) return;
@@ -678,6 +797,9 @@ export default function Settings() {
     }
     exportAllowed.current = false;
     busyRef.current = true;
+    // the slow part (every journal text read, the data written out, the attachments sized) comes before any
+    // percentage can be counted, so the button says what it is doing from the tap
+    setBusy({ kind: 'export', pct: 0, stage: 'preparing' });
     try {
       const snap = exportSnapshot();
       // journal text lives in files, so the backup carries it inline; the notes' attachments follow the data
@@ -697,6 +819,9 @@ export default function Settings() {
       setBusy({ kind: 'export', pct: 0 });
       const written = await writeBackup(uri, json, snap.notes, progressOf('export'));
       setBusy(null);
+      const now = Date.now();
+      setLastExport(now);
+      AsyncStorage.setItem(LAST_EXPORT_KEY, String(now)).catch(() => {});
       if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json' });
       else Alert.alert('Saved', 'Backup written to:\n' + uri);
       if (written.missing) {
@@ -712,64 +837,100 @@ export default function Settings() {
     }
   };
 
-  const importData = async () => {
+  /**
+   * Picks a backup file, reads and checks it, and only then asks whether to replace everything, saying when the backup
+   * was made and what it holds. Busy from the tap until the import is done or dropped; the picker's copy of the file
+   * is deleted either way.
+   */
+  const importData = async (pinOk = false) => {
     if (busyRef.current) return;
+    // an import replaces locked pages too, so it asks for the PIN first whenever anything is locked, like an export
+    if (!pinOk && (await locksNeedPin())) { setPinStep({ mode: 'enter', for: 'import' }); return; }
+    // asked again: a second tap may have started something while the PIN's state was read
+    if (busyRef.current) return;
+    busyRef.current = true;
+    let picked: string | null = null;
+    const finish = () => {
+      busyRef.current = false;
+      setBusy(null);
+      if (picked) FileSystem.deleteAsync(picked, { idempotent: true }).catch(() => {});
+    };
+    setBusy({ kind: 'import', pct: 0, stage: 'reading' });
     try {
-      const res = await DocumentPicker.getDocumentAsync({ type: 'application/json', copyToCacheDirectory: true });
-      if (res.canceled || !res.assets?.[0]) return;
-      const backup = await openBackup(res.assets[0].uri);
+      // some apps hand a .json file over as plain text or as bytes: reading it decides, not its label
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ['application/json', 'text/plain', 'application/octet-stream'], copyToCacheDirectory: true,
+      });
+      if (res.canceled || !res.assets?.[0]) { finish(); return; }
+      picked = res.assets[0].uri;
+      const backup = await openBackup(picked);
+      // parsed once, for the check and the journal's texts alike
+      let parsed: any = null;
+      try { parsed = JSON.parse(backup.json); } catch { /* said just below */ }
+      const read = readSnapshot(parsed);
+      if (!read) {
+        finish();
+        Alert.alert('Not a Sturoids backup', 'That file could not be read as a backup. Nothing was changed.');
+        return;
+      }
       Alert.alert(
         'Replace everything?',
-        'This replaces all current data with the backup. Calculator history is cleared and any running Deep Work session ends.',
+        describeBackup(read) + 'This replaces all current data with the backup. Calculator history is cleared and any running Deep Work session ends.' + cloudLine,
         [
-          { text: 'Cancel', style: 'cancel' },
+          { text: 'Cancel', style: 'cancel', onPress: finish },
           {
             text: 'Replace', style: 'destructive',
-            onPress: async () => {
-              if (busyRef.current) return;
-              busyRef.current = true;
-              const ok = importSnapshot(backup.json);
-              let carried = 0;
-              let complete = true;
-              try {
-                if (ok) {
-                  try {
-                    await restoreBodies(JSON.parse(backup.json)?.journal);
-                  } catch {
-                    // the index is restored either way; text that fails to write stays in the backup file
-                  }
-                  if (backup.hasFiles) {
-                    // each note's attachments come back into the app's own folder, and the notes point at them
-                    const byId = new Map(useStore.getState().notes.flatMap((n) => n.attachments).map((a) => [a.id, a]));
-                    setBusy({ kind: 'import', pct: 0 });
-                    const restored = await backup.restoreFiles((id) => {
-                      const a = byId.get(id);
-                      return a ? restoredPath(a) : null;
-                    }, progressOf('import'));
-                    useStore.getState().relinkAttachments(restored.files);
-                    carried = Object.keys(restored.files).length;
-                    complete = restored.complete;
-                  }
-                  rescheduleAllReminders();
-                }
-              } finally {
-                busyRef.current = false;
-                setBusy(null);
-              }
-              Alert.alert(
-                ok ? 'Imported' : 'Not a Sturoids backup',
-                !ok ? 'That file could not be read as a backup.'
-                  : !complete ? 'Your data is restored, but the backup file ends early, so some attachments could not be restored.'
-                    : carried ? 'Your data is restored, with ' + carried + (carried === 1 ? ' attachment.' : ' attachments.')
-                      : 'Your data is restored.'
-              );
+            onPress: () => {
+              replaceWith(read, parsed, backup)
+                .catch(() => Alert.alert('Import failed', 'Something went wrong while restoring. Try the import again.'))
+                .finally(finish);
             },
           },
-        ]
+        ],
       );
-    } catch (e: any) {
-      Alert.alert('Import failed', String(e?.message || e));
+    } catch {
+      finish();
+      Alert.alert('Import failed', 'That file could not be opened. Save it to the phone first, then try again.');
     }
+  };
+
+  /** Replaces everything with a backup already read: the data, the journal's texts, then the attachment files. */
+  const replaceWith = async (read: ReadSnapshot, parsed: any, backup: BackupOpened) => {
+    const startedAt = Date.now();
+    try {
+      applySnapshot(read);
+    } catch {
+      Alert.alert('Not a Sturoids backup', 'That file could not be read as a backup. Nothing was changed.');
+      return;
+    }
+    afterReplace();
+    let carried = 0;
+    let complete = true;
+    try {
+      await restoreBodies(parsed?.journal);
+    } catch {
+      // the index is restored either way; text that fails to write stays in the backup file
+    }
+    if (backup.hasFiles) {
+      // each note's attachments come back into the app's own folder, and the notes point at them
+      const byId = new Map(useStore.getState().notes.flatMap((n) => n.attachments).map((a) => [a.id, a]));
+      setBusy({ kind: 'import', pct: 0 });
+      const restored = await backup.restoreFiles((id) => {
+        const a = byId.get(id);
+        return a ? restoredPath(a) : null;
+      }, progressOf('import'));
+      useStore.getState().relinkAttachments(restored.files);
+      carried = Object.keys(restored.files).length;
+      complete = restored.complete;
+    }
+    // what the replaced data left behind (its journal's texts, files no note uses now) goes once the new files are in
+    sweepUnusedFiles(startedAt).catch(() => {});
+    Alert.alert(
+      'Imported',
+      !complete ? 'Your data is restored, but the backup file ends early, so some attachments could not be restored.'
+        : carried ? 'Your data is restored, with ' + carried + (carried === 1 ? ' attachment.' : ' attachments.')
+          : 'Your data is restored.'
+    );
   };
 
   // a copy of saved data that could not be opened (see store.ts): share it, restore it, or let it go
@@ -777,9 +938,13 @@ export default function Settings() {
   useEffect(() => {
     readRecoveryCopy().then(setRecovery);
   }, []);
+  // the kept copy holds whatever was locked when it was set aside, which the data on screen cannot tell: with a PIN
+  // set, sharing or restoring it asks for the PIN
+  const copyNeedsPin = async () => (await pinStatus()) !== 'none';
 
-  const shareRecovery = async () => {
+  const shareRecovery = async (pinOk = false) => {
     if (!recovery) return;
+    if (!pinOk && (await copyNeedsPin())) { setPinStep({ mode: 'enter', for: 'share-copy' }); return; }
     try {
       const uri = FileSystem.cacheDirectory + 'sturoids-kept-copy-' + todayKey() + '.json';
       await FileSystem.writeAsStringAsync(uri, recovery);
@@ -790,21 +955,24 @@ export default function Settings() {
     }
   };
 
-  const restoreRecovery = () => {
+  const restoreRecovery = async (pinOk = false) => {
     if (!recovery) return;
+    if (!pinOk && (await copyNeedsPin())) { setPinStep({ mode: 'enter', for: 'restore-copy' }); return; }
     Alert.alert(
       'Restore the kept copy?',
-      'This replaces all current data with the copy. Calculator history is cleared and any running Deep Work session ends.',
+      'This replaces all current data with the copy. Calculator history is cleared and any running Deep Work session ends.' + cloudLine,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Restore', style: 'destructive',
           onPress: async () => {
+            const startedAt = Date.now();
             const ok = importSnapshot(recovery);
             if (ok) {
-              rescheduleAllReminders();
+              afterReplace();
               await deleteRecoveryCopy();
               setRecovery(null);
+              sweepUnusedFiles(startedAt).catch(() => {});
             }
             Alert.alert(
               ok ? 'Restored' : 'Still could not be opened',
@@ -837,7 +1005,7 @@ export default function Settings() {
   const [deviceLock, setDeviceLock] = useState(false);
   /** what a PIN step is for decides what happens once it is done */
   type PinFor = 'journal-on' | 'notes-on' | 'journal-off' | 'notes-off' | 'journal-screen' | 'notes-screen'
-    | 'change' | 'remove' | 'export';
+    | 'change' | 'remove' | 'export' | 'import' | 'share-copy' | 'restore-copy';
   const [pinStep, setPinStep] = useState<null | { mode: 'enter' | 'set'; for: PinFor }>(null);
   const refreshLockInfo = () => {
     pinStatus().then((s) => {
@@ -887,6 +1055,9 @@ export default function Settings() {
       case 'notes-screen': setSetting('notesScreenLock', true); break;
       case 'remove': removePin().then(refreshLockInfo); break;
       case 'export': exportAllowed.current = true; exportData(); break;
+      case 'import': importData(true); break;
+      case 'share-copy': shareRecovery(true); break;
+      case 'restore-copy': restoreRecovery(true); break;
       case 'change': toast('Your new PIN is set.'); break;
     }
   };
@@ -905,22 +1076,31 @@ export default function Settings() {
 
   // ---- what each category is set to now, for its row on the list ----
   const slotNames = normaliseSlots(settings.tabSlots).map((k) => toolByKey(k)?.shortLabel || toolByKey(k)?.label).join(', ');
-  const signedIn = cloud.status !== 'signed-out' && !!cloud.email;
+  // the data's one storage row grown past the point Settings warns at (see store.ts)
+  const largeData = (savedSize() ?? 0) > SAVE_WARN_CHARS;
   const summaries: Record<Page, string> = {
     account: signedIn
-      ? cloud.status === 'choice' ? 'A newer copy in the cloud needs your choice' : (cloud.email as string)
-      : 'Profile, photo and cloud backup',
+      ? cloudStatus === 'choice'
+        ? (cloudReason === 'newer' ? 'A newer copy in the cloud needs your choice' : 'Your cloud copy can bring your data back')
+        : (cloudEmail as string)
+      : cloudLost ? 'You were signed out on this phone' : 'Profile, photo and cloud backup',
     appearance: (THEMES.find((t) => t.key === settings.theme)?.label || 'Default') + ', '
       + (ACCENT_CHOICES.find((x) => x.color === settings.accent)?.label || 'custom') + ' accent',
     tools: slotNames,
-    motion: (ANIMS.find((x) => x.key === settings.animLevel)?.label || 'Everything') + ' motion, '
-      + (settings.introStyle === 'logo' ? 'logo first' : 'the big signature'),
+    motion: settings.animLevel === 'none' ? 'No motion'
+      : (settings.animLevel === 'some' ? 'Some motion, ' : 'Full motion, ')
+        + (settings.introStyle === 'logo' ? 'logo first' : 'signature first'),
     time: (settings.hour24 ? '24-hour clock' : '12-hour clock') + ', reminders ' + (settings.remindersEnabled ? 'on' : 'off'),
     deepwork: 'Ambient screen: ' + [settings.ambientSeconds ? 'seconds' : '', settings.ambientClock ? 'time of day' : '']
       .filter(Boolean).join(' and ').replace(/^$/, 'minutes only'),
-    privacy: [settings.journalLocked ? 'Journal locked' : '', settings.notesLocked ? 'Notes locked' : '']
-      .filter(Boolean).join(', ') || (pinState === 'none' ? 'Nothing locked' : 'Nothing locked, PIN set'),
-    backup: recovery ? 'A kept copy is waiting' : 'Export or import a backup file',
+    // single locked notes count too; with the whole Notes tool locked, "Notes locked" already says it
+    privacy: [
+      settings.journalLocked ? 'Journal locked' : '',
+      settings.notesLocked ? 'Notes locked' : lockedNotes ? lockedNotes + (lockedNotes === 1 ? ' note locked' : ' notes locked') : '',
+    ].filter(Boolean).join(', ') || (pinState === 'none' ? 'Nothing locked' : 'Nothing locked, PIN set'),
+    backup: saveTrouble ? 'Your latest changes could not be saved'
+      : recovery ? 'A kept copy is waiting'
+        : lastExport ? 'Last exported ' + dayOf(lastExport) : 'Export or import a backup file',
     updates: 'Version ' + APP_VERSION,
     delete: signedIn ? 'Your account, cloud data or this phone' : 'Everything on this phone',
   };
@@ -1087,7 +1267,7 @@ export default function Settings() {
                 options={GRACE_OPTIONS}
               />
               <Text style={[T.caption, { marginTop: 14 }]}>
-                Locks hide pages, they do not encrypt them. Backups still include everything, so keep them somewhere safe.
+                Locks hide pages; they do not encrypt them. Backups still include everything, so keep them somewhere safe.
               </Text>
             </Card>
           </>
@@ -1100,21 +1280,40 @@ export default function Settings() {
             </SectionTitle>
             <Card>
               <PillButton
-                label={busy?.kind === 'export' ? 'Writing backup, ' + busy.pct + '%' : 'Export backup (JSON)'}
-                icon="download-outline" onPress={() => exportData()} style={{ marginBottom: 10 }}
+                label={busy?.kind === 'export'
+                  ? busy.stage === 'preparing' ? 'Preparing backup' : 'Writing backup, ' + busy.pct + '%'
+                  : 'Export a backup file'}
+                icon="download-outline" onPress={() => exportData()}
               />
+              {lastExport ? (
+                <Text style={[T.caption, { marginTop: 8, marginLeft: 4 }]}>Last exported {dayOf(lastExport)}</Text>
+              ) : null}
               <PillButton
-                label={busy?.kind === 'import' ? 'Restoring attachments, ' + busy.pct + '%' : 'Import backup'}
-                icon="push-outline" color={C.amber} outline onPress={importData}
+                label={busy?.kind === 'import'
+                  ? busy.stage === 'reading' ? 'Reading backup' : 'Restoring attachments, ' + busy.pct + '%'
+                  : 'Import backup'}
+                icon="push-outline" color={C.amber} outline onPress={() => importData()} style={{ marginTop: lastExport ? 14 : 10 }}
               />
+              {saveTrouble || largeData ? (
+                <Animated.View entering={arrive} style={st.recovery}>
+                  <Text style={st.recoveryTitle}>
+                    {saveTrouble ? 'Your latest changes could not be saved' : 'Your data is getting large for this phone'}
+                  </Text>
+                  <Text style={st.recoveryBody}>
+                    {saveTrouble
+                      ? 'This phone could not store your last changes. Export a backup file now, so nothing is lost.'
+                      : 'Long notes and lecture notes add up in the one place this phone keeps your data. Export a backup file now and then to keep a copy.'}
+                  </Text>
+                </Animated.View>
+              ) : null}
               {recovery ? (
                 <Animated.View entering={arrive} style={st.recovery}>
                   <Text style={st.recoveryTitle}>A copy of data that could not be opened</Text>
                   <Text style={st.recoveryBody}>
                     It was set aside so nothing is lost. Share it to keep it safe, or restore it after updating the app.
                   </Text>
-                  <PillButton label="Share copy" icon="share-outline" outline onPress={shareRecovery} style={{ marginTop: 12 }} />
-                  <PillButton label="Restore copy" icon="refresh-outline" color={C.amber} outline onPress={restoreRecovery} style={{ marginTop: 10 }} />
+                  <PillButton label="Share copy" icon="share-outline" outline onPress={() => shareRecovery()} style={{ marginTop: 12 }} />
+                  <PillButton label="Restore copy" icon="refresh-outline" color={C.amber} outline onPress={() => restoreRecovery()} style={{ marginTop: 10 }} />
                   <PillButton label="Delete copy" icon="trash-outline" color={C.danger} outline onPress={discardRecovery} style={{ marginTop: 10 }} />
                 </Animated.View>
               ) : null}
@@ -1131,7 +1330,8 @@ export default function Settings() {
           </>
         );
       case 'delete':
-        return <DeleteSection title={null} />;
+        // after an erase the page would hold one button over nothing: back to the list, which is fresh too
+        return <DeleteSection title={null} onErased={back} />;
     }
   };
 
@@ -1164,9 +1364,9 @@ export default function Settings() {
               <Arrive key={g.title} first={!built.current} index={gi + 1}>
                 <SectionTitle>{g.title}</SectionTitle>
                 <ListCard>
-                  {g.rows.map((r, i) => (
+                  {g.rows.map((r) => (
                     <CategoryRow
-                      key={r.p} first={i === 0} icon={r.icon} danger={r.danger}
+                      key={r.p} icon={r.icon} danger={r.danger}
                       title={PAGE_TITLES[r.p]} summary={summaries[r.p]} onPress={() => open(r.p)}
                     />
                   ))}
@@ -1178,15 +1378,21 @@ export default function Settings() {
             </Text>
           </EdgeScroll>
         </Animated.View>
-        {page ? (
+        {layerPage ? (
           // an open page is its own layer over the list, with its own scroll that starts at the top. It is opaque so the
           // list does not show through it, and what it holds from the start is simply there: only parts that turn up
-          // later (see `arrive`) fade in
-          <Animated.View key={page} entering={pageIn} exiting={pageOut} style={[st.pageLayer, { backgroundColor: bgFor(theme) }]}>
-            <LayoutAnimationConfig skipEntering>
+          // later (see `arrive`) fade in. A page on its way out takes no touches, so the list under it answers at once
+          <Animated.View
+            style={[st.pageLayer, { backgroundColor: bgFor(theme) }, pageStyle]}
+            pointerEvents={page ? 'auto' : 'none'}
+            importantForAccessibility={page ? 'auto' : 'no-hide-descendants'}
+            accessibilityElementsHidden={!page}
+          >
+            <LayoutAnimationConfig key={layerPage} skipEntering>
               <EdgeScroll style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
-                {/* the page's first heading sits close under the header, like the list's first card */}
-                <View style={{ marginTop: -S.section + 10 }}>{pageBody(page)}</View>
+                {/* a page's first heading sits close under the header, like the list's first card; a page that opens
+                    with a card keeps the full 12, so its top and its light are never cut off */}
+                <View style={CARD_FIRST.includes(layerPage) ? undefined : { marginTop: -S.section + 10 }}>{pageBody(layerPage)}</View>
               </EdgeScroll>
             </LayoutAnimationConfig>
           </Animated.View>
@@ -1217,7 +1423,8 @@ const st = StyleSheet.create({
   recoveryTitle: { ...T.label, color: C.text },
   recoveryBody: { ...T.caption, marginTop: 4 },
   slotRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 10 },
-  slotIndex: { width: 58, color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine },
+  // at least 58 wide, wider rather than wrapping at a large font size
+  slotIndex: { minWidth: 58, color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine },
   /** a slot's tool (its icon and its name), which dips and comes back as a new tool takes the slot */
   slotTool: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   archivedLine: { flex: 1, marginLeft: 10 },

@@ -245,7 +245,8 @@ export interface BackupOpened {
   /**
    * Writes the carried files into the notes' attachment folder. `target(id)` names the file for an attachment (or
    * null to skip it). Resolves with the attachments restored, by id, with their new files, and whether every file
-   * could be read: one cut short stops the restore there, keeping those already written.
+   * could be read: one cut short stops the restore there, keeping those already written, and a file already at its
+   * place stays as it was unless a whole one replaces it.
    */
   restoreFiles: (target: (id: string) => string | null, onProgress?: (share: number) => void) => Promise<Restored>;
 }
@@ -255,11 +256,15 @@ export interface Restored {
   complete: boolean;
 }
 
-/** Finds `needle` in the file, reading it in pieces. -1 when it is not there. */
-function findInFile(handle: Handle, size: number, needle: Uint8Array): number {
+/**
+ * Finds `needle` in the file, reading it in pieces. -1 when it is not there. It lets the screen draw between pieces,
+ * so a long backup's scan never freezes the "Reading backup" label it shows.
+ */
+async function findInFile(handle: Handle, size: number, needle: Uint8Array): Promise<number> {
   let carry: Uint8Array = new Uint8Array(0);
   const first = needle[0];
   for (let pos = 0; pos < size; pos += SCAN) {
+    if (pos) await pause();
     const piece = readRange(handle, pos, Math.min(SCAN, size - pos));
     const hay = new Uint8Array(carry.length + piece.length);
     hay.set(carry, 0);
@@ -281,7 +286,7 @@ export async function openBackup(uri: string): Promise<BackupOpened> {
   const scan = fileAt(uri).open();
   let at = -1;
   try {
-    at = findInFile(scan, size, ascii(JOIN));
+    at = await findInFile(scan, size, ascii(JOIN));
   } finally {
     scan.close();
   }
@@ -355,14 +360,17 @@ export async function openBackup(uri: string): Promise<BackupOpened> {
         i++;
 
         const dest = target(id);
-        let destFile: File | null = null;
+        // written beside its place and moved over it only once whole, so a backup cut short (or any failure) never
+        // touches the file this phone already has there
+        const part = dest ? dest + '.part' : null;
+        let partFile: File | null = null;
         let out: Handle | null = null;
         try {
-          if (dest) {
-            destFile = fileAt(dest);
-            if (destFile.exists) destFile.delete();
-            destFile.create();
-            out = destFile.open();
+          if (part) {
+            partFile = fileAt(part);
+            if (partFile.exists) partFile.delete();
+            partFile.create();
+            out = partFile.open();
           }
           const decoder = new Base64Decoder();
           for (;;) {
@@ -383,12 +391,15 @@ export async function openBackup(uri: string): Promise<BackupOpened> {
           }
           out?.close();
           out = null;
-          if (dest) restored[id] = dest;
+          if (dest && part) {
+            await FileSystem.moveAsync({ from: part, to: dest });
+            restored[id] = dest;
+          }
         } catch (e) {
           // a half-written file is never left behind looking like a whole one
           out?.close();
           out = null;
-          try { if (destFile?.exists) destFile.delete(); } catch {}
+          try { if (partFile?.exists) partFile.delete(); } catch {}
           throw e;
         }
       }

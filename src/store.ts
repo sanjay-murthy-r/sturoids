@@ -242,6 +242,29 @@ export function initialData() {
 type DataKey = keyof ReturnType<typeof initialData>;
 const DATA_KEYS = Object.keys(initialData()) as DataKey[];
 
+/**
+ * Settings that belong to this phone, not to the data: when the app was opened here. They never travel in a backup's
+ * fingerprint, a replace keeps this phone's own, and a change to them alone is not a change worth backing up.
+ */
+export const DEVICE_SETTINGS = ['firstOpenedAt', 'lastOpenedAt'] as const;
+const isDeviceSetting = (k: string) => (DEVICE_SETTINGS as readonly string[]).includes(k);
+
+/** The settings without this phone's own ones. */
+export function withoutDeviceSettings<T extends object>(settings: T): T {
+  const out: any = {};
+  for (const k of Object.keys(settings)) if (!isDeviceSetting(k)) out[k] = (settings as any)[k];
+  return out;
+}
+
+/** True when a store change touched nothing but this phone's own settings (or no data at all). */
+export function isDeviceOnlyChange(s: AppState, prev: AppState): boolean {
+  for (const k of DATA_KEYS) if (k !== 'settings' && (s as any)[k] !== (prev as any)[k]) return false;
+  if (s.settings === prev.settings) return true;
+  const keys = new Set([...Object.keys(s.settings), ...Object.keys(prev.settings)]);
+  for (const k of keys) if (!isDeviceSetting(k) && (s.settings as any)[k] !== (prev.settings as any)[k]) return false;
+  return true;
+}
+
 export interface AppState {
   settings: Settings;
   aiLinks: AiLink[];
@@ -458,7 +481,8 @@ function earliestActivity(p: any): number {
   return Number.isFinite(min) ? min : 1;
 }
 
-function hasAnyUserData(p: any): boolean {
+/** Whether the data holds anything the user made (a name, tasks, notes, sessions, habits, videos, journal entries). */
+export function hasAnyUserData(p: any): boolean {
   const nonEmpty = (a: any) => Array.isArray(a) && a.length > 0;
   return !!(p?.settings?.name) || nonEmpty(p?.dailyTasks) || nonEmpty(p?.missions) || nonEmpty(p?.sessions)
     || nonEmpty(p?.notes) || nonEmpty(p?.habits) || nonEmpty(p?.vaultVideos) || nonEmpty(p?.journal);
@@ -602,6 +626,31 @@ const SAVE_PAUSE_MS = 350;
 let pendingSave: { name: string; value: StorageValue<any> } | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Android reads a row back only up to about 2 MB, and its whole database is capped too, so the size of the last save
+ * is kept: Settings warns well before the row gets there.
+ */
+let savedChars: number | null = null;
+/** How many characters the last save of the store wrote, or null before the first one this launch. */
+export const savedSize = () => savedChars;
+/** From here Settings suggests keeping a backup file, long before the row could not be read back. */
+export const SAVE_WARN_CHARS = 1.2 * 1024 * 1024;
+
+/** A save that failed is never silent: the user hears once, until a save goes through again. */
+let saveFailing = false;
+const saveListeners = new Set<(failing: boolean) => void>();
+export const savesFailing = () => saveFailing;
+/** Calls cb whenever saving starts or stops failing. Returns an unsubscribe. */
+export function subscribeSaveProblems(cb: (failing: boolean) => void): () => void {
+  saveListeners.add(cb);
+  return () => { saveListeners.delete(cb); };
+}
+function setSaveFailing(failing: boolean) {
+  if (saveFailing === failing) return;
+  saveFailing = failing;
+  saveListeners.forEach((cb) => cb(failing));
+}
+
 /** Writes a save that is still waiting for its pause. */
 export function flushSaves(): void {
   if (saveTimer) {
@@ -610,7 +659,25 @@ export function flushSaves(): void {
   }
   const next = pendingSave;
   pendingSave = null;
-  if (next) Promise.resolve(rawJsonStorage.setItem(next.name, next.value)).catch(() => {});
+  if (!next) return;
+  let text: string;
+  try {
+    // stringified once, here, so its size is known
+    text = JSON.stringify(next.value);
+  } catch {
+    setSaveFailing(true);
+    return;
+  }
+  savedChars = text.length;
+  Promise.resolve(AsyncStorage.setItem(next.name, text)).then(
+    () => setSaveFailing(false),
+    () => {
+      // kept for the next flush (the next change, or leaving the app), unless a newer save is already waiting or
+      // saving has paused since to protect data that could not be read
+      if (!pendingSave && !persistPaused) pendingSave = next;
+      setSaveFailing(true);
+    },
+  );
 }
 
 /** Forgets a save that is still waiting: saving is pausing to protect data that could not be read. */
@@ -623,7 +690,13 @@ function dropPendingSave(): void {
 }
 
 const jsonStorage: PersistStorage<any> = {
-  getItem: (name) => rawJsonStorage.getItem(name),
+  // read as text first, so the row's size is known from the launch on, not only after the next save
+  getItem: async (name) => {
+    const text = await AsyncStorage.getItem(name);
+    if (text == null) return null;
+    savedChars = text.length;
+    return JSON.parse(text);
+  },
   setItem: (name, value) => {
     pendingSave = { name, value };
     if (saveTimer) clearTimeout(saveTimer);
@@ -1191,7 +1264,6 @@ export const useStore = create<AppState>()(
       // zustand's own shallow merge, plus the one fact the failure handler needs; a setting added since the data was
       // saved takes its default instead of arriving undefined
       merge: (persisted: any, current) => {
-        if (persisted) mergedFromStorage = true;
         const merged = { ...current, ...(persisted || {}) };
         if (persisted?.settings) merged.settings = { ...current.settings, ...persisted.settings };
         // a tool in a tab slot is never archived, whatever was saved (archiving arrived with its own default)
@@ -1204,6 +1276,8 @@ export const useStore = create<AppState>()(
         const tied = pruneScoreRefs(merged.scores, merged.scoreTags, sanitizeLearnings(merged.learnings, merged.scoreTags));
         merged.scores = tied.nodes;
         merged.learnings = tied.learnings;
+        // marked only once the merge has worked: a merge that throws leaves the app on defaults, which is a failed load
+        if (persisted) mergedFromStorage = true;
         return merged;
       },
       // zustand reports a load that throws only here and never marks the store hydrated
@@ -1232,6 +1306,9 @@ if (useStore.persist.hasHydrated()) setAccent(useStore.getState().settings.accen
 export const RECOVERY_KEY = 'student-hub-v1.recovery';
 
 let loadFailed = false;
+let rowUnreadable = false;
+/** an import or a restore put data the user chose in place this launch */
+let replacedThisLaunch = false;
 let settledOnError = false;
 let timedOut = false;
 let persistPaused = false;
@@ -1290,8 +1367,15 @@ async function handleHydrationError(error: unknown) {
     return;
   }
   let safe = false;
+  let raw: string | null = null;
   try {
-    const raw = await AsyncStorage.getItem(STORE_KEY);
+    raw = await AsyncStorage.getItem(STORE_KEY);
+  } catch {
+    // the row itself cannot be read (on Android, one grown past about 2 MB): no restart will read it either
+    rowUnreadable = true;
+  }
+  try {
+    if (rowUnreadable) throw new Error('unreadable');
     if (raw == null) {
       safe = true; // nothing on disk to protect
     } else {
@@ -1359,8 +1443,22 @@ export function giveUpWaitingForHydration() {
 
 /** The saved data failed to load this launch; the app is running on defaults. */
 export const loadFailedThisLaunch = () => loadFailed;
+/** The saved row could not even be read this launch (not just parsed): a restart cannot help, a backup can. */
+export const savedRowUnreadable = () => rowUnreadable;
 /** Saving is paused this launch so nothing overwrites data that could not be loaded. */
 export const savingPaused = () => persistPaused;
+
+/**
+ * Whether what the app holds is the user's own data, safe to send over a copy kept elsewhere (the cloud): 'failed' when
+ * the saved data could not be opened this launch and the app runs on defaults, 'waiting' while it has not loaded yet,
+ * 'ok' once it has, or once an import or a restore has put data the user chose in place.
+ */
+export function localDataState(): 'ok' | 'failed' | 'waiting' {
+  if (replacedThisLaunch) return 'ok';
+  if (loadFailed) return 'failed';
+  if (persistPaused || !(useStore.persist.hasHydrated() || mergedFromStorage)) return 'waiting';
+  return 'ok';
+}
 
 /** The raw saved blob kept aside when it could not be opened, if any. */
 export async function readRecoveryCopy(): Promise<string | null> {
@@ -1410,25 +1508,53 @@ export function exportSnapshot() {
   };
 }
 
-/** Restores a backup of any version through the same migration chain as persisted state. */
-export function importSnapshot(json: string): boolean {
+/** A backup that has been read and checked: its data, ready to replace everything, and when it was made if it says. */
+export interface ReadSnapshot { data: any; exportedAt: string | null }
+
+/**
+ * Reads a backup of any version (its text, or the text already parsed) through the same migration chain as persisted
+ * state, changing nothing yet, so a file can be checked and described before anything is replaced. Null when it is not
+ * a backup.
+ */
+export function readSnapshot(input: unknown): ReadSnapshot | null {
   try {
-    const data = JSON.parse(json);
-    if (!data || typeof data !== 'object') return false;
+    const data: any = typeof input === 'string' ? JSON.parse(input) : input;
+    if (!data || typeof data !== 'object') return null;
     let d: any;
+    let exportedAt: string | null = null;
     if (data._app === 'student-hub') {
       const { _app, _exportedAt, _v, ...rest } = data;
       d = _v === 2 || _v === 3 ? rest : migrateToGrey(migrateData(rest));
+      if (typeof _exportedAt === 'string') exportedAt = _exportedAt;
     } else if (data.state && typeof data.state === 'object' && typeof data.version === 'number') {
       // the app's own saved blob, such as the copy kept when it could not be opened
       d = migratePersisted(data.state, data.version);
     } else {
-      return false;
+      return null;
     }
-    d = migrateV5(d);
-    // an explicit import replaces everything, so saving resumes even if this launch paused it
-    resumePersistence();
-    useStore.getState().replaceAll(d);
+    return { data: migrateV5(d), exportedAt };
+  } catch {
+    return null;
+  }
+}
+
+/** Replaces everything with a backup already read. This phone keeps its own settings (see DEVICE_SETTINGS). */
+export function applySnapshot(read: ReadSnapshot): void {
+  const own: any = useStore.getState().settings;
+  const settings: any = { ...(read.data.settings || {}) };
+  for (const k of DEVICE_SETTINGS) if (own[k] !== undefined) settings[k] = own[k];
+  // an explicit import replaces everything, so saving resumes even if this launch paused it
+  resumePersistence();
+  useStore.getState().replaceAll({ ...read.data, settings });
+  replacedThisLaunch = true;
+}
+
+/** Restores a backup of any version (its text, or the text already parsed). False when it is not a backup. */
+export function importSnapshot(input: unknown): boolean {
+  const read = readSnapshot(input);
+  if (!read) return false;
+  try {
+    applySnapshot(read);
     return true;
   } catch {
     return false;

@@ -7,6 +7,7 @@
  *     emoji), and every file is restored byte for byte, including sizes on and around the chunk edges
  *   - a missing file is left out and counted; a file the platform reads in short pieces still restores whole
  *   - a backup cut short keeps the files before the cut and leaves no half-written file behind
+ *   - on the same phone, a cut-short backup leaves the files already there untouched; a whole one replaces them
  * Usage: node scripts/test-backup.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -46,6 +47,8 @@ const legacy = {
     }
   },
   async copyAsync({ from, to }) { fs.copyFileSync(toPath(from), toPath(to)); },
+  // a rename, which replaces the file at `to` in one step, as on the phone
+  async moveAsync({ from, to }) { fs.renameSync(toPath(from), toPath(to)); },
   async deleteAsync(uri) { fs.rmSync(toPath(uri), { force: true, recursive: true }); },
   async makeDirectoryAsync(uri) { fs.mkdirSync(toPath(uri), { recursive: true }); },
 };
@@ -246,6 +249,45 @@ function data(notes) {
     assert.deepEqual(result.files, { whole: paths.whole });
     assert.deepEqual(fs.readFileSync(toPath(paths.whole)), small);
     assert.equal(fs.existsSync(toPath(paths.cut)), false);
+    assert.equal(fs.existsSync(toPath(paths.cut + '.part')), false, 'no piece is left beside it');
+  });
+
+  await check('on the same phone, a backup cut short leaves the files already here as they were', async () => {
+    const small = crypto.randomBytes(1000);
+    const big = crypto.randomBytes(3 * CHUNK);
+    const a = attach('keep1', small);
+    const b = attach('keep2', big);
+    const d = data([{ id: 'n1', title: 'T', body: 'B', attachments: [a, b] }]);
+    const uri = CACHE + 'cut-here.json';
+    await backup.writeBackup(uri, JSON.stringify(d, null, 2), d.notes);
+    const full = fs.readFileSync(toPath(uri));
+    fs.writeFileSync(toPath(uri), full.subarray(0, Math.floor(full.length * 0.6)));
+    // the phone's own copy of the second file is its only one now
+    const current = crypto.randomBytes(5000);
+    fs.writeFileSync(toPath(b.uri), current);
+    const opened = await backup.openBackup(uri);
+    const paths = { keep1: backup.restoredPath(a), keep2: backup.restoredPath(b) };
+    assert.equal(paths.keep2, b.uri, 'a same-phone restore writes to the original');
+    const result = await opened.restoreFiles((id) => paths[id] ?? null);
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.files, { keep1: paths.keep1 });
+    assert.deepEqual(fs.readFileSync(toPath(paths.keep1)), small);
+    assert.deepEqual(fs.readFileSync(toPath(paths.keep2)), current, 'the original survives the cut');
+    assert.equal(fs.existsSync(toPath(paths.keep2 + '.part')), false, 'and no piece is left beside it');
+  });
+
+  await check('on the same phone, a whole backup replaces the files already here', async () => {
+    const bytes = crypto.randomBytes(CHUNK + 7);
+    const a = attach('swap', bytes);
+    const d = data([{ id: 'n1', title: 'T', body: 'B', attachments: [a] }]);
+    const uri = CACHE + 'swap.json';
+    await backup.writeBackup(uri, JSON.stringify(d, null, 2), d.notes);
+    fs.writeFileSync(toPath(a.uri), crypto.randomBytes(10));
+    const opened = await backup.openBackup(uri);
+    const result = await opened.restoreFiles((id) => (id === 'swap' ? backup.restoredPath(a) : null));
+    assert.equal(result.complete, true);
+    assert.deepEqual(fs.readFileSync(toPath(a.uri)), bytes);
+    assert.equal(fs.existsSync(toPath(a.uri + '.part')), false);
   });
 
   fs.rmSync(PHONE, { recursive: true, force: true });
