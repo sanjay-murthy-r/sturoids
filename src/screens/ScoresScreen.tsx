@@ -7,17 +7,18 @@ import Animated from 'react-native-reanimated';
 import { C, F, MIN, NEU, S, T, TRACK, neuRaised } from '../theme';
 import { useStore } from '../store';
 import {
-  ScoreNode, ScoreIndex, Learning, TagMatch, indexScores, resultOf, partsMismatch, groupSummary, examsUnder, upcoming,
-  deltaVsPrevious, pathOf, descendantIds, canMove, fmtPct, fmtMark, fmtExamDate, fromToday, whenOf, filterLearnings,
-  categoriesOf, categoryOf, plainTagsOf, rootExamOf, isTopExam,
+  ScoreNode, ScoreIndex, ScoreResult, ScoreTag, Learning, TagMatch, indexScores, resultOf, partsMismatch, groupSummary,
+  examsUnder, upcoming, waitingForMarks, resultTable, pathOf, descendantIds, canMove, fmtPct, fmtMark, fmtExamDate,
+  fromToday, whenOf, filterLearnings, categoriesOf, categoryOf, plainTagsOf, rootExamOf, isTopExam, subjectKey,
 } from '../scores';
+import { ALL, NONE, examPoints, ordinal, standingIn, subjectStats } from '../analytics';
 import { useToday } from '../hooks/useNow';
 import {
   ScreenBG, Card, SectionTitle, EmptyState, ListCard, ListRow, DotMenu, Sheet, Hairline,
   PillButton, Chip, Field, useTheme, useToolHeader, contextLine,
 } from '../components/UI';
-import type { ToolAction } from '../components/UI';
-import { Appear, Bouncy, Enter, FadeSwap } from '../components/Motion';
+import type { ContextPart, ToolAction } from '../components/UI';
+import { Appear, Bouncy, Enter, FadeSwap, useAnimLevel } from '../components/Motion';
 import { useSwapIn } from '../components/Swap';
 import { ScoreEditor, ScoreEditTarget } from '../components/ScoreEditor';
 import { ScoreAnalytics, AnalyticsTeaser, AnalyticsView, resolveView } from '../components/ScoreAnalytics';
@@ -48,6 +49,12 @@ function useSettled<T>(value: T, ms: number): T {
 /** A name cut to fit beside other facts on the header's one line. */
 const clip = (s: string, n = 18) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 
+/** Names in reading order: "Mock 2" before "Mock 10", whatever their case. */
+const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+
+/** A text link's reach: 13 px words stretched to about 44 dp to tap, without moving anything around them. */
+const LINK_SLOP = { top: 13, bottom: 13, left: 10, right: 10 };
+
 /** A node's name, or what it is called until it has one: the same words in the header, its rows and its menus. */
 function nameOf(ix: ScoreIndex, n: ScoreNode) {
   const title = n.title.trim();
@@ -69,9 +76,30 @@ function learningPath(ix: ScoreIndex, l: Learning) {
  */
 type Loc = { kind: 'node'; id: string } | { kind: 'analytics' } | { kind: 'notebook' };
 const sameLoc = (a: Loc | undefined, b: Loc) => !!a && a.kind === b.kind && (a.kind !== 'node' || (b.kind === 'node' && a.id === b.id));
+/** A page's key, which its content and the place it was left at are kept by; the root is 'top'. */
+const keyOf = (l: Loc | undefined) => (l ? l.kind + (l.kind === 'node' ? ':' + l.id : '') : 'top');
 
-/** An exam's line under its header: where it lives, its date, and its result (or how soon, while it has none). */
-function nodeLine(ix: ScoreIndex, n: ScoreNode, today: string) {
+/**
+ * What an exam is measured against: the marked exams in its category, or with none, those in its group, or with
+ * neither, every marked exam in no category. Oldest first, with the words that say where they are ("in JEE mocks").
+ */
+function peersOf(ix: ScoreIndex, n: ScoreNode, tags: ScoreTag[]) {
+  const cat = categoryOf(n, tags);
+  if (cat) return { pts: examPoints(ix, tags, cat.id), where: 'in ' + clip(cat.label) };
+  const parent = n.parentId ? ix.byId.get(n.parentId) : undefined;
+  if (parent?.kind === 'group') {
+    const inside = new Set(examsUnder(ix, parent.id).map((x) => x.id));
+    return { pts: examPoints(ix, tags, ALL).filter((p) => inside.has(p.id)), where: 'in ' + clip(nameOf(ix, parent)) };
+  }
+  return { pts: examPoints(ix, tags, NONE), where: categoriesOf(tags).length ? 'with no category' : '' };
+}
+
+/**
+ * A node's line under its header, saying what its page does not: for an exam, where it lives and where its result
+ * stands among its peers ("3rd of 8 in JEE mocks"), or while it has none, the result it is up against; for a subject,
+ * the exam it is part of and how it does across that kind of paper. A figure that is not there is not said.
+ */
+function nodeLine(ix: ScoreIndex, n: ScoreNode, tags: ScoreTag[]) {
   const parent = n.parentId ? ix.byId.get(n.parentId) : undefined;
   const place = parent ? (parent.kind === 'exam' ? 'Part of ' : '') + clip(nameOf(ix, parent)) : null;
   if (n.kind === 'group') {
@@ -79,21 +107,38 @@ function nodeLine(ix: ScoreIndex, n: ScoreNode, today: string) {
     const s = groupSummary(ix, n.id);
     return contextLine(place, count > 0 && plural(count, 'exam'), s && ['average ', { em: fmtPct(s.average) }]);
   }
-  const r = resultOf(n, ix);
-  return contextLine(
-    place,
-    n.date && fmtExamDate(n.date),
-    r ? { em: fmtPct(r.pct) } : n.date && n.date >= today && fromToday(n.date, today),
-  );
+  if (!isTopExam(ix, n)) {
+    // a subject of an exam, across the exams of that exam's kind, once it has been marked in two of them
+    let across: ContextPart[] | null = null;
+    if (parent && isTopExam(ix, parent)) {
+      const s = subjectStats(ix, peersOf(ix, parent, tags).pts.map((p) => p.id)).find((x) => x.key === subjectKey(n.title));
+      if (s && s.n >= 2) across = ['averages ', { em: fmtPct(s.mean) }, ' over ' + s.n + ' exams'];
+    }
+    return contextLine(place, across);
+  }
+  const { pts, where } = peersOf(ix, n, tags);
+  let fact: ContextPart[] | null = null;
+  if (resultOf(n, ix)) {
+    // left out when it is the only one marked: there is nothing to stand against
+    const at = standingIn(pts, n.id);
+    if (at) fact = [{ em: at.place === 1 ? (place ? 'best' : 'Best') : ordinal(at.place) }, ' of ' + at.of + (where ? ' ' + where : '')];
+  } else {
+    // the latest result among its peers from before it: the one to beat
+    const when = whenOf(n);
+    const before = [...pts].reverse().find((p) => p.when <= when);
+    if (before) fact = [clip(before.title) + ' was ', { em: fmtPct(before.pct) }];
+  }
+  return contextLine(place, fact);
 }
 
-/** How far a result moved: a small caret and the points, green up, muted red down. */
+/** How far a result moved: a small caret and the points, green up, muted red down. Nothing when it did not move. */
 function Delta({ value, style }: { value: number; style?: any }) {
   const r = Math.round(value * 10) / 10;
-  if (r === 0) return <Text style={[st.delta, { color: C.textFaint }, style]}>no change</Text>;
+  if (r === 0) return null;
   const up = r > 0;
+  const size = Math.abs(r);
   return (
-    <View style={[st.deltaRow, style]}>
+    <View style={[st.deltaRow, style]} accessible accessibilityLabel={(up ? 'up ' : 'down ') + size + (size === 1 ? ' point' : ' points')}>
       <Ionicons name={up ? 'caret-up' : 'caret-down'} size={11} color={up ? C.green : C.danger} />
       <Text style={[st.delta, { color: up ? C.green : C.danger }]}>{Math.abs(r)}</Text>
     </View>
@@ -132,15 +177,24 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const restoreScoreNodes = useStore((s) => s.restoreScoreNodes);
   const duplicateScoreNode = useStore((s) => s.duplicateScoreNode);
   const moveScoreNode = useStore((s) => s.moveScoreNode);
-  const setExamCategory = useStore((s) => s.setExamCategory);
-  const restoreExamTags = useStore((s) => s.restoreExamTags);
   const scoreTags = useStore((s) => s.scoreTags);
+  const level = useAnimLevel();
   const ix = useMemo(() => indexScores(scores), [scores]);
+  // every exam's result and its move on the one before, worked out once per change to the exams, not once per row
+  const table = useMemo(() => resultTable(ix), [ix]);
+  // a learning counts for its exam or subject and for every exam that one is part of, so an exam's row counts the
+  // learnings on its subjects too
   const learnedBy = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of learnings) m.set(l.nodeId, (m.get(l.nodeId) || 0) + 1);
+    for (const l of learnings) {
+      const seen = new Set<string>();
+      for (let n = ix.byId.get(l.nodeId); n && n.kind === 'exam' && !seen.has(n.id); n = n.parentId ? ix.byId.get(n.parentId) : undefined) {
+        seen.add(n.id);
+        m.set(n.id, (m.get(n.id) || 0) + 1);
+      }
+    }
     return m;
-  }, [learnings]);
+  }, [learnings, ix]);
   // turns over at midnight, so "Tomorrow" and "in 3 days" are never a day behind on a screen left open
   const today = useToday();
 
@@ -157,11 +211,11 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [areaW, setAreaW] = useState(0);
   // Analytics' view (which exams, how far back) lives here so the header can say what is in scope; null is its opening view
   const [analyticsView, setAnalyticsView] = useState<AnalyticsView | null>(null);
+  // the exam picked on Analytics' trend chart, kept here so it is still picked on the way back from opening it
+  const [trendPick, setTrendPick] = useState<string | null>(null);
   // the group whose exams are being put in a category
   const [catGroup, setCatGroup] = useState<ScoreNode | null>(null);
   const [catOpen, setCatOpen] = useState(false);
-  const [catDraft, setCatDraft] = useState('');
-  const catDone = useRef<null | { text: string; undo: () => void }>(null);
   const [tagsOpen, setTagsOpen] = useState(false);
   const [learn, setLearn] = useState<LearningTarget | null>(null);
   const [learnNode, setLearnNode] = useState<Learning | null>(null);
@@ -193,14 +247,15 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const inExam = here?.kind === 'exam';
 
   const go = React.useCallback((to: Loc) => setStack((cur) => (sameLoc(cur[cur.length - 1], to) ? cur : [...cur, to])), []);
-  const openNode = (id: string) => go({ kind: 'node', id });
+  // kept the same between renders, so the rows of a long list (memoised) are not drawn again for a sheet or a menu
+  const openNode = React.useCallback((id: string) => go({ kind: 'node', id }), [go]);
   // the notebook is never on the trail twice: from an exam it led to, its button goes back to the one already there
   const openNotebook = () => setStack((cur) => {
     const at = cur.findIndex((l) => l.kind === 'notebook');
     if (at < 0) return [...cur, { kind: 'notebook' }];
     return at === cur.length - 1 ? cur : cur.slice(0, at + 1);
   });
-  const openAnalytics = () => { setAnalyticsView(null); go({ kind: 'analytics' }); };
+  const openAnalytics = () => { setAnalyticsView(null); setTrendPick(null); go({ kind: 'analytics' }); };
 
   // Back, for the arrow and the hardware key alike: a sheet that is open closes first, then the page goes one step back
   // the way it came. False at the root, where the system takes the key.
@@ -232,7 +287,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     if (id) openNode(id);
   }, [pendingOpen, ix]);
 
-  const openMenu = (n: ScoreNode) => { setMenuNode(n); setMenuOpen(true); };
+  const openMenu = React.useCallback((n: ScoreNode) => { setMenuNode(n); setMenuOpen(true); }, []);
   // an exam that stands on its own is added and edited on the full-screen form; a subject and a group keep the sheet
   const newExam = (parentId: string | null) => router.push({ pathname: '/exam', params: parentId ? { parent: parentId } : {} } as any);
   const editNode = (n: ScoreNode, addSubject = false) => {
@@ -240,39 +295,43 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     else if (addSubject) setEditor({ mode: 'new', kind: 'exam', parentId: n.id });
     else setEditor({ mode: 'edit', id: n.id });
   };
-  const openCategoryFor = (g: ScoreNode) => { setCatGroup(g); setCatDraft(''); setCatOpen(true); };
-  const putInCategory = (categoryId: string | null, label: string) => {
-    if (!catGroup) return;
-    const ids = examsUnder(ix, catGroup.id).filter((n) => isTopExam(ix, n)).map((n) => n.id);
-    if (!ids.length) { setCatOpen(false); return; }
-    const before = setExamCategory(ids, categoryId);
-    tick();
-    const n = Object.keys(before).length;
-    catDone.current = {
-      text: categoryId ? 'Put ' + plural(n, 'exam') + ' in ' + label : 'Took ' + plural(n, 'exam') + ' out of their category',
-      undo: () => restoreExamTags(before),
-    };
-    setCatOpen(false);
-  };
+  const openCategoryFor = (g: ScoreNode) => { setCatGroup(g); setCatOpen(true); };
 
+  // A delete asks first whenever more than the node itself goes, and says what: the subjects or everything in a group,
+  // and the learnings kept on any of it, which go with it and come back with its Undo.
   const confirmDelete = (n: ScoreNode) => {
-    const below = [...descendantIds(ix, n.id)].map((id) => ix.byId.get(id)).filter(Boolean) as ScoreNode[];
+    const inside = descendantIds(ix, n.id);
+    const below = [...inside].map((id) => ix.byId.get(id)).filter(Boolean) as ScoreNode[];
+    inside.add(n.id);
+    const learned = learnings.filter((l) => inside.has(l.nodeId)).length;
+    const name = nameOf(ix, n);
     const run = () => {
       const removed = removeScoreNode(n.id);
       if (!removed.nodes.length) return;
       tap();
-      toast('Deleted ' + (n.title || (n.kind === 'group' ? 'the group' : 'the exam')), {
+      toast('Deleted ' + name, {
         label: 'Undo',
         onPress: () => restoreScoreNodes(removed),
       });
     };
-    if (!below.length) { run(); return; }
-    const exams = below.filter((x) => x.kind === 'exam').length;
-    const groups = below.length - exams;
-    const what = n.kind === 'exam'
-      ? (exams === 1 ? 'Its subject goes with it.' : 'Its ' + exams + ' subjects go with it.')
-      : 'Everything inside goes with it: ' + [exams ? plural(exams, 'exam') : '', groups ? plural(groups, 'group') : ''].filter(Boolean).join(' and ') + '.';
-    Alert.alert('Delete ' + (n.title || 'this') + '?', what, [
+    if (!below.length && !learned) { run(); return; }
+    let what: string;
+    if (n.kind === 'exam') {
+      const word = isTopExam(ix, n) ? 'subject' : 'part';
+      const subs = (ix.children.get(n.id) || []).filter((k) => k.kind === 'exam').length;
+      const list = [
+        subs === 1 ? 'its ' + word : subs ? 'its ' + subs + ' ' + word + 's' : '',
+        learned === 1 ? 'its learning' : learned ? 'its ' + learned + ' learnings' : '',
+      ].filter(Boolean).join(' and ');
+      what = list.charAt(0).toUpperCase() + list.slice(1) + (subs + learned > 1 ? ' go with it.' : ' goes with it.');
+    } else {
+      // exams standing on their own: a subject is part of its exam, not counted beside it
+      const exams = below.filter((x) => isTopExam(ix, x)).length;
+      const groups = below.filter((x) => x.kind === 'group').length;
+      const things = [exams ? plural(exams, 'exam') : '', groups ? plural(groups, 'group') : '', learned ? plural(learned, 'learning') : ''].filter(Boolean);
+      what = 'Everything inside goes with it: ' + (things.length > 1 ? things.slice(0, -1).join(', ') + ' and ' + things[things.length - 1] : things[0]) + '.';
+    }
+    Alert.alert('Delete ' + name + '?', what, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: run },
     ]);
@@ -309,7 +368,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const groups = scores
       .filter((g) => g.kind === 'group')
       .map((g) => ({ id: g.id as string | null, label: [...pathOf(ix, g.id).map((p) => nameOf(ix, p)), nameOf(ix, g)].join(' / ') }))
-      .sort((a, b) => a.label.localeCompare(b.label));
+      .sort((a, b) => byName(a.label, b.label));
     return [{ id: null as string | null, label: 'Top level' }, ...groups].filter((dst) => canMove(ix, moveNode.id, dst.id));
   }, [moveNode, scores, ix]);
 
@@ -331,14 +390,26 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
       shown: q ? byTags.filter((l) => l.text.toLowerCase().includes(q) || learningPath(ix, l).toLowerCase().includes(q)) : byTags,
     };
   }, [learnings, picked, match, alive, learningCats, ix]);
-  const notebookRows = useMemo(() => (notebook ? rowsFor(find) : null), [notebook, rowsFor, find]);
-  // the list follows each key of the search; the header's line waits until the typing pauses
+  // the list follows the search once a key has held for a moment, so its rows fold once per pause in the typing rather
+  // than on every key; the header's line waits for a longer pause
+  const listFind = useSettled(find, 150);
+  const notebookRows = useMemo(() => (notebook ? rowsFor(listFind) : null), [notebook, rowsFor, listFind]);
   const settledFind = useSettled(find, 350);
   const lineRows = useMemo(
-    () => (notebook ? (settledFind === find ? notebookRows : rowsFor(settledFind)) : null),
-    [notebook, notebookRows, settledFind, find, rowsFor],
+    () => (notebook ? (settledFind === listFind ? notebookRows : rowsFor(settledFind)) : null),
+    [notebook, notebookRows, settledFind, listFind, rowsFor],
   );
+  // a search is for one visit: leaving the notebook by Back clears it, while an exam opened from it keeps it in place
+  const notebookOnTrail = trail.some((l) => l.kind === 'notebook');
+  useEffect(() => { if (!notebookOnTrail) setFind(''); }, [notebookOnTrail]);
   const focus = useMemo(() => (analytics ? resolveView(ix, scoreTags, analyticsView) : null), [analytics, ix, scoreTags, analyticsView]);
+  // an exam's page keeps the learnings of its subjects too (each says which subject), and a subject's those of its parts
+  const examLearnings = useMemo(() => {
+    if (!here || here.kind !== 'exam') return [];
+    const inside = descendantIds(ix, here.id);
+    inside.add(here.id);
+    return learnings.filter((l) => inside.has(l.nodeId));
+  }, [here, ix, learnings]);
 
   // The header's line: the one fact each page is opened for. A figure that is zero is not said, and a page with nothing
   // true to say has no line at all.
@@ -360,12 +431,17 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
         q && 'matching "' + clip(q, 14) + '"',
       );
     }
-    if (here) return nodeLine(ix, here, today);
+    if (here) return nodeLine(ix, here, scoreTags);
+    // the top: how many exams, then the next one coming up as the Home tile words it ("Mock 8 in 3 days"), or with
+    // none coming, the average (the latest result is the Analytics card's first words, just below)
     const count = examsUnder(ix, null).length;
-    const latest = groupSummary(ix, null)?.latest;
+    const next = upcoming(ix, null, today)[0];
+    const sum = next ? null : groupSummary(ix, null);
     return contextLine(
       count > 0 && plural(count, 'exam'),
-      latest && ['latest ', { em: fmtPct(latest.pct) }, ' in ' + clip(nameOf(ix, latest.node), 22)],
+      next
+        ? [clip(nameOf(ix, next), 22) + ' ', { em: fromToday(next.date as string, today).toLowerCase() }]
+        : sum && ['average ', { em: fmtPct(sum.average) }],
     );
   }, [focus, lineRows, picked, match, settledFind, scoreTags, here, ix, today]);
 
@@ -393,17 +469,52 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     onBack: () => { if (!back()) router.back(); },
   });
 
-  // the page's own scroll resets as the level changes, and the offset the bar follows with it instead of a frame later,
-  // so the bar never keeps the last page's offset: back at the root from far down a level, its ground would otherwise
-  // cover the big title for a frame. The content below is keyed to the level, so it rises anew while the scroll view
-  // itself stays (the bar and the scroll are the same two elements in the root's tab mode and a level's page mode)
+  // The page's own scroll follows the level: a new page opens at its top, and going back returns to the place the page
+  // underneath was left at (down a long list, or at the Analytics point just opened). The offset the bar follows moves
+  // with it in the same frame instead of a frame later, so the bar never keeps the last page's offset: back at the root
+  // from far down a level, its ground would otherwise cover the big title for a frame. The content below is keyed to
+  // the level, so it rises anew while the scroll view itself stays (the bar and the scroll are the same two elements in
+  // the root's tab mode and a level's page mode).
   const scrollRef = useRef<Animated.ScrollView>(null);
-  const pageKey = loc ? loc.kind + (loc.kind === 'node' ? ':' + loc.id : '') : 'top';
+  const pageKey = keyOf(loc);
   const barOffset = header.scrollY;
+  // where each page on the trail was left, and where the scroll last came to rest (its own end events, on the JS thread)
+  const offsets = useRef(new Map<string, number>());
+  const restedAt = useRef(0);
+  const viewH = useRef(0);
+  // a place to return to once the page underneath has laid out enough of itself to scroll that far
+  const restore = useRef<{ y: number; tries: number } | null>(null);
+  const shownPage = useRef({ key: pageKey, depth: trail.length });
   useLayoutEffect(() => {
-    scrollRef.current?.scrollTo({ y: 0, animated: false });
-    barOffset.value = 0;
+    const was = shownPage.current;
+    if (was.key === pageKey) return;
+    offsets.current.set(was.key, restedAt.current);
+    shownPage.current = { key: pageKey, depth: trail.length };
+    const kept = new Set(['top', ...trail.map(keyOf)]);
+    for (const k of [...offsets.current.keys()]) if (!kept.has(k)) offsets.current.delete(k);
+    const y = trail.length < was.depth ? offsets.current.get(pageKey) ?? 0 : 0;
+    restore.current = y > 0 ? { y, tries: 0 } : null;
+    scrollRef.current?.scrollTo({ y, animated: false });
+    barOffset.value = y;
+    restedAt.current = y;
   }, [pageKey, barOffset]);
+  const onContentSize = (_w: number, h: number) => {
+    const r = restore.current;
+    if (!r) return;
+    // the page may lay out in steps (Analytics builds its subjects a frame later): wait for enough of it, a few steps at most
+    const enough = h - viewH.current >= r.y;
+    r.tries += 1;
+    if (enough || r.tries >= 4) restore.current = null;
+    scrollRef.current?.scrollTo({ y: r.y, animated: false });
+    barOffset.value = Math.min(r.y, Math.max(0, h - viewH.current));
+  };
+  const onRest = (e: { nativeEvent: { contentOffset: { y: number } } }) => { restedAt.current = e.nativeEvent.contentOffset.y; };
+  // a category picked from its row in Analytics opens a new page under it: back to its top, where its headline is
+  const toTop = React.useCallback(() => {
+    restore.current = null;
+    restedAt.current = 0;
+    scrollRef.current?.scrollTo({ y: 0, animated: level !== 'none' });
+  }, [level]);
 
   // the sheet that opens a learning keeps the exam's name while it closes, so its title never flips to "New learning"
   const learnFor = useRef<string | undefined>(undefined);
@@ -419,24 +530,31 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <Animated.ScrollView
           ref={scrollRef}
           {...header.scrollProps}
+          onLayout={(e) => { viewH.current = e.nativeEvent.layout.height; }}
+          onContentSizeChange={onContentSize}
+          onScrollBeginDrag={() => { restore.current = null; }}
+          onScrollEndDrag={onRest}
+          onMomentumScrollEnd={onRest}
           contentContainerStyle={[
             frame(READ_MAX),
             { padding: S.pad, paddingTop: header.padTop, paddingBottom: (inExam || aside ? 40 : 120) + (mode === 'tab' ? 0 : insets.bottom) },
           ]}
         >
           <View key={pageKey}>
-            {analytics ? (
+            {analytics && focus ? (
               <ScoreAnalytics
-                hero={header.hero} view={analyticsView} onView={setAnalyticsView}
+                hero={header.hero} ix={ix} resolved={focus} onView={setAnalyticsView}
                 onOpenExam={openNode}
                 onManageCategories={() => setTagsOpen(true)}
+                onScopePicked={toTop}
+                picked={trendPick} onPick={setTrendPick}
               />
             ) : notebookRows ? (
               <Notebook
                 hero={header.hero} rows={notebookRows} ix={ix} picked={picked} match={match} find={find} onFind={setFind}
                 onPick={(id) => { tick(); setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])); }}
                 onMatch={() => { tick(); setMatch((m) => (m === 'all' ? 'any' : 'all')); }}
-                onClear={() => { tick(); setPicked([]); setMatch('any'); }}
+                onClear={() => { tick(); setPicked([]); setMatch('any'); setFind(''); }}
                 onOpen={(l) => openNode(l.nodeId)}
                 onMenu={openLearning}
                 onManage={() => setTagsOpen(true)}
@@ -444,19 +562,20 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
             ) : inExam && here ? (
               <ExamView
                 hero={header.hero}
-                exam={here} ix={ix} today={today} onOpen={openNode} onMenu={openMenu}
+                exam={here} ix={ix} today={today} delta={table.delta.get(here.id) ?? null} onOpen={openNode} onMenu={openMenu}
                 onEdit={() => editNode(here)}
                 onAddPart={() => editNode(here, true)}
-                learnings={learnings.filter((l) => l.nodeId === here.id)}
+                learnings={examLearnings}
                 onAddLearning={() => setLearn({ mode: 'new', nodeId: here.id })}
                 onLearningMenu={openLearning}
               />
             ) : (
               <GroupView
                 hero={header.hero}
-                groupId={here?.id ?? null} group={here} ix={ix} today={today} sort={sort}
+                groupId={here?.id ?? null} group={here} ix={ix} table={table} today={today} sort={sort}
                 onSort={() => { tick(); setSort(SORTS[(SORTS.findIndex((x) => x.key === sort) + 1) % SORTS.length].key); }}
                 onOpen={openNode} onMenu={openMenu}
+                onMark={editNode}
                 onAdd={() => newExam(here?.id ?? null)}
                 onAnalytics={openAnalytics}
                 learnedBy={learnedBy}
@@ -469,6 +588,8 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <Bouncy
             radius={999}
             scaleTo={0.9}
+            accessibilityRole="button"
+            accessibilityLabel="Add an exam or a group"
             style={[
               st.fab,
               { right: fabRight, bottom: mode === 'tab' ? 24 : insets.bottom + 20 },
@@ -518,7 +639,13 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 style={st.moveRow}
               >
                 <Ionicons name={dst.id ? 'folder-outline' : 'layers-outline'} size={19} color={current ? C.textFaint : C.accent} />
-                <Text style={[T.body, { flex: 1, marginLeft: 12, fontFamily: F.med }, current && { color: C.textFaint }]} numberOfLines={1}>{dst.label}</Text>
+                {/* a long path is cut at its start, so the group's own name, at the end, stays in view */}
+                <Text
+                  style={[T.body, { flex: 1, marginLeft: 12, fontFamily: F.med }, current && { color: C.textFaint }]}
+                  numberOfLines={1} ellipsizeMode="head"
+                >
+                  {dst.label}
+                </Text>
                 {current ? <Text style={T.caption}>Here now</Text> : null}
               </Bouncy>
             </View>
@@ -528,59 +655,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <Text style={[T.caption, { marginTop: 12 }]}>To make an exam part of another one, add it there as a subject.</Text>
         ) : null}
       </Sheet>
-      <Sheet
-        visible={catOpen}
-        onClose={() => setCatOpen(false)}
-        onClosed={() => {
-          const done = catDone.current;
-          catDone.current = null;
-          if (done) toast(done.text, { label: 'Undo', onPress: done.undo });
-        }}
-        title={catGroup ? 'Category for ' + nameOf(ix, catGroup) : 'Category'}
-      >
-        <Text style={[T.caption, { marginBottom: 12 }]}>
-          Every exam in this group goes in the category you pick, and keeps its other tags. Subjects are not changed.
-        </Text>
-        {categoriesOf(scoreTags).map((c, i) => (
-          <View key={c.id}>
-            {i > 0 && <Hairline />}
-            <Bouncy onPress={() => putInCategory(c.id, c.label)} scaleTo={0.98} radius={S.radiusSm} style={st.moveRow}>
-              <View style={[st.catDot, { backgroundColor: c.color + '2E', borderColor: c.color + '99' }]} />
-              <Text style={[T.body, { flex: 1, marginLeft: 12, fontFamily: F.med }]} numberOfLines={1}>{c.label}</Text>
-            </Bouncy>
-          </View>
-        ))}
-        {categoriesOf(scoreTags).length ? (
-          <>
-            <Hairline />
-            <Bouncy onPress={() => putInCategory(null, '')} scaleTo={0.98} radius={S.radiusSm} style={st.moveRow}>
-              <Ionicons name="remove-circle-outline" size={19} color={C.textFaint} />
-              <Text style={[T.body, { flex: 1, marginLeft: 12, color: C.textDim }]}>No category</Text>
-            </Bouncy>
-          </>
-        ) : null}
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: 12 }}>
-          <Field
-            value={catDraft} onChangeText={setCatDraft} placeholder="New category" maxLength={40}
-            style={{ flex: 1, marginBottom: 0 }} returnKeyType="done"
-            onSubmitEditing={() => {
-              const name = catDraft.trim();
-              if (!name) return;
-              const id = useStore.getState().addScoreTag(name, { category: true });
-              if (id) putInCategory(id, name);
-            }}
-          />
-          <PillButton
-            small label="Add" style={{ marginLeft: 12 }}
-            onPress={() => {
-              const name = catDraft.trim();
-              if (!name) return;
-              const id = useStore.getState().addScoreTag(name, { category: true });
-              if (id) putInCategory(id, name);
-            }}
-          />
-        </View>
-      </Sheet>
+      <CategorySheet group={catGroup} visible={catOpen} onClose={() => setCatOpen(false)} ix={ix} />
       <DotMenu
         visible={learnMenu}
         onClose={() => setLearnMenu(false)}
@@ -605,29 +680,151 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   );
 }
 
+/* ---------------- a group's exams into a category ---------------- */
+
+/**
+ * Putting every exam in a group in one category. A component of its own, so the new category's name, typed here,
+ * re-renders this sheet and not the whole level behind it. The category every exam in the group is in already is
+ * marked "Here now", as the move sheet marks where a node is, and only the exams whose category changes are counted.
+ */
+function CategorySheet({ group, visible, onClose, ix }: {
+  group: ScoreNode | null; visible: boolean; onClose: () => void; ix: ScoreIndex;
+}) {
+  const scoreTags = useStore((s) => s.scoreTags);
+  const setExamCategory = useStore((s) => s.setExamCategory);
+  const restoreExamTags = useStore((s) => s.restoreExamTags);
+  const [draft, setDraft] = useState('');
+  const done = useRef<null | { text: string; undo: () => void }>(null);
+  // the rows still answer while the sheet slides away, and a second tap would leave an Undo that only takes the exams
+  // back to the first tap's result
+  const busy = useRef(false);
+  useEffect(() => {
+    if (!visible) return;
+    setDraft('');
+    busy.current = false;
+  }, [visible]);
+  const cats = categoriesOf(scoreTags);
+  // the category the group's exams share (null for none, undefined when they differ), worked out while the sheet is
+  // open and kept while it closes, so the row just tapped does not change on the way out
+  const inNow = useRef<string | null | undefined>(undefined);
+  if (visible && group) {
+    const ids = new Set(examsUnder(ix, group.id).map((n) => categoryOf(n, scoreTags)?.id ?? null));
+    inNow.current = ids.size === 1 ? [...ids][0] : undefined;
+  }
+
+  const put = (categoryId: string | null, label: string) => {
+    if (!group || busy.current) return;
+    busy.current = true;
+    // read fresh: a category made here a moment ago may already have taken in the exams carrying a tag of its name
+    const s = useStore.getState();
+    const fresh = indexScores(s.scores);
+    const ids = examsUnder(fresh, group.id)
+      .filter((n) => isTopExam(fresh, n) && (categoryOf(n, s.scoreTags)?.id ?? null) !== categoryId)
+      .map((n) => n.id);
+    if (ids.length) {
+      const before = setExamCategory(ids, categoryId);
+      tick();
+      const n = Object.keys(before).length;
+      done.current = {
+        text: categoryId ? 'Put ' + plural(n, 'exam') + ' in ' + label : 'Took ' + plural(n, 'exam') + ' out of their category',
+        undo: () => restoreExamTags(before),
+      };
+    }
+    onClose();
+  };
+  const make = () => {
+    const name = draft.trim();
+    if (!name || busy.current) return;
+    const id = useStore.getState().addScoreTag(name, { category: true });
+    if (id) put(id, name);
+  };
+
+  return (
+    <Sheet
+      visible={visible}
+      onClose={onClose}
+      onClosed={() => {
+        const d = done.current;
+        done.current = null;
+        if (d) toast(d.text, { label: 'Undo', onPress: d.undo });
+      }}
+      title={group ? 'Category for ' + nameOf(ix, group) : 'Category'}
+    >
+      <Text style={[T.caption, { marginBottom: 12 }]}>
+        Every exam in this group goes in the category you pick, and keeps its other tags. Subjects are not changed.
+      </Text>
+      {cats.map((c, i) => {
+        const current = inNow.current === c.id;
+        return (
+          <View key={c.id}>
+            {i > 0 && <Hairline />}
+            <Bouncy disabled={current} onPress={() => put(c.id, c.label)} scaleTo={0.98} radius={S.radiusSm} style={st.moveRow}>
+              <View style={[st.catDot, { backgroundColor: c.color + '2E', borderColor: c.color + '99' }]} />
+              <Text style={[T.body, { flex: 1, marginLeft: 12, fontFamily: F.med }, current && { color: C.textFaint }]} numberOfLines={1}>
+                {c.label}
+              </Text>
+              {current ? <Text style={T.caption}>Here now</Text> : null}
+            </Bouncy>
+          </View>
+        );
+      })}
+      {cats.length ? (
+        <>
+          <Hairline />
+          <Bouncy disabled={inNow.current === null} onPress={() => put(null, '')} scaleTo={0.98} radius={S.radiusSm} style={st.moveRow}>
+            <Ionicons name="remove-circle-outline" size={19} color={C.textFaint} />
+            <Text style={[T.body, { flex: 1, marginLeft: 12, color: inNow.current === null ? C.textFaint : C.textDim }]}>No category</Text>
+            {inNow.current === null ? <Text style={T.caption}>Here now</Text> : null}
+          </Bouncy>
+        </>
+      ) : null}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: 12 }}>
+        <Field
+          value={draft} onChangeText={setDraft} placeholder="New category" maxLength={40}
+          style={{ flex: 1, marginBottom: 0 }} returnKeyType="done" onSubmitEditing={make}
+        />
+        <PillButton small label="Add" style={{ marginLeft: 12 }} onPress={make} />
+      </View>
+    </Sheet>
+  );
+}
+
 /* ---------------- a group, or the top level ---------------- */
 
-function GroupView({ hero, groupId, ix, today, sort, onSort, onOpen, onMenu, onAdd, onAnalytics, learnedBy }: {
+function GroupView({ hero, groupId, ix, table, today, sort, onSort, onOpen, onMenu, onMark, onAdd, onAnalytics, learnedBy }: {
   /** the header's first block, carried in the page's first entrance */
   hero: React.ReactNode;
   groupId: string | null; group?: ScoreNode; ix: ScoreIndex; today: string; sort: Sort;
+  /** every exam's result and its move on the one before (resultTable), worked out once for the whole tree */
+  table: { result: Map<string, ScoreResult | null>; delta: Map<string, number | null> };
   onSort: () => void; onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void; onAdd: () => void;
+  /** opens an exam waiting for its marks where they are typed */
+  onMark: (n: ScoreNode) => void;
   onAnalytics: () => void;
   /** how many learnings each exam keeps */
   learnedBy: Map<string, number>;
 }) {
   const kids = ix.children.get(groupId) || [];
-  const groups = kids.filter((k) => k.kind === 'group').sort((a, b) => a.title.localeCompare(b.title));
+  const groups = useMemo(
+    () => kids
+      .filter((k) => k.kind === 'group')
+      .sort((a, b) => byName(nameOf(ix, a), nameOf(ix, b)))
+      .map((g) => ({ g, count: examsUnder(ix, g.id).length, s: groupSummary(ix, g.id) })),
+    [kids, ix],
+  );
   const exams = useMemo(() => {
     const list = kids.filter((k) => k.kind === 'exam');
-    const pct = (n: ScoreNode) => resultOf(n, ix)?.pct ?? -Infinity;
+    const pct = (n: ScoreNode) => table.result.get(n.id)?.pct ?? -Infinity;
     const byWhen = (a: ScoreNode, b: ScoreNode) => whenOf(a).localeCompare(whenOf(b)) || a.createdAt - b.createdAt;
     if (sort === 'oldest') return list.sort(byWhen);
     if (sort === 'best') return list.sort((a, b) => pct(b) - pct(a) || byWhen(b, a));
-    if (sort === 'az') return list.sort((a, b) => a.title.localeCompare(b.title));
+    if (sort === 'az') return list.sort((a, b) => byName(nameOf(ix, a), nameOf(ix, b)) || byWhen(a, b));
     return list.sort((a, b) => byWhen(b, a));
-  }, [kids, sort, ix]);
-  const soon = upcoming(ix, groupId, today).slice(0, 4);
+  }, [kids, sort, ix, table]);
+  const soon = useMemo(() => upcoming(ix, groupId, today).slice(0, 4), [ix, groupId, today]);
+  // exams sat lately with no marks yet: once their day has passed they leave Coming up, and would otherwise sit in the
+  // list as a faint "Not marked" with nothing to bring them back
+  const toMark = useMemo(() => waitingForMarks(ix, groupId, today), [ix, groupId, today]);
   let enter = 0;
 
   if (!kids.length) {
@@ -673,10 +870,28 @@ function GroupView({ hero, groupId, ix, today, sort, onSort, onOpen, onMenu, onA
         </Enter>
       ) : null}
 
+      {toMark.length ? (
+        <Enter index={enter++}>
+          <SectionTitle>To mark</SectionTitle>
+          <ListCard>
+            {toMark.map((n) => (
+              <ListRow key={n.id} onPress={() => onMark(n)} onLongPress={() => onMenu(n)} style={{ paddingVertical: 12 }}>
+                <Ionicons name="create-outline" size={18} color={C.accent} />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={st.rowTitle} numberOfLines={1}>{nameOf(ix, n)}</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>{fmtExamDate(n.date as string)}</Text>
+                </View>
+                <Text style={[st.when, { color: C.textDim }]}>{fromToday(n.date as string, today)}</Text>
+              </ListRow>
+            ))}
+          </ListCard>
+        </Enter>
+      ) : null}
+
       <Enter index={enter++}>
         <SectionTitle
           right={exams.length > 1 ? (
-            <Pressable onPress={onSort} hitSlop={8} accessibilityRole="button" accessibilityLabel={'Sorted by ' + SORTS.find((x) => x.key === sort)?.label}>
+            <Pressable onPress={onSort} hitSlop={LINK_SLOP} accessibilityRole="button" accessibilityLabel={'Sorted by ' + SORTS.find((x) => x.key === sort)?.label}>
               {/* the order's name dips over as the rows take their new places */}
               <FadeSwap swapKey={sort}>
                 <Text style={[st.link, { color: C.accent }]}>{SORTS.find((x) => x.key === sort)?.label}</Text>
@@ -687,24 +902,23 @@ function GroupView({ hero, groupId, ix, today, sort, onSort, onOpen, onMenu, onA
           {groups.length && exams.length ? 'Groups and exams' : groups.length ? 'Groups' : 'Exams'}
         </SectionTitle>
         <ListCard>
-          {groups.map((g) => {
-            const count = examsUnder(ix, g.id).length;
-            const s = groupSummary(ix, g.id);
-            return (
-              <ListRow key={g.id} onPress={() => onOpen(g.id)} onLongPress={() => onMenu(g)} style={{ paddingVertical: 12 }}>
-                <Ionicons name="folder-outline" size={20} color={C.accent} />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={st.rowTitle} numberOfLines={1}>{nameOf(ix, g)}</Text>
-                  <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>
-                    {count ? plural(count, 'exam') + (s ? '  ·  latest ' + fmtPct(s.latest.pct) : '') : 'Empty'}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
-              </ListRow>
-            );
-          })}
+          {groups.map(({ g, count, s }) => (
+            <ListRow key={g.id} onPress={() => onOpen(g.id)} onLongPress={() => onMenu(g)} style={{ paddingVertical: 12 }}>
+              <Ionicons name="folder-outline" size={20} color={C.accent} />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={st.rowTitle} numberOfLines={1}>{nameOf(ix, g)}</Text>
+                <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>
+                  {count ? plural(count, 'exam') + (s ? '  ·  latest ' + fmtPct(s.latest.pct) : '') : 'Empty'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
+            </ListRow>
+          ))}
           {exams.map((n) => (
-            <ExamRow key={n.id} n={n} ix={ix} today={today} onOpen={onOpen} onMenu={onMenu} learned={learnedBy.get(n.id) || 0} />
+            <ExamRow
+              key={n.id} n={n} ix={ix} today={today} r={table.result.get(n.id) ?? null} delta={table.delta.get(n.id) ?? null}
+              onOpen={onOpen} onMenu={onMenu} learned={learnedBy.get(n.id) || 0}
+            />
           ))}
         </ListCard>
       </Enter>
@@ -712,13 +926,14 @@ function GroupView({ hero, groupId, ix, today, sort, onSort, onOpen, onMenu, onA
   );
 }
 
-function ExamRow({ n, ix, today, onOpen, onMenu, learned }: {
-  n: ScoreNode; ix: ScoreIndex; today: string; onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void;
+/** One exam in a group's list. Memoised, so a sheet or a menu opening over a long list does not draw every row again. */
+const ExamRow = React.memo(function ExamRow({ n, ix, today, r, delta, onOpen, onMenu, learned }: {
+  n: ScoreNode; ix: ScoreIndex; today: string; r: ScoreResult | null; delta: number | null;
+  onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void;
   learned: number;
 }) {
-  const r = resultOf(n, ix);
+  useTheme(); // the countdown is in the accent, so a new accent reaches a row that is otherwise unchanged
   const parts = (ix.children.get(n.id) || []).filter((k) => k.kind === 'exam').length;
-  const delta = r ? deltaVsPrevious(n, ix) : null;
   const upcomingDay = !r && n.date && n.date >= today;
   const caption = [
     n.date ? fmtExamDate(n.date) : '',
@@ -751,24 +966,67 @@ function ExamRow({ n, ix, today, onOpen, onMenu, learned }: {
       )}
     </ListRow>
   );
-}
+});
 
 /* ---------------- one exam ---------------- */
 
+/** The way down from an exam to one of its subjects (or a subject's part), for a learning kept there: "Physics  /  Mechanics". */
+function pathBelow(ix: ScoreIndex, topId: string, id: string) {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (let n = ix.byId.get(id); n && n.id !== topId && !seen.has(n.id); n = n.parentId ? ix.byId.get(n.parentId) : undefined) {
+    seen.add(n.id);
+    names.unshift(nameOf(ix, n));
+  }
+  return names.join('  /  ');
+}
+
+/**
+ * A subject's share of its paper, when it can be known: of the marks when they add up, of the result when the paper
+ * is weighted. Null with nothing to share it with, or a total missing.
+ */
+function shareOf(ix: ScoreIndex, n: ScoreNode, parent: ScoreNode | undefined): string | null {
+  if (parent?.kind !== 'exam') return null;
+  const sibs = (ix.children.get(parent.id) || []).filter((k) => k.kind === 'exam');
+  if (sibs.length < 2) return null;
+  let v: number;
+  let of: string;
+  if ((parent.combine || 'sum') === 'weighted') {
+    const w = (k: ScoreNode) => (typeof k.weight === 'number' && k.weight > 0 ? k.weight : 1);
+    v = w(n) / sibs.reduce((a, k) => a + w(k), 0);
+    of = 'the result';
+  } else {
+    const totalOf = (k: ScoreNode) => resultOf(k, ix)?.outOf ?? k.outOf;
+    const totals = sibs.map(totalOf);
+    const mine = totalOf(n);
+    if (mine == null || totals.some((t) => typeof t !== 'number')) return null;
+    v = mine / (totals as number[]).reduce((a, t) => a + t, 0);
+    of = 'the marks';
+  }
+  const pct = Math.round(v * 100);
+  return pct > 0 && pct < 100 ? pct + '% of ' + of : null;
+}
+
 function ExamView({
-  hero, exam, ix, today, onOpen, onMenu, onEdit, onAddPart, learnings, onAddLearning, onLearningMenu,
+  hero, exam, ix, today, delta, onOpen, onMenu, onEdit, onAddPart, learnings, onAddLearning, onLearningMenu,
 }: {
   /** the header's first block, carried in the page's first entrance */
   hero: React.ReactNode;
   exam: ScoreNode; ix: ScoreIndex; today: string; onOpen: (id: string) => void; onMenu: (n: ScoreNode) => void;
+  /** how far its result moved on the one before, from the screen's result table */
+  delta: number | null;
   onEdit: () => void; onAddPart: () => void;
+  /** its own learnings and its subjects' */
   learnings: Learning[]; onAddLearning: () => void; onLearningMenu: (l: Learning) => void;
 }) {
   const r = resultOf(exam, ix);
   const parts = (ix.children.get(exam.id) || []).filter((k) => k.kind === 'exam').sort((a, b) => a.createdAt - b.createdAt);
   const mismatch = partsMismatch(exam, ix);
-  const delta = r ? deltaVsPrevious(exam, ix) : null;
   const parent = exam.parentId ? ix.byId.get(exam.parentId) : undefined;
+  // an exam is split into subjects; a subject is split into parts (Section A, Section B)
+  const top = isTopExam(ix, exam);
+  const word = top ? 'subject' : 'part';
+  const moved = delta != null && Math.round(delta * 10) !== 0;
   const weighted = (exam.combine || 'sum') === 'weighted';
   const facts = [
     exam.rank != null ? 'Rank ' + exam.rank.toLocaleString('en-IN') : '',
@@ -786,7 +1044,10 @@ function ExamView({
         {hero}
         <Card hero pad={20} style={{ marginBottom: S.gap }}>
           <Text style={T.kicker} numberOfLines={1}>
-            {exam.date ? fmtExamDate(exam.date, true) + '  ·  ' + fromToday(exam.date, today) : parent?.kind === 'exam' ? 'Part of ' + nameOf(ix, parent) : 'No date'}
+            {/* the exam a subject is part of is the header's line, so its card says what it is, or its share of the paper */}
+            {exam.date
+              ? fmtExamDate(exam.date, true) + '  ·  ' + fromToday(exam.date, today)
+              : parent?.kind === 'exam' ? shareOf(ix, exam, parent) || (isTopExam(ix, parent) ? 'Subject' : 'Part') : 'No date'}
           </Text>
           {r ? (
             <>
@@ -795,22 +1056,22 @@ function ExamView({
                 <Text style={st.heroMarks}>{fmtMark(r.score)} / {fmtMark(r.outOf)}</Text>
               ) : null}
               {r.from === 'parts' && r.marked != null && r.parts != null && r.marked < r.parts ? (
-                <Text style={[T.caption, { marginTop: 4 }]}>{r.marked} of {plural(r.parts, 'subject')} marked</Text>
+                <Text style={[T.caption, { marginTop: 4 }]}>{r.marked} of {plural(r.parts, word)} marked</Text>
               ) : null}
             </>
           ) : (
             <>
               <Text style={st.unmarked}>Not marked yet</Text>
-              {!parts.length ? (
-                <View style={{ flexDirection: 'row', marginTop: 14 }}>
-                  <PillButton small label="Add marks" icon="create-outline" onPress={onEdit} />
-                </View>
-              ) : null}
+              {/* an exam set up ahead of its day (from the last one's subjects, usually) is marked on the form, every
+                  subject in one place; a subject with parts opens its sheet */}
+              <View style={{ flexDirection: 'row', marginTop: 14 }}>
+                <PillButton small label="Add marks" icon="create-outline" onPress={onEdit} />
+              </View>
             </>
           )}
           <TagRow ids={exam.tags} style={{ marginTop: 14, marginBottom: -6 }} />
           {facts ? <Text style={[st.facts, { marginTop: 12 }]}>{facts}</Text> : null}
-          {gap != null || delta != null ? (
+          {gap != null || moved ? (
             <View style={[st.sideRow, { marginTop: 8, flexWrap: 'wrap', gap: 14 }]}>
               {gap != null ? (
                 <Text style={[T.caption, { color: gap >= 0 ? C.green : C.danger }]}>
@@ -818,9 +1079,9 @@ function ExamView({
                   {Math.round(gap * 10) === 0 ? ', on target' : ', ' + Math.abs(Math.round(gap * 10) / 10) + (gap > 0 ? ' above' : ' below')}
                 </Text>
               ) : null}
-              {delta != null ? (
+              {moved ? (
                 <View style={st.sideRow}>
-                  <Delta value={delta} />
+                  <Delta value={delta as number} />
                   <Text style={[T.caption, { marginLeft: 4 }]}>on the one before</Text>
                 </View>
               ) : null}
@@ -834,7 +1095,7 @@ function ExamView({
           <View style={st.hintRow}>
             <Ionicons name="information-circle-outline" size={16} color={C.textFaint} />
             <Text style={[T.caption, { flex: 1, marginLeft: 8 }]}>
-              Its subjects add up to {mismatch.score != null && mismatch.outOf != null ? fmtMark(mismatch.score) + ' / ' + fmtMark(mismatch.outOf) + ', ' : ''}
+              Its {word}s add up to {mismatch.score != null && mismatch.outOf != null ? fmtMark(mismatch.score) + ' / ' + fmtMark(mismatch.outOf) + ', ' : ''}
               {fmtPct(mismatch.pct)}. The marks you entered for the whole exam are the ones shown.
             </Text>
           </View>
@@ -844,12 +1105,12 @@ function ExamView({
       <Enter index={2}>
         <SectionTitle
           right={
-            <Pressable onPress={onAddPart} hitSlop={8} accessibilityRole="button">
+            <Pressable onPress={onAddPart} hitSlop={LINK_SLOP} accessibilityRole="button" accessibilityLabel={'Add a ' + word}>
               <Text style={[st.link, { color: C.accent }]}>+ Add</Text>
             </Pressable>
           }
         >
-          Subjects{weighted && parts.length ? '  ·  weighted' : ''}
+          {top ? 'Subjects' : 'Parts'}{weighted && parts.length ? '  ·  weighted' : ''}
         </SectionTitle>
         <Animated.View key={parts.length ? 'list' : 'none'} entering={partsIn}>
           {parts.length ? (
@@ -869,7 +1130,7 @@ function ExamView({
                         {[
                           pr && pr.score != null && pr.outOf != null ? fmtMark(pr.score) + ' / ' + fmtMark(pr.outOf) : '',
                           weighted ? 'weight ' + fmtMark(p.weight ?? 1) : '',
-                          sub ? 'has subjects' : '',
+                          sub ? 'has parts' : '',
                         ].filter(Boolean).join('  ·  ') || ' '}
                       </Text>
                       <TagRow ids={p.tags} style={{ marginTop: 8, marginBottom: -10 }} />
@@ -879,10 +1140,14 @@ function ExamView({
               })}
             </ListCard>
           ) : (
-            <Card pad={16}>
-              <Text style={T.label}>Split it into subjects, like Physics, Chemistry and Maths, and their marks add up here.</Text>
+            <Card>
+              <Text style={T.label}>
+                {top
+                  ? 'Split it into subjects, like Physics, Chemistry and Maths, and their marks add up here.'
+                  : 'Split it into parts, like Section A and Section B, and their marks add up here.'}
+              </Text>
               <View style={{ flexDirection: 'row', marginTop: 12 }}>
-                <Chip small icon="add" label="Add a subject" onPress={onAddPart} />
+                <Chip small icon="add" label={'Add a ' + word} onPress={onAddPart} />
               </View>
             </Card>
           )}
@@ -892,7 +1157,7 @@ function ExamView({
       <Enter index={3}>
         <SectionTitle
           right={(
-            <Pressable onPress={onAddLearning} hitSlop={8} accessibilityRole="button">
+            <Pressable onPress={onAddLearning} hitSlop={LINK_SLOP} accessibilityRole="button" accessibilityLabel="Add a learning">
               <Text style={[st.link, { color: C.accent }]}>+ Add</Text>
             </Pressable>
           )}
@@ -907,12 +1172,16 @@ function ExamView({
                   <View style={{ flex: 1 }}>
                     <Text style={T.body}>{l.text}</Text>
                     <TagRow ids={l.tags} style={{ marginTop: 8, marginBottom: -6 }} />
+                    {/* one kept on a subject says which */}
+                    {l.nodeId !== exam.id ? (
+                      <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1} ellipsizeMode="head">{pathBelow(ix, exam.id, l.nodeId)}</Text>
+                    ) : null}
                   </View>
                 </ListRow>
               ))}
             </ListCard>
           ) : (
-            <Card pad={16}>
+            <Card>
               <Text style={T.label}>
                 What this exam taught you, in your own words. Tag them, and they gather in the notebook.
               </Text>
@@ -954,6 +1223,10 @@ function Notebook({ hero, rows, ix, picked, match, find, onFind, onPick, onMatch
   const all = useStore((s) => s.scoreTags);
   const tags = React.useMemo(() => [...categoriesOf(all), ...plainTagsOf(all)], [all]);
   const { mine, shown } = rows;
+  // the list and the note that stands in for it when nothing matches fade one into the other, in place, instead of the
+  // list rising anew each time a search finds something again
+  const listIn = useSwapIn(shown.length ? 'list' : 'none');
+  const searching = !!find.trim();
 
   if (!mine.length) {
     return (
@@ -963,7 +1236,7 @@ function Notebook({ hero, rows, ix, picked, match, find, onFind, onPick, onMatch
           {hero}
           <EmptyState
             icon="book-outline"
-            title="Nothing learned yet"
+            title="No learnings yet"
             body="Open an exam and add what it taught you. Every learning gathers here, and its tags bring it back."
           />
         </Enter>
@@ -999,7 +1272,7 @@ function Notebook({ hero, rows, ix, picked, match, find, onFind, onPick, onMatch
               />
             </Appear>
           ) : null}
-          {picked.length ? <Appear><Chip small icon="close" label="Clear" onPress={onClear} /></Appear> : null}
+          {picked.length || searching ? <Appear><Chip small icon="close" label="Clear" onPress={onClear} /></Appear> : null}
           <Chip small icon="pricetags-outline" label={tags.length ? 'Manage tags' : 'Make a tag'} onPress={onManage} />
         </View>
         {picked.length > 1 ? (
@@ -1015,35 +1288,36 @@ function Notebook({ hero, rows, ix, picked, match, find, onFind, onPick, onMatch
         ) : null}
       </Enter>
 
-      {shown.length ? (
-        // the count and the filter are in the header's line, so the list follows the filters directly
-        <Enter index={1} style={{ marginTop: 10 }}>
-          <ListCard>
-            {shown.map((l) => {
-              const path = learningPath(ix, l);
-              return (
+      {/* the count and the filter are in the header's line, so the list follows the filters directly */}
+      <Enter index={1} style={shown.length ? { marginTop: 10 } : undefined}>
+        <Animated.View key={shown.length ? 'list' : 'none'} entering={listIn}>
+          {shown.length ? (
+            <ListCard>
+              {shown.map((l) => (
                 <ListRow key={l.id} onPress={() => onOpen(l)} onLongPress={() => onMenu(l)} style={{ paddingVertical: 12 }}>
                   <View style={{ flex: 1 }}>
                     <Text style={T.body}>{l.text}</Text>
                     <TagRow ids={l.tags} style={{ marginTop: 8, marginBottom: -6 }} />
-                    <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>{path}</Text>
+                    {/* cut at its start, so the exam it came from, at the end, stays in view */}
+                    <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1} ellipsizeMode="head">{learningPath(ix, l)}</Text>
                   </View>
                 </ListRow>
-              );
-            })}
-          </ListCard>
-        </Enter>
-      ) : (
-        <EmptyState
-          compact icon="filter-outline"
-          title={find.trim() && !picked.length ? 'Nothing matches that' : 'Nothing with those tags'}
-          body={find.trim() && !picked.length
-            ? 'Search looks through what each learning says and the exam it came from.'
-            : match === 'all' && picked.length > 1
-              ? 'No learning carries every tag picked. Turn All tags off to see any of them.'
-              : 'Try another tag, or clear the search.'}
-        />
-      )}
+              ))}
+            </ListCard>
+          ) : (
+            // worded for what is narrowing the list: the search, the tags, or both
+            <EmptyState
+              compact icon="filter-outline"
+              title={picked.length && !searching ? (picked.length === 1 ? 'Nothing with that tag' : 'Nothing with those tags') : 'Nothing matches that'}
+              body={match === 'all' && picked.length > 1
+                ? 'No learning carries every tag picked. Turn All tags off to see any of them.'
+                : !picked.length
+                  ? 'Search looks through what each learning says and the exam it came from.'
+                  : searching ? 'Try another tag, or clear the search.' : 'Try another tag.'}
+            />
+          )}
+        </Animated.View>
+      </Enter>
     </>
   );
 }

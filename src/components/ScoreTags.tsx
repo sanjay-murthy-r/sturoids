@@ -9,12 +9,22 @@ import { Appear } from './Motion';
 import { Chip, Field, IconBtn, PillButton, Row, Sheet, Hairline, Toggle } from './UI';
 import { tick } from '../haptics';
 
+/** What each of the tag pastels is called, in TAG_COLORS' order, for a screen reader. */
+const COLOR_NAMES = ['Mint', 'Sand', 'Rose', 'Aqua', 'Sky', 'Lime', 'Straw', 'Denim'];
+
 /**
  * A tag reads as its own colour, translucent: the flat chip every small choice in the app uses, always in its "on"
- * tint so a tag looks the same wherever it appears.
+ * tint so a tag looks the same wherever it appears. One that only shows (on a row, on an exam's card) is a plain pill
+ * with the same tint and edge: it never takes a touch, so a tap or a long press on it reaches the row beneath, and a
+ * notebook of a few hundred learnings mounts no animated hooks for its tags.
  */
 export function TagChip({ tag, onPress, dim }: { tag: ScoreTag; onPress?: () => void; dim?: boolean }) {
-  return <Chip small label={tag.label} color={tag.color} active={!dim} onPress={onPress} />;
+  if (onPress || dim) return <Chip small label={tag.label} color={tag.color} active={!dim} onPress={onPress} />;
+  return (
+    <View style={[st.pill, { backgroundColor: tag.color + '1F', borderColor: tag.color + '66' }]}>
+      <Text style={[st.pillText, { color: tag.color }]} numberOfLines={1}>{tag.label}</Text>
+    </View>
+  );
 }
 
 /** The tags a node or a learning carries, in one wrapping row. Nothing is drawn when it carries none. */
@@ -46,8 +56,10 @@ export function TagDots({ ids }: { ids?: string[] }) {
  * already in use picks that tag instead of making a second one. Categories are not offered: an exam's category is
  * chosen on its own, in the exam form.
  */
-export function TagPicker({ value, onChange, label = 'Tags' }: {
+export function TagPicker({ value, onChange, label = 'Tags', categoryHint = false }: {
   value: string[]; onChange: (ids: string[]) => void; label?: string;
+  /** the picker sits under a Category section (the exam form), so a category's name can point there */
+  categoryHint?: boolean;
 }) {
   const all = useStore((s) => s.scoreTags);
   const tags = React.useMemo(() => plainTagsOf(all), [all]);
@@ -65,7 +77,7 @@ export function TagPicker({ value, onChange, label = 'Tags' }: {
     const id = addScoreTag(name);
     // a name a category already has cannot be a plain tag too
     if (useStore.getState().scoreTags.find((t) => t.id === id)?.category) {
-      setClash(name + ' is a category. Pick it under Category.');
+      setClash(name + (categoryHint ? ' is a category. Pick it under Category.' : ' is a category. Give the tag another name.'));
       return;
     }
     setDraft('');
@@ -111,23 +123,70 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
   const addScoreTag = useStore((s) => s.addScoreTag);
   const patchScoreTag = useStore((s) => s.patchScoreTag);
   const removeScoreTag = useStore((s) => s.removeScoreTag);
+  // the tag sheet keeps its tag while it closes, so its title and its Delete button never change on the way out
   const [edit, setEdit] = React.useState<ScoreTag | null>(null);
+  const [editOpen, setEditOpen] = React.useState(false);
   const [name, setName] = React.useState('');
   const [taken, setTaken] = React.useState<'' | 'taken' | 'empty'>('');
   const [draft, setDraft] = React.useState('');
   const [catDraft, setCatDraft] = React.useState('');
+  // the last delete and its Undo. A sheet is its own window and would cover a toast, so the Undo is offered here, in
+  // the list the tag left, until the manager is next opened
+  const [gone, setGone] = React.useState<null | { label: string; category: boolean; undo: () => void }>(null);
+  React.useEffect(() => { if (visible) setGone(null); }, [visible]);
   const use = React.useMemo(() => tagUse(tags, scores, learnings), [tags, scores, learnings]);
   const cats = categoriesOf(tags);
   const plain = plainTagsOf(tags);
 
-  const open = (t: ScoreTag) => { setEdit(t); setName(t.label); setTaken(''); };
+  const open = (t: ScoreTag) => { setEdit(t); setEditOpen(true); setName(t.label); setTaken(''); };
   const saveName = () => {
     if (!edit) return;
     if (!name.trim()) { setTaken('empty'); return; }
     if (name.trim() !== edit.label && !patchScoreTag(edit.id, { label: name })) { setTaken('taken'); return; }
     setTaken('');
-    setEdit(null);
+    setEditOpen(false);
   };
+
+  // Deleting takes the tag off everything carrying it, so what carried it is noted first and an Undo puts it back: the
+  // tag again (a category again), in its colour, on the same exams, subjects and learnings, in the same place among
+  // their tags (a category first, as it was).
+  const deleteTag = (t: ScoreTag) => {
+    const s = useStore.getState();
+    if (!s.scoreTags.some((x) => x.id === t.id)) return; // a second tap while the sheet closes
+    const onNodes: Record<string, string[]> = {};
+    for (const n of s.scores) if (n.tags?.includes(t.id)) onNodes[n.id] = [...n.tags];
+    const onLearnings = s.learnings.filter((l) => l.tags.includes(t.id)).map((l) => ({ id: l.id, tags: [...l.tags] }));
+    removeScoreTag(t.id);
+    setGone({
+      label: t.label,
+      category: !!t.category,
+      undo: () => {
+        const now = useStore.getState();
+        const back = now.addScoreTag(t.label, t.category ? { category: true } : undefined);
+        if (!back) return;
+        now.patchScoreTag(back, { color: t.color });
+        const swap = (ids: string[]) => ids.map((id) => (id === t.id ? back : id));
+        now.restoreExamTags(Object.fromEntries(Object.entries(onNodes).map(([id, ids]) => [id, swap(ids)])));
+        for (const l of onLearnings) now.patchLearning(l.id, { tags: swap(l.tags) });
+      },
+    });
+    setEditOpen(false);
+  };
+
+  // where the tag was, a line that says it went and takes it back
+  const undoLine = (category: boolean) => (gone && gone.category === category ? (
+    <Appear style={st.undoRow}>
+      <Text style={[T.caption, { flex: 1 }]} numberOfLines={1}>Deleted {gone.label}</Text>
+      <Pressable
+        onPress={() => { tick(); gone.undo(); setGone(null); }}
+        hitSlop={{ top: 13, bottom: 13, left: 10, right: 10 }}
+        accessibilityRole="button"
+        accessibilityLabel={'Undo deleting ' + gone.label}
+      >
+        <Text style={[st.link, { color: C.accent }]}>Undo</Text>
+      </Pressable>
+    </Appear>
+  ) : null);
 
   const row = (t: ScoreTag, i: number, isCat: boolean) => (
     <View key={t.id}>
@@ -172,6 +231,7 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
             A category keeps like with like, such as JEE Main mocks apart from unit tests. An exam sits in one, and Analytics compares the exams inside each.
           </Text>
         ) : cats.map((t, i) => row(t, i, true))}
+        {undoLine(true)}
         {addLine(catDraft, setCatDraft, true)}
 
         <Text style={[st.section, { marginTop: 28 }]}>Tags</Text>
@@ -180,10 +240,11 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
             Tags sort exams, subjects and learnings, like Careless or Formulae. Make one here, or while you add an exam.
           </Text>
         ) : plain.map((t, i) => row(t, i, false))}
+        {undoLine(false)}
         {addLine(draft, setDraft, false)}
       </Sheet>
 
-      <Sheet visible={!!edit} onClose={() => setEdit(null)} title={edit ? edit.label : 'Tag'}>
+      <Sheet visible={editOpen} onClose={() => setEditOpen(false)} title={edit ? edit.label : 'Tag'}>
         <Field label="Name" value={name} onChangeText={(v) => { setName(v); setTaken(''); }} maxLength={40} />
         {taken ? (
           <Appear>
@@ -219,7 +280,7 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
         </Row>
         <Text style={[st.label, { marginTop: 14 }]}>Colour</Text>
         <View style={st.row}>
-          {TAG_COLORS.map((c) => {
+          {TAG_COLORS.map((c, i) => {
             const on = edit?.color === c;
             return (
               <Pressable
@@ -227,7 +288,8 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
                 onPress={() => { if (edit) { tick(); patchScoreTag(edit.id, { color: c }); setEdit({ ...edit, color: c }); } }}
                 hitSlop={6}
                 accessibilityRole="button"
-                accessibilityLabel={'Colour ' + c}
+                accessibilityLabel={COLOR_NAMES[i] || 'Colour'}
+                accessibilityState={{ selected: on }}
                 style={[st.swatch, { backgroundColor: c + '2E', borderColor: on ? c : c + '55', borderWidth: on ? 2 : 1 }]}
               >
                 {on ? <Ionicons name="checkmark" size={15} color={c} /> : null}
@@ -241,7 +303,7 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
           onPress={() => {
             if (!edit) return;
             const n = use.get(edit.id) || 0;
-            const go = () => { removeScoreTag(edit.id); setEdit(null); };
+            const go = () => deleteTag(edit);
             // a tag no exam or learning carries goes at once; one in use asks first, since it comes off all of them
             if (!n) { go(); return; }
             Alert.alert(
@@ -265,6 +327,11 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
 
 const st = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
+  // a small chip's measure, its 1 dp edge taken from the padding as the chip's edge layer takes it
+  pill: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, marginRight: 10, marginBottom: 10 },
+  pillText: { fontFamily: F.semi, fontSize: 12, letterSpacing: TRACK.fine },
+  undoRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 2 },
+  link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small, marginLeft: 12 },
   section: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.caps, textTransform: 'uppercase', marginBottom: 8, marginLeft: 2 },
   label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
   problem: { color: C.danger, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -8, marginBottom: 12 },

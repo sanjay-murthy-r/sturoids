@@ -68,7 +68,8 @@ const subjectsOf = (ix: ScoreIndex, id: string) =>
 
 /**
  * What a new exam starts from: the latest exam in its category (or, with no category, in the same group). Its
- * subjects come across with their totals and weights, marks blank, so a mock series is typed in seconds.
+ * subjects come across with their totals and weights, marks blank, so a mock series is typed in seconds, and so does
+ * the latest target set in that series, since a goal is usually the same from one mock to the next.
  */
 function templateFor(ix: ScoreIndex, tags: ScoreTag[], category: string | null, parentId: string | null) {
   const pool = topExams(ix)
@@ -76,6 +77,7 @@ function templateFor(ix: ScoreIndex, tags: ScoreTag[], category: string | null, 
     .sort(newestFirst);
   const latest = pool[0];
   const withParts = pool.find((n) => subjectsOf(ix, n.id).length);
+  const goal = pool.find((n) => typeof n.target === 'number')?.target;
   const rows: SubjectRow[] = withParts
     ? subjectsOf(ix, withParts.id).map((p) => ({
       key: rowKey(), title: p.title, score: '', outOf: num(p.outOf ?? resultOf(p, ix)?.outOf), weight: num(p.weight), locked: false,
@@ -86,6 +88,7 @@ function templateFor(ix: ScoreIndex, tags: ScoreTag[], category: string | null, 
     combine: (withParts?.combine || 'sum') as Draft['combine'],
     template: withParts ? { id: withParts.id, title: withParts.title || 'the last exam' } : null,
     outOf: latest && typeof latest.outOf === 'number' ? num(latest.outOf) : '',
+    target: num(goal),
     // a numbered series offers its next number; a title without one is not guessed at
     suggestion: latest && /\d/.test(latest.title) ? nextTitle(latest.title) : null,
   };
@@ -132,12 +135,15 @@ function initialDraft(params: { id?: string; parent?: string; subject?: string }
   const t = templateFor(ix, scoreTags, category, parentId);
   const draft: Draft = {
     title: '', date: todayKey(), category, tags: [], score: '', outOf: t.rows.length ? '' : t.outOf, ownMarks: false,
-    combine: t.combine, subjects: t.rows, target: '', rank: '', percentile: '', grade: '', note: '',
+    combine: t.combine, subjects: t.rows, target: t.target, rank: '', percentile: '', grade: '', note: '',
   };
   return { draft, editId: null as string | null, parentId, template: t.template, suggestion: t.suggestion, originalIds: [] as string[], focusKey: null };
 }
 
 type Problems = { title?: string; marks?: string; rows: Record<string, string>; details?: string };
+
+/** A text link's reach: 13 px words stretched to about 44 dp to tap, without moving anything around them. */
+const LINK_SLOP = { top: 13, bottom: 13, left: 10, right: 10 };
 
 /**
  * The exam form, on its own screen: name, category, date, every subject with its marks and the total adding up as
@@ -193,6 +199,9 @@ export function ExamFormScreen() {
     setD((x) => ({ ...x, subjects: x.subjects.filter((r) => r.key !== key) }));
   };
 
+  // the target the template brought, so a category picked later can swap it for its own unless one was typed
+  const templateGoal = React.useRef(init.draft.target);
+
   // a new exam that changes category takes that category's subjects, as long as nothing has been typed into the
   // subjects or the whole exam's marks yet
   const pickCategory = (id: string | null, toggle = true) => {
@@ -205,7 +214,11 @@ export function ExamFormScreen() {
     const t = templateFor(ix, tags, next, init.parentId);
     setTemplate(t.template);
     setSuggestion(t.suggestion);
-    set({ category: next, subjects: t.rows, combine: t.combine, outOf: t.rows.length ? '' : t.outOf || d.outOf });
+    const goal = d.target === templateGoal.current ? t.target : d.target;
+    templateGoal.current = t.target;
+    // a target that comes with the category is shown, never saved unseen behind a closed "More details"
+    if (goal && goal !== d.target) setMore(true);
+    set({ category: next, subjects: t.rows, combine: t.combine, outOf: t.rows.length ? '' : t.outOf || d.outOf, target: goal });
   };
   const makeCategory = () => {
     const name = (newCat || '').trim();
@@ -242,8 +255,13 @@ export function ExamFormScreen() {
   }, [d.subjects, d.combine, ix]);
 
   const dirty = JSON.stringify(d) !== JSON.stringify(init.draft);
+  // set once the exam is saved: the page takes a moment to leave, and the button and Back still answer meanwhile, so
+  // a second tap would add the exam twice, go back a page too far and ask for its page to open on the next visit.
+  // Never cleared, since the form closes with it
+  const saving = React.useRef(false);
   const leaveRef = React.useRef(() => {});
   leaveRef.current = () => {
+    if (saving.current) return;
     if (!dirty) { router.back(); return; }
     Alert.alert(
       editing ? 'Discard your changes?' : 'Discard this exam?',
@@ -257,6 +275,7 @@ export function ExamFormScreen() {
   }, []));
 
   const save = () => {
+    if (saving.current) return;
     const found: Problems = { rows: {} };
     const title = d.title.trim();
     if (!title) found.title = 'Give the exam a name.';
@@ -305,6 +324,7 @@ export function ExamFormScreen() {
     }
     const allTags = d.category ? [d.category, ...d.tags.filter((t) => t !== d.category)] : d.tags;
     const removeIds = init.originalIds.filter((id) => !kept.some((r) => r.id === id));
+    saving.current = true;
     const { id, removed } = saveExam({
       id: init.editId || undefined,
       parentId: init.parentId,
@@ -328,8 +348,13 @@ export function ExamFormScreen() {
     router.back();
     if (!editing) openScoreNode(id);
     const out = removed.nodes.filter((n) => n.parentId === id).length;
+    // a subject's learnings go with it, so the toast says so, and its Undo brings them back too
+    const lost = removed.learnings.length;
     if (out) {
-      toast('Saved. ' + out + (out === 1 ? ' subject' : ' subjects') + ' taken out', { label: 'Undo', onPress: () => restoreScoreNodes(removed) });
+      toast(
+        'Saved. ' + out + (out === 1 ? ' subject' : ' subjects') + (lost ? ' and ' + lost + (lost === 1 ? ' learning' : ' learnings') : '') + ' taken out',
+        { label: 'Undo', onPress: () => restoreScoreNodes(removed) },
+      );
     } else if (!editing) {
       toast('Added ' + title);
     }
@@ -432,7 +457,7 @@ export function ExamFormScreen() {
         <Enter index={3}>
           <SectionTitle
             right={hasSubjects ? (
-              <Pressable onPress={addRow} hitSlop={8} accessibilityRole="button" accessibilityLabel="Add a subject">
+              <Pressable onPress={addRow} hitSlop={LINK_SLOP} accessibilityRole="button" accessibilityLabel="Add a subject">
                 <Text style={[st.link, { color: C.accent }]}>+ Add</Text>
               </Pressable>
             ) : undefined}
@@ -444,7 +469,7 @@ export function ExamFormScreen() {
               <Text style={[st.hint, { flex: 1, marginTop: 0 }]}>From {template.title}: its subjects and totals. Change anything.</Text>
               <Pressable
                 onPress={() => { tick(); setTouched(true); setTemplate(null); set({ subjects: [] }); }}
-                hitSlop={8} accessibilityRole="button"
+                hitSlop={LINK_SLOP} accessibilityRole="button"
               >
                 <Text style={[st.link, { color: C.accent, marginLeft: 12 }]}>Start blank</Text>
               </Pressable>
@@ -452,7 +477,7 @@ export function ExamFormScreen() {
           ) : null}
           <Animated.View key={hasSubjects ? 'rows' : 'none'} entering={popIn}>
             {hasSubjects ? (
-              <Card pad={16}>
+              <Card>
                 <View style={st.headRow}>
                   <Text style={[st.colHead, { flex: 1 }]}>Subject</Text>
                   <Text style={[st.colHead, st.numCol]}>Score</Text>
@@ -605,12 +630,12 @@ export function ExamFormScreen() {
 
         <Enter index={5}>
           <View style={{ marginTop: S.section }}>
-            <TagPicker value={d.tags} onChange={(v) => set({ tags: v })} />
+            <TagPicker value={d.tags} onChange={(v) => set({ tags: v })} categoryHint />
           </View>
         </Enter>
 
         <Enter index={6}>
-          <Pressable onPress={() => setMore(!more)} hitSlop={8} style={st.moreRow} accessibilityRole="button">
+          <Pressable onPress={() => setMore(!more)} hitSlop={LINK_SLOP} style={st.moreRow} accessibilityRole="button">
             <Text style={[st.link, { color: C.accent }]}>More details</Text>
             <Ionicons name={more ? 'chevron-up' : 'chevron-down'} size={15} color={C.accent} />
           </Pressable>

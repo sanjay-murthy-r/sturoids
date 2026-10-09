@@ -56,6 +56,8 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
   const [more, setMore] = React.useState(false);
   const [calendar, setCalendar] = React.useState(false);
   const [problems, setProblems] = React.useState<Problems>({});
+  // the button still answers while the sheet slides away, so a second tap would add the subject or group twice
+  const saved = React.useRef(false);
 
   const ix = React.useMemo(() => indexScores(scores), [scores]);
   const node = shown?.mode === 'edit' ? ix.byId.get(shown.id) : undefined;
@@ -63,11 +65,14 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
   const parentId = shown?.mode === 'new' ? shown.parentId : node?.parentId ?? null;
   const parent = parentId ? ix.byId.get(parentId) : undefined;
   const isSub = parent?.kind === 'exam';
+  // a subject's own subjects are its parts (Section A, Section B), as its page calls them
+  const isPart = isSub && !!parent?.parentId && ix.byId.get(parent.parentId)?.kind === 'exam';
   const hasParts = !!node && (ix.children.get(node.id) || []).some((k) => k.kind === 'exam');
   const weighted = isSub && parent?.combine === 'weighted';
 
   React.useEffect(() => {
     if (!target) return;
+    saved.current = false;
     setShown(target);
     setProblems({});
     setCalendar(false);
@@ -95,6 +100,7 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }));
 
   const save = () => {
+    if (saved.current) return;
     const title = d.title.trim();
     const found: Problems = {};
     if (!title) found.title = kind === 'group' ? 'Give the group a name.' : 'Give the exam a name.';
@@ -115,18 +121,19 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
         found.details = 'Rank is a whole number, like 1204.';
       } else if (percentile.bad || (percentile.value !== undefined && (percentile.value < 0 || percentile.value > 100))) {
         found.details = 'Percentile runs from 0 to 100.';
+      } else if (goal.bad || (goal.value !== undefined && (goal.value < 0 || goal.value > 100))) {
+        found.details = 'A target is a percentage, from 0 to 100.';
       }
-    }
-    if (!found.details && (goal.bad || (goal.value !== undefined && (goal.value < 0 || goal.value > 100)))) {
-      found.details = 'A target is a percentage, from 0 to 100.';
     }
     setProblems(found);
     if (found.title || found.marks || found.weight || found.details) {
       if (found.details) setMore(true);
       return;
     }
+    saved.current = true;
+    // a group is only its name: targets belong to exams, where Analytics and the exam's page read them
     const fields: Partial<ScoreNode> = kind === 'group'
-      ? { title, target: goal.value }
+      ? { title }
       : {
         title,
         date: d.date || undefined,
@@ -151,10 +158,11 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
     onClose();
   };
 
+  const subWord = isPart ? 'part' : 'subject';
   const sheetTitle = shown?.mode === 'edit'
-    ? kind === 'group' ? 'Rename group' : isSub ? 'Edit subject' : 'Edit exam'
+    ? kind === 'group' ? 'Rename group' : isSub ? 'Edit ' + subWord : 'Edit exam'
     : kind === 'group' ? 'New group'
-      : isSub ? 'New subject in ' + (parent?.title || 'this exam')
+      : isSub ? 'New ' + subWord + ' in ' + (parent?.title || 'this exam')
         : parent ? 'New exam in ' + parent.title : 'New exam';
   const today = todayKey();
   const yesterday = shiftKey(today, -1);
@@ -162,10 +170,10 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
   return (
     <Sheet visible={!!target} onClose={onClose} title={sheetTitle}>
       <Field
-        label={kind === 'group' ? 'Group' : isSub ? 'Subject' : 'Exam'}
+        label={kind === 'group' ? 'Group' : isPart ? 'Part' : isSub ? 'Subject' : 'Exam'}
         value={d.title}
         onChangeText={(v) => set({ title: v })}
-        placeholder={kind === 'group' ? 'e.g. JEE mocks' : isSub ? 'e.g. Physics' : 'e.g. Mock test 7'}
+        placeholder={kind === 'group' ? 'e.g. JEE mocks' : isPart ? 'e.g. Section A' : isSub ? 'e.g. Physics' : 'e.g. Mock test 7'}
         autoFocus={shown?.mode === 'new'}
         maxLength={80}
       />
@@ -232,7 +240,10 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
 
           <TagPicker value={d.tags} onChange={(tags) => set({ tags })} />
 
-          <Pressable onPress={() => setMore(!more)} hitSlop={8} style={st.moreRow} accessibilityRole="button">
+          <Pressable
+            onPress={() => setMore(!more)} hitSlop={{ top: 13, bottom: 13, left: 10, right: 10 }} style={st.moreRow}
+            accessibilityRole="button"
+          >
             <Text style={[st.moreText, { color: C.accent }]}>More details</Text>
             <Ionicons name={more ? 'chevron-up' : 'chevron-down'} size={15} color={C.accent} />
           </Pressable>
@@ -250,13 +261,11 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
             </Appear>
           ) : null}
         </>
-      ) : (
-        <Field label="Target %" value={d.target} onChangeText={(v) => set({ target: v })} placeholder="Optional, like 75" keyboardType="numeric" />
-      )}
+      ) : null}
       {problems.details ? <Appear><Text style={st.problem}>{problems.details}</Text></Appear> : null}
 
       <PillButton
-        label={shown?.mode === 'edit' ? 'Save' : kind === 'group' ? 'Add group' : isSub ? 'Add subject' : 'Add exam'}
+        label={shown?.mode === 'edit' ? 'Save' : kind === 'group' ? 'Add group' : isSub ? 'Add ' + subWord : 'Add exam'}
         onPress={save}
         style={{ marginTop: 6 }}
       />

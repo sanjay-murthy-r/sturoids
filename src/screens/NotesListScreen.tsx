@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Text, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, Text, ScrollView, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -36,7 +36,7 @@ const PUSH_GAP_MS = 600;
  * Whether a sheet that has just opened has finished rising, so its field takes the keyboard then: a keyboard that
  * comes up while the panel is still moving resizes the window under it, and the panel jumps in mid-flight.
  */
-function useRisen(visible: boolean) {
+export function useRisen(visible: boolean) {
   const level = useAnimLevel();
   const [risen, setRisen] = useState(false);
   React.useEffect(() => {
@@ -173,14 +173,35 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
 
   // typing stays immediate; the search over every note runs on the settled text
   const settledQ = React.useDeferredValue(q);
+  // each note's words in lower case, kept until the note changes, so a search lowercases only what changed since the
+  // last one and never every long pasted note again
+  const lowered = React.useRef(new Map<string, { at: number; title: string; body: string }>());
   const filtered = useMemo(() => {
     const ql = settledQ.trim().toLowerCase();
+    let index = lowered.current;
+    if (ql) {
+      const next = new Map<string, { at: number; title: string; body: string }>();
+      for (const n of notes) {
+        const old = index.get(n.id);
+        next.set(n.id, old && old.at === n.updatedAt ? old : { at: n.updatedAt, title: n.title.toLowerCase(), body: n.body.toLowerCase() });
+      }
+      lowered.current = index = next;
+    }
     return notes
       .filter((n) => (folder ? n.folder === folder : true))
       // a locked note is found by its title only: its text never surfaces outside the note
-      .filter((n) => !ql || n.title.toLowerCase().includes(ql) || (!n.locked && n.body.toLowerCase().includes(ql)))
+      .filter((n) => {
+        if (!ql) return true;
+        const l = index.get(n.id);
+        return !!l && (l.title.includes(ql) || (!n.locked && l.body.includes(ql)));
+      })
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
   }, [notes, settledQ, folder]);
+
+  // a folder that is gone (a restored backup, an import) lets go of the filter, never leaving an empty list with no chip lit
+  React.useEffect(() => {
+    if (folder && !folders.includes(folder)) setFolder(null);
+  }, [folder, folders]);
 
   // a pin, an unpin or a delete moves rows within the same list: they glide to their new places. A new search or
   // folder is a different list, so its rows are simply there (a glide would send every row sliding at once)
@@ -199,10 +220,21 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
     dip.value = withTiming(1, { duration: level === 'full' ? 240 : 180, easing: EASE_OUT });
   }, [folder, level]);
 
-  const newNote = () => {
+  // one page per tap: a second tap within the gap (a double tap, or a tap while the page is still coming in) is ignored,
+  // so it never stacks two copies of a note or makes two new ones
+  const pushedAt = React.useRef(0);
+  const once = React.useCallback((go: () => void) => {
+    const t = Date.now();
+    if (t - pushedAt.current < PUSH_GAP_MS) return;
+    pushedAt.current = t;
+    go();
+  }, []);
+  const newNote = () => once(() => {
     const id = addNote({ folder: folder || 'General' });
+    // still blank when its page closes, it goes again
+    freshNotes.add(id);
     nav.openNote(id);
-  };
+  });
   // The header counts the notes in the folder you are in, or all of them, and not the search's matches: a line that
   // changed with every letter typed would only flicker. No notes, no line.
   const inFolder = useMemo(() => (folder ? notes.filter((n) => n.folder === folder).length : 0), [notes, folder]);
@@ -218,8 +250,28 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
     ),
   });
 
-  const openNote = React.useCallback((id: string) => nav.openNote(id), [nav]);
+  const openNote = React.useCallback((id: string) => once(() => nav.openNote(id)), [nav, once]);
   const openMenu = React.useCallback((n: Note) => { tap(); setMenuNote(n); }, []);
+
+  // On a tab the bar lies over the top of the list, and Android brings a field it focuses into view against the list's
+  // own edge, which is under the bar. A search field tapped while the list is partly scrolled is moved down to just
+  // below the bar instead of staying half under it
+  const listRef = React.useRef<FlatList<Note>>(null);
+  const searchY = React.useRef(0);
+  const onSearchFocus = () => {
+    if (!tabMode) return;
+    const want = Math.max(0, header.padTop + searchY.current - header.barH - 8);
+    if (header.scrollY.value > want) listRef.current?.scrollToOffset({ offset: want, animated: level !== 'none' });
+  };
+
+  // the button steps aside while the keyboard is up, so it never sits over the results of a search
+  const keyboardOpen = useKeyboardOpen();
+  const fabOn = useSharedValue(1);
+  React.useEffect(() => {
+    const to = keyboardOpen ? 0 : 1;
+    fabOn.value = level === 'none' ? to : withTiming(to, { duration: keyboardOpen ? 140 : 200, easing: EASE_OUT });
+  }, [keyboardOpen, level]);
+  const fabStyle = useAnimatedStyle(() => ({ opacity: fabOn.value }));
   const count = filtered.length;
   const today = useToday();
   const hour24 = useStore((s) => s.settings.hour24);
@@ -238,6 +290,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
           whatever rows are in the window then, however they got there */}
       <Enter index={0} style={{ flex: 1 }}>
         <Animated.FlatList
+          ref={listRef}
           data={filtered}
           keyExtractor={(n) => n.id}
           renderItem={renderItem}
@@ -251,7 +304,9 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
           ListHeaderComponent={
             <>
               {header.hero}
-              <Field value={q} onChangeText={setQ} placeholder="Search titles & bodies…" />
+              <View onLayout={(e) => { searchY.current = e.nativeEvent.layout.y; }}>
+                <Field value={q} onChangeText={setQ} placeholder="Search notes" onFocus={onSearchFocus} />
+              </View>
               {/* the scroller runs to the screen edges, so chip shadows are never clipped at its bounds */}
               <ScrollView
                 horizontal
@@ -275,28 +330,34 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
               // a search that finds nothing says so, instead of offering a new note as if the folder were empty
               <EmptyState icon="search-outline" title="No notes match that search" body="Search looks through titles, and through the text of notes that are not locked." />
             ) : (
-              <EmptyState icon="document-text-outline" title="No notes here yet" body="Folders, pins, search, voice, photos and files all live inside a note." actionLabel="New note" onAction={newNote} />
+              <EmptyState icon="document-text-outline" title="No notes here yet" body="Photos, files, voice and checklists live inside a note." actionLabel="New note" onAction={newNote} />
             )
           }
         />
       </Enter>
 
-      <Bouncy
-        radius={999}
-        scaleTo={0.9}
-        style={[
-          st.fab,
-          { bottom: tabMode ? 24 : insets.bottom + 20 },
-          theme === 'minimal'
-            ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.green }
-            : { backgroundColor: C.card, ...neuRaised('high') },
-        ]}
-        onPress={() => { tap(); newNote(); }}
-        accessibilityRole="button"
-        accessibilityLabel="New note"
+      <Animated.View
+        pointerEvents={keyboardOpen ? 'none' : 'box-none'}
+        importantForAccessibility={keyboardOpen ? 'no-hide-descendants' : 'auto'}
+        accessibilityElementsHidden={keyboardOpen}
+        style={[st.fabSpot, { bottom: tabMode ? 24 : insets.bottom + 20 }, fabStyle]}
       >
-        <Ionicons name="add" size={30} color={C.green} />
-      </Bouncy>
+        <Bouncy
+          radius={999}
+          scaleTo={0.9}
+          style={[
+            st.fab,
+            theme === 'minimal'
+              ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.green }
+              : { backgroundColor: C.card, ...neuRaised('high') },
+          ]}
+          onPress={() => { tap(); newNote(); }}
+          accessibilityRole="button"
+          accessibilityLabel="New note"
+        >
+          <Ionicons name="add" size={30} color={C.green} />
+        </Bouncy>
+      </Animated.View>
 
       <DotMenu
         visible={!!menuNote}
@@ -374,10 +435,9 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
 }
 
 const st = StyleSheet.create({
-  fab: {
-    position: 'absolute', right: 20, bottom: 24, width: 56, height: 56, borderRadius: 28,
-    alignItems: 'center', justifyContent: 'center',
-  },
+  /** where the new-note button sits; it fades here while the keyboard is up */
+  fabSpot: { position: 'absolute', right: 20 },
+  fab: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
   note: { alignItems: 'flex-start', paddingVertical: 14 },
   noteTitle: { flex: 1, color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
   noteBody: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 18, marginTop: 4 },

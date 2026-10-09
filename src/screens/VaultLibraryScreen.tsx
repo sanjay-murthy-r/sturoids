@@ -15,27 +15,18 @@ import {
 } from '../components/UI';
 import { toast } from '../components/Toast';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Appear, EASE_OUT, Enter, rowIn, shiftIn, useAnimLevel, useBuilt } from '../components/Motion';
+import { Appear, EASE_OUT, Enter, glide, rowIn, shiftIn, useAnimLevel, useBuilt } from '../components/Motion';
 import { useToolNav } from '../toolNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as CachedImage } from 'expo-image';
 import { WIDE_AT, columnWidth } from '../layout';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
-import { DraftSheet } from './VaultPlayerScreen';
+import { DraftSheet, fetchTitle, removeVaultItem } from './VaultPlayerScreen';
 
 const thumb = (videoId: string) => 'https://img.youtube.com/vi/' + videoId + '/mqdefault.jpg';
 
-/** The video's title from YouTube, or a stand-in when it cannot be had (offline, private, deleted, not embeddable). */
-async function fetchTitle(videoId: string): Promise<{ title: string; found: boolean }> {
-  try {
-    const r = await fetch('https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=' + videoId + '&format=json');
-    if (!r.ok) throw new Error();
-    const j = await r.json();
-    return j.title ? { title: j.title, found: true } : { title: 'Video ' + videoId, found: false };
-  } catch {
-    return { title: 'Video ' + videoId, found: false };
-  }
-}
+/** A second tap on a video while the first one's player is on its way is the same tap: never two players, two WebViews. */
+const PUSH_GAP_MS = 600;
 
 type ViewTab = 'library' | 'recent' | 'notes';
 /** the pager's pages, in order */
@@ -99,6 +90,26 @@ function Arrive({ how, children }: { how: Arrival; children: React.ReactNode }) 
   const level = useAnimLevel();
   return <Animated.View entering={how === 'appear' ? rowIn(level) : undefined}>{children}</Animated.View>;
 }
+
+/**
+ * One video of the Library page, a slice of the list's card. How it arrives is settled as it mounts: with its folder's
+ * page as that page comes in from the side ('page'), fading in where it lands when it turns up in a page already shown
+ * (a video added, a search that finds it), or simply there (a row scrolled into view, or the screen's first build).
+ */
+const LibraryRow = React.memo(function LibraryRow({ v, first, last, how, pageIn, folderName, onOpen, onMenu }: {
+  v: VaultVideo; first: boolean; last: boolean; how: Arrival | 'page'; pageIn: any; folderName?: string;
+  onOpen: (id: string) => void; onMenu: (v: VaultVideo) => void;
+}) {
+  const level = useAnimLevel();
+  const [entering] = useState(() => (how === 'page' ? pageIn : how === 'appear' ? rowIn(level) : undefined));
+  return (
+    <Animated.View entering={entering}>
+      <ListSlice first={first} last={last}>
+        <VideoRow v={v} folderName={folderName} onOpen={onOpen} onMenu={onMenu} />
+      </ListSlice>
+    </Animated.View>
+  );
+});
 
 /** The parts of a video's caption that say something: no "0 notes", no "0 marks". */
 function videoCaption(v: VaultVideo, folderName?: string) {
@@ -198,7 +209,8 @@ const AddCard = React.memo(function AddCard({ cwd, folderName, onAdded }: {
       if (useStore.getState().vaultVideos.some((v) => v.videoId === id)) { toast('That video is already in the Vault.'); return; }
       const vid = addVideo({ url: raw.trim(), videoId: id, title, folderId: cwd });
       setUrl('');
-      if (!found) toast('Added without its title: you may be offline, or the video is private or gone.');
+      // the player asks for the title again whenever the video is opened, and its menu can rename it
+      if (!found) toast('Added without its title, as YouTube did not answer. Opening the video tries again.');
       onAdded(vid);
     } finally {
       addingRef.current = false;
@@ -258,8 +270,6 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const addVaultFolder = useStore((s) => s.addVaultFolder);
   const renameVaultFolder = useStore((s) => s.renameVaultFolder);
   const deleteVaultFolder = useStore((s) => s.deleteVaultFolder);
-  const removeTimedNote = useStore((s) => s.removeTimedNote);
-  const removeBookmark = useStore((s) => s.removeBookmark);
   const updateTimedNote = useStore((s) => s.updateTimedNote);
   const updateBookmark = useStore((s) => s.updateBookmark);
 
@@ -274,6 +284,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [noteMenu, setNoteMenu] = useState<NoteHit | null>(null);
   const [editSheet, setEditSheet] = useState<NoteHit | null>(null);
   const [previewSheet, setPreviewSheet] = useState<NoteHit | null>(null);
+  const [renameSheet, setRenameSheet] = useState<VaultVideo | null>(null);
   // every sheet and menu keeps its title and rows while it closes, instead of emptying or changing on its way out
   const heldFolderSheet = useHeld(folderSheet);
   const heldFolderMenu = useHeld(folderMenu);
@@ -282,6 +293,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const heldNoteMenu = useHeld(noteMenu);
   const heldEdit = useHeld(editSheet);
   const heldPreview = useHeld(previewSheet);
+  const heldRename = useHeld(renameSheet);
   const pagerRef = useAnimatedRef<Animated.ScrollView>();
   // a page is as wide as the pager: the window on a phone; on a wide window known ahead, then measured
   const [pageW, setPageW] = useState(() => columnWidth(width, mode === 'tab'));
@@ -364,9 +376,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return m;
   }, [videos, folders]);
   const folderNames = useMemo(() => new Map(folders.map((f) => [f.id, f.name])), [folders]);
-  // the videos at or under the level in view: the root counts the whole library, a folder its own and its subfolders'
-  const levelCount = useMemo(() => {
-    if (!cwd) return videos.length;
+  // the folders at and under the level in view; null at the top, where that is the whole library
+  const subtree = useMemo(() => {
+    if (!cwd) return null;
     const under = new Set<string>([cwd]);
     for (let grew = true; grew;) {
       grew = false;
@@ -374,8 +386,14 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         if (f.parentId && under.has(f.parentId) && !under.has(f.id)) { under.add(f.id); grew = true; }
       }
     }
-    return videos.filter((v) => v.folderId != null && under.has(v.folderId)).length;
-  }, [videos, folders, cwd]);
+    return under;
+  }, [folders, cwd]);
+  const inSubtree = (folderId: string | null) => !subtree || (folderId != null && subtree.has(folderId));
+  // the videos at or under the level in view: the root counts the whole library, a folder its own and its subfolders'
+  const levelCount = useMemo(
+    () => (subtree ? videos.filter((v) => v.folderId != null && subtree.has(v.folderId)).length : videos.length),
+    [videos, subtree],
+  );
 
   // a folder opened comes in from the right, and climbing back up comes in from the left
   const depthOf = (id: string | null) => {
@@ -427,9 +445,22 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return v.title.toLowerCase().includes(ql) || v.tags.some((t) => t.includes(ql));
   };
 
-  const hereVideos = useMemo(
-    () => videos.filter((v) => v.folderId === cwd).filter(match).sort((a, b) => b.addedAt - a.addedAt),
-    [videos, cwd, ql]
+  // The Library page: the folder in view, or while a search is on, everything at and under it, with the folders whose
+  // names match. A video found deeper down names its folder, as Recent does
+  const libVideos = useMemo(
+    () => videos
+      .filter((v) => (ql ? inSubtree(v.folderId) : v.folderId === cwd))
+      .filter(match)
+      .sort((a, b) => b.addedAt - a.addedAt),
+    [videos, cwd, subtree, ql]
+  );
+  const libFolders = useMemo(
+    () => (!ql ? subFolders
+      : ql.startsWith('#') ? []
+        : folders
+          .filter((f) => f.id !== cwd && inSubtree(f.id) && f.name.toLowerCase().includes(ql))
+          .sort((a, b) => a.name.localeCompare(b.name))),
+    [ql, subFolders, folders, cwd, subtree]
   );
   const recentVideos = useMemo(
     () => [...videos].filter(match).sort((a, b) => b.addedAt - a.addedAt),
@@ -446,7 +477,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
       .sort((a, b) => b.video.addedAt - a.video.addedAt || a.item.time - b.item.time);
   }, [videos, ql]);
   // an empty page says whether the search found nothing or there is nothing yet
-  const folderHasVideos = useMemo(() => videos.some((v) => v.folderId === cwd), [videos, cwd]);
+  const levelEmpty = levelCount === 0 && subFolders.length === 0;
   const anyNotes = useMemo(() => videos.some((v) => v.notes.length > 0 || v.bookmarks.length > 0), [videos]);
 
   const submitFolder = (name: string) => {
@@ -465,8 +496,15 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     pagerRef.current?.scrollTo({ x: i * pageW, animated: true });
   };
 
-  const openAt = useCallback((videoDbId: string, time: number) => nav.openVideo(videoDbId, time), [nav]);
-  const openVideo = useCallback((id: string) => nav.openVideo(id), [nav]);
+  const pushedAt = useRef(0);
+  const once = useCallback((go: () => void) => {
+    const now = Date.now();
+    if (now - pushedAt.current < PUSH_GAP_MS) return;
+    pushedAt.current = now;
+    go();
+  }, []);
+  const openAt = useCallback((videoDbId: string, time: number) => once(() => nav.openVideo(videoDbId, time)), [nav, once]);
+  const openVideo = useCallback((id: string) => once(() => nav.openVideo(id)), [nav, once]);
   // the preview sheet is a window of its own: the video opens once it has gone, never under it
   const openAfterPreview = useRef<NoteHit | null>(null);
   const recentCount = recentVideos.length;
@@ -481,6 +519,37 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <NoteRow video={x.video} item={x.item} isBookmark={x.isBookmark} onOpen={openAt} onMenu={setNoteMenu} />
     </ListSlice>
   ), [notesCount, openAt]);
+
+  // How the Library page's rows arrive. The rows mounted while a new folder's page comes in arrive with it; one that turns
+  // up later in a page already shown fades in; one scrolled into view is simply there. Read when a row is made (the list
+  // makes rows in batches after the render that brought the page), so these are refs, settled once the page is shown
+  const pageKey = cwd ?? '';
+  const shownPage = useRef<string | null>(null);
+  const shownList = useRef('');
+  const shownIds = useRef<Set<string>>(new Set());
+  const arriving = useRef<{ anim: any } | null>(null);
+  if (shownPage.current !== pageKey) arriving.current = { anim: folderIn };
+  // a video removed or moved lets the rows under it glide up; a new folder or search is a different list, simply there
+  const libKey = pageKey + '|' + ql;
+  const sameLib = shownList.current === libKey;
+  React.useEffect(() => {
+    shownPage.current = pageKey;
+    shownList.current = libKey;
+    arriving.current = null;
+    shownIds.current = new Set(libVideos.map((v) => v.id));
+  });
+  const libCount = libVideos.length;
+  const renderLibrary = useCallback(({ item, index }: { item: VaultVideo; index: number }) => {
+    const a = arriving.current;
+    return (
+      <LibraryRow
+        v={item} first={index === 0} last={index === libCount - 1}
+        how={a ? 'page' : shownIds.current.has(item.id) ? 'still' : 'appear'} pageIn={a?.anim}
+        folderName={item.folderId && item.folderId !== cwd ? folderNames.get(item.folderId) : undefined}
+        onOpen={openVideo} onMenu={setVideoMenu}
+      />
+    );
+  }, [libCount, cwd, folderNames, openVideo]);
 
   const pageStyle = useMemo(
     () => ({ padding: S.pad, paddingTop: 4, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }),
@@ -545,51 +614,60 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
             onScroll={onPager}
             scrollEventThrottle={16}
           >
-            <Animated.ScrollView style={pageBox} contentContainerStyle={pageStyle} onScroll={onLibrary} scrollEventThrottle={16}>
-              {/* the header already names the folder: this row only moves between folders and adds one */}
-              <Row style={{ marginBottom: 10, flexWrap: 'wrap' }}>
-                <Chip small icon="home-outline" label="All" active={cwd === null} color={C.pink} onPress={() => setCwd(null)} />
-                {cwdFolder && (
-                  <Chip small icon="arrow-up-outline" label="Up" onPress={() => setCwd(cwdFolder.parentId)} />
-                )}
-                <Chip small icon="add" label="Folder" onPress={() => setFolderSheet({ mode: 'new' })} />
-              </Row>
+            {/* the folder in view as a list that makes only the rows near the screen, so a level of 150 lectures never
+                mounts 150 rows and thumbnails at once */}
+            <Animated.FlatList
+              style={pageBox}
+              contentContainerStyle={pageStyle}
+              onScroll={onLibrary}
+              scrollEventThrottle={16}
+              data={libVideos}
+              keyExtractor={(v) => v.id}
+              initialNumToRender={8}
+              windowSize={7}
+              renderItem={renderLibrary}
+              itemLayoutAnimation={sameLib ? glide(level) : undefined}
+              ListHeaderComponent={
+                <>
+                  {/* the header already names the folder: this row only moves between folders and adds one */}
+                  <Row style={{ marginBottom: 10, flexWrap: 'wrap' }}>
+                    <Chip small icon="home-outline" label="All" active={cwd === null} color={C.pink} onPress={() => setCwd(null)} />
+                    {cwdFolder && (
+                      <Chip small icon="arrow-up-outline" label="Up" onPress={() => setCwd(cwdFolder.parentId)} />
+                    )}
+                    <Chip small icon="add" label="Folder" onPress={() => setFolderSheet({ mode: 'new' })} />
+                  </Row>
 
-              {/* a folder's contents are one piece, keyed on the folder: it arrives from the side it was reached from */}
-              <FolderPage key={cwd ?? 'root'} entering={folderIn}>
-                {(how) => (<>
-                {subFolders.length > 0 && (
-                  <Arrive how={how}>
-                    <ListCard>
-                      {subFolders.map((f) => (
-                        <FolderRow key={f.id} f={f} count={counts.get(f.id) || 0} onOpen={openFolder} onMenu={setFolderMenu} />
-                      ))}
-                    </ListCard>
-                  </Arrive>
-                )}
-
-                {hereVideos.length > 0 && (
-                  <Arrive how={how}>
-                    <ListCard>
-                      {hereVideos.map((v) => <VideoRow key={v.id} v={v} onOpen={openVideo} onMenu={setVideoMenu} />)}
-                    </ListCard>
-                  </Arrive>
-                )}
-                {subFolders.length === 0 && hereVideos.length === 0 && (
-                  searching && folderHasVideos ? (
-                    <EmptyState key="match" icon="search-outline" title="No videos match" />
-                  ) : (
-                    <EmptyState
-                      key="none"
-                      icon={cwd ? 'folder-open-outline' : 'play-circle-outline'}
-                      title={cwd ? 'This folder is empty' : 'Your study-video library'}
-                      body={cwd ? undefined : 'Paste a lecture link above to start your library.'}
-                    />
-                  )
-                )}
-                </>)}
-              </FolderPage>
-            </Animated.ScrollView>
+                  {/* a folder's own card is one piece, keyed on the folder: it arrives from the side it was reached
+                      from, and the rows under it come with it */}
+                  <FolderPage key={cwd ?? 'root'} entering={folderIn}>
+                    {(how) => (<>
+                    {libFolders.length > 0 && (
+                      <Arrive how={how}>
+                        <ListCard>
+                          {libFolders.map((f) => (
+                            <FolderRow key={f.id} f={f} count={counts.get(f.id) || 0} onOpen={openFolder} onMenu={setFolderMenu} />
+                          ))}
+                        </ListCard>
+                      </Arrive>
+                    )}
+                    {libFolders.length === 0 && libVideos.length === 0 && (
+                      searching && !levelEmpty ? (
+                        <EmptyState key="match" icon="search-outline" title="Nothing matches that search" />
+                      ) : (
+                        <EmptyState
+                          key="none"
+                          icon={cwd ? 'folder-open-outline' : 'play-circle-outline'}
+                          title={cwd ? 'This folder is empty' : 'Your study-video library'}
+                          body={cwd ? undefined : 'Paste a lecture link above to start your library.'}
+                        />
+                      )
+                    )}
+                    </>)}
+                  </FolderPage>
+                </>
+              }
+            />
 
             <Animated.FlatList
               style={pageBox}
@@ -639,11 +717,27 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
           { label: 'Open', icon: 'folder-open-outline', onPress: () => setCwd(heldFolderMenu.id) },
           { label: 'Rename', icon: 'create-outline', onPress: () => setFolderSheet({ mode: 'rename', folder: heldFolderMenu }) },
           {
-            label: 'Delete (contents move up)', icon: 'trash-outline', color: C.danger,
+            label: 'Delete folder', icon: 'trash-outline', color: C.danger,
             onPress: () => {
-              // deleting the folder in view climbs out of it first, so the page never shows a folder that is gone
-              if (cwd === heldFolderMenu.id) setCwd(heldFolderMenu.parentId ?? null);
-              deleteVaultFolder(heldFolderMenu.id);
+              const f = heldFolderMenu;
+              const go = () => {
+                // deleting the folder in view climbs out of it first, so the page never shows a folder that is gone
+                if (cwd === f.id) setCwd(f.parentId ?? null);
+                deleteVaultFolder(f.id);
+              };
+              // an empty folder simply goes; one with something in it says where that goes, as Notes does
+              const vids = videos.filter((v) => v.folderId === f.id).length;
+              const subs = folders.filter((x) => x.parentId === f.id).length;
+              if (!vids && !subs) { go(); return; }
+              const what = vids + subs === 1
+                ? (vids ? 'Its video moves' : 'Its folder moves')
+                : 'Its ' + [vids ? plural(vids, 'video') : '', subs ? plural(subs, 'folder') : ''].filter(Boolean).join(' and ') + ' move';
+              const to = f.parentId ? folderNames.get(f.parentId) || 'the folder above' : 'the top of the library';
+              Alert.alert(
+                'Delete ' + f.name + '?',
+                what + ' up to ' + to + '. No video is deleted.',
+                [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete folder', style: 'destructive', onPress: go }],
+              );
             },
           },
         ] : []}
@@ -653,7 +747,8 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         visible={!!videoMenu}
         onClose={() => setVideoMenu(null)}
         items={heldVideoMenu ? [
-          { label: 'Open', icon: 'play-outline', onPress: () => nav.openVideo(heldVideoMenu.id) },
+          { label: 'Open', icon: 'play-outline', onPress: () => openVideo(heldVideoMenu.id) },
+          { label: 'Rename', icon: 'create-outline', onPress: () => setRenameSheet(heldVideoMenu) },
           { label: 'Move to folder', icon: 'folder-outline', onPress: () => setMoveSheet(heldVideoMenu) },
           {
             label: 'Remove from Vault', icon: 'trash-outline', color: C.danger,
@@ -687,12 +782,24 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
           { label: 'Preview video', icon: 'image-outline', onPress: () => setPreviewSheet(heldNoteMenu) },
           {
             label: 'Delete', icon: 'trash-outline', color: C.danger,
-            onPress: () => {
-              if (heldNoteMenu.isBookmark) removeBookmark(heldNoteMenu.video.id, heldNoteMenu.item.id);
-              else removeTimedNote(heldNoteMenu.video.id, heldNoteMenu.item.id);
-            },
+            onPress: () => removeVaultItem(heldNoteMenu.video.id, heldNoteMenu.item, heldNoteMenu.isBookmark),
           },
         ] : []}
+      />
+
+      <DraftSheet
+        visible={!!renameSheet}
+        onClose={() => setRenameSheet(null)}
+        title="Rename video"
+        initial={heldRename?.title ?? ''}
+        placeholder="Video name"
+        label="Rename"
+        color={C.pink}
+        onSave={(text) => {
+          if (!renameSheet || !text.trim()) return;
+          updateVideo(renameSheet.id, { title: text.trim() });
+          setRenameSheet(null);
+        }}
       />
 
       <DraftSheet

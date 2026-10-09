@@ -30,19 +30,27 @@ const fmtRank = (n: number) => n.toLocaleString('en-IN');
 /** bars start filling once their section has begun to rise */
 const BAR_DELAY = 220;
 
+/** A text link's reach: 13 px words stretched to about 44 dp to tap, without moving anything around them. */
+const LINK_SLOP = { top: 13, bottom: 13, left: 10, right: 10 };
+
 /**
- * How far a figure moved: a caret and the size, green when it is better and muted red when it is worse, "no change"
- * in the faint colour. `better` says which way is good (a lower rank is better).
+ * How far a figure moved: a caret and the size, green when it is better and muted red when it is worse. A move that
+ * rounds to nothing is not shown at all. `better` says which way is good (a lower rank is better, and is read as places).
  */
 function Delta({ value, better = 'up', format, large, style }: {
   value: number; better?: 'up' | 'down'; format?: (n: number) => string; large?: boolean; style?: any;
 }) {
   const r = round1(value);
-  if (r === 0) return <Text style={[large ? st.deltaLarge : st.delta, { color: C.textFaint }, style]}>no change</Text>;
+  if (r === 0) return null;
   const good = better === 'up' ? r > 0 : r < 0;
   const color = good ? C.green : C.danger;
+  const size = Math.abs(r);
+  // a screen reader hears the way it moved and how far, not a bare number beside a caret
+  const said = better === 'up'
+    ? (r > 0 ? 'up ' : 'down ') + size + (size === 1 ? ' point' : ' points')
+    : (good ? 'up ' : 'down ') + (format ? format(size) : size) + (size === 1 ? ' place' : ' places');
   return (
-    <View style={[st.deltaRow, style]}>
+    <View style={[st.deltaRow, style]} accessible accessibilityLabel={said}>
       <Ionicons name={good ? 'caret-up' : 'caret-down'} size={large ? 14 : 11} color={color} />
       <Text style={[large ? st.deltaLarge : st.delta, { color }]}>{format ? format(Math.abs(r)) : Math.abs(r)}</Text>
     </View>
@@ -136,24 +144,42 @@ export function resolveView(ix: ScoreIndex, tags: ScoreTag[], view: AnalyticsVie
   return { cats, overview, chips, scope, label, all, range, pts: inRange(all, range) };
 }
 
+/** A view as resolveView works it out: what the page draws and the header words its line from. */
+export type ResolvedView = ReturnType<typeof resolveView>;
+
 /**
  * The Analytics page's content, for the Scores screen to place under its header and inside its scroll. The view
- * lives in the screen (`view`, `onView`), which words its header from it; `hero` is the header's first block, carried
- * in the page's first entrance.
+ * lives in the screen, which resolves it once (`resolved`), words its header from it and hears of a new one through
+ * `onView`; `hero` is the header's first block, carried in the page's first entrance.
  */
-export function ScoreAnalytics({ view, onView, onOpenExam, onManageCategories, hero }: {
-  view: AnalyticsView | null; onView: (v: AnalyticsView) => void;
-  onOpenExam: (id: string) => void; onManageCategories: () => void; hero?: React.ReactNode;
+export function ScoreAnalytics({
+  ix, resolved, onView, onOpenExam, onManageCategories, onScopePicked, picked, onPick, hero,
+}: {
+  /** the exams, indexed once by the screen */
+  ix: ScoreIndex;
+  resolved: ResolvedView;
+  onView: (v: AnalyticsView) => void;
+  onOpenExam: (id: string) => void; onManageCategories: () => void;
+  /** a category picked from its row: what is under the row is a new page, so the screen takes it back to its top */
+  onScopePicked?: () => void;
+  /** the exam picked on the trend chart, kept by the screen so it is still picked after a visit to that exam */
+  picked: string | null; onPick: (id: string | null) => void;
+  hero?: React.ReactNode;
 }) {
   useTheme();
-  const scores = useStore((s) => s.scores);
   const tags = useStore((s) => s.scoreTags);
-  const ix = useMemo(() => indexScores(scores), [scores]);
   // the page's round: 0 until it is in view, then one more each time it comes into view, so its figures and bars play the same every visit
   const round = useSeen();
   const { width } = useWindowDimensions();
+  // The subject sections (a bar per subject, the heatmap's cells, a line per subject) are built a frame after the rest,
+  // so the headline's count and the page's rise start on a light frame. Their entrances come later than that anyway.
+  const [later, setLater] = useState(false);
+  React.useEffect(() => {
+    const f = requestAnimationFrame(() => setLater(true));
+    return () => cancelAnimationFrame(f);
+  }, []);
 
-  const { cats, overview, chips, scope, label: scopeLabel, all, range, pts } = useMemo(() => resolveView(ix, tags, view), [ix, tags, view]);
+  const { cats, overview, chips, scope, label: scopeLabel, all, range, pts } = resolved;
 
   const data = useMemo(() => {
     const stats = seriesStats(pts);
@@ -204,7 +230,7 @@ export function ScoreAnalytics({ view, onView, onOpenExam, onManageCategories, h
       {!cats.length ? (
         <Enter index={enter++}>
           {first()}
-          <Card pad={16}>
+          <Card>
             <Text style={T.label}>
               Categories keep like with like, such as JEE Main mocks apart from unit tests. Put exams in one, and
               Analytics compares the exams inside each.
@@ -232,19 +258,19 @@ export function ScoreAnalytics({ view, onView, onOpenExam, onManageCategories, h
         <>
           <Enter index={enter++}>
             {first()}
-            <Hero stats={stats} total={all.length} round={round} />
+            <Hero stats={stats} round={round} />
             {stats.n === 1 ? <OneMore /> : null}
           </Enter>
 
           {showOverview ? (
             <Enter index={enter++}>
-              <ByCategory rows={overview} onPick={pickScope} />
+              <ByCategory rows={overview} onPick={(next) => { pickScope(next); onScopePicked?.(); }} />
             </Enter>
           ) : null}
 
           {stats.n > 1 ? (
             <Enter index={enter++}>
-              <TrendSection pts={pts} stats={stats} onOpenExam={onOpenExam} />
+              <TrendSection pts={pts} stats={stats} pickedId={picked} onPick={onPick} onOpenExam={onOpenExam} />
             </Enter>
           ) : null}
 
@@ -266,7 +292,7 @@ export function ScoreAnalytics({ view, onView, onOpenExam, onManageCategories, h
             </Enter>
           ) : null}
 
-          {data.subjects.length ? (
+          {later && data.subjects.length ? (
             <Subjects subjects={data.subjects} callouts={data.callouts} pts={pts} round={round} enter={enter} />
           ) : null}
         </>
@@ -287,16 +313,16 @@ function OneMore() {
   );
 }
 
-const Hero = React.memo(function Hero({ stats, total, round }: { stats: SeriesStats; total: number; round: number }) {
+const Hero = React.memo(function Hero({ stats, round }: { stats: SeriesStats; round: number }) {
   useTheme();
   const full = useAnimLevel() === 'full';
   const avg = round1(stats.mean);
   // a count that lands on a whole number settles as "72%", like every other result; on the way it keeps its tenths
   const format = React.useCallback((n: number) => (n === avg ? fmtPct(n) : n.toFixed(1) + '%'), [avg]);
+  // how many exams are in view is the header's line, so the caption under the average gives the median, not the count
   const across = stats.n === 1
     ? [stats.latest.title, fmtExamDate(stats.latest.when)].join('  ·  ')
-    : 'across ' + (total > stats.n ? 'the last ' + stats.n + ' of ' + plural(total, 'marked exam') : plural(stats.n, 'marked exam'))
-      + '  ·  median ' + fmtPct(stats.median);
+    : 'Median ' + fmtPct(stats.median);
   return (
     <Card hero pad={20}>
       <View style={st.heroRow}>
@@ -376,12 +402,11 @@ function ByCategory({ rows, onPick }: { rows: CategoryRow[]; onPick: (s: Scope) 
 
 /* ---------------------------------------------------------------- trend */
 
-const TrendSection = React.memo(function TrendSection({ pts, stats, onOpenExam }: {
-  pts: ExamPoint[]; stats: SeriesStats; onOpenExam: (id: string) => void;
+const TrendSection = React.memo(function TrendSection({ pts, stats, pickedId, onPick, onOpenExam }: {
+  pts: ExamPoint[]; stats: SeriesStats; pickedId: string | null; onPick: (id: string | null) => void; onOpenExam: (id: string) => void;
 }) {
   const theme = useTheme();
   // the pick is kept by exam, so a new view (another category, another range) simply drops it
-  const [pickedId, setPickedId] = useState<string | null>(null);
   const index = pickedId ? pts.findIndex((p) => p.id === pickedId) : -1;
   const picked = index >= 0 ? pts[index] : null;
   const target = useMemo(() => {
@@ -407,8 +432,9 @@ const TrendSection = React.memo(function TrendSection({ pts, stats, onOpenExam }
         <TrendChart
           points={pts} moving={stats.moving} target={target}
           selected={index >= 0 ? index : null}
-          onSelect={(i) => setPickedId(i == null ? null : pts[i].id)}
+          onSelect={(i) => onPick(i == null ? null : pts[i].id)}
           accessibilityLabel={label}
+          valueText={picked ? picked.title + ', ' + fmtPct(picked.pct) : 'No exam picked'}
         />
         {keyItems.length > 1 ? <ChartKey items={keyItems} style={{ marginTop: 12 }} /> : null}
 
@@ -424,7 +450,7 @@ const TrendSection = React.memo(function TrendSection({ pts, stats, onOpenExam }
               <Text style={st.pickPct}>{fmtPct(picked.pct)}</Text>
               <Pressable
                 onPress={() => { tick(); onOpenExam(picked.id); }}
-                hitSlop={10}
+                hitSlop={LINK_SLOP}
                 accessibilityRole="button"
                 accessibilityLabel={'Open ' + picked.title}
                 style={{ marginLeft: 16 }}
@@ -504,17 +530,15 @@ function FigureGrid({ tiles, cols }: { tiles: Tile[]; cols: number }) {
 
 const Figures = React.memo(function Figures({ stats: s, cols }: { stats: SeriesStats; cols: number }) {
   useTheme();
+  // a spread or a gap of nothing is not a figure worth a tile, so those two come only when they are more than zero
   const tiles: Tile[] = [
     { label: 'Median', value: fmtPct(s.median) },
-    { label: 'Spread', value: fmtMark(round1(s.sd)), unit: pointsWord(s.sd) },
+    ...(round1(s.sd) > 0 ? [{ label: 'Spread', value: fmtMark(round1(s.sd)), unit: pointsWord(s.sd) }] : []),
     { label: 'Best', value: fmtPct(s.best.pct), sub: s.best.title },
     { label: 'Lowest', value: fmtPct(s.worst.pct), sub: s.worst.title },
   ];
-  if (s.form != null) {
-    tiles.push({
-      label: 'Latest vs usual', value: fmtPoints(s.form), unit: pointsWord(s.form),
-      sub: round1(s.form) !== 0 ? 'on the average before it' : undefined,
-    });
+  if (s.form != null && round1(s.form) !== 0) {
+    tiles.push({ label: 'Latest vs usual', value: fmtPoints(s.form), unit: pointsWord(s.form), sub: 'on the average before it' });
   }
   if (s.targets.set) tiles.push({ label: 'Targets met', value: s.targets.met + ' of ' + s.targets.set });
   if (s.streak && s.streak.count >= 2) {
@@ -545,8 +569,12 @@ const Figures = React.memo(function Figures({ stats: s, cols }: { stats: SeriesS
 
 const Distribution = React.memo(function Distribution({ stats, round }: { stats: SeriesStats; round: number }) {
   useTheme();
-  // highest band first, read down like a table of results
-  const bands = [...stats.bands].reverse();
+  // highest band first, read down like a table of results, from the highest band holding a result to the lowest:
+  // empty bands outside that range say nothing, and one inside it is a gap worth seeing
+  const all = [...stats.bands].reverse();
+  const top = all.findIndex((b) => b.count > 0);
+  const bottom = all.length - 1 - [...all].reverse().findIndex((b) => b.count > 0);
+  const bands = top < 0 ? all : all.slice(top, bottom + 1);
   const max = Math.max(1, ...bands.map((b) => b.count));
   return (
     <>
@@ -555,7 +583,7 @@ const Distribution = React.memo(function Distribution({ stats, round }: { stats:
         {bands.map((b, i) => (
           <View
             key={b.label}
-            style={[st.bandRow, i > 0 && { marginTop: 12 }, !b.count && { opacity: 0.45 }]}
+            style={[st.bandRow, i > 0 && { marginTop: 12 }]}
             accessible
             accessibilityLabel={b.label + ': ' + plural(b.count, 'exam')}
           >
@@ -585,7 +613,7 @@ const RankCard = React.memo(function RankCard({ stats }: { stats: SeriesStats })
       sub: r.latestId !== stats.latest.id ? 'as of ' + r.latestTitle : r.n > 1 ? 'from ' + fmtRank(r.first) : undefined,
     },
     ...(r.n > 1 ? [{ label: 'Best', value: fmtRank(r.best) }] : []),
-    ...(r.change != null ? [{ label: 'Last change', value: <Delta large value={r.change} better="down" format={fmtRank} style={st.tileDelta} /> }] : []),
+    ...(r.change ? [{ label: 'Last change', value: <Delta large value={r.change} better="down" format={fmtRank} style={st.tileDelta} /> }] : []),
   ] : [];
   const pctTiles: Tile[] = p ? [
     { label: 'Latest', value: fmtMark(p.latest), sub: p.latestId !== stats.latest.id ? 'as of ' + p.latestTitle : undefined },
@@ -671,7 +699,7 @@ const Subjects = React.memo(function Subjects({ subjects, callouts, pts, round, 
 
   const calls = [
     callouts.strongest && { key: 'strongest', icon: 'ribbon-outline', label: 'Strongest', s: callouts.strongest, value: fmtPct(callouts.strongest.mean), unit: 'average' },
-    callouts.weakest && { key: 'weakest', icon: 'flag-outline', label: 'Needs work', s: callouts.weakest, value: fmtPct(callouts.weakest.mean), unit: 'average' },
+    callouts.weakest && { key: 'weakest', icon: 'flag-outline', label: 'Lowest average', s: callouts.weakest, value: fmtPct(callouts.weakest.mean), unit: 'average' },
     callouts.improving && { key: 'improving', icon: 'trending-up-outline', label: 'Improving', s: callouts.improving, value: fmtPoints(callouts.improving.slope as number), unit: 'points an exam' },
     callouts.slipping && { key: 'slipping', icon: 'trending-down-outline', label: 'Slipping', s: callouts.slipping, value: fmtPoints(callouts.slipping.slope as number), unit: 'points an exam' },
     callouts.costliest && { key: 'costliest', icon: 'pie-chart-outline', label: 'Most marks lost', s: callouts.costliest, value: Math.round(callouts.costliest.lostShare * 100) + '%', unit: 'of marks lost' },

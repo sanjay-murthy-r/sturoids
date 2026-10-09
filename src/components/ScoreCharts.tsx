@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { ScrollView } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import Svg, { Circle, Line, Path, Text as SvgText } from 'react-native-svg';
 import { useIsFocused } from '@react-navigation/native';
@@ -256,9 +257,10 @@ export interface TrendPoint { id: string; pct: number }
 /**
  * Results over time, oldest on the left: the accent line with a small dot per exam and a larger one for the latest,
  * the three-exam moving average as a faint dashed line, and the target as a dotted one. A tap picks the nearest exam:
- * a hairline drops through it and a ring settles on its point. Screen readers step through the exams by swiping.
+ * a hairline drops through it and a ring settles on its point. Screen readers step through the exams by swiping, and
+ * hear `valueText` (the exam picked) at each step.
  */
-export function TrendChart({ points, moving, target, selected, onSelect, height = 180, accessibilityLabel }: {
+export function TrendChart({ points, moving, target, selected, onSelect, height = 180, accessibilityLabel, valueText }: {
   points: TrendPoint[];
   /** aligned with the points; null where there is no full window yet */
   moving?: (number | null)[];
@@ -268,6 +270,8 @@ export function TrendChart({ points, moving, target, selected, onSelect, height 
   onSelect: (index: number | null) => void;
   height?: number;
   accessibilityLabel?: string;
+  /** what is picked, said as the chart's value: the exam and its result, or that none is */
+  valueText?: string;
 }) {
   useTheme();
   const level = useAnimLevel();
@@ -358,6 +362,7 @@ export function TrendChart({ points, moving, target, selected, onSelect, height 
         onPress={(e) => pick(e.nativeEvent.locationX)}
         accessibilityRole="adjustable"
         accessibilityLabel={accessibilityLabel}
+        accessibilityValue={valueText ? { text: valueText } : undefined}
         accessibilityHint="Swipe up or down to step through the exams"
         accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
         onAccessibilityAction={(e) => step(e.nativeEvent.actionName === 'increment' ? 1 : -1)}
@@ -467,7 +472,8 @@ const HEAD_H = 20;
 /**
  * Subjects down the side, exams across (oldest on the left), each cell the subject's result in that exam: the accent
  * laid over the card, stronger for a higher result, with the rounded figure inside. A subject not sat is a faint dash.
- * When the columns do not fit, they scroll sideways and open on the latest.
+ * When the columns do not fit, they scroll sideways and open on the latest: a gesture-handler scroll, so a sideways drag
+ * along it scrolls the cells and never reaches the tab bar's fling around the page.
  */
 export function Heatmap({ rows, columns, accessibilityLabel }: {
   rows: { key: string; name: string; cells: (number | null)[] }[];
@@ -476,7 +482,7 @@ export function Heatmap({ rows, columns, accessibilityLabel }: {
 }) {
   useTheme();
   const [w, onLayout] = useWidth();
-  const scroller = React.useRef<ScrollView>(null);
+  const scroller = React.useRef<React.ElementRef<typeof ScrollView>>(null);
   const cols = columns.length;
   const avail = Math.max(0, w - NAME_W);
   const cellW = cols ? Math.max(CELL_MIN, Math.min(CELL_MAX, Math.floor((avail - (cols - 1) * GAP) / cols))) : CELL_MIN;

@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, BackHandler, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, Alert, AppState, BackHandler, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import YoutubePlayer, { YoutubeIframeRef } from 'react-native-youtube-iframe';
 import Animated from 'react-native-reanimated';
@@ -13,11 +13,59 @@ import { toast } from '../components/Toast';
 import { glide, rowIn, rowOut, useAnimLevel, useBuilt, useEntrance } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { READ_MAX, TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth, frame } from '../layout';
+import { useToolNav } from '../toolNav';
+import { useRisen } from './NotesListScreen';
 
 /** on a wide window the video never takes more than this share of the window's height */
 const PLAYER_MAX_H = 0.55;
 /** between the video's column and the notes' column on a sideways tablet */
 const COL_GAP = 28;
+/** how long a title may take before the video is saved without it, so a stalled connection never holds the add key */
+const TITLE_WAIT_MS = 6000;
+
+/** The name a video is saved under when its title could not be had. One that still wears it asks again when opened. */
+export const placeholderTitle = (videoId: string) => 'Video ' + videoId;
+
+/** The video's title from YouTube, or a stand-in when it cannot be had (offline, too slow, private, deleted). */
+export async function fetchTitle(videoId: string): Promise<{ title: string; found: boolean }> {
+  // Android's fetch never gives up on a stalled connection by itself
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), TITLE_WAIT_MS);
+  try {
+    const r = await fetch(
+      'https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=' + videoId + '&format=json',
+      { signal: stop.signal },
+    );
+    if (!r.ok) throw new Error();
+    const j = await r.json();
+    return j.title ? { title: j.title, found: true } : { title: placeholderTitle(videoId), found: false };
+  } catch {
+    return { title: placeholderTitle(videoId), found: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Takes a timed note or a bookmark off its video, with an Undo that puts the same one back in its place. */
+export function removeVaultItem(videoId: string, item: TimedNote | Bookmark, isBookmark: boolean) {
+  const s = useStore.getState();
+  if (isBookmark) s.removeBookmark(videoId, item.id);
+  else s.removeTimedNote(videoId, item.id);
+  toast(isBookmark ? 'Bookmark deleted.' : 'Timed note deleted.', {
+    label: 'Undo',
+    onPress: () => {
+      const now = useStore.getState();
+      const v = now.vaultVideos.find((x) => x.id === videoId);
+      if (!v) return;
+      const byTime = (a: { time: number }, b: { time: number }) => a.time - b.time;
+      if (isBookmark) {
+        if (!v.bookmarks.some((b) => b.id === item.id)) now.updateVideo(videoId, { bookmarks: [...v.bookmarks, item as Bookmark].sort(byTime) });
+      } else if (!v.notes.some((n) => n.id === item.id)) {
+        now.updateVideo(videoId, { notes: [...v.notes, item as TimedNote].sort(byTime) });
+      }
+    },
+  });
+}
 
 /** The last value that was not null, so a sheet keeps its title and its rows while it closes. */
 function useHeld<T>(value: T | null): T | null {
@@ -28,7 +76,8 @@ function useHeld<T>(value: T | null): T | null {
 
 /**
  * A sheet with one field and one button. It keeps its own draft, so typing re-renders the sheet and not the page under
- * it (here, a playing video). Each opening starts from `initial`.
+ * it (here, a playing video). Each opening starts from `initial`. The field takes the keyboard once the sheet has
+ * risen: a keyboard that comes up mid-rise resizes the window under the moving panel, and the panel jumps.
  */
 export function DraftSheet({
   visible, onClose, title, initial = '', placeholder, multiline, minHeight, autoCapitalize, label, color, hint, onSave,
@@ -47,10 +96,13 @@ export function DraftSheet({
     setOpen(visible);
     if (visible) setDraft(initial);
   }
+  const risen = useRisen(visible);
   return (
     <Sheet visible={visible} onClose={onClose} title={title}>
+      {/* made again once the sheet has risen, and only then asks for the keyboard */}
       <Field
-        value={draft} onChangeText={setDraft} placeholder={placeholder} autoFocus multiline={multiline}
+        key={risen ? 'risen' : 'rising'}
+        value={draft} onChangeText={setDraft} placeholder={placeholder} autoFocus={risen} multiline={multiline}
         autoCapitalize={autoCapitalize} style={minHeight ? { minHeight } : undefined}
       />
       <PillButton label={label} color={color} onPress={() => onSave(draft)} />
@@ -113,13 +165,11 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const updateVideo = useStore((s) => s.updateVideo);
   const addTimedNote = useStore((s) => s.addTimedNote);
   const updateTimedNote = useStore((s) => s.updateTimedNote);
-  const removeTimedNote = useStore((s) => s.removeTimedNote);
   const addBookmark = useStore((s) => s.addBookmark);
   const updateBookmark = useStore((s) => s.updateBookmark);
-  const removeBookmark = useStore((s) => s.removeBookmark);
   const addVideoTag = useStore((s) => s.addVideoTag);
   const removeVideoTag = useStore((s) => s.removeVideoTag);
-  const addNote = useStore((s) => s.addNote);
+  const nav = useToolNav();
 
   const playerRef = useRef<YoutubeIframeRef>(null);
   const seekDone = useRef(false);
@@ -128,6 +178,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [bmSheet, setBmSheet] = useState<{ time: number } | null>(null);
   const [folderSheet, setFolderSheet] = useState(false);
   const [tagSheet, setTagSheet] = useState(false);
+  const [renameSheet, setRenameSheet] = useState(false);
   const [menu, setMenu] = useState<{ item: TimedNote | Bookmark; isBookmark: boolean } | null>(null);
   const [editSheet, setEditSheet] = useState<{ item: any; isBookmark: boolean } | null>(null);
   // what each sheet shows stays while it closes, instead of turning to "@ 0:00" or an empty menu on its way out
@@ -136,15 +187,48 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const heldMenu = useHeld(menu);
   const heldEdit = useHeld(editSheet);
 
-  // layered back: fullscreen video is a native surface parented to the whole
-  // activity, so popping this route out from under it strands a black overlay
-  // and leaves the orientation unlocked — swallow back until the player exits
+  // Layered back: fullscreen video is a native surface parented to the whole activity, so popping this route out from
+  // under it strands a black overlay and leaves the orientation unlocked. Back while it fills the screen takes it out of
+  // fullscreen instead, and goes no further. The player's page cannot be reached from here, but the WebView ends a
+  // fullscreen view whenever fullscreen video is switched off, so back switches it off for a moment (check on a device)
   const fullscreen = useRef(false);
-  const blockBack = useCallback(() => fullscreen.current, []);
+  const [fsOff, setFsOff] = useState(false);
+  const leaveFullscreen = useCallback(() => {
+    if (!fullscreen.current) return false;
+    setFsOff(true);
+    return true;
+  }, []);
+  React.useEffect(() => {
+    if (!fsOff) return undefined;
+    const t = setTimeout(() => setFsOff(false), 80);
+    return () => clearTimeout(t);
+  }, [fsOff]);
+  const webViewProps = useMemo(() => ({ allowsFullscreenVideo: !fsOff }), [fsOff]);
   useFocusEffect(useCallback(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', blockBack);
+    const sub = BackHandler.addEventListener('hardwareBackPress', leaveFullscreen);
     return () => sub.remove();
-  }, [blockBack]));
+  }, [leaveFullscreen]));
+
+  // A video stops when its page is left: a player in a bar slot stays mounted behind another tab and would go on
+  // playing there unseen, and so would one with the app put away. It waits, paused, for play to be pressed again
+  useFocusEffect(useCallback(() => () => setPlaying(false), []));
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => { if (s === 'background') setPlaying(false); });
+    return () => sub.remove();
+  }, []);
+
+  // a video saved without its title (added offline, or the fetch stalled) asks for it again each time it is opened; a
+  // name given meanwhile wins
+  const dbId = video?.id;
+  const ytId = video?.videoId;
+  React.useEffect(() => {
+    if (!dbId || !ytId) return;
+    if (useStore.getState().vaultVideos.find((v) => v.id === dbId)?.title !== placeholderTitle(ytId)) return;
+    fetchTitle(ytId).then(({ title, found }) => {
+      const now = useStore.getState().vaultVideos.find((v) => v.id === dbId);
+      if (found && now && now.title === placeholderTitle(ytId)) useStore.getState().updateVideo(dbId, { title });
+    });
+  }, [dbId, ytId]);
 
   const seek = useCallback((sec: number) => {
     playerRef.current?.seekTo(sec, true);
@@ -196,8 +280,9 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       onError={onError}
       onFullScreenChange={onFullScreen}
       onChangeState={onState}
+      webViewProps={webViewProps}
     />
-  ) : null), [videoId, playerW, playerH, playing, onReady, onError, onFullScreen, onState]);
+  ) : null), [videoId, playerW, playerH, playing, onReady, onError, onFullScreen, onState, webViewProps]);
 
   const openMenu = useCallback((m: { item: TimedNote | Bookmark; isBookmark: boolean }) => setMenu(m), []);
 
@@ -223,20 +308,60 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     catch { return 0; }
   };
 
+  // The revision sheet is plain text in the note editor's own style (a bullet, the moment, the words), with no heading
+  // for a list that is empty. It opens with the video's link, which is how a second export finds it and updates it
+  // instead of adding a copy; a locked note is left alone
   const exportToNotes = () => {
-    const lines = [
-      '# ' + video.title,
-      video.url,
-      video.tags.length ? video.tags.map((x) => '#' + x).join(' ') : '',
-      '',
-      '## Bookmarks',
-      ...video.bookmarks.map((b) => '- [' + fmtMediaTime(b.time) + (b.endTime ? '-' + fmtMediaTime(b.endTime) : '') + '] ' + b.label),
-      '',
-      '## Timed notes',
-      ...video.notes.map((n) => '- [' + fmtMediaTime(n.time) + '] ' + n.text),
-    ];
-    addNote({ title: 'Revision: ' + video.title, body: lines.join('\n'), folder: 'General' });
-    toast('Revision sheet added to Notes.');
+    const at = (t: number, end?: number) => fmtMediaTime(t) + (end ? '-' + fmtMediaTime(end) : '');
+    const body = [
+      [video.url, video.tags.map((x) => '#' + x).join(' ')].filter(Boolean).join('\n'),
+      video.bookmarks.length ? ['Bookmarks', ...video.bookmarks.map((b) => '•  ' + at(b.time, b.endTime) + '  ' + b.label)].join('\n') : '',
+      video.notes.length ? ['Timed notes', ...video.notes.map((n) => '•  ' + at(n.time) + '  ' + n.text)].join('\n') : '',
+    ].filter(Boolean).join('\n\n');
+    const s = useStore.getState();
+    // an export from before this one opened with a Markdown heading, then the link
+    const isSheet = (text: string) => {
+      const [first, second] = text.split('\n', 2);
+      return first === video.url || (first.startsWith('# ') && second === video.url);
+    };
+    const old = s.notes.find((n) => !n.locked && isSheet(n.body));
+    const open = (id: string) => ({ label: 'Open', onPress: () => nav.openNote(id) });
+    if (!old) {
+      const id = s.addNote({ title: 'Revision: ' + video.title, body, folder: 'General' });
+      toast('Revision sheet added to Notes.', open(id));
+      return;
+    }
+    if (old.body === body) {
+      toast('The revision sheet in Notes is up to date.', open(old.id));
+      return;
+    }
+    // its title is the student's own by now, so only the words are written again
+    Alert.alert('Update the revision sheet?', 'It is written again from this video\'s bookmarks and timed notes, so anything typed into it is replaced.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Update',
+        onPress: () => {
+          useStore.getState().updateNote(old.id, { body });
+          toast('Revision sheet updated.', open(old.id));
+        },
+      },
+    ]);
+  };
+
+  // a tag goes with one tap, and Undo puts it back where it was
+  const dropTag = (x: string) => {
+    const was = video.tags.indexOf(x);
+    removeVideoTag(video.id, x);
+    toast('Removed #' + x + '.', {
+      label: 'Undo',
+      onPress: () => {
+        const v = useStore.getState().vaultVideos.find((y) => y.id === video.id);
+        if (!v || v.tags.includes(x)) return;
+        const tags = [...v.tags];
+        tags.splice(Math.min(Math.max(0, was), tags.length), 0, x);
+        useStore.getState().updateVideo(v.id, { tags });
+      },
+    });
   };
 
   const info = (
@@ -247,7 +372,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <Row style={{ flexWrap: 'wrap', marginTop: 10 }}>
         {video.tags.map((x) => (
           <Animated.View key={x} entering={built.current ? rowIn(level) : undefined} exiting={rowOut(level)} layout={glide(level)}>
-            <Chip small label={'#' + x} color={C.teal} active onPress={() => removeVideoTag(video.id, x)} />
+            <Chip small label={'#' + x} color={C.teal} active onPress={() => dropTag(x)} />
           </Animated.View>
         ))}
         <Animated.View layout={glide(level)}>
@@ -260,8 +385,9 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
           onPress={async () => { setNoteSheet({ time: await now() }); }} />
         <PillButton small label="Mark @ now" icon="bookmark-outline" color={C.pink}
           onPress={async () => { setBmSheet({ time: await now() }); }} />
-        <PillButton small label="→ Notes" icon="download-outline" color={C.accent} outline onPress={exportToNotes} />
+        <PillButton small label="Export to Notes" icon="download-outline" color={C.accent} outline onPress={exportToNotes} />
         <PillButton small label="Move" icon="folder-outline" color={C.textDim} outline onPress={() => setFolderSheet(true)} />
+        <PillButton small label="Rename" icon="create-outline" color={C.textDim} outline onPress={() => setRenameSheet(true)} />
       </Row>
     </>
   );
@@ -361,14 +487,14 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         items={heldMenu ? [
           { label: 'Jump to moment', icon: 'play-outline', onPress: () => seek(heldMenu.item.time) },
           { label: 'Edit', icon: 'create-outline', onPress: () => setEditSheet(heldMenu) },
-          {
-            label: 'Delete', icon: 'trash-outline', color: C.danger,
-            onPress: () => {
-              if (heldMenu.isBookmark) removeBookmark(video.id, heldMenu.item.id);
-              else removeTimedNote(video.id, heldMenu.item.id);
-            },
-          },
+          { label: 'Delete', icon: 'trash-outline', color: C.danger, onPress: () => removeVaultItem(video.id, heldMenu.item, heldMenu.isBookmark) },
         ] : []}
+      />
+
+      <DraftSheet
+        visible={renameSheet} onClose={() => setRenameSheet(false)} title="Rename video"
+        initial={video.title} placeholder="Video name" label="Rename" color={C.pink}
+        onSave={(text) => { if (text.trim()) { updateVideo(video.id, { title: text.trim() }); setRenameSheet(false); } }}
       />
 
       <DraftSheet
