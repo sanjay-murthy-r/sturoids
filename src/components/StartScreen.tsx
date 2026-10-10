@@ -1,19 +1,20 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, {
-  Easing, Extrapolation, cancelAnimation, interpolate, useAnimatedProps, useAnimatedStyle, useSharedValue,
+  Easing, Extrapolation, cancelAnimation, interpolate, runOnJS, useAnimatedProps, useAnimatedStyle, useSharedValue,
   withDelay, withSequence, withTiming,
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import Svg, { Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { C, F, LX, LY, NEU, bgFor, darkSh, liteSh } from '../theme';
 import { useStore } from '../store';
-import { setIntroPhase } from '../intro';
-import { SIG, SIG_SIZE, SIG_SPEED } from '../signature';
-import { DATE_PLACE } from '../handDate';
+import { setIntroPhase, useIntro } from '../intro';
+import { SIG_SIZE, SIG_SPEED } from '../signature';
+import { dateDigits } from '../sigModel';
 import { useAnimLevel } from './Motion';
 import { WIDE_AT } from '../layout';
-import { DATE_SPEED, SHINE_SKEW, Signature, SignatureStill, layoutDate } from './Signature';
+import { DATE_SPEED, SHINE_SKEW, Signature, SignatureStill, layoutDate, useIntroSignature } from './Signature';
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
@@ -76,22 +77,21 @@ if (__DEV__ && plateShadow(1) !== NEU.raisedHigh.boxShadow) {
 // signature at SIG_SPEED, the date a little quicker at DATE_SPEED); the beats are real ms.
 const SIG_START = 160;
 const real = (modelMs: number) => modelMs / SIG_SPEED;
-const SIGNED = real(SIG_START + SIG.total);
 /** the pen lifts from the signature's last mark and starts the date */
 const DATE_LIFT = 160;
 /** beat 1 ends on the finished signature and date, held still */
 const HOLD = 520;
-/** the date is cut in at the end, just before the hand-over, instead of written after the signature */
-const DATE_LATE = DATE_PLACE.when === 'outro';
 
 /**
- * Every beat after the pen, from how long today's date takes to write (real ms). The Handwriting Lab places the date
- * in time too: 'signature' writes it straight after the signature, in beat 1; 'outro' holds the signature alone and
- * cuts the date into the carve after the shine, just before the hand-over.
+ * Every beat after the pen, from how long the signature (model ms) and today's date (real ms) take to write. The
+ * Handwriting Lab places the date in time too: 'signature' writes it straight after the signature, in beat 1; 'outro'
+ * (`late`) holds the signature alone and cuts the date into the carve after the shine, just before the hand-over. A
+ * signature with no date (`dated` false) simply has no date beat.
  */
-function beats(dateMs: number, late: boolean) {
+function beats(sigTotal: number, dateMs: number, late: boolean, dated: boolean) {
+  const signed = real(SIG_START + sigTotal);
   /** the pen's last mark in beat 1: the signature's, or the date's after it */
-  const penDone = late ? SIGNED : SIGNED + DATE_LIFT + dateMs;
+  const penDone = late || !dated ? signed : signed + DATE_LIFT + dateMs;
   /** beat 2: the signature travels into its slot and sinks into a carve while the plate rises */
   const SHIFT = { at: penDone + HOLD, dur: 1060 };
   const RISE = { at: SHIFT.at + 240, dur: 1020, settle: 250 };
@@ -108,8 +108,8 @@ function beats(dateMs: number, late: boolean) {
    * app makes its own entrance in the scene's place (intro phase `leaving`): the day rises, then the tab bar.
    */
   const shineEnd = SHINE.at + SHINE.dur;
-  const dateStart = late ? shineEnd + DATE_LIFT : SIGNED + DATE_LIFT;
-  const LEAVE = late ? dateStart + dateMs + HOLD : shineEnd + 320;
+  const dateStart = late ? shineEnd + DATE_LIFT : signed + DATE_LIFT;
+  const LEAVE = late && dated ? dateStart + dateMs + HOLD : shineEnd + 320;
   const HANDOFF = LEAVE + 300;
   return {
     dateStart,
@@ -131,7 +131,7 @@ function beats(dateMs: number, late: boolean) {
 /** without the big signature the pen writes 1.55 times as fast: the signature comes last and should not keep Home waiting */
 const LOGO_PEN = 1.55;
 
-function logoBeats(dateMs: number, late: boolean) {
+function logoBeats(sigTotal: number, dateMs: number, late: boolean, dated: boolean) {
   const RISE = { at: 160, dur: 1250, settle: 260 };
   const GROOVES = { at: RISE.at + 950, dur: 520 };
   const TEXT = RISE.at + RISE.dur + RISE.settle + 30;
@@ -139,15 +139,15 @@ function logoBeats(dateMs: number, late: boolean) {
   const CAPTION = { at: TEXT + 260, dur: 560 };
   /** the pen sets down as the caption finishes arriving */
   const penAt = TEXT + 680;
-  const signed = penAt + real(SIG.total) / LOGO_PEN;
+  const signed = penAt + real(sigTotal) / LOGO_PEN;
   const dateStart = late ? 0 : signed + DATE_LIFT / LOGO_PEN;
-  const penDone = late ? signed : dateStart + dateMs / LOGO_PEN;
+  const penDone = late || !dated ? signed : dateStart + dateMs / LOGO_PEN;
   /** the ink settles into the carve, where it stays */
   const SINK = { at: penDone + 260, dur: 620 };
   const SHINE = { at: SINK.at + 500, dur: 1900 };
   const shineEnd = SHINE.at + SHINE.dur;
   const lateStart = shineEnd + DATE_LIFT;
-  const LEAVE = late ? lateStart + dateMs / LOGO_PEN + HOLD : shineEnd + 300;
+  const LEAVE = late && dated ? lateStart + dateMs / LOGO_PEN + HOLD : shineEnd + 300;
   const HANDOFF = LEAVE + 300;
   return {
     penAt,
@@ -159,17 +159,21 @@ function logoBeats(dateMs: number, late: boolean) {
   };
 }
 
+/**
+ * Beat 4, the hand-over, from the moment the scene begins to settle back: the words, the plate and the signature
+ * recede in turn; the material clears for the app and the app makes its entrance (CLEAR); the overlay goes (DONE).
+ */
 const RECEDE = { words: 0, plate: 70, sig: 140, dur: 460 };
+const HAND = { clear: 300, clearDur: 260, done: 860 };
 
 // 'some': the composed end state fades in, the app is built beneath it, the scene settles back and hands over
 const SOME = { fade: 320, reveal: 360, leave: 900, handoff: 1080, done: 1440 };
 
+/** Tap to skip: the pen runs on to the end of what it is writing this quickly, then the hand-over starts from there. */
+const SKIP_PEN = 250;
+
 /** Today as the phone keeps it: day, month and two-digit year, read at the moment it is needed. */
-function todayDigits(): string {
-  const d = new Date();
-  const two = (n: number) => String(n).padStart(2, '0');
-  return two(d.getDate()) + two(d.getMonth() + 1) + two(d.getFullYear() % 100);
-}
+const todayDigits = () => dateDigits(new Date());
 
 /** The logo's sheen, driven by the same value as the signature's shine. */
 function PlateSheen({ glint }: { glint: SharedValue<number> }) {
@@ -207,29 +211,46 @@ function PlateSheen({ glint }: { glint: SharedValue<number> }) {
  * The date is the phone's own, read at launch and again just before it is written, so an intro that
  * runs over midnight still writes the new day.
  *
+ * The signature is the one chosen in Settings (useIntroSignature): the creator's, or one recorded on
+ * this phone, with its own digits and placement or with no date at all, which skips the date beat.
+ *
  * Contract with app/_layout.tsx: onReveal() builds the app beneath the opaque overlay; onDone()
  * unmounts the overlay. The app's own entrance follows the intro phase (src/intro.ts). Real ms at
  * SIG_SPEED 1.2 and DATE_SPEED 1.45 (18 09 26): full = reveal ~5500 / hand-over ~10300 / done ~10900;
  * some = reveal 360 / done 1440; none = no overlay, both callbacks in the first effect. The minimal
  * theme keeps its own background; the plate keeps the default material (brand exception).
+ *
+ * The overlay takes every touch until the hand-over, so nothing in the app built beneath it can be
+ * pressed unseen. With "Tap to skip" on, a tap ends the intro early: the pen runs on to the end of
+ * what it is writing, quickly, the app is built if it is not yet, and the usual hand-over plays
+ * from wherever the scene is.
  */
 export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone: () => void }) {
   const liveTheme = useStore((s) => s.settings.theme);
   const liveLevel = useAnimLevel();
   // _layout mounts the intro only after hydration, so these are the user's settings; the intro
-  // commits to them for its whole run
+  // commits to them for its whole run, the signature included
   const liveIntro = useStore((s) => s.settings.introStyle);
-  const [{ level, theme, style }] = useState(() => ({ level: liveLevel, theme: liveTheme, style: liveIntro }));
+  const liveSkip = useStore((s) => s.settings.introTapSkip);
+  const liveSig = useIntroSignature();
+  const [{ level, theme, style, tapSkip, sig }] = useState(() => ({
+    level: liveLevel, theme: liveTheme, style: liveIntro, tapSkip: liveSkip === true, sig: liveSig,
+  }));
+  const { model, hand } = sig;
+  const dated = hand != null;
+  const late = dated && hand.place.when === 'outro';
   const logoFirst = style === 'logo';
   const { width: W, height: H } = useWindowDimensions();
   const [gone, setGone] = useState(false);
   const [date, setDate] = useState(todayDigits);
   const dateRef = useRef(date);
-  const dateMs = useMemo(() => layoutDate(date).total / DATE_SPEED, []);
-  const B = useMemo(() => beats(dateMs, DATE_LATE), []);
-  const L = useMemo(() => logoBeats(dateMs, DATE_LATE), []);
+  const dateMs = useMemo(() => (hand ? layoutDate(date, hand).total / DATE_SPEED : 0), []);
+  const B = useMemo(() => beats(model.total, dateMs, late, dated), []);
+  const L = useMemo(() => logoBeats(model.total, dateMs, late, dated), []);
   const callbacks = useRef({ onReveal, onDone });
   callbacks.current = { onReveal, onDone };
+  /** what a tap does while the intro plays: set by the timeline once it runs, when tap to skip is on */
+  const skipRef = useRef<(() => void) | null>(null);
 
   const full = level === 'full';
   const overlay = useSharedValue(1);
@@ -255,8 +276,21 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
       callbacks.current.onDone();
       return undefined;
     }
+    const animated = [
+      overlay, content, tau, dateTau, travel, ink, carve, glint, rise, grooves, word, caption,
+      leaveWords, leavePlate, leaveSig,
+    ];
     const timers: ReturnType<typeof setTimeout>[] = [];
+    const frames: number[] = [];
     const at = (ms: number, fn: () => void) => { timers.push(setTimeout(fn, ms)); };
+    let revealed = false;
+    const reveal = () => {
+      if (revealed) return;
+      revealed = true;
+      callbacks.current.onReveal();
+    };
+    /** the scene has begun to settle back: from here on a tap changes nothing */
+    let leaving = false;
     const finish = () => {
       setGone(true);
       setIntroPhase('done');
@@ -264,16 +298,54 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
     };
     const cubicOut = Easing.out(Easing.cubic);
 
+    /** Beat 4 from `start` ms on: the scene settles back, one layer after another, and the material clears for the app. */
+    const handOver = (start: number) => {
+      at(start, () => { leaving = true; });
+      const settle = { duration: RECEDE.dur, easing: cubicOut };
+      leaveWords.value = withDelay(start + RECEDE.words, withTiming(1, settle));
+      leavePlate.value = withDelay(start + RECEDE.plate, withTiming(1, settle));
+      leaveSig.value = withDelay(start + RECEDE.sig, withTiming(1, settle));
+      overlay.value = withDelay(start + HAND.clear, withTiming(0, { duration: HAND.clearDur, easing: Easing.inOut(Easing.quad) }));
+      at(start + HAND.clear, () => setIntroPhase('leaving'));
+      at(start + HAND.done, finish);
+    };
+    /** The same at some motion: quicker, and closer together. */
+    const handOverSome = (start: number) => {
+      at(start, () => { leaving = true; });
+      const quick = { duration: 280, easing: cubicOut };
+      leaveWords.value = withDelay(start, withTiming(1, quick));
+      leavePlate.value = withDelay(start + 40, withTiming(1, quick));
+      leaveSig.value = withDelay(start + 80, withTiming(1, quick));
+      const handoff = start + SOME.handoff - SOME.leave;
+      overlay.value = withDelay(handoff, withTiming(0, { duration: 220, easing: Easing.inOut(Easing.quad) }));
+      at(handoff, () => setIntroPhase('leaving'));
+      at(start + SOME.done - SOME.leave, finish);
+    };
+
+    /** The date's pen, `delay` ms from now, at the date's speed (`pace` times quicker again when the logo comes first). */
+    const writeDate = (delay: number, digits: string, pace: number) => {
+      if (!hand) return;
+      const total = layoutDate(digits, hand).total;
+      dateTau.value = withDelay(delay, withTiming(total, { duration: total / DATE_SPEED / pace, easing: Easing.linear }));
+    };
+    /** The phone's date is read again just before the pen starts on it, so the day written is always today's. */
+    const rereadDate = (start: number, pace: number) => {
+      if (!hand) return;
+      at(start - 150, () => {
+        const now = todayDigits();
+        if (now === dateRef.current) return;
+        dateRef.current = now;
+        setDate(now);
+        cancelAnimation(dateTau);
+        dateTau.value = 0;
+        writeDate(150, now, pace);
+      });
+    };
+
     if (level === 'some') {
       content.value = withTiming(1, { duration: SOME.fade, easing: cubicOut });
-      const quick = { duration: 280, easing: cubicOut };
-      leaveWords.value = withDelay(SOME.leave, withTiming(1, quick));
-      leavePlate.value = withDelay(SOME.leave + 40, withTiming(1, quick));
-      leaveSig.value = withDelay(SOME.leave + 80, withTiming(1, quick));
-      overlay.value = withDelay(SOME.handoff, withTiming(0, { duration: 220, easing: Easing.inOut(Easing.quad) }));
-      at(SOME.reveal, () => callbacks.current.onReveal());
-      at(SOME.handoff, () => setIntroPhase('leaving'));
-      at(SOME.done, finish);
+      handOverSome(SOME.leave);
+      at(SOME.reveal, reveal);
     } else if (logoFirst) {
       const cubicInOut = Easing.inOut(Easing.cubic);
       // beat 1: the plate rises out of the material and its grooves settle, unhurried; the signature is already in
@@ -290,55 +362,24 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
         duration: L.CAPTION.dur, easing: Easing.linear,
       }));
       // beat 3: the pen writes below them, in the place the signature keeps, and today's date after it
-      tau.value = withDelay(L.penAt, withTiming(SIG.total, { duration: real(SIG.total) / LOGO_PEN, easing: Easing.linear }));
-      const writeDate = (delay: number, digits: string) => {
-        const total = layoutDate(digits).total;
-        dateTau.value = withDelay(delay, withTiming(total, { duration: total / DATE_SPEED / LOGO_PEN, easing: Easing.linear }));
-      };
-      writeDate(L.dateStart, dateRef.current);
-      at(L.dateStart - 150, () => {
-        const now = todayDigits();
-        if (now === dateRef.current) return;
-        dateRef.current = now;
-        setDate(now);
-        cancelAnimation(dateTau);
-        dateTau.value = 0;
-        writeDate(150, now);
-      });
+      tau.value = withDelay(L.penAt, withTiming(model.total, { duration: real(model.total) / LOGO_PEN, easing: Easing.linear }));
+      writeDate(L.dateStart, dateRef.current, LOGO_PEN);
+      rereadDate(L.dateStart, LOGO_PEN);
       // the ink settles into the carve, then one shine crosses the plate and the signature together
       ink.value = withDelay(L.SINK.at, withTiming(0, { duration: L.SINK.dur, easing: cubicInOut }));
       carve.value = withDelay(L.SINK.at, withTiming(1, { duration: L.SINK.dur, easing: cubicInOut }));
       glint.value = withDelay(L.SHINE.at, withTiming(1, { duration: L.SHINE.dur, easing: Easing.inOut(Easing.sin) }));
       // beat 4: the hand-over, as it always is
-      const settle = { duration: RECEDE.dur, easing: cubicOut };
-      leaveWords.value = withDelay(L.LEAVE + RECEDE.words, withTiming(1, settle));
-      leavePlate.value = withDelay(L.LEAVE + RECEDE.plate, withTiming(1, settle));
-      leaveSig.value = withDelay(L.LEAVE + RECEDE.sig, withTiming(1, settle));
-      overlay.value = withDelay(L.CLEAR.at, withTiming(0, { duration: L.CLEAR.dur, easing: Easing.inOut(Easing.quad) }));
-      at(L.REVEAL, () => callbacks.current.onReveal());
-      at(L.HANDOFF, () => setIntroPhase('leaving'));
-      at(L.DONE, finish);
+      handOver(L.LEAVE);
+      at(L.REVEAL, reveal);
     } else {
       const cubicInOut = Easing.inOut(Easing.cubic);
       // beat 1: the pen, then today's date a little quicker
-      tau.value = withDelay(real(SIG_START), withTiming(SIG.total, {
-        duration: real(SIG.total), easing: Easing.linear,
+      tau.value = withDelay(real(SIG_START), withTiming(model.total, {
+        duration: real(model.total), easing: Easing.linear,
       }));
-      const writeDate = (delay: number, digits: string) => {
-        const total = layoutDate(digits).total;
-        dateTau.value = withDelay(delay, withTiming(total, { duration: total / DATE_SPEED, easing: Easing.linear }));
-      };
-      writeDate(B.dateStart, dateRef.current);
-      // the phone's date is read again just before the pen starts on it, so the day written is always today's
-      at(B.dateStart - 150, () => {
-        const now = todayDigits();
-        if (now === dateRef.current) return;
-        dateRef.current = now;
-        setDate(now);
-        cancelAnimation(dateTau);
-        dateTau.value = 0;
-        writeDate(150, now);
-      });
+      writeDate(B.dateStart, dateRef.current, 1);
+      rereadDate(B.dateStart, 1);
       // beat 2: the shift, the sink into a carve, the rise
       travel.value = withDelay(B.SHIFT.at, withTiming(1, { duration: B.SHIFT.dur, easing: cubicInOut }));
       ink.value = withDelay(B.SINK.at, withTiming(0, { duration: B.SINK.dur, easing: cubicInOut }));
@@ -356,22 +397,43 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
       }));
       glint.value = withDelay(B.SHINE.at, withTiming(1, { duration: B.SHINE.dur, easing: Easing.inOut(Easing.sin) }));
       // beat 4: the scene settles back, one layer after another, and the material clears for the app
-      const settle = { duration: RECEDE.dur, easing: cubicOut };
-      leaveWords.value = withDelay(B.LEAVE + RECEDE.words, withTiming(1, settle));
-      leavePlate.value = withDelay(B.LEAVE + RECEDE.plate, withTiming(1, settle));
-      leaveSig.value = withDelay(B.LEAVE + RECEDE.sig, withTiming(1, settle));
-      overlay.value = withDelay(B.CLEAR.at, withTiming(0, { duration: B.CLEAR.dur, easing: Easing.inOut(Easing.quad) }));
-      at(B.REVEAL, () => callbacks.current.onReveal());
-      at(B.HANDOFF, () => setIntroPhase('leaving'));
-      at(B.DONE, finish);
+      handOver(B.LEAVE);
+      at(B.REVEAL, reveal);
     }
 
-    const animated = [
-      overlay, content, tau, dateTau, travel, ink, carve, glint, rise, grooves, word, caption,
-      leaveWords, leavePlate, leaveSig,
-    ];
+    // Tap to skip: everything stops where it is and only the pens run on, quickly, to the end of what they are writing
+    // (a date still to come at the end is left unwritten). The app is built then if it is not yet, and one frame later
+    // the usual hand-over starts from the scene as it stands. No cut: whatever is showing settles back as it always does.
+    if (tapSkip) {
+      skipRef.current = () => {
+        if (leaving) return;
+        leaving = true;
+        skipRef.current = null;
+        timers.forEach(clearTimeout);
+        timers.length = 0;
+        animated.forEach(cancelAnimation);
+        const go = () => {
+          reveal();
+          frames.push(requestAnimationFrame(() => (full ? handOver(0) : handOverSome(0))));
+        };
+        if (!full) {
+          go();
+          return;
+        }
+        const quick = { duration: SKIP_PEN, easing: Easing.out(Easing.quad) };
+        if (tau.value < model.total) tau.value = withTiming(model.total, quick);
+        if (hand && (!late || dateTau.value > 0)) {
+          const total = layoutDate(dateRef.current, hand).total;
+          if (dateTau.value < total) dateTau.value = withTiming(total, quick);
+        }
+        at(SKIP_PEN, go);
+      };
+    }
+
     return () => {
+      skipRef.current = null;
       timers.forEach(clearTimeout);
+      frames.forEach(cancelAnimationFrame);
       animated.forEach(cancelAnimation);
     };
   }, []);
@@ -407,9 +469,6 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
   const wordStyle = useAnimatedStyle(() => ({
     opacity: word.value * (1 - leaveWords.value),
     transform: [{ translateY: 8 * (1 - word.value) - 6 * leaveWords.value }],
-    // letter spacing trails each glyph, so the left padding keeps the word optically centred
-    letterSpacing: 6 - 3 * word.value,
-    paddingLeft: 6 - 3 * word.value,
   }));
   const captionStyle = useAnimatedStyle(() => ({
     opacity: caption.value * (1 - leaveWords.value),
@@ -425,7 +484,7 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
   // a phone lays the intro out on its own width, as it always has; a wide window on a phone's, then scales it by k
   const wide = W >= WIDE_AT;
   const sigW = SIG_SIZE * (wide ? DESIGN_W : W);
-  const sigH = (sigW * SIG.vh) / SIG.vw;
+  const sigH = (sigW * model.vh) / model.vw;
   const columnH = PLATE + GAP_WORD + WORD_H + GAP_CAPTION + CAPTION_H + GAP_SIG + sigH;
   const k = wide ? Math.min(K_MAX, (FIT_H * H) / columnH) : 1;
   // the column is centred and scaled about its centre, so the slot's centre sits k * (columnH - sigH) / 2 below the
@@ -437,12 +496,12 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
 
   return (
     <Animated.View
-      pointerEvents="none"
+      pointerEvents="box-none"
       importantForAccessibility="no-hide-descendants"
       accessibilityElementsHidden
       style={[StyleSheet.absoluteFill, st.overlay, { backgroundColor: bgFor(theme) }, overlayStyle]}
     >
-      <View style={[st.scaler, k !== 1 && { transform: [{ scale: k }] }]}>
+      <View pointerEvents="none" style={[st.scaler, k !== 1 && { transform: [{ scale: k }] }]}>
         <Animated.View style={[st.column, { height: columnH }, columnStyle]}>
           <Animated.View style={[st.plate, plateStyle]}>
             <Animated.View style={[st.plateFace, st.tierLow, tierLowStyle]} />
@@ -460,32 +519,69 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
             {full ? <PlateSheen glint={glint} /> : null}
           </Animated.View>
 
-          <Animated.Text style={[st.word, wordStyle]}>STUROIDS</Animated.Text>
-          <Animated.Text style={[st.caption, captionStyle]}>ALL-IN-ONE STUDENT APP</Animated.Text>
+          <Animated.View style={[st.wordRow, wordStyle]}>
+            {WORD.map((ch, i) => <WordLetter key={i} ch={ch} index={i} word={word} />)}
+          </Animated.View>
+          <Animated.Text style={[st.caption, captionStyle]} allowFontScaling={false}>ALL-IN-ONE STUDENT APP</Animated.Text>
 
           <Animated.View style={[{ width: sigW, height: sigH, marginTop: GAP_SIG }, sigStyle]}>
             {full ? (
               <Signature
                 width={sigW}
+                model={model}
+                hand={hand}
                 heroScale={heroScale}
                 heroX={0}
                 heroY={heroY}
                 tau={tau}
                 date={date}
                 dateTau={dateTau}
-                dateLate={DATE_LATE}
+                dateLate={late}
                 travel={travel}
                 ink={ink}
                 carve={carve}
                 glint={glint}
               />
             ) : (
-              <SignatureStill width={sigW} date={date} />
+              <SignatureStill width={sigW} model={model} hand={hand} date={date} />
             )}
           </Animated.View>
         </Animated.View>
       </View>
+      <TouchShield onTap={skipRef} />
     </Animated.View>
+  );
+}
+
+const WORD = 'STUROIDS'.split('');
+
+/**
+ * One letter of the wordmark. The word arrives with its letters a little apart and draws them together as it comes
+ * in; each letter is set at the word's final spacing and moves by transform alone, so no frame re-lays out the text.
+ */
+function WordLetter({ ch, index, word }: { ch: string; index: number; word: SharedValue<number> }) {
+  const spread = (index - (WORD.length - 1) / 2) * 3;
+  const style = useAnimatedStyle(() => ({ transform: [{ translateX: spread * (1 - word.value) }] }));
+  return <Animated.Text style={[st.word, style]} allowFontScaling={false}>{ch}</Animated.Text>;
+}
+
+/**
+ * Takes every touch while the intro plays, so nothing in the app built beneath it can be pressed unseen, and lets
+ * them through from the hand-over on. It holds a gesture of its own, which is what keeps the gesture handlers of the
+ * screens beneath from claiming a touch too. A tap calls whatever `onTap` holds then (tap to skip, when it is on).
+ */
+function TouchShield({ onTap }: { onTap: React.MutableRefObject<(() => void) | null> }) {
+  const playing = useIntro((s) => s.phase === 'playing');
+  // the ref itself never goes to the UI thread (a worklet would freeze it): only this function, called back on JS
+  const fire = useCallback(() => { onTap.current?.(); }, [onTap]);
+  const gesture = useMemo(() => Gesture.Tap().onEnd((_e, success) => {
+    'worklet';
+    if (success) runOnJS(fire)();
+  }), [fire]);
+  return (
+    <GestureDetector gesture={gesture}>
+      <View style={StyleSheet.absoluteFill} pointerEvents={playing ? 'auto' : 'none'} collapsable={false} />
+    </GestureDetector>
   );
 }
 
@@ -503,9 +599,11 @@ const st = StyleSheet.create({
   tierMid: { boxShadow: plateShadow(0.7) },
   plateBody: { backgroundColor: C.card },
   clip: { overflow: 'hidden' },
+  // letter spacing trails each glyph, so the left padding keeps the word optically centred
+  wordRow: { flexDirection: 'row', justifyContent: 'center', height: WORD_H, paddingLeft: 3 },
   word: {
     height: WORD_H, lineHeight: WORD_H, textAlign: 'center',
-    color: C.text, fontFamily: F.brand, fontSize: 22,
+    color: C.text, fontFamily: F.brand, fontSize: 22, letterSpacing: 3,
   },
   caption: {
     height: CAPTION_H, lineHeight: CAPTION_H, marginTop: GAP_CAPTION, textAlign: 'center',

@@ -9,6 +9,11 @@
  *   - storage that answers after the wait replaces the defaults, resumes saving and says so
  *   - a row that cannot be read back pauses saving and holds the cloud back; a failed save is kept and reported
  *   - a restore keeps this phone's own visit times, and a change to them alone is not a data change
+ *   - one row per collection: a round trip, the move from the old single row, a row that cannot be read never being
+ *     written over, and only changed rows being written
+ *   - 1.7's migration (daily ToDos, the moved accents, the new settings), and one-off ToDos leaving on a new day
+ *   - Recently deleted: every kind goes and comes back in its place, locks follow the tools, and the purge after
+ *     30 days deletes the files too
  * Usage: node scripts/test-store.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -19,26 +24,55 @@ const { createRequire } = require('module');
 const ROOT = path.join(__dirname, '..');
 const projectRequire = createRequire(path.join(ROOT, 'package.json'));
 const ts = projectRequire('typescript');
+/** the single row everything was saved in before 1.7 */
 const KEY = 'student-hub-v1';
+/** 1.7's rows: a meta row, and one per collection */
+const META = 'student-hub-v2:meta';
+const ROW = (k) => 'student-hub-v2:' + k;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const DAY = 24 * 60 * 60 * 1000;
 
 /**
  * Boots src/store.ts in a fresh module registry over its own storage map. `faults` can be changed while it runs:
- * `unreadable` keys throw on read (a row Android cannot read back), `writesFail` makes every write throw.
+ * `unreadable` keys throw on read (a row Android cannot read back), `writesFail` makes every write throw. `writes`
+ * records the keys of every multiSet, and `deleted` every file the app deleted.
  */
-function boot(seed = {}, { gate, faults = {} } = {}) {
-  const storage = new Map(Object.entries(seed));
+function boot(seed = {}, { gate, faults = {}, storage: shared } = {}) {
+  const storage = shared || new Map(Object.entries(seed));
+  const writes = [];
+  const deleted = [];
+  const read = async (k) => {
+    if (gate) await gate;
+    if (faults.unreadable && faults.unreadable.includes(k)) throw new Error('Row too big to fit into CursorWindow');
+    return storage.has(k) ? storage.get(k) : null;
+  };
   const asyncStorage = {
-    getItem: async (k) => {
-      if (gate) await gate;
-      if (faults.unreadable && faults.unreadable.includes(k)) throw new Error('Row too big to fit into CursorWindow');
-      return storage.has(k) ? storage.get(k) : null;
-    },
+    getItem: read,
     setItem: async (k, v) => {
       if (faults.writesFail) throw new Error('database or disk is full');
       storage.set(k, v);
     },
     removeItem: async (k) => { storage.delete(k); },
+    // as on Android: one row that cannot be read fails the whole read, and a multiSet is one transaction
+    multiGet: async (keys) => {
+      const out = [];
+      for (const k of keys) out.push([k, await read(k)]);
+      return out;
+    },
+    multiSet: async (pairs) => {
+      if (faults.writesFail) throw new Error('database or disk is full');
+      writes.push(pairs.map(([k]) => k));
+      for (const [k, v] of pairs) storage.set(k, v);
+    },
+    multiRemove: async (keys) => { for (const k of keys) storage.delete(k); },
+  };
+  const fileSystem = {
+    documentDirectory: 'file:///doc/',
+    cacheDirectory: 'file:///cache/',
+    async deleteAsync(uri) { deleted.push(uri); },
+    async readAsStringAsync() { return ''; },
+    async writeAsStringAsync() {},
+    async makeDirectoryAsync() {},
   };
   const registry = new Map();
   const load = (file) => {
@@ -52,6 +86,7 @@ function boot(seed = {}, { gate, faults = {} } = {}) {
     const req = (spec) => {
       if (spec === '@react-native-async-storage/async-storage') return { __esModule: true, default: asyncStorage };
       if (spec === 'react-native') return {};
+      if (spec === 'expo-file-system') return fileSystem;
       if (spec.startsWith('.')) {
         const base = path.resolve(path.dirname(file), spec);
         const hit = [base + '.ts', base + '.tsx', path.join(base, 'index.ts')].find((p) => fs.existsSync(p));
@@ -65,9 +100,28 @@ function boot(seed = {}, { gate, faults = {} } = {}) {
   };
   const store = load(path.join(ROOT, 'src', 'store.ts'));
   const notices = [];
-  store.subscribeLoadNotices((n) => notices.push(n));
+  const named = [];
+  store.subscribeLoadNotices((n, collections) => { notices.push(n); named.push(collections || []); });
   const utils = load(path.join(ROOT, 'src', 'utils.ts'));
-  return { store, utils, storage, notices, state: () => store.useStore.getState() };
+  return {
+    store, utils, storage, notices, named, writes, deleted, state: () => store.useStore.getState(),
+    /** a collection's row as saved, parsed */
+    row: (k) => (storage.has(ROW(k)) ? JSON.parse(storage.get(ROW(k))) : undefined),
+    meta: () => (storage.has(META) ? JSON.parse(storage.get(META)) : undefined),
+  };
+}
+
+/** Writes what waits, after the store's own pause has been skipped. */
+async function flush(app) {
+  await sleep(5);
+  app.store.flushSaves();
+  await sleep(5);
+}
+
+/** A day's key, `days` from today. */
+function dayKey(utils, days) {
+  const d = new Date();
+  return utils.todayKey(new Date(d.getFullYear(), d.getMonth(), d.getDate() + days));
 }
 
 async function settled(app) {
@@ -300,9 +354,12 @@ const scenarios = {
     assert.deepEqual(s.scores, []);
     assert.deepEqual(s.settings.archivedTools, ['desmos', 'ai'], 'an upgrade takes the archive default');
     assert.equal(s.settings.name, 'Sam');
-    await sleep(10);
-    app.store.flushSaves(); // saves wait for a pause; the test does not
-    assert.equal(JSON.parse(app.storage.get(KEY)).version, 5, 'written back as v5');
+    assert.equal(s.settings.accent, '#9588F9', 'the old Iris moves to the new one');
+    assert.equal(s.dailyTasks[0].repeat, 'daily', 'a ToDo from before one-offs keeps coming back every day');
+    await flush(app); // saves wait for a pause; the test does not
+    assert.equal(app.meta().version, 6, 'written back as v6, one row per collection');
+    assert.equal(app.row('settings').name, 'Sam');
+    assert.ok(app.storage.has(KEY), 'the old row stays until a later launch has loaded the new ones');
     assert.deepEqual(app.notices, []);
   },
 
@@ -384,7 +441,10 @@ const scenarios = {
     assert.equal(app.store.savingPaused(), true);
     app.state().setSetting('name', 'x');
     await sleep(20);
+    app.store.flushSaves();
+    await sleep(5);
     assert.equal(app.storage.get(KEY), '{still bad', 'the unreadable blob is untouched');
+    assert.equal(app.storage.has(META), false, 'and nothing new is written beside it');
     assert.equal(app.storage.get(app.store.RECOVERY_KEY), '{older copy');
     assert.deepEqual(app.notices, ['failed-paused']);
   },
@@ -430,7 +490,7 @@ const scenarios = {
     faults.writesFail = false;
     app.store.flushSaves(); // the kept save goes through on the next flush
     await sleep(5);
-    assert.equal(JSON.parse(app.storage.get(KEY)).state.settings.name, 'First');
+    assert.equal(app.row('settings').name, 'First');
     assert.equal(app.store.savesFailing(), false);
     assert.deepEqual(seen, [true, false]);
   },
@@ -481,9 +541,334 @@ const scenarios = {
     assert.equal(app.store.savingPaused(), false);
     assert.equal(app.store.localDataState(), 'ok');
     app.state().setSetting('name', 'After');
-    await sleep(20);
-    app.store.flushSaves();
-    assert.equal(JSON.parse(app.storage.get(KEY)).state.settings.name, 'After', 'saving resumed');
+    await flush(app);
+    assert.equal(app.row('settings').name, 'After', 'saving resumed');
+    assert.ok(app.row('notes'), 'every collection is written once saving resumes');
+  },
+
+  // ---------- one row per collection ----------
+
+  async 'the rows round-trip: what one launch saves, the next loads'() {
+    const first = boot();
+    await settled(first);
+    first.state().setSetting('name', 'Asha');
+    first.state().addNote({ title: 'Waves', body: 'λ = v / f' });
+    first.state().addDaily('Read', { repeat: 'daily', time: '17:00', remind: 'hour' });
+    first.state().setDesmosState('{"graph":1}');
+    await flush(first);
+    const meta = first.meta();
+    assert.equal(meta.version, 6);
+    for (const k of ['settings', 'notes', 'dailyTasks', 'trash', 'desmosState']) {
+      assert.ok(meta.keys.includes(k), 'the meta row names ' + k);
+      assert.ok(first.storage.has(ROW(k)), k + ' has a row of its own');
+    }
+    assert.ok(first.store.savedSize() > 0);
+    assert.equal(first.store.largestCollection().chars, first.store.savedSize(), 'the size is the largest row');
+
+    const second = boot({}, { storage: first.storage });
+    await settled(second);
+    const s = second.state();
+    assert.equal(s.settings.name, 'Asha');
+    assert.equal(s.notes[0].body, 'λ = v / f');
+    assert.deepEqual(
+      { repeat: s.dailyTasks[0].repeat, time: s.dailyTasks[0].time, remind: s.dailyTasks[0].remind },
+      { repeat: 'daily', time: '17:00', remind: 'hour' },
+    );
+    assert.equal(s.desmosState, '{"graph":1}');
+    assert.equal(second.store.loadFailedThisLaunch(), false);
+    assert.deepEqual(second.notices, []);
+  },
+
+  async 'the old single row moves to rows, and goes only after a later launch loads them'() {
+    const saved = { ...V4, settings: { ...V4.settings, accent: '#D97757' }, dailyTasks: [{ id: 'd1', title: 'Read', doneOn: null, createdAt: 1 }] };
+    const first = boot({ [KEY]: JSON.stringify({ state: saved, version: 5 }) });
+    await settled(first);
+    assert.equal(first.state().settings.accent, '#DB7E5F', 'Terracotta moves too');
+    assert.equal(first.state().dailyTasks[0].repeat, 'daily');
+    await flush(first);
+    assert.equal(first.meta().version, 6, 'the first save writes the rows');
+    assert.ok(first.storage.has(KEY), 'the old row is still there');
+    const second = boot({}, { storage: first.storage });
+    await settled(second);
+    await sleep(10);
+    assert.equal(second.state().settings.name, 'Sam', 'loaded from the rows');
+    assert.equal(second.storage.has(KEY), false, 'a clean load from the rows lets the old row go');
+  },
+
+  async 'a row that cannot be read loses only its own collection, and is never written over'() {
+    const first = boot();
+    await settled(first);
+    first.state().setSetting('name', 'Asha');
+    first.state().addNote({ title: 'Precious', body: 'only copy' });
+    await flush(first);
+    const notesText = first.storage.get(ROW('notes'));
+    for (const fault of ['unreadable', 'garbled']) {
+      const storage = new Map(first.storage);
+      const faults = {};
+      if (fault === 'unreadable') faults.unreadable = [ROW('notes')];
+      else storage.set(ROW('notes'), notesText.slice(0, 20));
+      const before = storage.get(ROW('notes'));
+      const app = boot({}, { storage, faults });
+      await settled(app);
+      await sleep(5);
+      assert.equal(app.state().settings.name, 'Asha', fault + ': the rest loads');
+      assert.deepEqual(app.state().notes, [], fault + ': the collection starts fresh this launch');
+      assert.deepEqual(app.notices, ['failed-paused']);
+      assert.deepEqual(app.named[0], ['Notes'], fault + ': the notice names it');
+      assert.equal(app.store.loadFailedThisLaunch(), true);
+      assert.equal(app.store.localDataState(), 'failed', fault + ': nothing goes over a copy elsewhere');
+      app.state().addNote({ title: 'Typed meanwhile' });
+      app.state().setSetting('name', 'Asha K');
+      await flush(app);
+      assert.equal(storage.get(ROW('notes')), before, fault + ': the row is never written over');
+      assert.equal(JSON.parse(storage.get(ROW('settings'))).name, 'Asha K', fault + ': the others save as usual');
+      assert.ok(JSON.parse(storage.get(META)).keys.includes('notes'), fault + ': and stay named');
+    }
+  },
+
+  async 'a save writes only the rows that changed, and the meta row last'() {
+    const app = boot();
+    await settled(app);
+    app.state().addNote({ title: 'One' });
+    await flush(app);
+    app.writes.length = 0;
+    app.state().setSetting('name', 'Changed');
+    await flush(app);
+    assert.deepEqual(app.writes, [[ROW('settings'), META]]);
+    app.writes.length = 0;
+    app.state().setSetting('name', 'Changed');
+    await flush(app);
+    assert.deepEqual(app.writes, [], 'nothing changed, nothing written');
+  },
+
+  // ---------- 1.7's data ----------
+
+  async 'the v6 migration makes old ToDos daily, sets the new defaults, and changes nothing twice'() {
+    const app = boot();
+    await settled(app);
+    const { migrateV6, readSnapshot, DEFAULT_SETTINGS } = app.store;
+    const old = {
+      settings: { name: 'Sam', accent: '#8b7cf8', ownSignature: { v: 1, recordedAt: 1, strokes: 'bad' } },
+      dailyTasks: [{ id: 'a', title: 'Read', doneOn: null, createdAt: 1 }, { id: 'b', title: 'Run', doneOn: null, createdAt: 1, time: '25:00', remind: 'hour' }],
+      missions: [{ id: 'm', title: 'Essay', deadline: '2026-11-01', done: false, subtasks: [], doneOn: '2026-10-01', remind: 'soon' }],
+    };
+    const once = migrateV6(old, true);
+    assert.deepEqual(once.dailyTasks.map((t) => t.repeat), ['daily', 'daily']);
+    assert.ok(!('time' in once.dailyTasks[1]) && !('remind' in once.dailyTasks[1]), 'a bad time goes, and its reminder with it');
+    assert.ok(!('doneOn' in once.missions[0]) && !('remind' in once.missions[0]));
+    assert.equal(once.settings.accent, '#9588F9', 'any case');
+    assert.equal(once.settings.ownSignature, null, 'a damaged signature is dropped');
+    assert.equal(once.settings.signatureSource, 'creator');
+    for (const k of ['introTapSkip', 'focusChime', 'examReminders', 'blockAlerts', 'attachmentsWifiOnly', 'calcAngle', 'calcFunctions', 'calcSci', 'focusLastMin', 'focusLastMode']) {
+      assert.equal(once.settings[k], DEFAULT_SETTINGS[k], k + ' takes its default');
+    }
+    assert.deepEqual(migrateV6(once, true), once, 'a second pass changes nothing');
+    // a backup from before 1.7 has its ToDos made daily; a 1.7 backup's one-offs stay one-offs
+    const older = readSnapshot(JSON.stringify({ _app: 'student-hub', _v: 3, dailyTasks: [{ id: 'a', title: 'A', doneOn: null, createdAt: 1 }] }));
+    assert.equal(older.data.dailyTasks[0].repeat, 'daily');
+    const newer = readSnapshot(JSON.stringify({ _app: 'student-hub', _v: 4, dailyTasks: [{ id: 'a', title: 'A', doneOn: null, createdAt: 1 }] }));
+    assert.ok(!('repeat' in newer.data.dailyTasks[0]));
+  },
+
+  async 'a recorded signature is kept within its limits, and dropped when damaged'() {
+    const app = boot();
+    await settled(app);
+    const { sanitizeSignature } = app.store;
+    const stroke = (n) => ({ pts: Array.from({ length: n }, (_, i) => [i / n, 0.5, i * 10]) });
+    const digits = Object.fromEntries('0123456789'.split('').map((d) => [d, { strokes: [stroke(500)] }]));
+    const sig = sanitizeSignature({
+      v: 1, recordedAt: 5, strokes: [stroke(1500), stroke(1500), { pts: [[0.1, 0.1, 0], [null, 0.2, 5]] }], digits,
+      date: { size: 0.2, gap: 0.05, tilt: -3, when: 'outro', groups: { dd: { x: 0.1, y: 0.8 }, mm: { x: 0.4, y: 0.8 }, yy: { x: 0.7, y: 0.8 } } },
+    });
+    assert.ok(sig.strokes.reduce((n, s) => n + s.pts.length, 0) <= 2000, 'at most 2000 points');
+    assert.equal(sig.strokes[2].pts.length, 1, 'a point holding a non-finite number is dropped');
+    assert.ok(sig.digits['7'].strokes[0].pts.length <= 400, 'at most 400 per digit');
+    assert.equal(sig.date.when, 'outro');
+    assert.equal(sanitizeSignature({ v: 1, recordedAt: 5, strokes: [{ pts: 'x' }] }), null);
+    const noDigits = sanitizeSignature({ v: 1, recordedAt: 5, strokes: [stroke(3)], digits: { 0: 'bad' } });
+    assert.ok(noDigits && !('digits' in noDigits), 'damaged digits go on their own');
+  },
+
+  async 'one-off ToDos ticked on an earlier day leave on a new day; daily ones stay'() {
+    const app = boot();
+    await settled(app);
+    const yesterday = dayKey(app.utils, -1);
+    const today = app.utils.todayKey();
+    app.store.useStore.setState({
+      dailyTasks: [
+        { id: 'once-done-yesterday', title: 'A', doneOn: yesterday, createdAt: 1 },
+        { id: 'once-done-today', title: 'B', doneOn: today, createdAt: 1 },
+        { id: 'once-open', title: 'C', doneOn: null, createdAt: 1 },
+        { id: 'daily-done-yesterday', title: 'D', doneOn: yesterday, createdAt: 1, repeat: 'daily' },
+      ],
+    });
+    app.state().settleDay();
+    assert.deepEqual(app.state().dailyTasks.map((t) => t.id), ['once-done-today', 'once-open', 'daily-done-yesterday']);
+    // and at launch, from what was saved
+    await flush(app);
+    app.store.useStore.setState({ dailyTasks: [...app.state().dailyTasks, { id: 'late', title: 'E', doneOn: yesterday, createdAt: 1 }] });
+    await flush(app);
+    const next = boot({}, { storage: app.storage });
+    await settled(next);
+    await sleep(5);
+    assert.ok(!next.state().dailyTasks.some((t) => t.id === 'late'), 'settled at launch');
+    // a ToDo's reminder needs its time
+    const id = next.state().addDaily('Call', { time: '09:00', remind: 'morning' });
+    next.state().updateDaily(id, { time: null });
+    const t = next.state().dailyTasks.find((x) => x.id === id);
+    assert.ok(!('time' in t) && !('remind' in t) && !('repeat' in t), 'a new ToDo is a one-off; its reminder goes with its time');
+  },
+
+  async 'long-term tasks remember the day they were ticked, and deletes can be undone'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    const m = st().addMission('Essay', '2026-11-01');
+    st().toggleMission(m);
+    assert.equal(st().missions[0].doneOn, app.utils.todayKey());
+    st().toggleMission(m);
+    assert.ok(!('doneOn' in st().missions[0]));
+    st().updateMission(m, { time: '17:00', remind: 'hour' });
+    st().updateMission(m, { remind: null });
+    assert.deepEqual([st().missions[0].time, 'remind' in st().missions[0]], ['17:00', false]);
+    st().addSubtask(m, 'Outline');
+    st().addSubtask(m, 'Draft');
+    const sub = st().removeSubtask(m, st().missions[0].subtasks[0].id);
+    st().restoreSubtask(m, sub.subtask, sub.index);
+    assert.deepEqual(st().missions[0].subtasks.map((x) => x.title), ['Outline', 'Draft']);
+    const gone = st().removeMission(m);
+    assert.equal(st().missions.length, 0);
+    st().restoreMission(gone.mission, gone.index);
+    assert.equal(st().missions.length, 1);
+    const sid = st().logSession({ dateKey: '2026-10-01', endedAt: 1, netSeconds: 60, taskTitles: [] });
+    const removed = st().removeSession(sid);
+    st().restoreSession(removed.session, removed.index);
+    assert.equal(st().sessions[0].id, sid);
+    // habits: today and the six days before, never a day to come
+    st().addHabit('Walk');
+    const h = st().habits[0].id;
+    st().toggleHabitDay(h, dayKey(app.utils, -6));
+    st().toggleHabitDay(h, dayKey(app.utils, -7));
+    st().toggleHabitDay(h, dayKey(app.utils, 1));
+    assert.deepEqual(st().habits[0].doneDates, [dayKey(app.utils, -6)]);
+    st().renameHabit(h, '  Evening walk ');
+    assert.equal(st().habits[0].title, 'Evening walk');
+  },
+
+  // ---------- Recently deleted ----------
+
+  async 'every kind of delete goes to Recently deleted and comes back in its place'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    st().addNote({ title: 'Second' });
+    const n = st().addNote({ title: 'First' });
+    st().addAttachment(n, { kind: 'image', uri: 'file:///doc/attachments/a.jpg', name: 'a.jpg' });
+    st().addAttachment(n, { kind: 'file', uri: 'file:///doc/attachments/b.pdf', name: 'b.pdf' });
+    const [a1] = st().notes[0].attachments;
+    const v = st().addVideo({ url: 'u', videoId: 'abcdefghijk', title: 'Lecture' });
+    st().addTimedNote(v, 30, 'Key idea');
+    st().addBookmark(v, 60, 'Proof');
+    st().upsertJournalEntry({ id: 'j1', dateKey: '2026-10-01', title: '', excerpt: 'x', tags: [], wordCount: 1, pinned: false, createdAt: 1, updatedAt: 1 });
+
+    const ta = st().trashAttachment(n, a1.id);
+    assert.equal(st().notes[0].attachments.length, 1);
+    const tn = st().trashNote(n);
+    assert.equal(st().notes.length, 1);
+    assert.equal(st().restoreFromTrash(ta), 'parent-missing', 'a part waits for its note');
+    assert.equal(st().restoreFromTrash(tn), 'ok');
+    assert.equal(st().notes[0].id, n, 'back at its place');
+    assert.equal(st().restoreFromTrash(ta), 'ok');
+    assert.deepEqual(st().notes[0].attachments.map((x) => x.id)[0], a1.id, 'the attachment back in its place');
+
+    const tt = st().trashTimedNote(v, st().vaultVideos[0].notes[0].id);
+    const tb = st().trashBookmark(v, st().vaultVideos[0].bookmarks[0].id);
+    const tv = st().trashVideo(v);
+    const tj = st().trashJournalEntry('j1');
+    assert.equal(st().trash.length, 4);
+    assert.equal(st().trash.find((t) => t.id === tj).title, 'Entry for ' + app.utils.fmtShortDate('2026-10-01'));
+    assert.equal(st().restoreFromTrash(tt), 'parent-missing');
+    for (const id of [tv, tt, tb, tj]) assert.equal(st().restoreFromTrash(id), 'ok');
+    assert.equal(st().vaultVideos[0].notes.length, 1);
+    assert.equal(st().vaultVideos[0].bookmarks.length, 1);
+    assert.equal(st().journal.length, 1);
+    assert.deepEqual(st().trash, []);
+    assert.equal(st().restoreFromTrash(tv), 'ok', 'an Undo tapped twice is harmless');
+    assert.equal(st().vaultVideos.length, 1);
+  },
+
+  async 'locked items stay locked in Recently deleted, as their tools are'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    const n = st().addNote({ title: 'Secret' });
+    st().updateNote(n, { locked: true }, { touch: false });
+    const open = st().addNote({ title: 'Open' });
+    st().upsertJournalEntry({ id: 'j1', dateKey: '2026-10-01', title: 'Day', excerpt: '', tags: [], wordCount: 0, pinned: false, createdAt: 1, updatedAt: 1 });
+    const tn = st().trashNote(n);
+    const to = st().trashNote(open);
+    const tj = st().trashJournalEntry('j1');
+    const lockOf = (id) => st().trash.find((t) => t.id === id).locked;
+    assert.deepEqual([lockOf(tn), lockOf(to), lockOf(tj)], [true, false, false]);
+    st().setSetting('journalLocked', true);
+    assert.equal(lockOf(tj), true, 'locking the journal locks its entries in the trash');
+    st().setSetting('journalLocked', false);
+    assert.equal(lockOf(tj), false);
+    assert.equal(lockOf(tn), true, 'a locked note stays locked');
+  },
+
+  async 'deleting for good takes the files, and the purge after 30 days does it at launch'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    const n = st().addNote({ title: 'With a photo' });
+    st().addAttachment(n, { kind: 'image', uri: 'file:///doc/attachments/p.jpg', name: 'p.jpg' });
+    st().addAttachment(n, { kind: 'image', uri: 'content://gallery/1', name: 'g.jpg' });
+    const kept = st().addNote({ title: 'Shares a file' });
+    st().addAttachment(kept, { kind: 'image', uri: 'file:///doc/attachments/shared.jpg', name: 's.jpg' });
+    st().addAttachment(n, { kind: 'image', uri: 'file:///doc/attachments/shared.jpg', name: 's.jpg' });
+    st().upsertJournalEntry({ id: 'j1', dateKey: '2026-10-01', title: '', excerpt: '', tags: [], wordCount: 0, pinned: false, createdAt: 1, updatedAt: 1 });
+    const tn = st().trashNote(n);
+    const tj = st().trashJournalEntry('j1');
+    st().deleteFromTrash(tn);
+    await sleep(5);
+    assert.deepEqual(app.deleted, ['file:///doc/attachments/p.jpg'], "only the app's own copy nothing else uses");
+    st().emptyTrash();
+    await sleep(5);
+    assert.ok(app.deleted.includes('file:///doc/journal/j1.txt'), "the entry's text goes too");
+    assert.deepEqual(st().trash, []);
+    assert.equal(st().restoreFromTrash(tj), 'ok', 'gone for good is gone');
+    assert.equal(st().journal.length, 0);
+
+    // a launch purges what has been there 30 days
+    const old = { id: 'old', kind: 'video', deletedAt: Date.now() - 31 * DAY, title: 'Old', locked: false, data: { id: 'v', notes: [], bookmarks: [] } };
+    const fresh = { ...old, id: 'fresh', deletedAt: Date.now() - DAY, data: { id: 'v2', notes: [], bookmarks: [] } };
+    app.store.useStore.setState({ trash: [old, fresh] });
+    await flush(app);
+    const next = boot({}, { storage: app.storage });
+    await settled(next);
+    await sleep(5);
+    assert.deepEqual(next.state().trash.map((t) => t.id), ['fresh']);
+    assert.equal(next.store.trashDaysLeft(fresh), 29);
+  },
+
+  async 'a backup carries Recently deleted and the Desmos graph, and an import brings them back'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    const n = st().addNote({ title: 'Gone' });
+    st().trashNote(n);
+    st().setDesmosState('{"x":1}');
+    assert.equal(st().setDesmosState('x'.repeat(300001)), false, 'too large a graph is refused');
+    assert.equal(st().desmosState, '{"x":1}', 'and the old one kept');
+    const snap = JSON.stringify(app.store.exportSnapshot());
+    st().emptyTrash();
+    st().setDesmosState('');
+    assert.equal(app.store.importSnapshot(snap), true);
+    assert.equal(st().trash.length, 1);
+    assert.equal(st().trash[0].data.title, 'Gone');
+    assert.equal(st().desmosState, '{"x":1}');
+    assert.equal(app.store.hasAnyUserData(JSON.parse(snap)), true, 'something deleted is still data');
   },
 };
 

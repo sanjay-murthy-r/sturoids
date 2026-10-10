@@ -123,7 +123,9 @@ export const useSlot = () => React.useContext(SlotContext);
 
 /**
  * Links for tool screens that respect the presentation: inside a slot, a tool's own pages open inside
- * that slot (the bar stays); on a full page they open as full pages.
+ * that slot (the bar stays); on a full page they open as full pages. Each opens its page once, as openPage does: a
+ * quick double tap brings the page already opening to the top instead of stacking a second copy of the same note,
+ * video or archive.
  */
 export function useToolNav() {
   const slot = React.useContext(SlotContext);
@@ -135,14 +137,15 @@ export function useToolNav() {
       /** '/slot2' inside a slot, '' on a full page */
       base,
       openNote: (id: string) =>
-        router.push({ pathname: inSlot ? `${base}/note/[id]` : '/notes/[id]', params: { id } }),
+        router.push({ pathname: inSlot ? `${base}/note/[id]` : '/notes/[id]', params: { id } }, { dangerouslySingular: true }),
+      /** `atSec` starts the player there; a player for the same video already in the stack comes to the top instead */
       openVideo: (id: string, atSec?: number) =>
         router.push({
           pathname: inSlot ? `${base}/video/[id]` : '/vault/[id]',
           params: atSec != null ? { id, t: String(Math.floor(atSec)) } : { id },
-        }),
+        }, { dangerouslySingular: true }),
       /** the journal archive (its routes arrive with the Journal tool) */
-      openArchive: () => router.push(inSlot ? `${base}/journal/archive` : '/journal/archive'),
+      openArchive: () => router.push(inSlot ? `${base}/journal/archive` : '/journal/archive', { dangerouslySingular: true }),
     };
   }, [slot]);
 }

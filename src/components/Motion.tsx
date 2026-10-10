@@ -1,10 +1,11 @@
 import React from 'react';
-import { AppState, Pressable, Text, ViewStyle } from 'react-native';
+import { AccessibilityInfo, AccessibilityRole, AccessibilityState, AppState, Pressable, PressableProps, Text, ViewStyle } from 'react-native';
 import Animated, {
   FadeIn, FadeOut, LinearTransition, cancelAnimation, runOnJS,
   useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withSpring, withTiming, Easing,
 } from 'react-native-reanimated';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from '@react-navigation/native';
+import { create } from 'zustand';
 import { useStore } from '../store';
 import { useIntro } from '../intro';
 import { AnimLevel, C, neuPressedInner } from '../theme';
@@ -20,13 +21,28 @@ export function useFocusKey() {
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 /**
+ * The phone's own "remove animations" switch, kept live. Reanimated reads it once, at launch, so turning it on or off
+ * while the app runs would change nothing until a restart: here it is read once and then follows every change. `on` is
+ * null until the first read answers, and until then the value Reanimated took at launch stands in.
+ */
+export const useOsReduceMotion = create<{ on: boolean | null }>(() => ({ on: null }));
+AccessibilityInfo.isReduceMotionEnabled()
+  .then((on) => { if (useOsReduceMotion.getState().on === null) useOsReduceMotion.setState({ on }); })
+  .catch(() => {});
+AccessibilityInfo.addEventListener('reduceMotionChanged', (on) => useOsReduceMotion.setState({ on }));
+
+/** Whether the phone asks for no motion, for code outside a component (haptics); false until the first read answers. */
+export const osReducesMotion = () => useOsReduceMotion.getState().on === true;
+
+/**
  * The motion level every animated component obeys. The OS "reduce motion" /
- * "remove animations" setting wins over the in-app dial.
+ * "remove animations" setting wins over the in-app dial, and a change to it applies at once.
  */
 export const useAnimLevel = () => {
-  const reduced = useReducedMotion();
+  const atLaunch = useReducedMotion();
+  const live = useOsReduceMotion((s) => s.on);
   const level = useStore((s) => s.settings.animLevel);
-  return reduced ? 'none' : level;
+  return (live ?? atLaunch) ? 'none' : level;
 };
 
 /** Neumorphic motion: presses SINK into the material, releases ease back out. */
@@ -374,29 +390,40 @@ export function Enter({
   return <Animated.View style={[style, entrance]}>{children}</Animated.View>;
 }
 
+/** What a pressable says it is to a screen reader: a button, a tab, a radio choice in a group, and so on. */
+export type PressRole = AccessibilityRole;
+
 /**
  * Press-sink pressable. On press the element depresses into the surface
  * (scale + slight downward shift + shadow flattens via opacity of children's elevation
  * being simulated with a dim overlay), then eases back out.
  * Name kept as "Bouncy" so every screen keeps working.
+ *
+ * It is always the same animated pressable: with motion off the press simply does not move, so changing the motion
+ * level never swaps the element and remounts everything inside it. Anything it can press is a button to a screen
+ * reader unless the caller names another role, and a disabled one says so.
  */
 export function Bouncy({
   onPress, onLongPress, children, style, disabled, scaleTo = 0.975, radius = 22, hitSlop, sink = true,
-  accessibilityLabel, accessibilityRole, accessibilityState,
+  accessibilityLabel, accessibilityHint, accessibilityRole, accessibilityState,
 }: {
   onPress?: () => void; onLongPress?: () => void; children: React.ReactNode;
   style?: any; disabled?: boolean; scaleTo?: number;
   /** border radius of the pressed-inset overlay (999 chips, 22 cards, 16 keys) */
   radius?: number;
-  hitSlop?: number;
+  hitSlop?: PressableProps['hitSlop'];
   /** false keeps the element in place while pressed (a row inside a card): only the carve shows */
   sink?: boolean;
   accessibilityLabel?: string;
-  accessibilityRole?: 'button' | 'tab' | 'link' | 'checkbox' | 'switch';
-  accessibilityState?: { checked?: boolean; selected?: boolean; disabled?: boolean };
+  accessibilityHint?: string;
+  accessibilityRole?: PressRole;
+  accessibilityState?: AccessibilityState;
 }) {
   const level = useAnimLevel();
+  const still = level === 'none';
   const p = useSharedValue(0); // 0 = rest, 1 = pressed
+  // a level turned to none while a press was held leaves nothing carved
+  React.useEffect(() => { if (still) { cancelAnimation(p); p.value = 0; } }, [still]);
   const aStyle = useAnimatedStyle(() => ({
     transform: [
       { scale: 1 - (1 - scaleTo) * p.value },
@@ -404,17 +431,9 @@ export function Bouncy({
     ] as const,
   }));
   const dimStyle = useAnimatedStyle(() => ({ opacity: p.value }));
+  const role = accessibilityRole ?? (onPress || onLongPress ? 'button' : undefined);
+  const state = disabled ? { ...accessibilityState, disabled: true } : accessibilityState;
 
-  if (level === 'none') {
-    return (
-      <Pressable
-        onPress={onPress} onLongPress={onLongPress} disabled={disabled} style={style} hitSlop={hitSlop}
-        accessibilityLabel={accessibilityLabel} accessibilityRole={accessibilityRole} accessibilityState={accessibilityState}
-      >
-        {children}
-      </Pressable>
-    );
-  }
   return (
     <AnimatedPressable
       onPress={onPress}
@@ -422,10 +441,11 @@ export function Bouncy({
       disabled={disabled}
       hitSlop={hitSlop}
       accessibilityLabel={accessibilityLabel}
-      accessibilityRole={accessibilityRole}
-      accessibilityState={accessibilityState}
-      onPressIn={() => { p.value = withTiming(1, SINK_IN); }}
-      onPressOut={() => { p.value = withSpring(0, RISE_OUT); }}
+      accessibilityHint={accessibilityHint}
+      accessibilityRole={role}
+      accessibilityState={state}
+      onPressIn={still ? undefined : () => { p.value = withTiming(1, SINK_IN); }}
+      onPressOut={still ? undefined : () => { p.value = withSpring(0, RISE_OUT); }}
       style={[style, aStyle]}
     >
       {children}

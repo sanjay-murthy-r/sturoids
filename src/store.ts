@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState as AppLifecycle } from 'react-native';
 import { create } from 'zustand';
-import { persist, createJSONStorage, PersistStorage, StorageValue } from 'zustand/middleware';
-import { uid, todayKey, DayName, DAY_NAMES } from './utils';
+import { persist, PersistStorage, StorageValue } from 'zustand/middleware';
+import { uid, todayKey, toMinutes, fmtShortDate, fmtMediaTime, DayName, DAY_NAMES } from './utils';
 import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
 import { ToolKey, DEFAULT_SLOTS, DEFAULT_ARCHIVED, ROUTE_TO_TOOL, TOOLS, normaliseSlots, normaliseArchived, toolByKey } from './tools';
 import {
@@ -12,9 +12,26 @@ import {
 
 // ---------- types ----------
 
-export interface DailyTask { id: string; title: string; doneOn: string | null; createdAt: number }
+/** How long before a reminder for a task with a time: the morning of its day (08:00), or an hour before the time. */
+export type TaskRemind = 'morning' | 'hour';
+
+export interface DailyTask {
+  id: string; title: string; doneOn: string | null; createdAt: number;
+  /** comes back every day; a ToDo without it is a one-off, which goes once it has been ticked and its day is over */
+  repeat?: 'daily';
+  /** 'HH:MM', due by */
+  time?: string;
+  remind?: TaskRemind;
+}
 export interface Subtask { id: string; title: string; done: boolean }
-export interface Mission { id: string; title: string; deadline: string; done: boolean; subtasks: Subtask[] }
+export interface Mission {
+  id: string; title: string; deadline: string; done: boolean; subtasks: Subtask[];
+  /** the day it was ticked, YYYY-MM-DD, while it is done */
+  doneOn?: string;
+  /** 'HH:MM' on the deadline day */
+  time?: string;
+  remind?: TaskRemind;
+}
 export interface FocusSession { id: string; dateKey: string; endedAt: number; netSeconds: number; taskTitles: string[]; subject?: string }
 export interface PlannerBlock { id: string; subject: string; start: string; end: string; color: string }
 export interface Habit { id: string; title: string; doneDates: string[]; remindTime?: string }
@@ -34,6 +51,10 @@ export interface VaultFolder { id: string; name: string; parentId: string | null
 export interface VaultVideo {
   id: string; videoId: string; url: string; title: string; folderId: string | null; tags: string[];
   addedAt: number; notes: TimedNote[]; bookmarks: Bookmark[];
+  /** where it was left, in seconds */
+  resumeAt?: number;
+  /** when it was last opened, for Recently watched */
+  openedAt?: number;
 }
 
 export interface AiLink { id: string; label: string; url: string; custom?: boolean }
@@ -84,6 +105,57 @@ export interface JournalEntry {
 
 /** what a delete took away, and what an Undo puts back */
 export interface RemovedScores { nodes: ScoreNode[]; learnings: Learning[] }
+
+/** A removed tag, its place in the list, and the tags of every exam and learning that carried it, for an Undo. */
+export interface RemovedScoreTag {
+  tag: ScoreTag;
+  index: number;
+  nodes: Record<string, string[]>;
+  learnings: Record<string, string[]>;
+}
+
+export type TrashKind = 'note' | 'journal' | 'video' | 'timedNote' | 'bookmark' | 'attachment';
+
+/**
+ * Something deleted, kept for 30 days in Recently deleted. `data` is the thing itself (a note with its attachments,
+ * a journal entry's index, a video with its notes), `parentId` the note or video a part came from, `index` its place.
+ * A journal entry's text and an attachment's file stay where they were until the item is deleted for good.
+ */
+export interface TrashItem {
+  id: string;
+  kind: TrashKind;
+  deletedAt: number;
+  title: string;
+  /** shown as "Locked note" or "Locked entry", and restored or deleted only with the PIN */
+  locked: boolean;
+  data: any;
+  parentId?: string;
+  index?: number;
+  /** the item's own lock (a locked note, or an attachment of one), before a locked tool adds its own */
+  ownLock?: boolean;
+}
+
+/** How long Recently deleted keeps an item. */
+export const TRASH_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Whole days an item has left in Recently deleted (at least 1 while it is still there). */
+export function trashDaysLeft(item: TrashItem, now = Date.now()): number {
+  return Math.max(1, Math.ceil((item.deletedAt + TRASH_KEEP_MS - now) / (24 * 60 * 60 * 1000)));
+}
+
+/** One recorded pen point: x and y as fractions of the pad, t in ms from the first touch. */
+export type SigPoint = [number, number, number];
+export interface SigStroke { pts: SigPoint[] }
+export interface OwnSignature {
+  v: 1;
+  recordedAt: number;
+  strokes: SigStroke[];
+  digits?: Record<string, { strokes: SigStroke[] }>;
+  date?: {
+    size: number; gap: number; tilt: number; when: 'signature' | 'outro';
+    groups: { dd: { x: number; y: number }; mm: { x: number; y: number }; yy: { x: number; y: number } };
+  };
+}
 
 /** What the full-screen exam form saves in one go: the exam, its subjects, and the subjects taken out. */
 export interface ExamSave {
@@ -141,6 +213,25 @@ export interface Settings {
   ambientClock: boolean;
   /** the profile photo, a small JPEG as a data URI ('' for none), so it travels with backups and the cloud */
   avatar: string;
+  /** a tap during the start screen goes straight to Today */
+  introTapSkip: boolean;
+  /** a soft chime when a Deep Work block ends (the buzz always plays) */
+  focusChime: boolean;
+  /** the evening before each dated exam, at 7 pm */
+  examReminders: boolean;
+  /** a notification five minutes before each Planner block */
+  blockAlerts: boolean;
+  /** automatic backups send attachments only on Wi-Fi */
+  attachmentsWifiOnly: boolean;
+  /** which signature the start screen writes: the creator's, or one recorded on this app */
+  signatureSource: 'creator' | 'own';
+  ownSignature: OwnSignature | null;
+  calcAngle: 'deg' | 'rad';
+  calcFunctions: boolean;
+  calcSci: boolean;
+  /** the length and mode Deep Work last started with */
+  focusLastMin: number;
+  focusLastMode: 'countdown' | 'stopwatch';
 }
 
 export type PlannerWeek = Record<DayName, PlannerBlock[]>;
@@ -155,7 +246,24 @@ function withoutUndefined<T extends object>(o: T): T {
   return out;
 }
 
-const DEFAULT_AI_LINKS: AiLink[] = [
+/** A copy with a patch applied: a key the patch sets to null is removed, one it leaves undefined stays as it was. */
+function patched<T extends object>(o: T, patch: object): T {
+  const out: any = { ...o };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) delete out[k];
+    else if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+/** Puts an item back into a list at its old place (clamped to the list as it is now). */
+function insertAt<T>(list: readonly T[], item: T, index: number | undefined): T[] {
+  const out = [...list];
+  out.splice(Math.max(0, Math.min(index ?? out.length, out.length)), 0, item);
+  return out;
+}
+
+export const DEFAULT_AI_LINKS: AiLink[] = [
   { id: 'claude', label: 'Claude', url: 'https://claude.ai' },
   { id: 'chatgpt', label: 'ChatGPT', url: 'https://chatgpt.com' },
   { id: 'gemini', label: 'Gemini', url: 'https://gemini.google.com' },
@@ -210,6 +318,18 @@ export const DEFAULT_SETTINGS: Settings = {
   ambientSeconds: true,
   ambientClock: false,
   avatar: '',
+  introTapSkip: false,
+  focusChime: true,
+  examReminders: false,
+  blockAlerts: false,
+  attachmentsWifiOnly: true,
+  signatureSource: 'creator',
+  ownSignature: null,
+  calcAngle: 'deg',
+  calcFunctions: false,
+  calcSci: false,
+  focusLastMin: 50,
+  focusLastMode: 'countdown',
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -237,6 +357,9 @@ export function initialData() {
     scores: [] as ScoreNode[],
     scoreTags: [] as ScoreTag[],
     learnings: [] as Learning[],
+    trash: [] as TrashItem[],
+    /** the Desmos graph as Calc.getState() gives it, as JSON ('' for none) */
+    desmosState: '',
   };
 }
 type DataKey = keyof ReturnType<typeof initialData>;
@@ -288,6 +411,8 @@ export interface AppState {
   scores: ScoreNode[];
   scoreTags: ScoreTag[];
   learnings: Learning[];
+  trash: TrashItem[];
+  desmosState: string;
 
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** puts tools in the three slots; a tool placed in a slot is restored if it was archived */
@@ -299,21 +424,39 @@ export interface AppState {
   addTodoReminder: (time: string, label: string) => void;
   removeTodoReminder: (id: string) => void;
 
-  addDaily: (title: string) => string;
+  /** a one-off unless `extra.repeat` is 'daily'; returns the new ToDo's id */
+  addDaily: (title: string, extra?: { repeat?: 'daily'; time?: string; remind?: TaskRemind }) => string;
   toggleDaily: (id: string) => void;
+  /**
+   * a field set to null in the patch is removed. A ToDo's reminder needs its time: one set without a time, or left
+   * when the time is cleared, goes
+   */
+  updateDaily: (id: string, patch: { title?: string; repeat?: 'daily' | null; time?: string | null; remind?: TaskRemind | null }) => void;
   removeDaily: (id: string) => void;
   /** puts a removed task back at its old place in the list (an undo) */
   restoreDaily: (task: DailyTask, index: number) => void;
   setLastTriage: (dateKey: string) => void;
+  /** one-off ToDos ticked on an earlier day go; the store calls it at launch and when the day changes */
+  settleDay: () => void;
 
   addMission: (title: string, deadline: string) => string;
   toggleMission: (id: string) => void;
-  removeMission: (id: string) => void;
+  /** a field set to null in the patch is removed */
+  updateMission: (id: string, patch: { title?: string; deadline?: string; time?: string | null; remind?: TaskRemind | null }) => void;
+  /** returns what it removed and where it stood, for an Undo */
+  removeMission: (id: string) => { mission: Mission; index: number } | null;
+  restoreMission: (m: Mission, index: number) => void;
   addSubtask: (missionId: string, title: string) => void;
   toggleSubtask: (missionId: string, subId: string) => void;
-  removeSubtask: (missionId: string, subId: string) => void;
+  /** returns what it removed and where it stood, for an Undo */
+  removeSubtask: (missionId: string, subId: string) => { subtask: Subtask; index: number } | null;
+  restoreSubtask: (missionId: string, sub: Subtask, index: number) => void;
 
-  logSession: (s: Omit<FocusSession, 'id'>) => void;
+  /** returns the new session's id */
+  logSession: (s: Omit<FocusSession, 'id'>) => string;
+  /** returns what it removed and where it stood, for an Undo */
+  removeSession: (id: string) => { session: FocusSession; index: number } | null;
+  restoreSession: (session: FocusSession, index: number) => void;
   setDeepWork: (s: ActiveSession | null) => void;
   patchDeepWork: (patch: Partial<ActiveSession>) => void;
 
@@ -331,11 +474,15 @@ export interface AppState {
 
   addHabit: (title: string, remindTime?: string) => void;
   toggleHabitToday: (id: string) => void;
+  /** ticks or unticks a day: today or one of the six before it, never a day to come */
+  toggleHabitDay: (id: string, dateKey: string) => void;
+  renameHabit: (id: string, title: string) => void;
   removeHabit: (id: string) => void;
   setHabitReminder: (id: string, time?: string) => void;
 
   addNote: (n: Partial<Note>) => string;
-  updateNote: (id: string, n: Partial<Note>) => void;
+  /** `touch: false` (a pin, a lock, a move) leaves the note's edited time as it was */
+  updateNote: (id: string, n: Partial<Note>, opts?: { touch?: boolean }) => void;
   /** returns the attachments it orphaned — the caller deletes the files it copied */
   deleteNote: (id: string) => Attachment[];
   addNoteFolder: (name: string) => void;
@@ -351,6 +498,9 @@ export interface AppState {
 
   addVideo: (v: { url: string; videoId: string; title: string; folderId?: string | null }) => string;
   updateVideo: (id: string, v: Partial<VaultVideo>) => void;
+  /** where the video was left; callers save it every 10 s at most, and on pause or leave */
+  setVideoProgress: (id: string, seconds: number) => void;
+  markVideoOpened: (id: string) => void;
   deleteVideo: (id: string) => void;
   addVaultFolder: (name: string, parentId?: string | null) => string;
   renameVaultFolder: (id: string, name: string) => void;
@@ -394,8 +544,10 @@ export interface AppState {
   setExamCategory: (ids: string[], categoryId: string | null) => Record<string, string[]>;
   /** puts tags back as they were */
   restoreExamTags: (before: Record<string, string[]>) => void;
-  /** the tag goes from the list and from every exam and learning carrying it */
-  removeScoreTag: (id: string) => void;
+  /** the tag goes from the list and from every exam and learning carrying it; returns what an Undo puts back */
+  removeScoreTag: (id: string) => RemovedScoreTag | null;
+  /** puts a removed tag back with its id, its place in the list, and its links on exams and learnings */
+  restoreScoreTag: (removed: RemovedScoreTag) => void;
   addLearning: (l: { nodeId: string; text: string; tags?: string[] }) => string;
   patchLearning: (id: string, patch: { text?: string; tags?: string[] }) => void;
   /** returns the learning so an Undo can put it back */
@@ -404,6 +556,26 @@ export interface AppState {
 
   pushCalc: (expr: string, result: string) => void;
   clearCalcHistory: () => void;
+  /** keeps the Desmos graph; false (and the old graph kept) when it is too large to keep */
+  setDesmosState: (json: string) => boolean;
+
+  // Recently deleted. Each returns the trash item's id (null when there was nothing to move), so an Undo can call
+  // restoreFromTrash with it
+  trashNote: (id: string) => string | null;
+  /** the entry's text stays in its file */
+  trashJournalEntry: (id: string) => string | null;
+  trashVideo: (id: string) => string | null;
+  trashTimedNote: (videoId: string, id: string) => string | null;
+  trashBookmark: (videoId: string, id: string) => string | null;
+  /** the file stays where it is */
+  trashAttachment: (noteId: string, attId: string) => string | null;
+  /** 'parent-missing' when the note or video a part belongs to is not here (restore that first) */
+  restoreFromTrash: (trashId: string) => 'ok' | 'parent-missing';
+  /** gone for good, with its files */
+  deleteFromTrash: (trashId: string) => void;
+  emptyTrash: () => void;
+  /** what has been in Recently deleted for 30 days goes for good; the store calls it at launch and on a new day */
+  purgeTrash: (now: number) => void;
 
   /** a TRUE replace: every data key not in `data` goes back to its fresh value */
   replaceAll: (data: Partial<AppState>) => void;
@@ -481,11 +653,15 @@ function earliestActivity(p: any): number {
   return Number.isFinite(min) ? min : 1;
 }
 
-/** Whether the data holds anything the user made (a name, tasks, notes, sessions, habits, videos, journal entries). */
+/**
+ * Whether the data holds anything the user made (a name, tasks, notes, sessions, habits, videos, journal entries,
+ * exams, or something deleted that can still come back).
+ */
 export function hasAnyUserData(p: any): boolean {
   const nonEmpty = (a: any) => Array.isArray(a) && a.length > 0;
   return !!(p?.settings?.name) || nonEmpty(p?.dailyTasks) || nonEmpty(p?.missions) || nonEmpty(p?.sessions)
-    || nonEmpty(p?.notes) || nonEmpty(p?.habits) || nonEmpty(p?.vaultVideos) || nonEmpty(p?.journal);
+    || nonEmpty(p?.notes) || nonEmpty(p?.habits) || nonEmpty(p?.vaultVideos) || nonEmpty(p?.journal)
+    || nonEmpty(p?.scores) || nonEmpty(p?.trash);
 }
 
 function normaliseQuick(items: any): QuickItem[] {
@@ -584,8 +760,10 @@ export function migrateV5(p: any): any {
   // entry text lives in files. No saved store ever held it inline; a backup's inline text is written back by
   // restoreBodies right after an import, so only the index is built here
   const scale = (v: any) => Number.isInteger(v) && v >= 1 && v <= 5;
+  // a backup also carries the texts of entries in Recently deleted beside the journal (journalForBackup): those are
+  // not entries, and their index is in the trash
   out.journal = (Array.isArray(p?.journal) ? p.journal : [])
-    .filter((e: any) => e && typeof e === 'object' && typeof e.id === 'string' && typeof e.dateKey === 'string')
+    .filter((e: any) => e && typeof e === 'object' && typeof e.id === 'string' && typeof e.dateKey === 'string' && e.inTrash !== true)
     .map(({ body, mood, rating, checkoutSkipped, ...e }: any) => {
       const entry: any = {
         ...e,
@@ -610,31 +788,321 @@ export function migrateV5(p: any): any {
   return out;
 }
 
-// ---------- persistence ----------
+// ---------- v5 -> v6 (1.7) ----------
 
-const STORE_KEY = 'student-hub-v1';
+const isRecord = (x: any): boolean => !!x && typeof x === 'object' && !Array.isArray(x);
+const isFiniteNumber = (n: any): n is number => typeof n === 'number' && Number.isFinite(n);
+const listOf = (a: any): any[] => (Array.isArray(a) ? a : []);
+const validTime = (t: any) => typeof t === 'string' && toMinutes(t) >= 0;
+const REMINDS: TaskRemind[] = ['morning', 'hour'];
+
+/** Iris and Terracotta moved a little in 1.7: a saved accent moves with them. */
+const ACCENT_REMAP: Record<string, string> = { '#8B7CF8': '#9588F9', '#D97757': '#DB7E5F' };
+
+/** at most this many pen points in a recorded signature, and in each recorded digit */
+const SIG_MAX_POINTS = 2000;
+const DIGIT_MAX_POINTS = 400;
+const DIGIT_KEYS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+
+/** the largest Desmos graph kept, in characters; a larger one would bloat every save of its row */
+export const DESMOS_MAX_CHARS = 300000;
+
+/**
+ * Thins strokes evenly to at most `max` points in all: every stroke keeps its first and last point (a dot its one), the
+ * rest share what is left in proportion to their length. Null when even the ends do not fit.
+ */
+function thinStrokes(strokes: SigStroke[], max: number): SigStroke[] | null {
+  const total = strokes.reduce((n, s) => n + s.pts.length, 0);
+  if (total <= max) return strokes;
+  const ends = strokes.reduce((n, s) => n + Math.min(2, s.pts.length), 0);
+  if (ends > max) return null;
+  const spare = max - ends;
+  const middles = total - ends;
+  return strokes.map((s) => {
+    const n = s.pts.length;
+    if (n <= 2) return s;
+    const keep = 2 + Math.floor(((n - 2) * spare) / middles);
+    if (keep >= n) return s;
+    const pts: SigPoint[] = [];
+    for (let i = 0; i < keep; i++) pts.push(s.pts[Math.round((i * (n - 1)) / (keep - 1))]);
+    return { pts };
+  });
+}
+
+/**
+ * Recorded pen strokes, checked: every point an [x, y, t]; one holding a number that is not finite (which JSON keeps as
+ * null) is dropped, as is a stroke left with no points, and the rest are thinned to `max`. Null when the shape is wrong
+ * or nothing is left.
+ */
+function cleanStrokes(raw: any, max: number): SigStroke[] | null {
+  if (!Array.isArray(raw)) return null;
+  const strokes: SigStroke[] = [];
+  for (const s of raw) {
+    if (!isRecord(s) || !Array.isArray(s.pts)) return null;
+    const pts: SigPoint[] = [];
+    for (const p of s.pts) {
+      if (!Array.isArray(p) || p.length < 3) return null;
+      const xyt = [p[0], p[1], p[2]];
+      if (xyt.some((n) => n !== null && typeof n !== 'number')) return null;
+      if (!xyt.every(isFiniteNumber)) continue;
+      pts.push(xyt as SigPoint);
+    }
+    if (pts.length) strokes.push({ pts });
+  }
+  return strokes.length ? thinStrokes(strokes, max) : null;
+}
+
+function cleanDigits(raw: any): OwnSignature['digits'] | null {
+  if (!isRecord(raw)) return null;
+  const out: Record<string, { strokes: SigStroke[] }> = {};
+  for (const d of DIGIT_KEYS) {
+    if (!isRecord(raw[d])) return null;
+    const strokes = cleanStrokes(raw[d].strokes, DIGIT_MAX_POINTS);
+    if (!strokes) return null;
+    out[d] = { strokes };
+  }
+  return out;
+}
+
+function cleanDatePlace(raw: any): OwnSignature['date'] | null {
+  if (!isRecord(raw) || !isFiniteNumber(raw.size) || !(raw.size > 0) || !isFiniteNumber(raw.gap) || !isFiniteNumber(raw.tilt)) return null;
+  if (raw.when !== 'signature' && raw.when !== 'outro') return null;
+  const at = (q: any) => (isRecord(q) && isFiniteNumber(q.x) && isFiniteNumber(q.y) ? { x: q.x, y: q.y } : null);
+  const g = isRecord(raw.groups) ? raw.groups : {};
+  const dd = at(g.dd);
+  const mm = at(g.mm);
+  const yy = at(g.yy);
+  if (!dd || !mm || !yy) return null;
+  return { size: raw.size, gap: raw.gap, tilt: raw.tilt, when: raw.when, groups: { dd, mm, yy } };
+}
+
+/**
+ * A signature recorded on this app, checked on every load and import: null when its strokes are damaged. Its digits and
+ * the date's placement are optional, so a damaged one of those goes on its own (no digits, no date) and the signature
+ * stays. Never throws.
+ */
+export function sanitizeSignature(raw: any): OwnSignature | null {
+  try {
+    if (!isRecord(raw) || raw.v !== 1 || !isFiniteNumber(raw.recordedAt)) return null;
+    const strokes = cleanStrokes(raw.strokes, SIG_MAX_POINTS);
+    if (!strokes) return null;
+    const out: OwnSignature = { v: 1, recordedAt: raw.recordedAt, strokes };
+    const digits = raw.digits === undefined ? null : cleanDigits(raw.digits);
+    if (digits) {
+      out.digits = digits;
+      const date = raw.date === undefined ? null : cleanDatePlace(raw.date);
+      if (date) out.date = date;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function cleanDaily(t: any): DailyTask {
+  const out = { ...t };
+  if (typeof out.title !== 'string') out.title = out.title == null ? '' : String(out.title);
+  if (typeof out.doneOn !== 'string') out.doneOn = null;
+  if (out.repeat !== 'daily') delete out.repeat;
+  if (!validTime(out.time)) delete out.time;
+  // a ToDo's reminder is set from its time, so without one it has nothing to ring at
+  if (!REMINDS.includes(out.remind) || !out.time) delete out.remind;
+  return out;
+}
+
+function cleanMission(m: any): Mission {
+  const out = { ...m, done: m.done === true };
+  if (!out.done || typeof out.doneOn !== 'string') delete out.doneOn;
+  if (!validTime(out.time)) delete out.time;
+  if (!REMINDS.includes(out.remind)) delete out.remind;
+  return out;
+}
+
+function cleanVideo(v: any): VaultVideo {
+  const out = { ...v };
+  if (!(isFiniteNumber(out.resumeAt) && out.resumeAt >= 0)) delete out.resumeAt;
+  if (!(isFiniteNumber(out.openedAt) && out.openedAt > 0)) delete out.openedAt;
+  return out;
+}
+
+const TRASH_KINDS: TrashKind[] = ['note', 'journal', 'video', 'timedNote', 'bookmark', 'attachment'];
+
+/** Whether a trash item stands behind the PIN now: its own lock, or the lock on the tool it came from. */
+function trashLockOf(item: TrashItem, settings: Partial<Settings>): boolean {
+  if (item.ownLock) return true;
+  if (item.kind === 'journal') return !!settings.journalLocked;
+  if (item.kind === 'note' || item.kind === 'attachment') return !!settings.notesLocked;
+  return false;
+}
+
+/** The trash with every item's lock worked out again from the settings (after a lock was switched on or off). */
+function relockTrash(trash: TrashItem[], settings: Partial<Settings>): TrashItem[] {
+  let changed = false;
+  const out = trash.map((t) => {
+    const locked = trashLockOf(t, settings);
+    if (locked === t.locked) return t;
+    changed = true;
+    return { ...t, locked };
+  });
+  return changed ? out : trash;
+}
+
+/**
+ * Recently deleted as saved: anything that is not a whole item of a known kind is dropped. With the settings at hand
+ * every lock is worked out again; without them (their row did not load) a lock is only ever kept, never lifted.
+ */
+function cleanTrash(raw: any, settings?: Partial<Settings>): TrashItem[] {
+  const out: TrashItem[] = [];
+  const seen = new Set<string>();
+  for (const it of listOf(raw)) {
+    if (!isRecord(it) || typeof it.id !== 'string' || seen.has(it.id) || !TRASH_KINDS.includes(it.kind)) continue;
+    if (!isFiniteNumber(it.deletedAt) || !isRecord(it.data) || typeof it.data.id !== 'string') continue;
+    const part = it.kind === 'timedNote' || it.kind === 'bookmark' || it.kind === 'attachment';
+    if (part && typeof it.parentId !== 'string') continue;
+    if (it.kind === 'journal' && typeof it.data.dateKey !== 'string') continue;
+    if (it.kind === 'attachment' && typeof it.data.uri !== 'string') continue;
+    seen.add(it.id);
+    const data = it.kind === 'note' && !Array.isArray(it.data.attachments) ? { ...it.data, attachments: [] }
+      : it.kind === 'video' ? { ...it.data, notes: listOf(it.data.notes).filter(isRecord), bookmarks: listOf(it.data.bookmarks).filter(isRecord) }
+        : it.data;
+    const item: TrashItem = {
+      id: it.id, kind: it.kind, deletedAt: it.deletedAt, title: typeof it.title === 'string' ? it.title : '', locked: false, data,
+    };
+    if (typeof it.parentId === 'string') item.parentId = it.parentId;
+    if (Number.isInteger(it.index) && it.index >= 0) item.index = it.index;
+    if (it.ownLock === true || (it.kind === 'note' && it.data.locked === true)) item.ownLock = true;
+    item.locked = settings ? trashLockOf(item, settings) : it.locked === true || !!item.ownLock;
+    out.push(item);
+  }
+  return out;
+}
+
+const BOOLEAN_SETTINGS_V6 = ['introTapSkip', 'focusChime', 'examReminders', 'blockAlerts', 'attachmentsWifiOnly', 'calcFunctions', 'calcSci'] as const;
+
+function cleanSettingsV6(s: any): Settings {
+  const st = { ...s };
+  if (typeof st.accent === 'string' && ACCENT_REMAP[st.accent.toUpperCase()]) st.accent = ACCENT_REMAP[st.accent.toUpperCase()];
+  for (const k of BOOLEAN_SETTINGS_V6) if (typeof st[k] !== 'boolean') st[k] = DEFAULT_SETTINGS[k];
+  st.ownSignature = sanitizeSignature(st.ownSignature);
+  // with no signature of their own to write, the start screen writes the creator's
+  st.signatureSource = st.signatureSource === 'own' && st.ownSignature ? 'own' : 'creator';
+  st.calcAngle = st.calcAngle === 'rad' ? 'rad' : 'deg';
+  if (!(Number.isInteger(st.focusLastMin) && st.focusLastMin >= 1 && st.focusLastMin <= 600)) st.focusLastMin = DEFAULT_SETTINGS.focusLastMin;
+  st.focusLastMode = st.focusLastMode === 'stopwatch' ? 'stopwatch' : 'countdown';
+  return st;
+}
+
+/**
+ * The checks on everything 1.7 added: idempotent, run on every load, every import and the v6 migration. Only the
+ * collections present are touched, so a row that could not be loaded is never stood in for.
+ */
+export function sanitizeV6(p: any): any {
+  const out = { ...(p || {}) };
+  if ('dailyTasks' in out) out.dailyTasks = listOf(out.dailyTasks).filter(isRecord).map(cleanDaily);
+  if ('missions' in out) out.missions = listOf(out.missions).filter(isRecord).map(cleanMission);
+  if ('vaultVideos' in out) out.vaultVideos = listOf(out.vaultVideos).filter(isRecord).map(cleanVideo);
+  if (isRecord(out.settings)) out.settings = cleanSettingsV6(out.settings);
+  if ('trash' in out) out.trash = cleanTrash(out.trash, isRecord(out.settings) ? out.settings : undefined);
+  if ('desmosState' in out) {
+    out.desmosState = typeof out.desmosState === 'string' && out.desmosState.length <= DESMOS_MAX_CHARS ? out.desmosState : '';
+  }
+  return out;
+}
+
+/**
+ * The ONE v6 migration. `fromBefore6`: the data comes from before one-off ToDos, when every ToDo came back each day,
+ * so each keeps doing that. Only data that old is marked (a 1.7 backup's one-offs stay one-offs), and the rest is
+ * sanitizeV6, so running it again changes nothing.
+ */
+export function migrateV6(p: any, fromBefore6: boolean): any {
+  const out = { ...(p || {}) };
+  if (fromBefore6 && Array.isArray(out.dailyTasks)) {
+    out.dailyTasks = out.dailyTasks.map((t: any) => (isRecord(t) && t.repeat === undefined ? { ...t, repeat: 'daily' } : t));
+  }
+  return sanitizeV6(out);
+}
+
+// ---------- persistence ----------
+//
+// Every collection is saved as a row of its own, with a small meta row naming them. Android reads a row back only up
+// to about 2 MB, and one row holding everything would one day pass that; a collection on its own takes far longer to
+// get there, and a row that cannot be read loses only its own collection's launch, never the rest. A save waits for a
+// short pause after a burst of changes (a note being typed), then writes only the rows whose text changed and the meta
+// row last, in one multiSet (one transaction on Android). The app going to the background writes what is waiting.
+
+/** v6 is 1.7: one-off ToDos, Recently deleted, and one row per collection */
+const STORE_VERSION = 6;
+/** zustand's name for the saved store; the rows sit under it */
+const STORE_KEY = 'student-hub-v2';
+/** the version of the rows, which collections have one, and a count of saves */
+const META_KEY = STORE_KEY + ':meta';
+const rowKey = (k: string) => STORE_KEY + ':' + k;
+/** the single row everything was saved in before 1.7: read to move from, removed after a later launch loads cleanly */
+const LEGACY_KEY = 'student-hub-v1';
+interface RowsMeta { version: number; keys: string[]; seq: number; savedAt: number }
+
 /** Set once a load has applied saved state, so a failure after that point is never taken for a failed load. */
 let mergedFromStorage = false;
-const rawJsonStorage = createJSONStorage<any>(() => AsyncStorage)!;
 
-/**
- * The whole store is saved as one row, so a burst of changes (a note being typed) used to serialise and write all of
- * it on every keystroke, holding up the JS thread each time. A save now waits for a short pause, and the app going
- * to the background writes whatever is waiting at once.
- */
-const SAVE_PAUSE_MS = 350;
-let pendingSave: { name: string; value: StorageValue<any> } | null = null;
+/** how long a save waits after the last change of a burst */
+export const SAVE_PAUSE_MS = 350;
+let pendingSave: StorageValue<any> | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+/** the newest state a save set out to write: a failed write is tried again from it, never from anything older */
+let latestSave: StorageValue<any> | null = null;
+
+/** each row's text as it is on disk (read or written this launch), so a save writes only the rows that changed */
+const rowText = new Map<string, string>();
+/** each collection's size in characters, as last saved or loaded */
+const rowChars = new Map<string, number>();
+/** the collections with a row on disk, which the meta row names */
+const rowsOnDisk = new Set<string>();
+/** rows that could not be read or opened this launch: never written over, so what is on disk is never lost */
+const blockedRows = new Set<string>();
+/** the collections that did not load this launch */
+let failedRows: string[] = [];
+let saveSeq = 0;
+/** the old single row's size, until the rows are first written */
+let legacyChars: number | null = null;
+/** where this launch's data came from: the rows, the old single row, or nowhere (a fresh install) */
+let loadedFrom: 'rows' | 'legacy' | 'none' | null = null;
+/** why the whole load failed: storage refused to read the row it needed, or what it held could not be opened */
+let loadFailure: 'unreadable' | 'unparsable' | null = null;
 
 /**
- * Android reads a row back only up to about 2 MB, and its whole database is capped too, so the size of the last save
- * is kept: Settings warns well before the row gets there.
+ * Android reads a row back only up to about 2 MB, and its whole database is capped too, so the size of each row is
+ * kept: Settings warns well before one gets there.
  */
-let savedChars: number | null = null;
-/** How many characters the last save of the store wrote, or null before the first one this launch. */
-export const savedSize = () => savedChars;
-/** From here Settings suggests keeping a backup file, long before the row could not be read back. */
+export const savedSize = (): number | null => largestCollection()?.chars ?? legacyChars;
+/** The largest collection's row, by size in characters, or null before any has been saved or loaded this launch. */
+export function largestCollection(): { key: string; name: string; chars: number } | null {
+  let key = '';
+  let chars = -1;
+  for (const [k, n] of rowChars) {
+    if (n > chars) {
+      key = k;
+      chars = n;
+    }
+  }
+  return chars < 0 ? null : { key, name: COLLECTION_NAMES[key] || key, chars };
+}
+/** From here Settings suggests keeping a backup file, long before a row could not be read back. */
 export const SAVE_WARN_CHARS = 1.2 * 1024 * 1024;
+
+/** Each collection as the user knows it, for a notice that names what did not load. */
+const COLLECTION_NAMES: Record<string, string> = {
+  settings: 'Settings', aiLinks: 'AI links', quickAccess: 'Quick access', todoReminders: 'ToDo check-ins',
+  dailyTasks: 'ToDos', missions: 'Long-term tasks', lastTriage: 'ToDos', sessions: 'Deep Work sessions',
+  planner: 'Planner', weekTemplates: 'Week templates', habits: 'Habits', notes: 'Notes', noteFolders: 'Note folders',
+  vaultVideos: 'YT Vault', vaultFolders: 'YT Vault folders', calcHistory: 'Calculator history', deepWork: 'Deep Work',
+  journal: 'Journal', journalTags: 'Journal tags', scores: 'Scores', scoreTags: 'Score tags', learnings: 'Learnings',
+  trash: 'Recently deleted', desmosState: 'Desmos',
+};
+
+/** The collections that could not be loaded this launch, by name ("Notes"); empty when everything loaded. */
+export function failedCollections(): string[] {
+  return [...new Set(failedRows.map((k) => COLLECTION_NAMES[k] || k))];
+}
 
 /** A save that failed is never silent: the user hears once, until a save goes through again. */
 let saveFailing = false;
@@ -651,7 +1119,7 @@ function setSaveFailing(failing: boolean) {
   saveListeners.forEach((cb) => cb(failing));
 }
 
-/** Writes a save that is still waiting for its pause. */
+/** Writes a save that is still waiting for its pause: only the rows whose text changed, then the meta row. */
 export function flushSaves(): void {
   if (saveTimer) {
     clearTimeout(saveTimer);
@@ -660,25 +1128,59 @@ export function flushSaves(): void {
   const next = pendingSave;
   pendingSave = null;
   if (!next) return;
-  let text: string;
+  const state: any = next.state || {};
+  const pairs: [string, string][] = [];
+  const wrote: { key: string; text: string; before: string | undefined }[] = [];
   try {
-    // stringified once, here, so its size is known
-    text = JSON.stringify(next.value);
+    for (const k of DATA_KEYS) {
+      if (blockedRows.has(k) || !(k in state)) continue;
+      // stringified once, here, so the row's size is known
+      const text = JSON.stringify(state[k]);
+      if (typeof text !== 'string') continue;
+      rowChars.set(k, text.length);
+      if (rowText.get(k) === text) continue;
+      wrote.push({ key: k, text, before: rowText.get(k) });
+      pairs.push([rowKey(k), text]);
+    }
   } catch {
     setSaveFailing(true);
     return;
   }
-  savedChars = text.length;
-  Promise.resolve(AsyncStorage.setItem(next.name, text)).then(
-    () => setSaveFailing(false),
+  if (!pairs.length) return;
+  latestSave = next;
+  for (const w of wrote) {
+    rowText.set(w.key, w.text);
+    rowsOnDisk.add(w.key);
+  }
+  const meta: RowsMeta = {
+    version: typeof next.version === 'number' ? next.version : STORE_VERSION,
+    keys: [...rowsOnDisk],
+    seq: ++saveSeq,
+    savedAt: Date.now(),
+  };
+  pairs.push([META_KEY, JSON.stringify(meta)]);
+  Promise.resolve(AsyncStorage.multiSet(pairs)).then(
     () => {
-      // kept for the next flush (the next change, or leaving the app), unless a newer save is already waiting or
-      // saving has paused since to protect data that could not be read
-      if (!pendingSave && !persistPaused) pendingSave = next;
+      legacyChars = null;
+      setSaveFailing(false);
+    },
+    () => {
+      // none of it reached the disk: its rows count as unwritten again (unless a later save has set them since), and
+      // the newest state waits for the next flush (the next change, or leaving the app), unless a newer save is already
+      // waiting or saving has paused since to protect data that could not be read
+      for (const w of wrote) {
+        if (rowText.get(w.key) !== w.text) continue;
+        if (w.before === undefined) rowText.delete(w.key);
+        else rowText.set(w.key, w.before);
+      }
+      if (!pendingSave && !persistPaused && latestSave) pendingSave = latestSave;
       setSaveFailing(true);
     },
   );
 }
+
+/** Whether a change is still waiting for its pause before it is saved. */
+export const savePending = () => pendingSave != null;
 
 /** Forgets a save that is still waiting: saving is pausing to protect data that could not be read. */
 function dropPendingSave(): void {
@@ -689,28 +1191,167 @@ function dropPendingSave(): void {
   pendingSave = null;
 }
 
-const jsonStorage: PersistStorage<any> = {
-  // read as text first, so the row's size is known from the launch on, not only after the next save
-  getItem: async (name) => {
-    const text = await AsyncStorage.getItem(name);
-    if (text == null) return null;
-    savedChars = text.length;
+/** Every row the store keeps, the old single row included. */
+function allRowKeys(): string[] {
+  return [META_KEY, LEGACY_KEY, ...[...new Set<string>([...DATA_KEYS, ...rowsOnDisk])].map(rowKey)];
+}
+
+/** Reads the old single row: the data as it was saved before 1.7. */
+async function readLegacy(): Promise<StorageValue<any> | null> {
+  let text: string | null;
+  try {
+    text = await AsyncStorage.getItem(LEGACY_KEY);
+  } catch (e) {
+    // the row itself cannot be read (on Android, one grown past about 2 MB): no restart will read it either
+    loadFailure = 'unreadable';
+    throw e;
+  }
+  if (text == null) {
+    loadedFrom = 'none';
+    return null;
+  }
+  loadedFrom = 'legacy';
+  legacyChars = text.length;
+  try {
     return JSON.parse(text);
-  },
-  setItem: (name, value) => {
-    pendingSave = { name, value };
+  } catch (e) {
+    loadFailure = 'unparsable';
+    throw e;
+  }
+}
+
+/**
+ * Reads the meta row, then every row it names. A row that cannot be read or opened is left out: its collection starts
+ * on its fresh value this launch, the row is never written over, and the user hears which collection it was. Before
+ * 1.7 there are no rows yet, and the old single row is read instead.
+ */
+async function readSaved(): Promise<StorageValue<any> | null> {
+  let metaText: string | null;
+  try {
+    metaText = await AsyncStorage.getItem(META_KEY);
+  } catch (e) {
+    loadFailure = 'unreadable';
+    throw e;
+  }
+  if (metaText == null) return readLegacy();
+  let meta: RowsMeta;
+  try {
+    meta = JSON.parse(metaText);
+    if (!isRecord(meta) || typeof meta.version !== 'number' || !Array.isArray(meta.keys)) throw new Error('damaged meta row');
+  } catch (e) {
+    // without it there is no knowing what the rows hold, so nothing is read or written over
+    loadFailure = 'unparsable';
+    throw e;
+  }
+  loadedFrom = 'rows';
+  saveSeq = Number(meta.seq) || 0;
+  const listed = meta.keys.filter((k: unknown): k is string => typeof k === 'string');
+  // a collection from a later version stays named, so its row is kept for that version
+  listed.forEach((k) => rowsOnDisk.add(k));
+  const keys = listed.filter((k) => (DATA_KEYS as string[]).includes(k));
+  const unreadable = new Set<string>();
+  const texts = new Map<string, string | null>();
+  try {
+    for (const [key, value] of await AsyncStorage.multiGet(keys.map(rowKey))) texts.set(key, value);
+  } catch {
+    // one row too large to read fails the whole read: each is read on its own, so the others still load
+    for (const k of keys) {
+      try {
+        texts.set(rowKey(k), await AsyncStorage.getItem(rowKey(k)));
+      } catch {
+        unreadable.add(k);
+      }
+    }
+  }
+  const state: any = {};
+  const failed: string[] = [];
+  const missing: string[] = [];
+  for (const k of keys) {
+    if (unreadable.has(k)) {
+      failed.push(k);
+      continue;
+    }
+    const text = texts.get(rowKey(k));
+    if (text == null) {
+      // named but not there: there is nothing on disk to protect, but the collection is gone, which is said
+      missing.push(k);
+      continue;
+    }
+    try {
+      state[k] = JSON.parse(text);
+    } catch {
+      failed.push(k);
+      continue;
+    }
+    rowText.set(k, text);
+    rowChars.set(k, text.length);
+  }
+  // the exam tree, its tags and its learnings are checked against one another on every load: with one of them out, the
+  // others would lose their links to it, so they stay out together (and untouched on disk)
+  const linked = ['scores', 'scoreTags', 'learnings'];
+  if (linked.some((k) => failed.includes(k) || missing.includes(k))) {
+    for (const k of linked) {
+      if (!(k in state)) continue;
+      delete state[k];
+      failed.push(k);
+    }
+  }
+  if (failed.length || missing.length) {
+    failed.forEach((k) => blockedRows.add(k));
+    failedRows = [...failed, ...missing];
+    // what this phone holds is not the user's whole data now: nothing goes over a copy kept elsewhere, and no file is
+    // cleared as unused (the missing collection may use it)
+    loadFailed = true;
+    // a restart reads the same rows again: a backup or the cloud copy can bring them back
+    if (failed.length) rowUnreadable = true;
+  }
+  return { state, version: meta.version };
+}
+
+/** Removes every row the store keeps (zustand's clearStorage). */
+async function removeRows(): Promise<void> {
+  dropPendingSave();
+  await AsyncStorage.multiRemove(allRowKeys());
+  rowText.clear();
+  rowChars.clear();
+  rowsOnDisk.clear();
+}
+
+const rowStorage: PersistStorage<any> = {
+  getItem: () => readSaved(),
+  setItem: (_name, value) => {
+    pendingSave = value;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(flushSaves, SAVE_PAUSE_MS);
   },
-  removeItem: (name) => {
-    dropPendingSave();
-    return rawJsonStorage.removeItem(name);
-  },
+  removeItem: () => removeRows(),
 };
+
+/**
+ * Everything the store keeps on this phone goes, and every guard this launch put on saving is lifted: the user asked
+ * for all of it to go (erasing the phone). What the store holds after this is saved as new.
+ */
+export async function clearSavedData(): Promise<void> {
+  dropPendingSave();
+  blockedRows.clear();
+  failedRows = [];
+  try {
+    await AsyncStorage.multiRemove(allRowKeys());
+  } catch {
+    // whatever stays is written over by the next save, now that nothing blocks it
+  }
+  rowText.clear();
+  rowChars.clear();
+  rowsOnDisk.clear();
+  legacyChars = null;
+  resumePersistence();
+  replacedThisLaunch = true;
+}
 
 // leaving the app, or closing it from the background, writes whatever is still waiting
 AppLifecycle?.addEventListener?.('change', (next) => {
   if (next !== 'active') flushSaves();
+  else settleIfNewDay();
 });
 
 /** Every persisted-shape migration, oldest first. Also restores the app's own saved blob on import. */
@@ -721,7 +1362,79 @@ function migratePersisted(persisted: any, version: number): any {
     p = { ...p, settings: { ...(p?.settings || {}), accent: p?.settings?.accent || DEFAULT_ACCENT } };
   }
   if (version < 5) p = migrateV5(p);
+  if (version < 6) p = migrateV6(p, true);
   return p;
+}
+
+// ---------- Recently deleted ----------
+
+const firstLine = (text: unknown) => (typeof text === 'string' ? text.trim().split('\n')[0].trim().slice(0, 80) : '');
+const noteTitle = (n: Note) => firstLine(n.title) || firstLine(n.body) || 'Untitled note';
+const entryTitle = (e: JournalEntry) => firstLine(e.title) || 'Entry for ' + fmtShortDate(e.dateKey);
+
+function trashItemOf(kind: TrashKind, data: any, title: string, settings: Settings, extra: Partial<TrashItem> = {}): TrashItem {
+  const item: TrashItem = { id: uid(), kind, deletedAt: Date.now(), title, locked: false, data, ...extra };
+  if (!item.ownLock) delete item.ownLock;
+  item.locked = trashLockOf(item, settings);
+  return item;
+}
+
+/** The attachments a trash item keeps: a deleted note's, or one removed on its own. */
+function trashedAttachmentsOf(t: TrashItem): Attachment[] {
+  if (t.kind === 'note') return listOf(t.data?.attachments).filter((a) => a && typeof a.id === 'string' && typeof a.uri === 'string');
+  if (t.kind === 'attachment') return typeof t.data?.uri === 'string' ? [t.data] : [];
+  return [];
+}
+
+/**
+ * Every attachment kept in Recently deleted. Their files stay on the phone until the item is deleted for good, so a
+ * backup, the cloud copy and the folder sweep after a restore all count them with the notes' own.
+ */
+export function trashedAttachments(trash: TrashItem[]): Attachment[] {
+  return trash.flatMap(trashedAttachmentsOf);
+}
+
+/** The journal entries kept in Recently deleted, whose texts stay in their files until then. */
+export function trashedEntryIds(trash: TrashItem[]): string[] {
+  return trash.filter((t) => t.kind === 'journal' && typeof t.data?.id === 'string').map((t) => t.data.id);
+}
+
+/**
+ * Deletes trash items for good, with what goes with them: the parts kept from a note or a video deleted alongside
+ * (unless it is back in the app), and the files nothing that stays still uses. The store stays free of the file system:
+ * the attachments and journal modules delete the files, each only inside the app's own folder.
+ */
+function dropForGood(s: AppState, items: TrashItem[], set: (partial: Partial<AppState>) => void) {
+  const gone = new Set(items.map((t) => t.id));
+  for (const t of items) {
+    const kept = t.kind === 'note' ? s.notes.some((n) => n.id === t.data.id) : t.kind === 'video' ? s.vaultVideos.some((v) => v.id === t.data.id) : true;
+    if (kept) continue;
+    for (const x of s.trash) {
+      const part = t.kind === 'note' ? x.kind === 'attachment' : x.kind === 'timedNote' || x.kind === 'bookmark';
+      if (part && x.parentId === t.data.id) gone.add(x.id);
+    }
+  }
+  const trash = s.trash.filter((t) => !gone.has(t.id));
+  const removed = s.trash.filter((t) => gone.has(t.id));
+  const used = new Set<string>();
+  for (const n of s.notes) for (const a of n.attachments || []) used.add(a.uri);
+  for (const a of trashedAttachments(trash)) used.add(a.uri);
+  const files = trashedAttachments(removed).filter((a) => !used.has(a.uri));
+  const entries = new Set([...s.journal.map((e) => e.id), ...trashedEntryIds(trash)]);
+  const bodies = trashedEntryIds(removed).filter((id) => !entries.has(id));
+  set({ trash });
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    if (files.length) (require('./attachments') as typeof import('./attachments')).deleteAttachmentFiles(files);
+  } catch {
+    // the files stay; the sweep after the next restore clears what nothing uses
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    if (bodies.length) void (require('./journal') as typeof import('./journal')).deleteBodies(bodies);
+  } catch {
+    // as above
+  }
 }
 
 // ---------- store ----------
@@ -732,7 +1445,12 @@ export const useStore = create<AppState>()(
       ...initialData(),
 
       setSetting: (key, value) =>
-        set((s) => ({ settings: { ...s.settings, [key]: value } })),
+        set((s) => {
+          const settings = { ...s.settings, [key]: value };
+          // what Recently deleted keeps from a tool locks and unlocks with that tool
+          if (key === 'journalLocked' || key === 'notesLocked') return { settings, trash: relockTrash(s.trash, settings) };
+          return { settings };
+        }),
       setTabSlots: (slots) =>
         set((s) => {
           const tabSlots = normaliseSlots(slots);
@@ -759,9 +1477,11 @@ export const useStore = create<AppState>()(
       removeTodoReminder: (id) =>
         set((s) => ({ todoReminders: s.todoReminders.filter((r) => r.id !== id) })),
 
-      addDaily: (title) => {
+      addDaily: (title, extra) => {
         const id = uid();
-        set((s) => ({ dailyTasks: [...s.dailyTasks, { id, title, doneOn: null, createdAt: Date.now() }] }));
+        // a new ToDo is a one-off unless it is asked to come back every day
+        const task = cleanDaily({ id, title, doneOn: null, createdAt: Date.now(), ...(extra || {}) });
+        set((s) => ({ dailyTasks: [...s.dailyTasks, task] }));
         return id;
       },
       toggleDaily: (id) =>
@@ -770,6 +1490,14 @@ export const useStore = create<AppState>()(
             t.id === id ? { ...t, doneOn: t.doneOn === todayKey() ? null : todayKey() } : t
           ),
         })),
+      updateDaily: (id, patch) =>
+        set((s) => {
+          const at = s.dailyTasks.findIndex((t) => t.id === id);
+          if (at < 0) return {};
+          const list = [...s.dailyTasks];
+          list[at] = cleanDaily(patched(list[at], patch));
+          return { dailyTasks: list };
+        }),
       removeDaily: (id) => set((s) => ({ dailyTasks: s.dailyTasks.filter((t) => t.id !== id) })),
       restoreDaily: (task, index) =>
         set((s) => {
@@ -779,6 +1507,12 @@ export const useStore = create<AppState>()(
           return { dailyTasks: list };
         }),
       setLastTriage: (dateKey) => set({ lastTriage: dateKey }),
+      settleDay: () => {
+        const today = todayKey();
+        const s = get();
+        const keep = s.dailyTasks.filter((t) => t.repeat === 'daily' || !t.doneOn || t.doneOn >= today);
+        if (keep.length !== s.dailyTasks.length) set({ dailyTasks: keep });
+      },
 
       addMission: (title, deadline) => {
         const id = uid();
@@ -786,8 +1520,39 @@ export const useStore = create<AppState>()(
         return id;
       },
       toggleMission: (id) =>
-        set((s) => ({ missions: s.missions.map((m) => (m.id === id ? { ...m, done: !m.done } : m)) })),
-      removeMission: (id) => set((s) => ({ missions: s.missions.filter((m) => m.id !== id) })),
+        set((s) => ({
+          missions: s.missions.map((m) => {
+            if (m.id !== id) return m;
+            if (m.done) {
+              const { doneOn: _gone, ...rest } = m;
+              return { ...rest, done: false };
+            }
+            return { ...m, done: true, doneOn: todayKey() };
+          }),
+        })),
+      updateMission: (id, patch) =>
+        set((s) => {
+          const at = s.missions.findIndex((m) => m.id === id);
+          if (at < 0) return {};
+          const list = [...s.missions];
+          list[at] = cleanMission(patched(list[at], patch));
+          return { missions: list };
+        }),
+      removeMission: (id) => {
+        const s = get();
+        const index = s.missions.findIndex((m) => m.id === id);
+        if (index < 0) return null;
+        const mission = s.missions[index];
+        set({ missions: s.missions.filter((m) => m.id !== id) });
+        return { mission, index };
+      },
+      restoreMission: (m, index) =>
+        set((s) => {
+          if (s.missions.some((x) => x.id === m.id)) return {};
+          const list = [...s.missions];
+          list.splice(Math.max(0, Math.min(index, list.length)), 0, m);
+          return { missions: list };
+        }),
       addSubtask: (missionId, title) =>
         set((s) => ({
           missions: s.missions.map((m) =>
@@ -802,14 +1567,46 @@ export const useStore = create<AppState>()(
               : m
           ),
         })),
-      removeSubtask: (missionId, subId) =>
-        set((s) => ({
-          missions: s.missions.map((m) =>
-            m.id === missionId ? { ...m, subtasks: m.subtasks.filter((st) => st.id !== subId) } : m
-          ),
-        })),
+      removeSubtask: (missionId, subId) => {
+        const s = get();
+        const m = s.missions.find((x) => x.id === missionId);
+        const index = m ? m.subtasks.findIndex((st) => st.id === subId) : -1;
+        if (!m || index < 0) return null;
+        const subtask = m.subtasks[index];
+        set({
+          missions: s.missions.map((x) => (x.id === missionId ? { ...x, subtasks: x.subtasks.filter((st) => st.id !== subId) } : x)),
+        });
+        return { subtask, index };
+      },
+      restoreSubtask: (missionId, sub, index) =>
+        set((s) => {
+          const m = s.missions.find((x) => x.id === missionId);
+          if (!m || m.subtasks.some((st) => st.id === sub.id)) return {};
+          const subtasks = [...m.subtasks];
+          subtasks.splice(Math.max(0, Math.min(index, subtasks.length)), 0, sub);
+          return { missions: s.missions.map((x) => (x.id === missionId ? { ...x, subtasks } : x)) };
+        }),
 
-      logSession: (sess) => set((s) => ({ sessions: [...s.sessions, { ...sess, id: uid() }] })),
+      logSession: (sess) => {
+        const id = uid();
+        set((s) => ({ sessions: [...s.sessions, { ...sess, id }] }));
+        return id;
+      },
+      removeSession: (id) => {
+        const s = get();
+        const index = s.sessions.findIndex((x) => x.id === id);
+        if (index < 0) return null;
+        const session = s.sessions[index];
+        set({ sessions: s.sessions.filter((x) => x.id !== id) });
+        return { session, index };
+      },
+      restoreSession: (session, index) =>
+        set((s) => {
+          if (s.sessions.some((x) => x.id === session.id)) return {};
+          const list = [...s.sessions];
+          list.splice(Math.max(0, Math.min(index, list.length)), 0, session);
+          return { sessions: list };
+        }),
       setDeepWork: (session) => set({ deepWork: session }),
       patchDeepWork: (patch) =>
         set((s) => (s.deepWork ? { deepWork: { ...s.deepWork, ...patch } } : {})),
@@ -862,6 +1659,24 @@ export const useStore = create<AppState>()(
             return { ...h, doneDates: has ? h.doneDates.filter((d) => d !== today) : [...h.doneDates, today] };
           }),
         })),
+      toggleHabitDay: (id, dateKey) => {
+        // the week strip reaches back six days: a day further back, or one still to come, is never ticked
+        const today = new Date();
+        const earliest = todayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6));
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey) || dateKey > todayKey(today) || dateKey < earliest) return;
+        set((s) => ({
+          habits: s.habits.map((h) => {
+            if (h.id !== id) return h;
+            const has = h.doneDates.includes(dateKey);
+            return { ...h, doneDates: has ? h.doneDates.filter((d) => d !== dateKey) : [...h.doneDates, dateKey] };
+          }),
+        }));
+      },
+      renameHabit: (id, title) => {
+        const name = title.trim();
+        if (!name) return;
+        set((s) => ({ habits: s.habits.map((h) => (h.id === id && h.title !== name ? { ...h, title: name } : h)) }));
+      },
       removeHabit: (id) => set((s) => ({ habits: s.habits.filter((h) => h.id !== id) })),
       setHabitReminder: (id, time) =>
         set((s) => ({ habits: s.habits.map((h) => (h.id === id ? { ...h, remindTime: time } : h)) })),
@@ -881,9 +1696,9 @@ export const useStore = create<AppState>()(
         }));
         return id;
       },
-      updateNote: (id, n) =>
+      updateNote: (id, n, opts) =>
         set((s) => ({
-          notes: s.notes.map((x) => (x.id === id ? { ...x, ...n, updatedAt: Date.now() } : x)),
+          notes: s.notes.map((x) => (x.id === id ? { ...x, ...n, ...(opts?.touch === false ? {} : { updatedAt: Date.now() }) } : x)),
         })),
       // the store stays free of expo-file-system: only the notes screen knows which
       // uris it actually copied into its own directory (persistFile falls back to the
@@ -935,6 +1750,12 @@ export const useStore = create<AppState>()(
           notes: s.notes.map((n) => (n.attachments.some((a) => uris[a.id])
             ? { ...n, attachments: n.attachments.map((a) => (uris[a.id] ? { ...a, uri: uris[a.id] } : a)) }
             : n)),
+          // and those kept in Recently deleted, so they come back with their files
+          trash: s.trash.some((t) => trashedAttachmentsOf(t).some((a) => uris[a.id])) ? s.trash.map((t) => {
+            if (!trashedAttachmentsOf(t).some((a) => uris[a.id])) return t;
+            if (t.kind === 'attachment') return { ...t, data: { ...t.data, uri: uris[t.data.id] } };
+            return { ...t, data: { ...t.data, attachments: t.data.attachments.map((a: Attachment) => (uris[a.id] ? { ...a, uri: uris[a.id] } : a)) } };
+          }) : s.trash,
         })),
 
       addVideo: (v) => {
@@ -952,6 +1773,18 @@ export const useStore = create<AppState>()(
       },
       updateVideo: (id, v) =>
         set((s) => ({ vaultVideos: s.vaultVideos.map((x) => (x.id === id ? { ...x, ...v } : x)) })),
+      setVideoProgress: (id, seconds) => {
+        if (!Number.isFinite(seconds)) return;
+        const at = Math.max(0, Math.floor(seconds));
+        const v = get().vaultVideos.find((x) => x.id === id);
+        if (!v || v.resumeAt === at) return;
+        set((s) => ({ vaultVideos: s.vaultVideos.map((x) => (x.id === id ? { ...x, resumeAt: at } : x)) }));
+      },
+      markVideoOpened: (id) => {
+        if (!get().vaultVideos.some((x) => x.id === id)) return;
+        const now = Date.now();
+        set((s) => ({ vaultVideos: s.vaultVideos.map((x) => (x.id === id ? { ...x, openedAt: now } : x)) }));
+      },
       deleteVideo: (id) => set((s) => ({ vaultVideos: s.vaultVideos.filter((x) => x.id !== id) })),
       addVaultFolder: (name, parentId = null) => {
         const id = uid();
@@ -1131,12 +1964,47 @@ export const useStore = create<AppState>()(
         });
         return true;
       },
-      removeScoreTag: (id) =>
-        set((s) => ({
+      removeScoreTag: (id) => {
+        const s = get();
+        const index = s.scoreTags.findIndex((t) => t.id === id);
+        if (index < 0) return null;
+        const removed: RemovedScoreTag = { tag: s.scoreTags[index], index, nodes: {}, learnings: {} };
+        for (const n of s.scores) if (n.tags?.includes(id)) removed.nodes[n.id] = [...n.tags];
+        for (const l of s.learnings) if (l.tags.includes(id)) removed.learnings[l.id] = [...l.tags];
+        set({
           scoreTags: s.scoreTags.filter((t) => t.id !== id),
           scores: s.scores.map((n) => (n.tags?.includes(id) ? { ...n, tags: n.tags.filter((t) => t !== id) } : n)),
           learnings: s.learnings.map((l) => (l.tags.includes(id) ? { ...l, tags: l.tags.filter((t) => t !== id) } : l)),
-        })),
+        });
+        return removed;
+      },
+      restoreScoreTag: ({ tag, index, nodes, learnings }) =>
+        set((s) => {
+          // a tag of the same name made since takes the links back, so no exam ends up with two of one name
+          const same = s.scoreTags.find((t) => t.id === tag.id) || s.scoreTags.find((t) => sameTagName(t.label, tag.label));
+          const id = same ? same.id : tag.id;
+          const scoreTags = same ? s.scoreTags : insertAt(s.scoreTags, tag, index);
+          const category = same ? !!same.category : !!tag.category;
+          const categories = new Set(scoreTags.filter((t) => t.category).map((t) => t.id));
+          // back at its old place in each list of tags it was on
+          const putBack = (tags: string[], before: string[]) => {
+            if (tags.includes(id)) return tags;
+            const at = before.indexOf(tag.id);
+            return insertAt(tags, id, at < 0 ? tags.length : at);
+          };
+          return {
+            scoreTags,
+            scores: s.scores.map((n) => {
+              const before = nodes[n.id];
+              if (!before) return n;
+              const tags = n.tags || [];
+              // an exam put in another category since stays there: no exam sits in two
+              if (category && tags.some((t) => t !== id && categories.has(t))) return n;
+              return { ...n, tags: putBack(tags, before) };
+            }),
+            learnings: s.learnings.map((l) => (learnings[l.id] ? { ...l, tags: putBack(l.tags, learnings[l.id]) } : l)),
+          };
+        }),
       saveExam: ({ id, parentId, fields, subjects, removeIds }) => {
         const s = get();
         const now = Date.now();
@@ -1247,6 +2115,142 @@ export const useStore = create<AppState>()(
       pushCalc: (expr, result) =>
         set((s) => ({ calcHistory: [{ id: uid(), expr, result }, ...s.calcHistory].slice(0, 100) })),
       clearCalcHistory: () => set({ calcHistory: [] }),
+      setDesmosState: (json) => {
+        if (typeof json !== 'string' || json.length > DESMOS_MAX_CHARS) return false;
+        if (get().desmosState !== json) set({ desmosState: json });
+        return true;
+      },
+
+      trashNote: (id) => {
+        const s = get();
+        const index = s.notes.findIndex((n) => n.id === id);
+        if (index < 0) return null;
+        const note = s.notes[index];
+        const item = trashItemOf('note', note, noteTitle(note), s.settings, { index, ownLock: !!note.locked });
+        set({ notes: s.notes.filter((n) => n.id !== id), trash: [item, ...s.trash] });
+        return item.id;
+      },
+      trashJournalEntry: (id) => {
+        const s = get();
+        const index = s.journal.findIndex((e) => e.id === id);
+        if (index < 0) return null;
+        const entry = s.journal[index];
+        const item = trashItemOf('journal', entry, entryTitle(entry), s.settings, { index });
+        set({ journal: s.journal.filter((e) => e.id !== id), trash: [item, ...s.trash] });
+        return item.id;
+      },
+      trashVideo: (id) => {
+        const s = get();
+        const index = s.vaultVideos.findIndex((v) => v.id === id);
+        if (index < 0) return null;
+        const video = s.vaultVideos[index];
+        const item = trashItemOf('video', video, firstLine(video.title) || 'Video', s.settings, { index });
+        set({ vaultVideos: s.vaultVideos.filter((v) => v.id !== id), trash: [item, ...s.trash] });
+        return item.id;
+      },
+      trashTimedNote: (videoId, id) => {
+        const s = get();
+        const v = s.vaultVideos.find((x) => x.id === videoId);
+        const index = v ? v.notes.findIndex((n) => n.id === id) : -1;
+        if (!v || index < 0) return null;
+        const note = v.notes[index];
+        const title = firstLine(note.text) || 'Note at ' + fmtMediaTime(note.time);
+        const item = trashItemOf('timedNote', note, title, s.settings, { parentId: videoId, index });
+        set({
+          vaultVideos: s.vaultVideos.map((x) => (x.id === videoId ? { ...x, notes: x.notes.filter((n) => n.id !== id) } : x)),
+          trash: [item, ...s.trash],
+        });
+        return item.id;
+      },
+      trashBookmark: (videoId, id) => {
+        const s = get();
+        const v = s.vaultVideos.find((x) => x.id === videoId);
+        const index = v ? v.bookmarks.findIndex((b) => b.id === id) : -1;
+        if (!v || index < 0) return null;
+        const mark = v.bookmarks[index];
+        const title = firstLine(mark.label) || 'Bookmark at ' + fmtMediaTime(mark.time);
+        const item = trashItemOf('bookmark', mark, title, s.settings, { parentId: videoId, index });
+        set({
+          vaultVideos: s.vaultVideos.map((x) => (x.id === videoId ? { ...x, bookmarks: x.bookmarks.filter((b) => b.id !== id) } : x)),
+          trash: [item, ...s.trash],
+        });
+        return item.id;
+      },
+      trashAttachment: (noteId, attId) => {
+        const s = get();
+        const n = s.notes.find((x) => x.id === noteId);
+        const index = n ? n.attachments.findIndex((a) => a.id === attId) : -1;
+        if (!n || index < 0) return null;
+        const att = n.attachments[index];
+        // an attachment of a locked note stays behind the PIN, as the note does
+        const item = trashItemOf('attachment', att, firstLine(att.name) || 'Attachment', s.settings, {
+          parentId: noteId, index, ownLock: !!n.locked,
+        });
+        set({
+          notes: s.notes.map((x) => (x.id === noteId ? { ...x, attachments: x.attachments.filter((a) => a.id !== attId) } : x)),
+          trash: [item, ...s.trash],
+        });
+        return item.id;
+      },
+      restoreFromTrash: (trashId) => {
+        const s = get();
+        const item = s.trash.find((t) => t.id === trashId);
+        // already back (an Undo tapped twice), or gone for good
+        if (!item) return 'ok';
+        const trash = s.trash.filter((t) => t.id !== trashId);
+        const d = item.data;
+        if (item.kind === 'note') {
+          if (s.notes.some((n) => n.id === d.id)) set({ trash });
+          // a folder deleted meanwhile took its notes to General, and so does this one
+          else set({ notes: insertAt(s.notes, { ...d, folder: s.noteFolders.includes(d.folder) ? d.folder : 'General' }, item.index), trash });
+          return 'ok';
+        }
+        if (item.kind === 'journal') {
+          if (s.journal.some((e) => e.id === d.id)) set({ trash });
+          else set({ journal: insertAt(s.journal, d, item.index), trash });
+          return 'ok';
+        }
+        if (item.kind === 'video') {
+          if (s.vaultVideos.some((v) => v.id === d.id)) set({ trash });
+          else {
+            const folderId = d.folderId && s.vaultFolders.some((f) => f.id === d.folderId) ? d.folderId : null;
+            set({ vaultVideos: insertAt(s.vaultVideos, { ...d, folderId }, item.index), trash });
+          }
+          return 'ok';
+        }
+        if (item.kind === 'timedNote' || item.kind === 'bookmark') {
+          const v = s.vaultVideos.find((x) => x.id === item.parentId);
+          if (!v) return 'parent-missing';
+          const key = item.kind === 'timedNote' ? 'notes' : 'bookmarks';
+          const list: { id: string; time: number }[] = v[key];
+          if (list.some((x) => x.id === d.id)) set({ trash });
+          else {
+            const next = [...list, d].sort((a, b) => a.time - b.time);
+            set({ vaultVideos: s.vaultVideos.map((x) => (x.id === v.id ? { ...x, [key]: next } : x)), trash });
+          }
+          return 'ok';
+        }
+        // an attachment goes back into its note, which must be here
+        const n = s.notes.find((x) => x.id === item.parentId);
+        if (!n) return 'parent-missing';
+        if (n.attachments.some((a) => a.id === d.id)) set({ trash });
+        else set({ notes: s.notes.map((x) => (x.id === n.id ? { ...x, attachments: insertAt(x.attachments, d, item.index) } : x)), trash });
+        return 'ok';
+      },
+      deleteFromTrash: (trashId) => {
+        const s = get();
+        const item = s.trash.find((t) => t.id === trashId);
+        if (item) dropForGood(s, [item], set);
+      },
+      emptyTrash: () => {
+        const s = get();
+        if (s.trash.length) dropForGood(s, s.trash, set);
+      },
+      purgeTrash: (now) => {
+        const s = get();
+        const old = s.trash.filter((t) => !(t.deletedAt > now - TRASH_KEEP_MS));
+        if (old.length) dropForGood(s, old, set);
+      },
 
       replaceAll: (data) => {
         const fresh = initialData();
@@ -1258,17 +2262,21 @@ export const useStore = create<AppState>()(
     }),
     {
       name: STORE_KEY,
-      storage: jsonStorage,
-      version: 5,
+      storage: rowStorage,
+      version: STORE_VERSION,
       migrate: (persisted: any, version) => migratePersisted(persisted, version),
       // zustand's own shallow merge, plus the one fact the failure handler needs; a setting added since the data was
-      // saved takes its default instead of arriving undefined
-      merge: (persisted: any, current) => {
+      // saved takes its default instead of arriving undefined. What 1.7 added is checked on every load, like the exams
+      merge: (rawPersisted: any, current) => {
+        const persisted = rawPersisted ? sanitizeV6(rawPersisted) : rawPersisted;
         const merged = { ...current, ...(persisted || {}) };
-        if (persisted?.settings) merged.settings = { ...current.settings, ...persisted.settings };
+        if (persisted?.settings) merged.settings = cleanSettingsV6({ ...current.settings, ...persisted.settings });
         // a tool in a tab slot is never archived, whatever was saved (archiving arrived with its own default)
         const tabSlots = normaliseSlots(merged.settings.tabSlots);
         merged.settings = { ...merged.settings, tabSlots, archivedTools: normaliseArchived(merged.settings.archivedTools, tabSlots) };
+        // with the settings row out, nothing says whether the journal and Notes were locked: they start locked, and open
+        // again once this phone is known to have no PIN (see unlockWithoutPin), so a damaged row never lays them open
+        if (failedRows.includes('settings')) merged.settings = { ...merged.settings, journalLocked: true, notesLocked: true };
         // the migration only runs the first time after an upgrade; the exam tree is repaired on every load, so a tree
         // damaged after that (a bad import, a half-written save) can never reach a screen
         merged.scores = sanitizeScores(merged.scores);
@@ -1297,11 +2305,13 @@ useStore.persist.onFinishHydration((s) => setAccent(s.settings.accent));
 if (useStore.persist.hasHydrated()) setAccent(useStore.getState().settings.accent);
 
 // ---------- hydration can never strand the app ----------
-// The app renders nothing until the saved data has loaded. When reading or migrating the saved
-// blob throws (unreadable storage, a corrupt blob, a migration bug) zustand never marks the store
-// hydrated, so the failure is settled here instead: the raw blob is copied aside (Settings > Data
-// can share or restore it) and only then does the app render, on defaults. If that copy cannot be
-// made, saving pauses for this launch, so the defaults never overwrite the blob still on disk.
+// The app renders nothing until the saved data has loaded. When reading or migrating it throws
+// (unreadable storage, a corrupt row, a migration bug) zustand never marks the store hydrated, so
+// the failure is settled here instead. The old single row, when it could be read, is copied aside
+// (Settings > Data can share or restore it) and only then does the app render, on defaults; if
+// that copy cannot be made, or the rows themselves are what failed, saving pauses for this launch,
+// so the defaults never overwrite what is still on disk. A single row that fails is settled while
+// reading (readSaved): its collection alone starts fresh and is never saved over.
 
 export const RECOVERY_KEY = 'student-hub-v1.recovery';
 
@@ -1314,23 +2324,29 @@ let timedOut = false;
 let persistPaused = false;
 const settledListeners = new Set<() => void>();
 
-/** What the user should be told about this launch's load. The root layout shows it once the intro is gone. */
+/**
+ * What the user should be told about this launch's load. The root layout shows it once the intro is gone. A
+ * collection that failed on its own comes as 'failed-paused' with its name: it is not saved this launch.
+ */
 export type LoadNotice = 'late-load' | 'failed-kept' | 'failed-paused';
-let pendingNotice: LoadNotice | null = null;
-const noticeListeners = new Set<(n: LoadNotice) => void>();
+let pendingNotice: { n: LoadNotice; collections: string[] } | null = null;
+const noticeListeners = new Set<(n: LoadNotice, collections: string[]) => void>();
 
-function raiseNotice(n: LoadNotice) {
-  if (noticeListeners.size === 0) pendingNotice = n;
-  else noticeListeners.forEach((cb) => cb(n));
+function raiseNotice(n: LoadNotice, collections: string[] = []) {
+  if (noticeListeners.size === 0) pendingNotice = { n, collections };
+  else noticeListeners.forEach((cb) => cb(n, collections));
 }
 
-/** Delivers a notice raised before anyone listened, then every later one as it happens. */
-export function subscribeLoadNotices(cb: (n: LoadNotice) => void): () => void {
+/**
+ * Delivers a notice raised before anyone listened, then every later one as it happens. `collections` names what did
+ * not load when only some collections failed ("Notes"); it is empty when the whole load failed.
+ */
+export function subscribeLoadNotices(cb: (n: LoadNotice, collections: string[]) => void): () => void {
   noticeListeners.add(cb);
   if (pendingNotice) {
-    const n = pendingNotice;
+    const { n, collections } = pendingNotice;
     pendingNotice = null;
-    cb(n);
+    cb(n, collections);
   }
   return () => {
     noticeListeners.delete(cb);
@@ -1354,12 +2370,12 @@ function pausePersistence() {
 function resumePersistence() {
   if (!persistPaused) return;
   persistPaused = false;
-  useStore.persist.setOptions({ storage: jsonStorage });
+  useStore.persist.setOptions({ storage: rowStorage });
 }
 
 async function handleHydrationError(error: unknown) {
   console.warn('[store] saved data could not be loaded', error);
-  // the blob loaded and only its write-back failed: the data is already in, nothing to rescue
+  // the data loaded and only its write-back failed: it is already in, nothing to rescue
   if (mergedFromStorage) {
     if (timedOut) finishLateLoad();
     settledOnError = true;
@@ -1367,34 +2383,34 @@ async function handleHydrationError(error: unknown) {
     return;
   }
   let safe = false;
-  let raw: string | null = null;
-  try {
-    raw = await AsyncStorage.getItem(STORE_KEY);
-  } catch {
-    // the row itself cannot be read (on Android, one grown past about 2 MB): no restart will read it either
-    rowUnreadable = true;
-  }
-  try {
-    if (rowUnreadable) throw new Error('unreadable');
-    if (raw == null) {
-      safe = true; // nothing on disk to protect
-    } else {
-      const kept = await AsyncStorage.getItem(RECOVERY_KEY);
-      if (kept == null) {
-        await AsyncStorage.setItem(RECOVERY_KEY, raw);
-        safe = true;
+  if (loadedFrom === 'legacy' && loadFailure !== 'unreadable') {
+    // the old single row was read but could not be opened (or moved on): it is copied aside before anything is saved
+    try {
+      const raw = await AsyncStorage.getItem(LEGACY_KEY);
+      if (raw == null) {
+        safe = true; // nothing on disk to protect
       } else {
-        // an older copy is already kept: never replace it, and never overwrite this blob either
-        safe = kept === raw;
+        const kept = await AsyncStorage.getItem(RECOVERY_KEY);
+        if (kept == null) {
+          await AsyncStorage.setItem(RECOVERY_KEY, raw);
+          safe = true;
+        } else {
+          // an older copy is already kept: never replace it, and never overwrite this row either
+          safe = kept === raw;
+        }
       }
+    } catch {
+      safe = false;
     }
-  } catch {
-    safe = false;
+  } else if (loadFailure) {
+    // storage refused to read the row the load needed (on Android, one grown past about 2 MB), or the meta row is
+    // damaged: no restart will read them either, and nothing is saved over them
+    rowUnreadable = true;
   }
   if (safe) resumePersistence();
   else pausePersistence();
   loadFailed = true;
-  // settled only now, after the copy: nothing may render (and write) before the blob is safe
+  // settled only now, after the copy: nothing may render (and write) before the data is safe
   settledOnError = true;
   settleHydration();
   raiseNotice(safe ? 'failed-kept' : 'failed-paused');
@@ -1408,7 +2424,65 @@ function finishLateLoad() {
 }
 useStore.persist.onFinishHydration(() => {
   if (timedOut) finishLateLoad();
+  // a collection that could not be loaded on its own is named; the rest of the data is in and saves as usual
+  if (failedRows.length) raiseNotice('failed-paused', failedCollections());
+  if (failedRows.includes('settings')) unlockWithoutPin();
+  // the old single row goes only once the rows have loaded cleanly on a later launch than the one that wrote them
+  if (loadedFrom === 'rows' && !failedRows.length) AsyncStorage.removeItem(LEGACY_KEY).catch(() => {});
+  settleIfNewDay();
+  armMidnight();
 });
+
+/**
+ * The settings did not load, so the journal and Notes started locked (see merge). No lock is ever set without a PIN, so
+ * on a phone with none they open again; when the PIN cannot be asked about, they stay locked this launch.
+ */
+function unlockWithoutPin() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const lock = require('./lock') as typeof import('./lock');
+    lock.pinStatus().then((status) => {
+      if (status !== 'none') return;
+      const { setSetting } = useStore.getState();
+      setSetting('journalLocked', false);
+      setSetting('notesLocked', false);
+    }).catch(() => {});
+  } catch {
+    // no lock module here: they stay locked this launch
+  }
+}
+
+// ---------- a new day ----------
+// One-off ToDos ticked on an earlier day go, and what has been in Recently deleted for 30 days goes for good: at launch,
+// when the app comes back on a new day, and at midnight while it is open.
+
+let settledDay = '';
+let midnightTimer: ReturnType<typeof setTimeout> | null = null;
+
+function settleIfNewDay() {
+  // never before the saved data is in: a change made then would be saved over it
+  if (!useStore.persist.hasHydrated()) return;
+  const today = todayKey();
+  if (today === settledDay) return;
+  settledDay = today;
+  const s = useStore.getState();
+  s.settleDay();
+  // files are deleted for good only when this launch's data is whole: a collection that did not load may still use them
+  if (!loadFailed) s.purgeTrash(Date.now());
+}
+
+function armMidnight() {
+  if (midnightTimer) clearTimeout(midnightTimer);
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1);
+  midnightTimer = setTimeout(() => {
+    midnightTimer = null;
+    settleIfNewDay();
+    armMidnight();
+  }, Math.max(1000, next.getTime() - now.getTime()));
+  // a test run in Node is never held open by it
+  (midnightTimer as any)?.unref?.();
+}
 
 /** True once the saved data has loaded, or its failure to load has been handled. */
 export function hydrationSettled(): boolean {
@@ -1477,12 +2551,18 @@ export async function deleteRecoveryCopy(): Promise<void> {
   }
 }
 
+/**
+ * The backup format. 4 is 1.7: a ToDo without `repeat` is a one-off, so only an older backup has its ToDos made daily
+ * on the way in. Recently deleted rides along, and so does the Desmos graph.
+ */
+const BACKUP_V = 4;
+
 /** Everything worth backing up, as a plain object. */
 export function exportSnapshot() {
   const s = useStore.getState();
   return {
     _app: 'student-hub',
-    _v: 3,
+    _v: BACKUP_V,
     _exportedAt: new Date().toISOString(),
     settings: s.settings,
     aiLinks: s.aiLinks,
@@ -1505,6 +2585,8 @@ export function exportSnapshot() {
     scores: s.scores,
     scoreTags: s.scoreTags,
     learnings: s.learnings,
+    trash: s.trash,
+    desmosState: s.desmosState,
   };
 }
 
@@ -1522,17 +2604,21 @@ export function readSnapshot(input: unknown): ReadSnapshot | null {
     if (!data || typeof data !== 'object') return null;
     let d: any;
     let exportedAt: string | null = null;
+    let fromBefore6 = false;
     if (data._app === 'student-hub') {
-      const { _app, _exportedAt, _v, ...rest } = data;
-      d = _v === 2 || _v === 3 ? rest : migrateToGrey(migrateData(rest));
+      // _safety marks this phone's own copy kept while it followed the cloud (see cloud.ts); it reads as any backup
+      const { _app, _exportedAt, _v, _safety, ...rest } = data;
+      const v = typeof _v === 'number' ? _v : 0;
+      d = v >= 2 ? rest : migrateToGrey(migrateData(rest));
+      fromBefore6 = v < BACKUP_V;
       if (typeof _exportedAt === 'string') exportedAt = _exportedAt;
     } else if (data.state && typeof data.state === 'object' && typeof data.version === 'number') {
-      // the app's own saved blob, such as the copy kept when it could not be opened
+      // the app's own saved data, such as the copy kept when it could not be opened (migrated to v6 just here)
       d = migratePersisted(data.state, data.version);
     } else {
       return null;
     }
-    return { data: migrateV5(d), exportedAt };
+    return { data: migrateV6(migrateV5(d), fromBefore6), exportedAt };
   } catch {
     return null;
   }
@@ -1543,8 +2629,10 @@ export function applySnapshot(read: ReadSnapshot): void {
   const own: any = useStore.getState().settings;
   const settings: any = { ...(read.data.settings || {}) };
   for (const k of DEVICE_SETTINGS) if (own[k] !== undefined) settings[k] = own[k];
-  // an explicit import replaces everything, so saving resumes even if this launch paused it
+  // an explicit import replaces everything, so saving resumes even if this launch paused it, and a collection that
+  // could not be loaded is saved over by the one the user chose
   resumePersistence();
+  blockedRows.clear();
   useStore.getState().replaceAll({ ...read.data, settings });
   replacedThisLaunch = true;
 }

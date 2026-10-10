@@ -26,6 +26,8 @@ export interface WheelLabel {
   full: string;
   /** shown instead of the full name away from the centre */
   short?: string;
+  /** what a screen reader says for the value when the label alone says too little ("4 pm" for an hour's "4") */
+  spoken?: string;
 }
 
 /**
@@ -173,7 +175,7 @@ export const Wheel = React.memo(function Wheel({
         accessible
         accessibilityRole="adjustable"
         accessibilityLabel={accessibilityLabel}
-        accessibilityValue={{ text: label(wrap(index)).full }}
+        accessibilityValue={{ text: label(wrap(index)).spoken ?? label(wrap(index)).full }}
         accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
         onAccessibilityAction={(ev) => step(ev.nativeEvent.actionName === 'increment' ? 1 : -1)}
       >

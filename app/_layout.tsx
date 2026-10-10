@@ -3,9 +3,11 @@ import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Alert, Dimensions, InteractionManager, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { ReduceMotion, ReducedMotionConfig, useReducedMotion } from 'react-native-reanimated';
 import * as SplashScreen from 'expo-splash-screen';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import { Ionicons } from '@expo/vector-icons';
 // each face from its own file: a package's index would carry every one of its files into the app. Geist speaks,
 // Newsreader titles the big screens, Rubik Light counts, and the intro keeps Rubik (the Font Lab v2 pick)
 import { useFonts } from '@expo-google-fonts/rubik/useFonts';
@@ -18,13 +20,16 @@ import { Geist_600SemiBold } from '@expo-google-fonts/geist/600SemiBold';
 import { Geist_700Bold } from '@expo-google-fonts/geist/700Bold';
 import { Newsreader_500Medium } from '@expo-google-fonts/newsreader/500Medium';
 import { bgFor } from '../src/theme';
-import { useStore, subscribeLoadNotices } from '../src/store';
+import {
+  useStore, subscribeLoadNotices, subscribeSaveProblems, savesFailing, savedRowUnreadable,
+} from '../src/store';
+import type { LoadNotice } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
 import { setIntroPhase } from '../src/intro';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ToastHost } from '../src/components/Toast';
-import { noteTransitionStart, pageTransition, useAnimLevel } from '../src/components/Motion';
+import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
 
 // the native splash stays up until the intro (or the app) has painted its first
 // frame — no bare-material gap between the splash icon and the first real frame
@@ -41,6 +46,113 @@ SplashScreen.setOptions({ duration: 180, fade: true });
   }
 }
 
+/**
+ * Hands `then` whether a cloud account is signed in, once the cloud has looked at its saved session (or after a short
+ * wait, if it has not by then). The cloud module is loaded here only on the way to telling the user something.
+ */
+function whenCloudKnown(then: (signedIn: boolean) => void) {
+  const { useCloud } = require('../src/cloud') as typeof import('../src/cloud');
+  const signedIn = () => !!useCloud.getState().email;
+  if (useCloud.getState().ready) {
+    then(signedIn());
+    return;
+  }
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    off();
+    clearTimeout(timer);
+    then(signedIn());
+  };
+  const off = useCloud.subscribe((s) => { if (s.ready) finish(); });
+  const timer = setTimeout(finish, 3000);
+}
+
+const openBackup = { text: 'Open Settings', onPress: () => router.push('/settings?page=backup') };
+const openAccount = { text: 'Open Settings', onPress: () => router.push('/settings?page=account') };
+
+/** "Notes", "Notes and Journal", "Notes, Journal and Scores" */
+const listOf = (names: string[]) =>
+  (names.length < 2 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1]);
+
+/**
+ * What a load that failed or finished late means, and what is safe: said once the intro has gone. `lost` names the
+ * collections that could not be opened when only some failed; it is empty when the whole load failed.
+ */
+function tellLoadNotice(notice: LoadNotice, lost: string[], signedIn: boolean) {
+  if (notice === 'late-load') {
+    Alert.alert('Your saved data has loaded', 'Changes made while it was loading were replaced by it.');
+    return;
+  }
+  // only some collections could not be opened: everything else loaded, and the cloud copy or a backup file can bring
+  // the rest back (a restart reads the same rows again)
+  if (lost.length) {
+    const one = lost.length === 1;
+    Alert.alert(
+      'Some of your saved data could not be opened',
+      (one ? 'This could not be opened, and shows as empty for now: ' : 'These could not be opened, and show as empty for now: ')
+        + listOf(lost) + '. Everything else loaded. '
+        + (signedIn
+          ? 'Your cloud copy can bring ' + (one ? 'it' : 'them') + ' back, from Settings, Account.'
+          : 'If you have a backup file, it can bring ' + (one ? 'it' : 'them') + ' back, from Settings, Backup.'),
+      [{ text: 'Later', style: 'cancel' }, signedIn ? openAccount : openBackup],
+    );
+    return;
+  }
+  const title = 'Your saved data could not be opened';
+  if (notice === 'failed-paused') {
+    if (savedRowUnreadable()) {
+      // the row cannot even be read back, so a restart cannot help: a copy kept elsewhere can
+      Alert.alert(
+        title,
+        'Nothing on this phone was changed, but changes you make now will not be saved, and restarting will not open it. '
+          + (signedIn
+            ? 'Your cloud copy can bring your data back, from Settings, Account.'
+            : 'If you have a backup file, import it from Settings, Backup.'),
+        [{ text: 'Later', style: 'cancel' }, signedIn ? openAccount : openBackup],
+      );
+      return;
+    }
+    Alert.alert(
+      title,
+      'Nothing on this phone was changed, but changes you make now will not be saved. Restart the app to try again.'
+        + (signedIn ? ' Your cloud copy is safe too.' : ''),
+    );
+    return;
+  }
+  Alert.alert(
+    title,
+    'A copy was kept on this phone and the app started fresh. You can share the copy or restore it from Settings, Backup.'
+      + (signedIn ? ' Your cloud copy is safe too, under Account.' : ''),
+    [{ text: 'Later', style: 'cancel' }, openBackup],
+  );
+}
+
+/** Said once a launch, the first time a save fails: the changes are still in the app, but not yet on the phone. */
+let saveTroubleTold = false;
+function tellSaveTrouble() {
+  if (saveTroubleTold) return;
+  saveTroubleTold = true;
+  Alert.alert(
+    'Your latest changes could not be saved',
+    'This phone could not store them. Export a backup file now, so nothing is lost.',
+    [{ text: 'Later', style: 'cancel' }, openBackup],
+  );
+}
+
+/**
+ * Keeps Reanimated's own reduce-motion switch with the phone's live one. Reanimated reads the switch once, at launch,
+ * and finishes every animation at once while it was on; when the user changes it while the app runs, this overrides
+ * Reanimated to match, and stands down once the two agree again.
+ */
+function ReduceMotionSync() {
+  const atLaunch = useReducedMotion();
+  const live = useOsReduceMotion((s) => s.on);
+  if (live == null || live === atLaunch) return null;
+  return <ReducedMotionConfig mode={live ? ReduceMotion.Always : ReduceMotion.Never} />;
+}
+
 export default function RootLayout() {
   const hydrated = useHydrated();
   const theme = useStore((s) => s.settings.theme);
@@ -51,12 +163,18 @@ export default function RootLayout() {
   // the intro renders only these two faces, so only they gate its first frame. A face that fails
   // to load falls back to the system font instead of holding the app on its splash forever.
   const [introLoaded, introError] = useFonts({ Rubik_500Medium, Rubik_600SemiBold });
+  // the icons' font loads with the app's faces, so no icon draws an empty box for a frame and then pops in
   const [appLoaded, appError] = useFonts({
+    ...Ionicons.font,
     Rubik_300Light, Geist_400Regular, Geist_500Medium, Geist_600SemiBold, Geist_700Bold, Newsreader_500Medium,
   });
   const introFonts = introLoaded || !!introError;
   const appFonts = appLoaded || !!appError;
   const splashHidden = useRef(false);
+  // With motion off there is no intro to paint first: the app is built as soon as the data and its fonts are in, and the
+  // splash stays up until the app's own first frame, so it never fades onto empty material.
+  const instant = level === 'none';
+  const showApp = (revealed || instant) && appFonts;
 
   // notifications and reminder rescheduling never compete with the intro
   useEffect(() => {
@@ -71,28 +189,13 @@ export default function RootLayout() {
   }, [revealed]);
 
   // a load that failed or finished late is never silent: once the intro is gone, say what happened and what is
-  // safe, including a notice raised long after the app opened
+  // safe, including a notice raised long after the app opened. A save that fails is said once too.
   useEffect(() => {
-    if (!introDone) return;
-    return subscribeLoadNotices((notice) => {
-      if (notice === 'late-load') {
-        Alert.alert('Your saved data has loaded', 'Changes made while it was loading were replaced by it.');
-      } else if (notice === 'failed-paused') {
-        Alert.alert(
-          'Your saved data could not be opened',
-          'Nothing on this phone was changed, but changes you make now will not be saved. Restart the app to try again.',
-        );
-      } else {
-        Alert.alert(
-          'Your saved data could not be opened',
-          'A copy was kept on this phone and the app started fresh. You can share the copy or restore it from Settings, under Data.',
-          [
-            { text: 'Later', style: 'cancel' },
-            { text: 'Open Settings', onPress: () => router.push('/settings') },
-          ],
-        );
-      }
-    });
+    if (!introDone) return undefined;
+    const offLoad = subscribeLoadNotices((notice, lost) => whenCloudKnown((signedIn) => tellLoadNotice(notice, lost, signedIn)));
+    const offSave = subscribeSaveProblems((failing) => { if (failing) tellSaveTrouble(); });
+    if (savesFailing()) tellSaveTrouble();
+    return () => { offLoad(); offSave(); };
   }, [introDone]);
 
   // however the intro ended, the app's entrance never waits on it
@@ -119,25 +222,29 @@ export default function RootLayout() {
     SplashScreen.hideAsync().catch(() => {});
   };
 
+  // the splash goes from the first real frame: the intro's (it paints with the root), or with motion off the app's own
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: bg }} onLayout={hideSplash}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: bg }} onLayout={instant ? undefined : hideSplash}>
       <StatusBar style="light" />
-      {revealed && appFonts && (
-        <ErrorBoundary>
-        <Stack
-          screenListeners={noteTransitionStart}
-          screenOptions={{
-            // headers are app-owned (NeuHeader) — status-bar spacing is padded
-            // explicitly inside each screen, consistent everywhere
-            headerShown: false,
-            contentStyle: { backgroundColor: bg },
-            // a page dissolves in while its own content rises; with motion off it simply appears (see pageTransition)
-            ...pageTransition(level),
-          }}
-        />
-        </ErrorBoundary>
+      <ReduceMotionSync />
+      {showApp && (
+        <View style={{ flex: 1 }} onLayout={instant ? hideSplash : undefined}>
+          <ErrorBoundary>
+          <Stack
+            screenListeners={noteTransitionStart}
+            screenOptions={{
+              // headers are app-owned (NeuHeader) — status-bar spacing is padded
+              // explicitly inside each screen, consistent everywhere
+              headerShown: false,
+              contentStyle: { backgroundColor: bg },
+              // a page dissolves in while its own content rises; with motion off it simply appears (see pageTransition)
+              ...pageTransition(level),
+            }}
+          />
+          </ErrorBoundary>
+        </View>
       )}
-      {revealed && appFonts && <ToastHost />}
+      {showApp && <ToastHost />}
       {!introDone && (
         <StartScreen onReveal={() => setRevealed(true)} onDone={() => setIntroDone(true)} />
       )}

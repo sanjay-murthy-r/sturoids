@@ -2,14 +2,18 @@ import React from 'react';
 import { Pressable, View, ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, TRACK, neuInset, neuRaised } from '../theme';
+import { C, CHROME_FONT_MAX, F, MIN, TRACK, neuInset, neuRaised } from '../theme';
 import { useTheme } from './UI';
 import { CHANGE, RISE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
 
+/** a segment's reach grows above and below to the rows' rhythm; its sides already meet the next segment */
+const SEG_SLOP = { top: 6, bottom: 6 };
+
 /**
  * Kit segmented control: carved trough + a raised thumb that springs to the
- * active segment. Replaces every ad-hoc `st.seg` in the app.
+ * active segment. Replaces every ad-hoc `st.seg` in the app. Each segment is a button that says whether it is the
+ * chosen one.
  */
 export function SegmentedControl<K extends string>({
   options, value, onChange, onPressActive, color, size = 'md', stretch, style,
@@ -87,6 +91,9 @@ export function SegmentedControl<K extends string>({
         return (
           <Pressable
             key={o.key}
+            hitSlop={SEG_SLOP}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
             onPress={() => {
               if (!active) { tick(); onChange(o.key); } else onPressActive?.(o.key);
             }}
@@ -133,10 +140,11 @@ function SegLabel({ active, label, icon, color, size }: {
           <Animated.View style={[ink, lit]}><Ionicons name={icon} size={size + 1} color={color} /></Animated.View>
         </View>
       ) : null}
+      {/* fixed chrome: the segments share one row, so their names grow with the phone's font size only up to 1.3 */}
       <View style={{ flexShrink: 1 }}>
-        <Animated.Text numberOfLines={1} style={[text, { color: C.textFaint }, unlit]}>{label}</Animated.Text>
+        <Animated.Text numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX} style={[text, { color: C.textFaint }, unlit]}>{label}</Animated.Text>
         <Animated.Text
-          numberOfLines={1} style={[text, ink, { color }, lit]}
+          numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX} style={[text, ink, { color }, lit]}
           importantForAccessibility="no" accessibilityElementsHidden
         >
           {label}

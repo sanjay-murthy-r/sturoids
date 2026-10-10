@@ -4,8 +4,9 @@
 // place the data lives: the cloud holds its latest copy, kept current a little after each change and whenever the app
 // goes to the background, and brings it to another phone.
 //
-// Two phones on one account never overwrite each other silently: a phone remembers the copy it last saw, and when the
-// cloud holds a newer one written somewhere else, it stops and asks which to keep. See supabase/setup.sql.
+// Two phones on one account never overwrite each other silently: a phone remembers the copy it last saw. When the cloud
+// holds a newer one written on another phone and this phone has changed nothing since, it follows quietly (keeping a
+// copy of its own data for an Undo); when both changed, it stops and asks which to keep. See supabase/setup.sql.
 
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -16,12 +17,20 @@ import { create } from 'zustand';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import {
   useStore, exportSnapshot, readSnapshot, applySnapshot, flushSaves, hasAnyUserData, localDataState, isDeviceOnlyChange,
-  withoutDeviceSettings, Attachment,
+  withoutDeviceSettings, Attachment, RECOVERY_KEY, trashedAttachments, savePending, SAVE_PAUSE_MS,
 } from './store';
 import { journalForBackup, restoreBodies } from './journal';
 import { restoredPath } from './backup';
 import { ATT_DIR } from './attachments';
+import { toast } from './components/Toast';
 import { uid } from './utils';
+
+// A copy of this phone's data is kept while it follows the cloud quietly, so the toast's Undo can bring it back. It
+// sits in the store's recovery row (Settings can share or restore it like a kept copy, and no file is cleared as
+// unused while it is there), marked as this module's own so it is never taken for data that could not be opened.
+const SAFETY_PREFIX = '{"_safety":';
+/** how long the Undo of a quiet follow stands: the toast with its action, ten seconds with a screen reader, and a margin */
+const FOLLOW_UNDO_MS = 20 * 1000;
 
 export const SUPABASE_URL = 'https://imvydxgapirnkuvayimn.supabase.co';
 /** the project's publishable key: safe in the app, since every row and file is guarded by the user's own id */
@@ -53,7 +62,11 @@ export type CloudStatus = 'signed-out' | 'idle' | 'syncing' | 'error' | 'choice'
 export type ChoiceReason = 'newer' | 'empty' | 'rescue';
 
 /** A copy in the cloud the phone did not write or has not seen: the user picks which to keep. */
-export interface RemoteCopy { updatedAt: string; device: string | null; bytes: number; files: number }
+export interface RemoteCopy {
+  updatedAt: string; device: string | null; bytes: number; files: number;
+  /** the install that wrote it */
+  deviceId?: string | null;
+}
 
 interface Meta {
   /** this install, so the cloud can tell which phone wrote a copy */
@@ -81,6 +94,65 @@ interface Meta {
   rescue?: boolean;
   /** the session ended without the user signing out here (revoked elsewhere): said until the next sign-in */
   lost?: boolean;
+  /** attachments the last backup left for Wi-Fi: the next backup on Wi-Fi sends them, even with no data changed */
+  filesWaiting?: boolean;
+  /** a newer cloud copy this phone followed and the user undid: it is asked about, never followed again */
+  declinedAt?: string | null;
+}
+
+/**
+ * A time as the cloud writes it ("2026-10-09T15:56:08.222123+00:00"), in ms. Read by hand: microseconds and an offset
+ * written with a colon are not something every engine's Date.parse takes. NaN when it is not such a time.
+ */
+export function isoTime(text: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}(?::?\d{2})?)?$/i.exec(String(text || '').trim());
+  if (!m) return NaN;
+  const ms = m[7] ? Number((m[7] + '00').slice(0, 3)) : 0;
+  let t = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], ms);
+  const zone = m[8];
+  if (zone && zone.toUpperCase() !== 'Z') {
+    const sign = zone[0] === '-' ? -1 : 1;
+    const digits = zone.slice(1).replace(':', '');
+    t -= sign * (Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2, 4) || 0)) * 60000;
+  }
+  return t;
+}
+
+/** What to do about a copy in the cloud this phone has not seen: bring it here quietly, or ask which to keep. */
+export type NewerCopyAction = 'follow' | 'ask';
+
+export interface NewerCopyFacts {
+  /** the cloud copy's updated_at, and the install that wrote it */
+  remoteAt: string;
+  remoteDeviceId: string | null | undefined;
+  /** the cloud copy this phone last wrote or read, and this install */
+  lastRemoteAt: string | null;
+  deviceId: string;
+  /** the fingerprint of this phone's data now (null when not worked out), and of what it last sent or brought down */
+  localHash: string | null;
+  lastHash: string | null;
+  /** a change here still waiting for its pause before it is saved */
+  savePending: boolean;
+  /** a copy this phone followed and the user undid */
+  declinedAt?: string | null;
+}
+
+/**
+ * Whether a copy in the cloud this phone has not seen can simply come here. Only when it is plainly newer than the copy
+ * this phone last saw and was written by another install, while this phone has changed nothing since its last backup
+ * (its data has the same fingerprint, and no save waits) and the user has not undone following this very copy: then
+ * nothing of this phone's would be lost. Anything else (both changed, a first sign-in, a copy of unknown origin) is the
+ * user's choice. Pure, so it is tested on its own.
+ */
+export function newerCopyAction(f: NewerCopyFacts): NewerCopyAction {
+  if (!f.lastRemoteAt || !f.lastHash || !f.deviceId) return 'ask';
+  const seen = isoTime(f.lastRemoteAt);
+  const now = isoTime(f.remoteAt);
+  if (!Number.isFinite(seen) || !Number.isFinite(now) || !(now > seen)) return 'ask';
+  if (!f.remoteDeviceId || f.remoteDeviceId === f.deviceId) return 'ask';
+  if (f.declinedAt && f.declinedAt === f.remoteAt) return 'ask';
+  if (f.savePending || f.localHash == null || f.localHash !== f.lastHash) return 'ask';
+  return 'follow';
 }
 
 export interface CloudState {
@@ -151,7 +223,10 @@ function loadMeta(): Promise<void> {
  */
 export async function forgetSyncRecord() {
   await loadMeta();
-  meta = { ...meta, userId: null, email: null, lastRemoteAt: null, lastSyncedAt: null, lastHash: null, rescue: false, dirty: true };
+  meta = {
+    ...meta, userId: null, email: null, lastRemoteAt: null, lastSyncedAt: null, lastHash: null, rescue: false, dirty: true,
+    filesWaiting: false, declinedAt: null,
+  };
   await saveMeta();
 }
 
@@ -193,9 +268,19 @@ async function buildSnapshot(): Promise<{ json: string; hash: string; attachment
   // stringified once: the fingerprint is taken before the export time goes in, since that changes every run
   const body = JSON.stringify(data);
   const json = '{"_exportedAt":' + JSON.stringify(_exportedAt) + ',' + body.slice(1);
-  return {
-    json, hash: fingerprint(body), attachments: snap.notes.flatMap((n) => n.attachments || []), hasUserData: hasAnyUserData(snap),
-  };
+  return { json, hash: fingerprint(body), attachments: attachmentsOf(snap), hasUserData: hasAnyUserData(snap) };
+}
+
+/** Every attachment the data keeps, once: the notes', and those of notes and files in Recently deleted. */
+function attachmentsOf(snap: { notes: { attachments?: Attachment[] }[]; trash: Parameters<typeof trashedAttachments>[0] }): Attachment[] {
+  const seen = new Set<string>();
+  const out: Attachment[] = [];
+  for (const a of [...snap.notes.flatMap((n) => n.attachments || []), ...trashedAttachments(snap.trash || [])]) {
+    if (!a || typeof a.id !== 'string' || seen.has(a.id)) continue;
+    seen.add(a.id);
+    out.push(a);
+  }
+  return out;
 }
 
 /** Words for an error from the cloud, for the screen. Raw server text never reaches it. */
@@ -238,11 +323,13 @@ export async function initCloud() {
     await saveMeta();
   }
   watchChanges();
+  // a copy of this phone's data kept while it followed the cloud outlives its Undo only when the app was closed in that
+  // time: it goes now, before any look at the cloud could keep a new one
+  if (await dropSafetyCopy(null)) sweepAfterReplace(Date.now());
   // a signed-in phone shows its account while it looks at the cloud, instead of looking signed out for a moment
   patch({ auto: meta.auto, lastSyncedAt: meta.lastSyncedAt, lost: !!meta.lost, email: meta.email ?? null });
   // nothing is loaded for someone who never signed in: the client is made only when a session was saved
-  const hasSession = await AsyncStorage.getAllKeys().then((ks) => ks.some((k) => k.startsWith('sb-') && k.endsWith('-auth-token'))).catch(() => false);
-  if (!hasSession) {
+  if (!(await hasSavedSession())) {
     patch({ ready: true, status: 'signed-out', email: null });
     return;
   }
@@ -299,7 +386,10 @@ async function adopt(session: Session | null) {
   adoptedUser = session.user.id;
   // another account on this phone starts its own record of what was synced; the same one picks up where it left off
   if (meta.userId !== session.user.id) {
-    meta = { ...meta, userId: session.user.id, lastRemoteAt: null, lastSyncedAt: null, lastHash: null, rescue: false };
+    meta = {
+      ...meta, userId: session.user.id, lastRemoteAt: null, lastSyncedAt: null, lastHash: null, rescue: false,
+      filesWaiting: false, declinedAt: null,
+    };
   }
   meta.email = session.user.email ?? null;
   meta.lost = false;
@@ -344,13 +434,27 @@ function startWatching() {
   if (watching) return;
   watching = true;
   appStateSub = AppState.addEventListener('change', onAppState);
+  // attachments left for Wi-Fi go up as soon as the phone is on it
+  try {
+    const Network = require('expo-network') as typeof import('expo-network');
+    networkSub = Network.addNetworkStateListener((st) => {
+      if (!isUnmetered(st.type) || !meta.filesWaiting || !meta.auto || AppState.currentState !== 'active') return;
+      if (running || useCloud.getState().status === 'choice') return;
+      syncNow().catch(() => {});
+    });
+  } catch {
+    // no network module: the next backup on Wi-Fi sends them
+  }
 }
 
 let appStateSub: { remove: () => void } | null = null;
+let networkSub: { remove: () => void } | null = null;
 function stopWatching() {
   watching = false;
   appStateSub?.remove();
   appStateSub = null;
+  networkSub?.remove();
+  networkSub = null;
   if (changeTimer) { clearTimeout(changeTimer); changeTimer = null; }
   stopRetry();
 }
@@ -369,6 +473,73 @@ function onAppState(next: string) {
       if (changeTimer) { clearTimeout(changeTimer); changeTimer = null; }
       syncNow().catch(() => {});
     }
+  }
+}
+
+// ---------------------------------------------------------------- Wi-Fi only
+
+const isUnmetered = (type: unknown) => type === 'WIFI' || type === 'ETHERNET';
+
+/**
+ * Whether the phone is on Wi-Fi (or a cable) now. Without the network module there is no telling, and files go as they
+ * always did.
+ */
+async function onWifi(): Promise<boolean> {
+  try {
+    const Network = require('expo-network') as typeof import('expo-network');
+    return isUnmetered((await Network.getNetworkStateAsync()).type);
+  } catch {
+    return true;
+  }
+}
+
+/** Whether attachments may go up on this run: always, unless the user keeps them to Wi-Fi and the phone is not on it. */
+async function filesMayGo(overMobileData: boolean): Promise<boolean> {
+  if (overMobileData || !useStore.getState().settings.attachmentsWifiOnly) return true;
+  return onWifi();
+}
+
+/**
+ * What a backup would do with the attachments: the ones the cloud lacks and that fit (each up to 20 MB, the account's
+ * 120 MB in all), how many do not fit, and the files in the cloud no attachment uses any more.
+ */
+async function planFiles(userId: string, attachments: Attachment[]) {
+  const folder = userId + '/att';
+  const have = await listFiles(folder);
+  const wanted = new Set(attachments.map((a) => a.id));
+  let used = 0;
+  have.forEach((size, name) => { if (wanted.has(name)) used += size; });
+  const todo: { a: Attachment; size: number }[] = [];
+  let skipped = 0;
+  for (const a of attachments) {
+    if (have.has(a.id)) continue;
+    const info = await FileSystem.getInfoAsync(a.uri).catch(() => null);
+    if (!info || !info.exists || (info as any).isDirectory) continue;
+    const size = (info as any).size || 0;
+    if (size > FILE_LIMIT || used + size > QUOTA_BYTES) { skipped++; continue; }
+    used += size;
+    todo.push({ a, size });
+  }
+  const unused = [...have.keys()].filter((name) => !wanted.has(name)).map((name) => folder + '/' + name);
+  return { folder, todo, skipped, unused };
+}
+
+/**
+ * For "Back up now" pressed by hand: what the attachments waiting for Wi-Fi would cost over mobile data, so the screen
+ * can ask once before sending them ("Send 12 MB of attachments over mobile data?"). Null when there is nothing to ask:
+ * the phone is on Wi-Fi, the setting is off, no attachment is waiting, or the cloud cannot be asked. Then
+ * syncNow(false, { mobileData: true }) sends them, and plain syncNow() backs up the data and leaves them for Wi-Fi.
+ */
+export async function mobileDataCost(): Promise<{ bytes: number; files: number } | null> {
+  if (!useStore.getState().settings.attachmentsWifiOnly || (await onWifi())) return null;
+  const s = await session().catch(() => null);
+  if (!s) return null;
+  try {
+    const { attachments } = await buildSnapshot();
+    const { todo } = await planFiles(s.user.id, attachments);
+    return todo.length ? { bytes: todo.reduce((n, t) => n + t.size, 0), files: todo.length } : null;
+  } catch {
+    return null;
   }
 }
 
@@ -458,6 +629,106 @@ export async function changePassword(password: string) {
   if (error) throw error;
 }
 
+/** An error that means the request never reached the cloud (or its answer never came back). */
+function isOffline(e: unknown): boolean {
+  const msg = String((e as any)?.message || e || '');
+  const name = String((e as any)?.name || '');
+  return /AuthRetryableFetchError/.test(name) || /Network request failed|fetch failed|network|timed out|timeout/i.test(msg);
+}
+
+/**
+ * Forgot password, step one: the cloud emails a 6-digit code to the address (the "Reset password" email template must
+ * show the code, {{ .Token }}). An address with no account is told nothing different, so nobody can test addresses.
+ */
+export async function sendResetCode(email: string): Promise<'sent' | 'offline' | 'error'> {
+  try {
+    const { error } = await cloud().auth.resetPasswordForEmail(email.trim());
+    if (error) return isOffline(error) ? 'offline' : 'error';
+    return 'sent';
+  } catch (e) {
+    return isOffline(e) ? 'offline' : 'error';
+  }
+}
+
+/** the account a code was already accepted for this launch, so choosing a password again never asks for a new code */
+let recoveredEmail: string | null = null;
+
+/**
+ * Forgot password, step two: the code from the email and a new password. The code signs this phone in, the password
+ * is set, and the phone stays signed in. A password the cloud turns down ('weak') can be chosen again without a new
+ * code. 'wrong-code' covers a mistyped code and an expired one.
+ */
+export async function resetPasswordWithCode(
+  email: string, code: string, newPassword: string,
+): Promise<'ok' | 'wrong-code' | 'weak' | 'offline' | 'error'> {
+  const address = email.trim().toLowerCase();
+  // checked before the code is spent: the cloud asks for at least 6 characters
+  if (newPassword.length < 6) return 'weak';
+  try {
+    const c = cloud();
+    let current = (await c.auth.getSession()).data.session;
+    if (!(recoveredEmail === address && current?.user.email?.toLowerCase() === address)) {
+      const token = code.replace(/\s+/g, '');
+      if (!/^\d{6}$/.test(token)) return 'wrong-code';
+      const { data, error } = await c.auth.verifyOtp({ email: address, token, type: 'recovery' });
+      if (error || !data.session) {
+        if (error && isOffline(error)) return 'offline';
+        // too many tries, or the cloud failing, is not the code's fault
+        const status = Number((error as any)?.status) || 0;
+        return status >= 500 || status === 429 ? 'error' : 'wrong-code';
+      }
+      recoveredEmail = address;
+      current = data.session;
+    }
+    const { error: setError } = await c.auth.updateUser({ password: newPassword });
+    if (setError) {
+      const text = String(setError.message || '') + String((setError as any).code || '');
+      if (isOffline(setError)) return 'offline';
+      // the password it already has: nothing to change, and the phone is signed in
+      if (!/should be different|same_password/i.test(text)) {
+        return /weak|at least|characters|password/i.test(text) ? 'weak' : 'error';
+      }
+    }
+    recoveredEmail = null;
+    if (current) await afterSignIn(current);
+    return 'ok';
+  } catch (e) {
+    return isOffline(e) ? 'offline' : 'error';
+  }
+}
+
+/** Whether a session was saved on this phone (an account signed in here), without loading the cloud library. */
+async function hasSavedSession(): Promise<boolean> {
+  return AsyncStorage.getAllKeys()
+    .then((ks) => ks.some((k) => k.startsWith('sb-') && k.endsWith('-auth-token')))
+    .catch(() => false);
+}
+
+/**
+ * Checks the account's password by signing in again with the signed-in account's email (Forgot PIN). The session
+ * simply renews. 'offline' covers anything that kept the check from being made (no connection, the cloud busy).
+ */
+export async function verifyAccountPassword(password: string): Promise<'ok' | 'wrong' | 'signed-out' | 'offline'> {
+  if (!(await hasSavedSession())) return 'signed-out';
+  let email: string | null = null;
+  try {
+    email = (await cloud().auth.getSession()).data.session?.user.email ?? null;
+  } catch {
+    email = null;
+  }
+  if (!email) return 'signed-out';
+  if (!password) return 'wrong';
+  try {
+    const { error } = await cloud().auth.signInWithPassword({ email, password });
+    if (!error) return 'ok';
+    if (isOffline(error)) return 'offline';
+    const text = String(error.message || '') + String((error as any).code || '');
+    return /Invalid login credentials|invalid_credentials/i.test(text) ? 'wrong' : 'offline';
+  } catch {
+    return 'offline';
+  }
+}
+
 /** Removes every attachment the account keeps in the cloud. */
 async function removeAllFiles(userId: string) {
   const c = cloud();
@@ -482,7 +753,10 @@ export async function deleteCloudCopy() {
   await removeAllFiles(s.user.id);
   const { error } = await cloud().from('backups').delete().eq('user_id', s.user.id);
   if (error) throw error;
-  meta = { ...meta, auto: false, lastRemoteAt: null, lastSyncedAt: null, lastHash: null, rescue: false, dirty: true };
+  meta = {
+    ...meta, auto: false, lastRemoteAt: null, lastSyncedAt: null, lastHash: null, rescue: false, dirty: true,
+    filesWaiting: false, declinedAt: null,
+  };
   await saveMeta();
   patch({
     auto: false, lastSyncedAt: null, remote: null, reason: null, hasCopy: false, pending: true, usedBytes: 0, status: 'idle',
@@ -510,7 +784,10 @@ async function readRemote(userId: string): Promise<RemoteCopy | null> {
   const { data, error } = await cloud().from('backups').select('updated_at, device, device_id, bytes, files').eq('user_id', userId).maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  return { updatedAt: data.updated_at, device: data.device_id === meta.deviceId ? 'this phone' : data.device, bytes: data.bytes, files: data.files };
+  return {
+    updatedAt: data.updated_at, device: data.device_id === meta.deviceId ? 'this phone' : data.device, bytes: data.bytes,
+    files: data.files, deviceId: data.device_id ?? null,
+  };
 }
 
 /**
@@ -557,7 +834,10 @@ export async function check(compare = false) {
     const remote = await readRemote(s.user.id);
     patch({ hasCopy: !!remote });
     if (remote && remote.updatedAt !== meta.lastRemoteAt) {
-      patch({ status: 'choice', reason: 'newer', remote, error: null });
+      // a run that started meanwhile looks at the cloud copy itself
+      if (running) return;
+      running = meetNewer(s, remote).finally(() => { running = null; });
+      await running;
       return;
     }
     patch({ remote: null, reason: null, status: useCloud.getState().status === 'choice' ? 'idle' : useCloud.getState().status });
@@ -572,7 +852,8 @@ export async function check(compare = false) {
       }
       patch({ pending: !!meta.dirty });
     }
-    if (useCloud.getState().pending && meta.auto) await syncNow();
+    // attachments left for Wi-Fi go up once the phone is on it, even with nothing else to send
+    if (meta.auto && (useCloud.getState().pending || (meta.filesWaiting && (await filesMayGo(false))))) await syncNow();
   } catch (e) {
     patch({ status: 'error', error: describe(e) });
     scheduleRetry();
@@ -591,11 +872,20 @@ function settled(changesAtBuild: number) {
   patch({ pending: false });
 }
 
+/** What a backup says about its attachments: those that did not fit, and those left for Wi-Fi. */
+function filesNote(skipped: number, waiting: number): string | null {
+  const fit = skipped ? (skipped === 1 ? 'One attachment did not fit' : skipped + ' attachments did not fit') + ' (20 MB each, 120 MB in all).' : '';
+  if (!waiting) return fit || null;
+  return fit ? fit + ' The others wait for Wi-Fi.' : 'Attachments wait for Wi-Fi';
+}
+
 /**
  * Sends this phone's data up: new attachments first, then the snapshot, then files no note uses any more are
- * cleared. `force` sends even when another phone wrote a newer copy (the user chose to keep this phone's data).
+ * cleared. `force` sends even when another phone wrote a newer copy (the user chose to keep this phone's data). With
+ * attachments kept to Wi-Fi and the phone on mobile data, the data still goes and the attachments wait for Wi-Fi, unless
+ * `mobileData` says the user agreed to send them now (see mobileDataCost).
  */
-export function syncNow(force = false): Promise<void> {
+export function syncNow(force = false, opts: { mobileData?: boolean } = {}): Promise<void> {
   if (running) return running;
   running = (async () => {
     const st = useCloud.getState();
@@ -610,7 +900,7 @@ export function syncNow(force = false): Promise<void> {
       if (!force) {
         remote = await readRemote(userId);
         if (remote && remote.updatedAt !== meta.lastRemoteAt) {
-          patch({ status: 'choice', reason: 'newer', remote, hasCopy: true });
+          await meetNewer(s, remote);
           return;
         }
       }
@@ -619,11 +909,12 @@ export function syncNow(force = false): Promise<void> {
       await afterInteractions();
       const atBuild = changes;
       const { json, hash, attachments, hasUserData } = await buildSnapshot();
-      // nothing changed since the last backup: nothing goes up
-      if (hash === meta.lastHash && !force) {
+      const filesGo = await filesMayGo(!!opts.mobileData);
+      // nothing changed since the last backup, and no attachment waits for this run: nothing goes up
+      if (hash === meta.lastHash && !force && !(meta.filesWaiting && filesGo)) {
         settled(atBuild);
         await saveMeta();
-        patch({ status: 'idle', progress: null });
+        patch({ status: 'idle', progress: null, note: meta.filesWaiting ? filesNote(0, 1) : null });
         return;
       }
       // a phone holding nothing of the user's never empties a fuller cloud copy without asking
@@ -631,23 +922,24 @@ export function syncNow(force = false): Promise<void> {
         patch({ status: 'choice', reason: 'empty', remote, hasCopy: true, progress: null });
         return;
       }
-      const { skipped, unused } = await sendFiles(s, userId, attachments);
+      const { skipped, waiting, unused } = await sendFiles(s, userId, attachments, filesGo);
       const updatedAt = new Date().toISOString();
       const { data, error } = await cloud().from('backups').upsert({
         user_id: userId, snapshot: json, device: deviceName(), device_id: meta.deviceId, app_version: appVersion(),
-        bytes: json.length, files: attachments.length - skipped, updated_at: updatedAt,
+        bytes: json.length, files: Math.max(0, attachments.length - skipped - waiting), updated_at: updatedAt,
       }).select('updated_at').single();
       if (error) throw error;
       meta.lastRemoteAt = data?.updated_at ?? updatedAt;
       meta.lastHash = hash;
       meta.lastSyncedAt = Date.now();
       meta.rescue = false;
+      meta.filesWaiting = waiting > 0;
       settled(atBuild);
       await saveMeta();
       retries = 0;
       patch({
         status: 'idle', lastSyncedAt: meta.lastSyncedAt, remote: null, reason: null, hasCopy: true, progress: null,
-        note: skipped ? (skipped === 1 ? 'One attachment did not fit' : skipped + ' attachments did not fit') + ' (20 MB each, 120 MB in all).' : null,
+        note: filesNote(skipped, waiting),
       });
       // files no note uses any more leave only now that the copy naming the rest is saved; if this fails, the next
       // backup clears them
@@ -683,26 +975,14 @@ async function removeFiles(paths: string[]) {
 }
 
 /**
- * Uploads the attachments the cloud lacks. Returns how many could not go up, and the files no note uses any more,
- * which are removed only once the snapshot is saved.
+ * Uploads the attachments the cloud lacks, unless `upload` is false (they wait for Wi-Fi). Returns how many could not
+ * go up, how many wait, and the files no note uses any more, which are removed only once the snapshot is saved.
  */
-async function sendFiles(s: Session, userId: string, attachments: Attachment[]): Promise<{ skipped: number; unused: string[] }> {
-  const folder = userId + '/att';
-  const have = await listFiles(folder);
-  const wanted = new Set(attachments.map((a) => a.id));
-  let used = 0;
-  have.forEach((size, name) => { if (wanted.has(name)) used += size; });
-  const todo: { a: Attachment; size: number }[] = [];
-  let skipped = 0;
-  for (const a of attachments) {
-    if (have.has(a.id)) continue;
-    const info = await FileSystem.getInfoAsync(a.uri).catch(() => null);
-    if (!info || !info.exists || (info as any).isDirectory) continue;
-    const size = (info as any).size || 0;
-    if (size > FILE_LIMIT || used + size > QUOTA_BYTES) { skipped++; continue; }
-    used += size;
-    todo.push({ a, size });
-  }
+async function sendFiles(
+  s: Session, userId: string, attachments: Attachment[], upload: boolean,
+): Promise<{ skipped: number; waiting: number; unused: string[] }> {
+  const { folder, todo, skipped, unused } = await planFiles(userId, attachments);
+  if (!upload) return { skipped, waiting: todo.length, unused };
   const total = todo.reduce((n, t) => n + t.size, 0) || 1;
   let done = 0;
   for (const { a, size } of todo) {
@@ -717,8 +997,7 @@ async function sendFiles(s: Session, userId: string, attachments: Attachment[]):
     done += size;
   }
   patch({ progress: todo.length ? 1 : null });
-  const unused = [...have.keys()].filter((name) => !wanted.has(name)).map((name) => folder + '/' + name);
-  return { skipped, unused };
+  return { skipped, waiting: 0, unused };
 }
 
 /** Waits for touches and animations to finish, so building a snapshot never lands in the middle of one. */
@@ -736,87 +1015,122 @@ function mimeOf(a: Attachment): string {
   return known[ext] || (a.kind === 'image' ? 'image/jpeg' : a.kind === 'video' ? 'video/mp4' : 'application/octet-stream');
 }
 
+/** The wipe module, loaded when a replace needs it (it reaches back here, so never at the top). */
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const wipeModule = () => require('./wipe') as typeof import('./wipe');
+
+/** After a replace: the old journal's texts and files nothing uses any more go, now that every file needed is here. */
+function sweepAfterReplace(startedAt: number) {
+  try {
+    wipeModule().sweepUnusedFiles(startedAt).catch(() => {});
+  } catch {
+    // the next replace sweeps
+  }
+}
+
+/**
+ * Brings the cloud copy here, replacing this phone's data: the data, the journal's texts, then each attachment (those
+ * kept in Recently deleted too). Runs inside `running`. Throws only before anything here is replaced; `onReplaced`
+ * hears the moment the data is. Returns how many attachments could not be brought down.
+ */
+async function bringDown(s: Session, onReplaced?: () => void): Promise<{ missing: number }> {
+  const { data, error } = await cloud().from('backups').select('snapshot, updated_at').eq('user_id', s.user.id).maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    patch({ hasCopy: false });
+    throw said('There is no copy in the cloud yet.');
+  }
+  // the copy comes down whole and is read before anything here is replaced; it is parsed once for both steps
+  let parsed: any = null;
+  try { parsed = JSON.parse(data.snapshot); } catch { /* refused just below */ }
+  const read = readSnapshot(parsed);
+  if (!read) throw said('The cloud copy could not be read by this version of the app.');
+  applySnapshot(read);
+  onReplaced?.();
+  let missing = 0;
+  try {
+    try { await restoreBodies(parsed?.journal); } catch { /* the index is back either way */ }
+    wipeModule().afterReplace();
+    const attachments = attachmentsOf(useStore.getState());
+    const folder = s.user.id + '/att';
+    // what the cloud holds, by size, so a file already here is never fetched again (a same-phone restore costs no
+    // data); unknown if the listing fails, and then each file is simply asked for
+    const listed = await listFiles(folder).catch(() => null);
+    const relinked: Record<string, string> = {};
+    await FileSystem.makeDirectoryAsync(ATT_DIR, { intermediates: true }).catch(() => {});
+    for (let i = 0; i < attachments.length; i++) {
+      const a = attachments[i];
+      patch({ progress: attachments.length ? i / attachments.length : null });
+      const dest = restoredPath(a);
+      const here = await localSize(dest);
+      const size = listed?.get(a.id);
+      if (here != null && (size === here || (!!listed && size === undefined))) {
+        // already on this phone, whole; or never sent up (too large, or waiting for Wi-Fi) while this phone has it
+        relinked[a.id] = dest;
+        continue;
+      }
+      if (!listed || size !== undefined) {
+        // fetched beside the file, and moved over it only once it is whole: a failed or cut download never
+        // touches the one this phone already has
+        const part = dest + '.part';
+        try {
+          const res = await FileSystem.downloadAsync(`${SUPABASE_URL}/storage/v1/object/authenticated/${BUCKET}/${folder}/${a.id}`, part, {
+            headers: { Authorization: 'Bearer ' + s.access_token, apikey: SUPABASE_KEY },
+          });
+          if (res.status >= 200 && res.status < 300) {
+            await FileSystem.moveAsync({ from: part, to: dest });
+            relinked[a.id] = dest;
+            continue;
+          }
+        } catch {
+          // counted below, unless this phone has the file
+        }
+        await FileSystem.deleteAsync(part, { idempotent: true }).catch(() => {});
+      }
+      if (here != null) relinked[a.id] = dest;
+      else if (dest === a.uri || (await localSize(a.uri)) == null) missing++;
+    }
+    useStore.getState().relinkAttachments(relinked);
+    flushSaves();
+    const { hash } = await buildSnapshot();
+    meta.lastHash = hash;
+  } finally {
+    // whatever happened after the replace, this phone now holds that copy and is never asked about it again
+    meta.lastRemoteAt = data.updated_at;
+    meta.lastSyncedAt = Date.now();
+    meta.rescue = false;
+    meta.dirty = false;
+    meta.filesWaiting = false;
+    meta.declinedAt = null;
+    await saveMeta();
+    patch({
+      status: 'idle', remote: null, reason: null, hasCopy: true, pending: false, progress: null, lastSyncedAt: meta.lastSyncedAt,
+      error: null, note: null,
+    });
+  }
+  return { missing };
+}
+
 /**
  * Brings the cloud copy to this phone, replacing what is here: the data, the journal's texts, then each attachment.
  * Returns how many attachments could not be brought down.
  */
 export async function restoreFromCloud(): Promise<{ missing: number }> {
   if (running) await running.catch(() => {});
+  if (followTimer) {
+    // a quiet follow's Undo stands down: this replace is the user's own choice
+    clearTimeout(followTimer);
+    followTimer = null;
+    await dropSafetyCopy(null);
+  }
   let missing = 0;
   running = (async () => {
     patch({ status: 'syncing', error: null, progress: null, note: null });
     try {
       const s = await session();
-      const { data, error } = await cloud().from('backups').select('snapshot, updated_at').eq('user_id', s.user.id).maybeSingle();
-      if (error) throw error;
-      if (!data) {
-        patch({ hasCopy: false });
-        throw said('There is no copy in the cloud yet.');
-      }
-      // the copy comes down whole and is read before anything here is replaced; it is parsed once for both steps
-      let parsed: any = null;
-      try { parsed = JSON.parse(data.snapshot); } catch { /* refused just below */ }
-      const read = readSnapshot(parsed);
-      if (!read) throw said('The cloud copy could not be read by this version of the app.');
-      applySnapshot(read);
-      try { await restoreBodies(parsed?.journal); } catch { /* the index is back either way */ }
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const wipe = require('./wipe') as typeof import('./wipe');
       const startedAt = Date.now();
-      wipe.afterReplace();
-      const attachments = useStore.getState().notes.flatMap((n) => n.attachments || []);
-      const folder = s.user.id + '/att';
-      // what the cloud holds, by size, so a file already here is never fetched again (a same-phone restore costs no
-      // data); unknown if the listing fails, and then each file is simply asked for
-      const listed = await listFiles(folder).catch(() => null);
-      const relinked: Record<string, string> = {};
-      await FileSystem.makeDirectoryAsync(ATT_DIR, { intermediates: true }).catch(() => {});
-      for (let i = 0; i < attachments.length; i++) {
-        const a = attachments[i];
-        patch({ progress: attachments.length ? i / attachments.length : null });
-        const dest = restoredPath(a);
-        const here = await localSize(dest);
-        const size = listed?.get(a.id);
-        if (here != null && (size === here || (!!listed && size === undefined))) {
-          // already on this phone, whole; or never sent up (too large) while this phone still has it
-          relinked[a.id] = dest;
-          continue;
-        }
-        if (!listed || size !== undefined) {
-          // fetched beside the file, and moved over it only once it is whole: a failed or cut download never
-          // touches the one this phone already has
-          const part = dest + '.part';
-          try {
-            const res = await FileSystem.downloadAsync(`${SUPABASE_URL}/storage/v1/object/authenticated/${BUCKET}/${folder}/${a.id}`, part, {
-              headers: { Authorization: 'Bearer ' + s.access_token, apikey: SUPABASE_KEY },
-            });
-            if (res.status >= 200 && res.status < 300) {
-              await FileSystem.moveAsync({ from: part, to: dest });
-              relinked[a.id] = dest;
-              continue;
-            }
-          } catch {
-            // counted below, unless this phone has the file
-          }
-          await FileSystem.deleteAsync(part, { idempotent: true }).catch(() => {});
-        }
-        if (here != null) relinked[a.id] = dest;
-        else if (dest === a.uri || (await localSize(a.uri)) == null) missing++;
-      }
-      useStore.getState().relinkAttachments(relinked);
-      flushSaves();
-      const { hash } = await buildSnapshot();
-      meta.lastRemoteAt = data.updated_at;
-      meta.lastHash = hash;
-      meta.lastSyncedAt = Date.now();
-      meta.rescue = false;
-      meta.dirty = false;
-      await saveMeta();
-      patch({
-        status: 'idle', remote: null, reason: null, hasCopy: true, pending: false, progress: null, lastSyncedAt: meta.lastSyncedAt,
-      });
-      // the old journal's texts and files no note uses any more go, now that every file the copy needs is here
-      wipe.sweepUnusedFiles(startedAt).catch(() => {});
+      ({ missing } = await bringDown(s));
+      sweepAfterReplace(startedAt);
     } catch (e) {
       patch({ status: 'error', error: describe(e), progress: null });
       throw e;
@@ -824,6 +1138,133 @@ export async function restoreFromCloud(): Promise<{ missing: number }> {
   })().finally(() => { running = null; });
   await running;
   return { missing };
+}
+
+// ---------------------------------------------------------------- following the cloud
+
+/** the wait before a quiet follow's kept copy goes, while its Undo stands */
+let followTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Whether the recovery row holds a copy this module kept (the one with `id`, or any when id is null). */
+function isSafetyCopy(raw: string | null, id: string | null): boolean {
+  if (raw == null || !raw.startsWith(SAFETY_PREFIX)) return false;
+  return id == null || raw.startsWith(SAFETY_PREFIX + JSON.stringify(id) + ',');
+}
+
+/** Removes the copy this module kept for an Undo (never a kept copy of data that could not be opened). True if it went. */
+async function dropSafetyCopy(id: string | null): Promise<boolean> {
+  try {
+    if (!isSafetyCopy(await AsyncStorage.getItem(RECOVERY_KEY), id)) return false;
+    await AsyncStorage.removeItem(RECOVERY_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A copy in the cloud this phone has not seen: it comes here quietly when it may (newerCopyAction), else it is asked about. */
+async function meetNewer(s: Session, remote: RemoteCopy): Promise<void> {
+  if (await follow(s, remote)) return;
+  patch({ status: 'choice', reason: 'newer', remote, hasCopy: true, error: null, progress: null });
+}
+
+/**
+ * Follows a newer cloud copy written on another phone while this one has changed nothing: a copy of this phone's data
+ * is kept first, then the cloud copy comes here, and a toast offers the Undo. False (nothing changed) when it may not:
+ * then the user chooses. Runs inside `running`.
+ */
+async function follow(s: Session, remote: RemoteCopy): Promise<boolean> {
+  if (localDataState() !== 'ok' || meta.rescue) return false;
+  // a Deep Work session under way here is in no copy, and a replace ends it: the user chooses
+  if (useStore.getState().deepWork) return false;
+  const facts = (localHash: string | null): NewerCopyFacts => ({
+    remoteAt: remote.updatedAt, remoteDeviceId: remote.deviceId, lastRemoteAt: meta.lastRemoteAt, deviceId: meta.deviceId,
+    localHash, lastHash: meta.lastHash, savePending: savePending(), declinedAt: meta.declinedAt,
+  });
+  // everything that needs no snapshot is asked first: most newer copies are a choice
+  if (newerCopyAction({ ...facts(meta.lastHash), savePending: false }) !== 'follow') return false;
+  // a save still in its pause is let through first: on a return to the app it is often only this phone's open time,
+  // stamped just as this look at the cloud began. A change to the data still shows in the fingerprint below
+  if (savePending()) await new Promise((r) => setTimeout(r, SAVE_PAUSE_MS + 50));
+  await afterInteractions();
+  const atBuild = changes;
+  const mine = await buildSnapshot();
+  if (newerCopyAction(facts(mine.hash)) !== 'follow') return false;
+  // a kept copy of data that could not be opened is never replaced, and without a copy of its own there is no Undo
+  let kept: string | null;
+  try { kept = await AsyncStorage.getItem(RECOVERY_KEY); } catch { return false; }
+  if (kept != null) return false;
+  const safetyId = uid();
+  try {
+    await AsyncStorage.setItem(RECOVERY_KEY, SAFETY_PREFIX + JSON.stringify(safetyId) + ',' + mine.json.slice(1));
+  } catch {
+    return false;
+  }
+  // something changed while the copy was made: this phone is no longer idle, and the user chooses
+  if (changes !== atBuild || savePending()) {
+    await dropSafetyCopy(safetyId);
+    return false;
+  }
+  const before = { lastRemoteAt: meta.lastRemoteAt, lastHash: meta.lastHash, lastSyncedAt: meta.lastSyncedAt, filesWaiting: !!meta.filesWaiting };
+  const startedAt = Date.now();
+  let replaced = false;
+  patch({ status: 'syncing', error: null, progress: null, note: null });
+  try {
+    await bringDown(s, () => { replaced = true; });
+  } catch (e) {
+    if (!replaced) {
+      await dropSafetyCopy(safetyId);
+      throw e;
+    }
+  }
+  const from = remote.device && remote.device !== 'this phone' ? remote.device : 'another phone';
+  toast('Updated from ' + from, { label: 'Undo', onPress: () => { undoFollow(safetyId, remote.updatedAt, before).catch(() => {}); } });
+  if (followTimer) clearTimeout(followTimer);
+  followTimer = setTimeout(() => {
+    followTimer = null;
+    dropSafetyCopy(safetyId).then((gone) => { if (gone) sweepAfterReplace(startedAt); }).catch(() => {});
+  }, FOLLOW_UNDO_MS);
+  return true;
+}
+
+/**
+ * The toast's Undo: this phone's own data comes back from the copy kept before following, and the cloud copy it
+ * followed is asked about from now on (keep this phone's data, or bring that copy here), never followed again.
+ */
+async function undoFollow(
+  safetyId: string, remoteAt: string,
+  before: { lastRemoteAt: string | null; lastHash: string | null; lastSyncedAt: number | null; filesWaiting: boolean },
+) {
+  if (followTimer) { clearTimeout(followTimer); followTimer = null; }
+  if (running) await running.catch(() => {});
+  let raw: string | null = null;
+  try { raw = await AsyncStorage.getItem(RECOVERY_KEY); } catch { raw = null; }
+  let parsed: any = null;
+  if (isSafetyCopy(raw, safetyId)) {
+    try { parsed = JSON.parse(raw as string); } catch { parsed = null; }
+  }
+  const read = parsed ? readSnapshot(parsed) : null;
+  if (!read) {
+    toast('Too late to undo');
+    return;
+  }
+  running = (async () => {
+    applySnapshot(read);
+    try { await restoreBodies(parsed.journal); } catch { /* the index is back either way */ }
+    wipeModule().afterReplace();
+    flushSaves();
+    meta.lastRemoteAt = before.lastRemoteAt;
+    meta.lastHash = before.lastHash;
+    meta.lastSyncedAt = before.lastSyncedAt;
+    meta.filesWaiting = before.filesWaiting;
+    meta.declinedAt = remoteAt;
+    await saveMeta();
+    await dropSafetyCopy(safetyId);
+    patch({ lastSyncedAt: meta.lastSyncedAt, status: 'idle', note: null });
+  })().finally(() => { running = null; });
+  await running;
+  // the other phone's copy waits in the cloud for the user's choice
+  check(false).catch(() => {});
 }
 
 /** The size of a file on this phone, or null when there is none. */

@@ -122,16 +122,29 @@ function readRange(handle: Handle, offset: number, length: number): Bytes {
   return out;
 }
 
-/** Every attachment of these notes, once, with the file that holds it. */
+/**
+ * The attachments kept in Recently deleted, whose files stay on the phone for 30 days: a backup carries them with the
+ * notes' own, and a restore writes them back. Read from the store when a backup needs them, never at load, so this
+ * module stays free of the store.
+ */
+function trashedAttachmentsNow(): Attachment[] {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const store = require('./store') as typeof import('./store');
+    return store.trashedAttachments(store.useStore.getState().trash);
+  } catch {
+    return [];
+  }
+}
+
+/** Every attachment of these notes and of Recently deleted, once, with the file that holds it. */
 function attachmentsOf(notes: Note[]): Attachment[] {
   const seen = new Set<string>();
   const out: Attachment[] = [];
-  for (const n of notes) {
-    for (const a of n.attachments ?? []) {
-      if (!a || typeof a.id !== 'string' || typeof a.uri !== 'string' || seen.has(a.id)) continue;
-      seen.add(a.id);
-      out.push(a);
-    }
+  for (const a of [...notes.flatMap((n) => n.attachments ?? []), ...trashedAttachmentsNow()]) {
+    if (!a || typeof a.id !== 'string' || typeof a.uri !== 'string' || seen.has(a.id)) continue;
+    seen.add(a.id);
+    out.push(a);
   }
   return out;
 }
@@ -145,7 +158,10 @@ async function sizeOf(uri: string): Promise<number | null> {
   }
 }
 
-/** Roughly how many bytes a backup of this data and these notes' files takes, before anything is written. */
+/**
+ * Roughly how many bytes a backup of this data and these notes' files takes (with those kept in Recently deleted),
+ * before anything is written.
+ */
 export async function estimateBackupBytes(dataJson: string, notes: Note[]): Promise<number> {
   let bytes = dataJson.length * 1.1;
   for (const a of attachmentsOf(notes)) {
@@ -163,8 +179,8 @@ export interface BackupWritten {
 }
 
 /**
- * Writes a backup to `uri`: the data, then every file attached to its notes. `onProgress` gets 0..1 as the files
- * are written. A file that can no longer be found is left out and counted as missing; one that fails half way fails
+ * Writes a backup to `uri`: the data, then every file attached to its notes and to what Recently deleted keeps.
+ * `onProgress` gets 0..1 as the files are written. A file that can no longer be found is left out and counted as missing; one that fails half way fails
  * the whole backup, which is then removed rather than left looking complete.
  */
 export async function writeBackup(
@@ -244,7 +260,8 @@ export interface BackupOpened {
   hasFiles: boolean;
   /**
    * Writes the carried files into the notes' attachment folder. `target(id)` names the file for an attachment (or
-   * null to skip it). Resolves with the attachments restored, by id, with their new files, and whether every file
+   * null to skip it); one it skips that Recently deleted keeps (the backup's data is in place by now) goes to its own
+   * place there. Resolves with the attachments restored, by id, with their new files, and whether every file
    * could be read: one cut short stops the restore there, keeping those already written, and a file already at its
    * place stays as it was unless a whole one replaces it.
    */
@@ -320,6 +337,13 @@ export async function openBackup(uri: string): Promise<BackupOpened> {
   const filesStart = at + JOIN.length;
   const restoreFiles: BackupOpened['restoreFiles'] = async (target, onProgress) => {
     const restored: Record<string, string> = {};
+    const trashed = new Map(trashedAttachmentsNow().map((a) => [a.id, a]));
+    const placeFor = (id: string): string | null => {
+      const named = target(id);
+      if (named) return named;
+      const kept = trashed.get(id);
+      return kept ? restoredPath(kept) : null;
+    };
     await FileSystem.makeDirectoryAsync(ATT_DIR, { intermediates: true }).catch(() => {});
     const reader = fileAt(uri).open();
     const span = Math.max(1, size - filesStart);
@@ -359,7 +383,7 @@ export async function openBackup(uri: string): Promise<BackupOpened> {
         if (peek() !== QUOTE) throw damaged();
         i++;
 
-        const dest = target(id);
+        const dest = placeFor(id);
         // written beside its place and moved over it only once whole, so a backup cut short (or any failure) never
         // touches the file this phone already has there
         const part = dest ? dest + '.part' : null;

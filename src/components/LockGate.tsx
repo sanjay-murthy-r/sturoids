@@ -1,13 +1,13 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { allowScreenCaptureAsync, preventScreenCaptureAsync } from 'expo-screen-capture';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming,
 } from 'react-native-reanimated';
-import { AnimLevel, C, F, MIN, NEU, S, T, TRACK } from '../theme';
-import { ScreenBG, Sheet, useTheme } from './UI';
+import { AnimLevel, C, CHROME_FONT_MAX, F, MIN, NEU, S, T, TRACK } from '../theme';
+import { Field, PillButton, ScreenBG, Sheet, useTheme } from './UI';
 import { Bouncy, EASE_OUT, FadeSwap, useAnimLevel } from './Motion';
 import { useStore } from '../store';
 import { tap, tick } from '../haptics';
@@ -23,7 +23,15 @@ const KEY_GAP_X = 26;
 const KEY_GAP_Y = 14;
 const KEY_MAX = 72;
 /** what TalkBack says for the keys that show an icon; a digit says itself */
-const KEY_LABEL: Record<string, string> = { del: 'Delete', ok: 'Confirm', bio: 'Use screen lock' };
+const KEY_LABEL: Record<string, string> = { del: 'Delete digit', ok: 'Done', bio: 'Use screen lock' };
+
+/**
+ * The cloud module, loaded only when it is needed: the keypad is on the way into the journal and Notes, and the cloud
+ * (with its network client) is kept off every screen's first load.
+ */
+const cloudModule = () => require('../cloud') as typeof import('../cloud');
+/** how long the account's password check may take before the keypad says to connect to the internet */
+const CHECK_WAIT_MS = 20_000;
 
 type Stage = 'enter' | 'legacy' | 'choose' | 'confirm';
 
@@ -52,6 +60,10 @@ const pageIn = (level: AnimLevel) => FadeIn.duration(level === 'full' ? 320 : 20
  * `set` chooses one, asking for the current PIN first when there is one. A code from before the PIN was four digits
  * is asked for once, then a new PIN is chosen in its place. `onScreenLock` puts the phone's own lock on the key left
  * of 0. The keypad starts over each time it becomes `active`.
+ *
+ * Under the keys, while a PIN is asked for, a quiet "Forgot PIN": signed in to the cloud, the account's password lets
+ * the owner choose a new PIN (the locks stay on, and backing out before the new PIN is confirmed changes nothing);
+ * signed out, it says what the way out is.
  */
 export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
   mode: 'enter' | 'set'; tint: string; onDone: () => void; onScreenLock?: () => void; active?: boolean;
@@ -65,6 +77,11 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
   const [first, setFirst] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [coolS, setCoolS] = React.useState(0);
+  // a forgotten PIN being replaced: the account's password checked out and a new PIN is being chosen. `resetFrom` is
+  // the step to go back to if the owner backs out
+  const [resetting, setResetting] = React.useState(false);
+  const resetFrom = React.useRef<Stage>('enter');
+  const [forgot, setForgot] = React.useState<{ email: string } | null>(null);
   const busy = React.useRef(false);
   const shake = useSharedValue(0);
   const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }));
@@ -76,6 +93,8 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
     setFirst('');
     setMessage('');
     setCoolS(Math.ceil(pinCooldownMs() / 1000));
+    setResetting(false);
+    setForgot(null);
     setStage(null);
     pinStatus().then((st) => {
       if (!live) return;
@@ -130,6 +149,7 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
         setStage('confirm');
       } else if (code === first) {
         await setPin(code);
+        setResetting(false);
         onDone();
       } else {
         setFirst('');
@@ -141,9 +161,47 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
     }
   };
 
+  // a wait after wrong PINs holds only the steps that check one; choosing a new PIN after the account's password is not
+  // held by it (the new PIN ends the wait)
+  const checking = stage === 'enter' || stage === 'legacy';
+  const waitS = checking ? coolS : 0;
+
+  const forgotPin = () => {
+    tick();
+    const c = cloudModule().useCloud.getState();
+    // before the cloud has looked at its saved session, the account it last had stands in; the password check says
+    // whether this phone is still signed in to it
+    if (c.email && (c.status !== 'signed-out' || !c.ready)) {
+      setForgot({ email: c.email });
+      return;
+    }
+    Alert.alert(
+      'Forgot your PIN?',
+      'Only a cloud account can reset the PIN. Without one, the way out is Settings, Delete, Delete everything on this phone.',
+    );
+  };
+  // the password checked out and its sheet has gone: the new PIN is chosen as a first one would be
+  const startReset = () => {
+    if (stage) resetFrom.current = stage;
+    setResetting(true);
+    setDigits('');
+    setFirst('');
+    setMessage('');
+    setStage('choose');
+  };
+  const cancelReset = () => {
+    tick();
+    setResetting(false);
+    setDigits('');
+    setFirst('');
+    setMessage('');
+    setCoolS(Math.ceil(pinCooldownMs() / 1000));
+    setStage(resetFrom.current);
+  };
+
   const len = stage === 'legacy' ? LEGACY_MAX : PIN_LEN;
   const press = (k: string) => {
-    if (coolS > 0 || busy.current || !stage) return;
+    if (waitS > 0 || busy.current || !stage) return;
     if (k === 'del') {
       tick();
       setDigits((d) => d.slice(0, -1));
@@ -172,13 +230,16 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
         : stage === 'choose' ? (fresh ? 'Choose a 4-digit PIN' : 'Choose a new 4-digit PIN')
           : 'Enter it again';
   const hint = stage === 'legacy' ? 'PINs are now four digits. After this, you choose a new one.'
-    : stage === 'choose' && fresh ? 'It opens locked notes, and the journal and Notes when they are locked. Only this phone keeps it, so it cannot be recovered if forgotten.'
-      : screenKey ? 'Or use your screen lock.'
-        : '';
+    : resetting ? 'Your password checked out. Choose a new PIN and enter it twice.'
+      : stage === 'choose' && fresh ? 'It opens locked notes, and the journal and Notes when they are locked. Only this phone keeps it. If it is forgotten, a cloud account can reset it.'
+        : screenKey ? 'Or use your screen lock.'
+          : '';
   // the waits grow to an hour after many wrong PINs, so a long one counts in minutes
-  const status = coolS > 0 ? 'Try again in ' + (coolS < 60 ? coolS + ' s' : Math.ceil(coolS / 60) + ' min') : message;
+  const status = waitS > 0 ? 'Try again in ' + (waitS < 60 ? waitS + ' s' : Math.ceil(waitS / 60) + ' min') : message;
   // while the PIN's state is being read, or a wait is on, the keys rest dimmed; they ease back up when they can be used
-  const resting = coolS > 0 || !stage;
+  const resting = waitS > 0 || !stage;
+  // the quiet link under the keys: Forgot PIN while one is asked for, Cancel while a forgotten one is being replaced
+  const link = resetting ? 'Cancel' : checking ? 'Forgot PIN' : '';
   const keysOn = useSharedValue(resting ? 0.45 : 1);
   React.useEffect(() => {
     keysOn.value = level === 'none' ? (resting ? 0.45 : 1) : withTiming(resting ? 0.45 : 1, { duration: 220, easing: EASE_OUT });
@@ -228,10 +289,10 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
         ))}
       </Animated.View>
       {/* a wait counts down in place; a new message dips in */}
-      <FadeSwap swapKey={coolS > 0 ? 'wait' : message}>
+      <FadeSwap swapKey={waitS > 0 ? 'wait' : message}>
         <Text
           accessibilityLiveRegion="polite"
-          style={[T.caption, st.status, status ? { color: coolS > 0 ? C.textFaint : C.danger } : null]}
+          style={[T.caption, st.status, status ? { color: waitS > 0 ? C.textFaint : C.danger } : null]}
         >
           {status || ' '}
         </Text>
@@ -262,7 +323,8 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
                   ) : kind === 'bio' ? (
                     <Ionicons name="finger-print-outline" size={26} color={tint} />
                   ) : (
-                    <Text style={st.keyText}>{kind}</Text>
+                    // fixed chrome: a key is a fixed circle, so its digit grows with the phone's font size only up to 1.3
+                    <Text style={st.keyText} maxFontSizeMultiplier={CHROME_FONT_MAX}>{kind}</Text>
                   )}
                 </Bouncy>
               );
@@ -270,7 +332,113 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
           </View>
         ))}
       </Animated.View>
+      {/* the slot keeps its height whether or not a link is in it, so the keys never move */}
+      <View style={st.linkSlot}>
+        {link ? (
+          <FadeSwap swapKey={link}>
+            <Pressable
+              onPress={resetting ? cancelReset : forgotPin} hitSlop={10}
+              accessibilityRole="button" accessibilityLabel={link}
+              style={({ pressed }) => [st.link, pressed && { opacity: 0.55 }]}
+            >
+              <Text style={st.linkText} maxFontSizeMultiplier={CHROME_FONT_MAX}>{link}</Text>
+            </Pressable>
+          </FadeSwap>
+        ) : null}
+      </View>
+      <ForgotSheet
+        email={forgot?.email ?? ''} visible={!!forgot} onClose={() => setForgot(null)} onVerified={startReset}
+      />
     </View>
+  );
+}
+
+/**
+ * Asks for the cloud account's password before a forgotten PIN can be replaced. It checks it with the cloud, which
+ * keeps the phone signed in; once it checks out, the sheet closes and the keypad moves on to choosing the new PIN.
+ */
+function ForgotSheet({ visible, email, onClose, onVerified }: {
+  visible: boolean; email: string; onClose: () => void; onVerified: () => void;
+}) {
+  const [password, setPassword] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const field = React.useRef<TextInput>(null);
+  const passed = React.useRef(false);
+  const running = React.useRef(false);
+  React.useEffect(() => {
+    if (!visible) return;
+    passed.current = false;
+    setPassword('');
+    setError('');
+    setBusy(false);
+  }, [visible]);
+
+  const check = async () => {
+    if (running.current || !password) return;
+    running.current = true;
+    setBusy(true);
+    setError('');
+    let result: 'ok' | 'wrong' | 'signed-out' | 'offline';
+    // a check that hangs on a poor connection is taken for no connection, so the sheet never sits on "Checking"
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      result = await Promise.race([
+        cloudModule().verifyAccountPassword(password),
+        new Promise<'offline'>((resolve) => { timer = setTimeout(() => resolve('offline'), CHECK_WAIT_MS); }),
+      ]);
+    } catch {
+      result = 'offline';
+    } finally {
+      clearTimeout(timer);
+    }
+    running.current = false;
+    setBusy(false);
+    if (result === 'ok') {
+      passed.current = true;
+      onClose();
+      return;
+    }
+    setError(result === 'wrong' ? "That password didn't match"
+      : result === 'offline' ? 'Connect to the internet to check your password'
+        : 'This phone is no longer signed in to your account. Sign in again under Settings, Account, then try again.');
+  };
+
+  return (
+    <Sheet
+      visible={visible}
+      onClose={onClose}
+      title="Reset your PIN"
+      // the field takes the keyboard once the sheet is up, so the keyboard never rides the rise
+      onRisen={() => field.current?.focus()}
+      onClosed={() => {
+        // the password is not kept a moment longer than the sheet
+        setPassword('');
+        if (passed.current) {
+          passed.current = false;
+          onVerified();
+        }
+      }}
+    >
+      <Text style={[T.body, st.forgotBody]}>
+        {email ? 'Enter the password for ' + email + '.' : "Enter your cloud account's password."} Then choose a new PIN.
+      </Text>
+      <Field
+        ref={field}
+        label="Account password"
+        value={password}
+        onChangeText={(t) => { setPassword(t); if (error) setError(''); }}
+        secureTextEntry
+        autoCapitalize="none"
+        autoCorrect={false}
+        autoComplete="password"
+        textContentType="password"
+        returnKeyType="done"
+        onSubmitEditing={check}
+      />
+      <Text accessibilityLiveRegion="polite" style={[T.caption, st.forgotError]}>{error || ' '}</Text>
+      <PillButton label={busy ? 'Checking' : 'Check password'} onPress={check} />
+    </Sheet>
   );
 }
 
@@ -458,4 +626,9 @@ const st = StyleSheet.create({
   keyRow: { flexDirection: 'row', justifyContent: 'center', gap: KEY_GAP_X },
   key: { alignItems: 'center', justifyContent: 'center' },
   keyText: { color: C.text, fontFamily: F.med, fontSize: 26, letterSpacing: TRACK.large, fontVariant: ['tabular-nums'] },
+  linkSlot: { minHeight: 38, marginTop: 6, alignItems: 'center', justifyContent: 'center' },
+  link: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
+  linkText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
+  forgotBody: { color: C.textDim, marginBottom: 16 },
+  forgotError: { color: C.danger, marginTop: -6, marginBottom: 12, minHeight: 17 },
 });

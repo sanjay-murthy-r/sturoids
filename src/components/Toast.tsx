@@ -15,8 +15,9 @@ let show: ((message: string, action?: ToastAction) => void) | null = null;
 
 /**
  * A short note that needs no answer, on a raised card above the tab bar for a little over two seconds. With an
- * action (such as Undo) it stays a little longer and the action sits at its end. For anything said from inside a
- * sheet use an Alert: a sheet is its own window and would cover the card.
+ * action (such as Undo) it stays a little longer and the action sits at its end; while a screen reader is on, about
+ * ten seconds, or until it is used or another toast takes its place, so there is time to reach the action. For
+ * anything said from inside a sheet use an Alert: a sheet is its own window and would cover the card.
  */
 export function toast(message: string, action?: ToastAction) {
   if (show) show(message, action);
@@ -25,6 +26,10 @@ export function toast(message: string, action?: ToastAction) {
 /** the card rises in on an ease out and sinks away on a short ease in */
 const IN = { duration: 240, easing: EASE_OUT };
 const OUT_EASE = Easing.in(Easing.quad);
+/** how long a toast stays: a plain note, one with an action, and one with an action while a screen reader is on */
+const STAY_MS = 2200;
+const STAY_ACTION_MS = 4200;
+const STAY_ACTION_READER_MS = 10_000;
 
 /** Mounted once, in the root layout. */
 export function ToastHost() {
@@ -42,6 +47,14 @@ export function ToastHost() {
   const current = React.useRef<Shown | null>(null);
   const still = React.useRef(level === 'none');
   still.current = level === 'none';
+  // whether a screen reader is on, read once and kept current: it decides how long an action stays in reach
+  const reader = React.useRef(false);
+  React.useEffect(() => {
+    let live = true;
+    AccessibilityInfo.isScreenReaderEnabled().then((on) => { if (live) reader.current = on; }).catch(() => {});
+    const sub = AccessibilityInfo.addEventListener('screenReaderChanged', (on) => { reader.current = on; });
+    return () => { live = false; sub.remove(); };
+  }, []);
 
   const clear = React.useCallback(() => {
     current.current = null;
@@ -79,7 +92,8 @@ export function ToastHost() {
         shown.value = withTiming(1, IN);
       }
       if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => hide(200), action ? 4200 : 2200);
+      const stay = !action ? STAY_MS : reader.current ? STAY_ACTION_READER_MS : STAY_ACTION_MS;
+      timer.current = setTimeout(() => hide(200), stay);
     };
     return () => {
       show = null;

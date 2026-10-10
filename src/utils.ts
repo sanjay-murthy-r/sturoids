@@ -39,16 +39,38 @@ export function daysUntil(dateKey: string): number {
   return Math.round((then - now) / 86400000);
 }
 
-/** "HH:MM" -> minutes since midnight; returns -1 if invalid */
+/**
+ * "HH:MM" -> minutes since midnight; returns -1 if invalid. "24:00" is the end of the day (1440), so a block can run
+ * until midnight; a time something happens at (a reminder) stays below it.
+ */
 export function toMinutes(hhmm: string): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec((hhmm || '').trim());
   if (!m) return -1;
   const h = +m[1], min = +m[2];
+  if (h === 24 && min === 0) return 1440;
   if (h > 23 || min > 59) return -1;
   return h * 60 + min;
 }
 
+/** Of the blocks going on at `nowMin`, the one that ends first (the one to say), or null. */
+export function blockOnNow<B extends { start: string; end: string }>(blocks: readonly B[], nowMin: number): B | null {
+  let on: B | null = null;
+  let onEnd = Infinity;
+  for (const b of blocks) {
+    const start = toMinutes(b.start);
+    const end = toMinutes(b.end);
+    if (start < 0 || end <= start || nowMin < start || nowMin >= end) continue;
+    if (end < onEnd) {
+      on = b;
+      onEnd = end;
+    }
+  }
+  return on;
+}
+
 export function fmtClockTime(mins: number, hour24: boolean): string {
+  // the end of the day reads as midnight on either clock
+  if (mins >= 1440) return hour24 ? '24:00' : '12:00 am';
   let h = Math.floor(mins / 60);
   const m = String(mins % 60).padStart(2, '0');
   if (hour24) return `${String(h).padStart(2, '0')}:${m}`;

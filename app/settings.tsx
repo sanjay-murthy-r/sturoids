@@ -14,7 +14,9 @@ import {
   useStore, exportSnapshot, importSnapshot, readSnapshot, applySnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves,
   savedSize, savesFailing, subscribeSaveProblems, SAVE_WARN_CHARS, ReadSnapshot,
 } from '../src/store';
-import { compareVersions, todayKey } from '../src/utils';
+import { compareVersions, fmtShortDate, todayKey } from '../src/utils';
+import { openPage } from '../src/toolNav';
+import { SignatureStill } from '../src/components/Signature';
 import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu, EdgeScroll, useTheme } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
 import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt, useEntrance } from '../src/components/Motion';
@@ -426,6 +428,30 @@ function Arrive({ first, index, children }: { first: boolean; index: number; chi
   const entrance = useEntrance(index, play);
   return <Animated.View style={entrance}>{children}</Animated.View>;
 }
+
+/** the creator's signature under the app's name, as wide as the name times this */
+const COLOPHON_SIGN = 1.2;
+
+/**
+ * The end of the list, signed like a colophon: the app's name in the intro's wordmark face (the name, not the logo),
+ * the creator's own signature under it, a little wider than the name and with no date (always his, never one recorded
+ * on this phone), his name, smaller and quiet, and the version.
+ */
+const Colophon = React.memo(function Colophon() {
+  useTheme();
+  // the signature takes the name's measured width, so it follows the face and the phone's font size
+  const [wordW, setWordW] = useState(0);
+  return (
+    <View style={st.colophon} accessible accessibilityLabel={'Sturoids, signed by Sanjay Murthy. Version ' + APP_VERSION}>
+      <Text style={st.colophonName} onLayout={(e) => setWordW(Math.round(e.nativeEvent.layout.width))}>Sturoids</Text>
+      <View style={st.colophonSign}>
+        {wordW ? <SignatureStill width={Math.round(wordW * COLOPHON_SIGN)} hand={null} /> : null}
+      </View>
+      <Text style={st.colophonBy}>Sanjay Murthy</Text>
+      <Text style={st.colophonVersion}>Version {APP_VERSION}</Text>
+    </View>
+  );
+});
 
 /** How far a page travels as it comes in or leaves, and how far the list under it drifts the other way. */
 const PAGE_DRIFT = 28;
@@ -1078,6 +1104,11 @@ export default function Settings() {
   const slotNames = normaliseSlots(settings.tabSlots).map((k) => toolByKey(k)?.shortLabel || toolByKey(k)?.label).join(', ');
   // the data's one storage row grown past the point Settings warns at (see store.ts)
   const largeData = (savedSize() ?? 0) > SAVE_WARN_CHARS;
+  // the start screen writes a signature recorded here
+  const ownSignatureOn = settings.signatureSource === 'own' && !!settings.ownSignature;
+  const signatureSummary = ownSignatureOn && settings.ownSignature
+    ? 'Yours, recorded ' + fmtShortDate(todayKey(new Date(settings.ownSignature.recordedAt)))
+    : 'The original';
   const summaries: Record<Page, string> = {
     account: signedIn
       ? cloudStatus === 'choice'
@@ -1089,7 +1120,9 @@ export default function Settings() {
     tools: slotNames,
     motion: settings.animLevel === 'none' ? 'No motion'
       : (settings.animLevel === 'some' ? 'Some motion, ' : 'Full motion, ')
-        + (settings.introStyle === 'logo' ? 'logo first' : 'signature first'),
+        + (settings.introStyle === 'logo'
+          ? 'logo first' + (ownSignatureOn ? ', your signature' : '')
+          : (ownSignatureOn ? 'your signature first' : 'signature first')),
     time: (settings.hour24 ? '24-hour clock' : '12-hour clock') + ', reminders ' + (settings.remindersEnabled ? 'on' : 'off'),
     deepwork: 'Ambient screen: ' + [settings.ambientSeconds ? 'seconds' : '', settings.ambientClock ? 'time of day' : '']
       .filter(Boolean).join(' and ').replace(/^$/, 'minutes only'),
@@ -1150,6 +1183,20 @@ export default function Settings() {
                   label="Disable the big signature"
                 />
               </Row>
+              <Hairline />
+              {/* the third choice: whose signature the start screen writes, and recording your own */}
+              <ListRow
+                onPress={() => { tick(); openPage('/signature'); }} style={st.signatureRow}
+                accessibilityLabel="Your signature" accessibilityHint={signatureSummary}
+              >
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>Your signature</Text>
+                  <FadeSwap swapKey={signatureSummary}>
+                    <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{signatureSummary}</Text>
+                  </FadeSwap>
+                </View>
+                <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
+              </ListRow>
             </Card>
           </>
         );
@@ -1373,9 +1420,9 @@ export default function Settings() {
                 </ListCard>
               </Arrive>
             ))}
-            <Text style={[T.caption, { textAlign: 'center', marginTop: 24 }]}>
-              Sturoids v{APP_VERSION} · local-first · made for focused work
-            </Text>
+            <Arrive first={!built.current} index={groups.length + 1}>
+              <Colophon />
+            </Arrive>
           </EdgeScroll>
         </Animated.View>
         {layerPage ? (
@@ -1415,6 +1462,13 @@ const st = StyleSheet.create({
   avatar: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   statusDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
   catRow: { paddingVertical: 13 },
+  // level with the toggle's words above it; the press carves a little past them
+  signatureRow: { paddingHorizontal: 8, marginHorizontal: -8, paddingVertical: 10, marginTop: 8 },
+  colophon: { alignItems: 'center', marginTop: S.section * 1.5, paddingBottom: 8 },
+  colophonName: { color: C.text, fontFamily: F.brand, fontSize: 26, lineHeight: 32, letterSpacing: 0.4 },
+  colophonSign: { marginTop: 12 },
+  colophonBy: { color: C.textFaint, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, marginTop: 12 },
+  colophonVersion: { ...T.caption, fontSize: 11, marginTop: 4 },
   link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   recovery: {
     marginTop: 16, paddingTop: 14,

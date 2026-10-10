@@ -1,11 +1,11 @@
 import React from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming } from 'react-native-reanimated';
 import { StackActions } from '@react-navigation/native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { C, F, MIN, TRACK, bgFor } from '../theme';
+import { C, CHROME_FONT_MAX, F, MIN, TRACK, bgFor } from '../theme';
 import { useTheme } from './UI';
 import { EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, RISE_OUT, SINK_IN, TAB_FADE, TAB_SHIFT, useAnimLevel } from './Motion';
 import { useStore } from '../store';
@@ -28,7 +28,10 @@ const TODAY: ItemMeta = { label: 'Today', shortLabel: 'Today', icon: 'home-outli
 const MORE: ItemMeta = { label: 'More', shortLabel: 'More', icon: 'grid-outline' };
 
 const ICON = 24;
-/** every tab keeps room for a name and a dot under its icon, so no icon moves when the current tab changes */
+/**
+ * every tab keeps room for a name and a dot under its icon, so no icon moves when the current tab changes. The name's
+ * line is 14 at the phone's normal font size; it grows with a larger one up to the chrome's cap, and its room with it
+ */
 const LABEL_H = 14;
 const DOT = 4;
 const BAR_PAD_TOP = 10;
@@ -36,7 +39,7 @@ const BAR_PAD_X = 8;
 const ITEM_PAD = 2;
 const GAP = 3;
 /** where the dot's row sits: under the icon and the name of every tab */
-const DOT_TOP = BAR_PAD_TOP + ITEM_PAD + ICON + GAP + LABEL_H + GAP;
+const dotTop = (labelH: number) => BAR_PAD_TOP + ITEM_PAD + ICON + GAP + labelH + GAP;
 
 // the rail: the same tabs standing in a column on the left of a wide window
 const RAIL_PAD_TOP = 18;
@@ -44,14 +47,18 @@ const RAIL_ITEM_H = 64;
 const RAIL_GAP = 8;
 const RAIL_PITCH = RAIL_ITEM_H + RAIL_GAP;
 /** a rail tab centres its icon, name and dot room in its height; the dot's room starts this far down */
-const RAIL_DOT_IN_ITEM = (RAIL_ITEM_H - (ICON + GAP + LABEL_H + GAP + DOT)) / 2 + ICON + GAP + LABEL_H + GAP;
+const railDotInItem = (labelH: number) => (RAIL_ITEM_H - (ICON + GAP + labelH + GAP + DOT)) / 2 + ICON + GAP + labelH + GAP;
 
 /**
  * One tab of the rail: an outline icon that takes the accent when it is the current tab, with the tab's name arriving
  * beneath it. The two icon colours crossfade, so nothing snaps. The dot under the name belongs to the bar, which
  * glides it from tab to tab; each tab keeps the dot's room so nothing moves.
  */
-function TabItem({ meta, focused, onPress, vertical }: { meta: ItemMeta; focused: boolean; onPress: () => void; vertical: boolean }) {
+function TabItem({ meta, focused, onPress, vertical, labelH }: {
+  meta: ItemMeta; focused: boolean; onPress: () => void; vertical: boolean;
+  /** the name's room at the phone's font size (see LABEL_H) */
+  labelH: number;
+}) {
   const level = useAnimLevel();
   const press = useSharedValue(0);
   const on = useSharedValue(focused ? 1 : 0);
@@ -85,7 +92,9 @@ function TabItem({ meta, focused, onPress, vertical }: { meta: ItemMeta; focused
           <Ionicons name={meta.icon as any} size={ICON} color={C.accent} />
         </Animated.View>
       </Animated.View>
-      <Animated.Text numberOfLines={1} maxFontSizeMultiplier={1.2} style={[st.label, { color: C.accent }, nameStyle]}>
+      <Animated.Text
+        numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX} style={[st.label, { height: labelH, color: C.accent }, nameStyle]}
+      >
         {meta.shortLabel}
       </Animated.Text>
       <View style={st.dotRoom} />
@@ -103,6 +112,10 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
   const theme = useTheme();
   const level = useAnimLevel();
   const insets = useSafeAreaInsets();
+  // the names grow with the phone's font size up to the chrome's cap; their line height grows the same way, so their
+  // room does too, and the dot's row moves down with it
+  const { fontScale } = useWindowDimensions();
+  const labelH = Math.ceil(LABEL_H * Math.min(CHROME_FONT_MAX, Math.max(1, fontScale)));
   const rawSlots = useStore((s) => s.settings.tabSlots);
   const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
   const vertical = descriptors[state.routes[state.index]?.key]?.options.tabBarPosition === 'left';
@@ -222,15 +235,15 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
             navigation.dispatch({ ...StackActions.popToTop(), target: nested.key });
           }
         };
-        return <TabItem key={name} meta={metaFor(name)} focused={focused} onPress={onPress} vertical={vertical} />;
+        return <TabItem key={name} meta={metaFor(name)} focused={focused} onPress={onPress} vertical={vertical} labelH={labelH} />;
       })}
       {vertical && focusIndex >= 0 ? (
-        <Animated.View pointerEvents="none" style={[st.railDot, { top: insets.top + RAIL_PAD_TOP + RAIL_DOT_IN_ITEM }, dotStyle]}>
+        <Animated.View pointerEvents="none" style={[st.railDot, { top: insets.top + RAIL_PAD_TOP + railDotInItem(labelH) }, dotStyle]}>
           <View style={[st.dot, { backgroundColor: C.accent }]} />
         </Animated.View>
       ) : null}
       {!vertical && slotW > 0 && focusIndex >= 0 ? (
-        <Animated.View pointerEvents="none" style={[st.dotTrack, { width: slotW }, dotStyle]}>
+        <Animated.View pointerEvents="none" style={[st.dotTrack, { top: dotTop(labelH), width: slotW }, dotStyle]}>
           <View style={[st.dot, { backgroundColor: C.accent }]} />
         </Animated.View>
       ) : null}
@@ -244,12 +257,13 @@ const st = StyleSheet.create({
   item: { flex: 1, alignItems: 'center', paddingVertical: ITEM_PAD },
   icon: { width: ICON, height: ICON },
   glyph: { position: 'absolute', top: 0, left: 0 },
+  // the height is set where it is drawn, from the font size (see LABEL_H); the line height here grows with it
   label: {
-    height: LABEL_H, lineHeight: LABEL_H, marginTop: GAP, textAlign: 'center',
+    lineHeight: LABEL_H, marginTop: GAP, textAlign: 'center',
     fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.fine,
   },
   dotRoom: { width: DOT, height: DOT, marginTop: GAP },
-  dotTrack: { position: 'absolute', top: DOT_TOP, left: BAR_PAD_X, height: DOT, alignItems: 'center' },
+  dotTrack: { position: 'absolute', left: BAR_PAD_X, height: DOT, alignItems: 'center' },
   rail: { width: RAIL_W, paddingBottom: 12, borderRightWidth: 1 },
   railItem: { height: RAIL_ITEM_H, marginBottom: RAIL_GAP, alignItems: 'center', justifyContent: 'center' },
   railDot: { position: 'absolute', left: 0, width: RAIL_W, height: DOT, alignItems: 'center' },

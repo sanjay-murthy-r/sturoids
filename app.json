@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sturoids",
     "slug": "all-in-one-student-app",
-    "version": "1.6.0",
+    "version": "1.7.0",
     "scheme": "sturoids",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -24,7 +24,7 @@
     },
     "android": {
       "package": "com.sanjay.studenthub",
-      "versionCode": 10,
+      "versionCode": 11,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -43,14 +43,15 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Sturoids attaches your photos and videos inside notes."
+          "photosPermission": "Sturoids attaches your photos and videos inside notes.",
+          "cameraPermission": "Sturoids takes photos to attach inside your notes."
         }
       ],
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Sturoids uses the microphone for voice notes.",
-          "speechRecognitionPermission": "Sturoids converts your speech to note text on-device."
+          "microphonePermission": "Sturoids listens while you dictate, to turn your speech into note text.",
+          "speechRecognitionPermission": "Sturoids turns your speech into note text."
         }
       ],
       "expo-secure-store",
@@ -68,7 +69,26 @@
           "resizeMode": "contain",
           "backgroundColor": "#30302E"
         }
-      ]
+      ],
+      "expo-audio",
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/chime.wav"
+          ]
+        }
+      ],
+      [
+        "expo-share-intent",
+        {
+          "disableIOS": true,
+          "androidIntentFilters": [
+            "text/*"
+          ]
+        }
+      ],
+      "./plugins/withAsyncStorageSize.js"
     ],
     "experiments": {
       "typedRoutes": false

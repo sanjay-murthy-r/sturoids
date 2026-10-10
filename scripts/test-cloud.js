@@ -9,6 +9,10 @@
  *   - when this phone was opened is not a change worth a backup
  *   - a same-phone restore keeps the files already here, never fetches them again, and survives a failed download
  *   - a session ended elsewhere is said; deleting the account ends every session
+ *   - a newer copy from another phone is followed only when this phone changed nothing (the decision, tested on its
+ *     own), with a copy kept for the Undo; when both changed, the choice stays
+ *   - attachments kept to Wi-Fi wait on mobile data while the data goes, and go once allowed or on Wi-Fi
+ *   - a password reset by emailed code, and the password check behind Forgot PIN
  * Usage: node scripts/test-cloud.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -53,13 +57,19 @@ function boot({ seed = {}, rows = {}, files = {}, session = sessionFor(), meta }
     setItem: async (k, v) => { storage.set(k, v); },
     removeItem: async (k) => { storage.delete(k); },
     getAllKeys: async () => [...storage.keys()],
+    multiGet: async (keys) => keys.map((k) => [k, storage.has(k) ? storage.get(k) : null]),
+    multiSet: async (pairs) => { for (const [k, v] of pairs) storage.set(k, v); },
+    multiRemove: async (keys) => { for (const k of keys) storage.delete(k); },
   };
 
-  // the cloud: one row per account, and the bucket as object path to bytes. `log` keeps the order things happened in
+  // the cloud: one row per account, and the bucket as object path to bytes. `log` keeps the order things happened in.
+  // `network` is what the phone is on; `offline` makes every auth call fail as an unanswered request would
   const world = {
     rows: new Map(Object.entries(rows)), files: new Map(Object.entries(files)), session, log: [], authCb: null,
-    failUpsert: false, failDownload: new Set(),
+    failUpsert: false, failDownload: new Set(), network: 'WIFI', offline: false, password: 'secret1', resetCode: null,
+    toasts: [],
   };
+  const offlineError = () => Object.assign(new Error('Network request failed'), { name: 'AuthRetryableFetchError', status: 0 });
   const objectPath = (url) => url.split('/storage/v1/object/')[1].replace(/^authenticated\//, '').replace(/^backups\//, '');
   const fileSystem = {
     documentDirectory: DOC,
@@ -107,10 +117,36 @@ function boot({ seed = {}, rows = {}, files = {}, session = sessionFor(), meta }
         if (world.authCb) world.authCb('SIGNED_OUT', null);
         return { error: null };
       },
-      async signInWithPassword({ email }) {
+      async signInWithPassword({ email, password }) {
+        if (world.offline) return { data: { session: null }, error: offlineError() };
+        if (password !== world.password) return { data: { session: null }, error: Object.assign(new Error('Invalid login credentials'), { status: 400 }) };
         world.session = sessionFor(email);
         if (world.authCb) world.authCb('SIGNED_IN', world.session);
         return { data: { session: world.session }, error: null };
+      },
+      async resetPasswordForEmail(email) {
+        if (world.offline) return { data: null, error: offlineError() };
+        world.log.push('reset code to ' + email);
+        world.resetCode = '123456';
+        return { data: {}, error: null };
+      },
+      async verifyOtp({ email, token, type }) {
+        if (world.offline) return { data: { session: null }, error: offlineError() };
+        world.log.push('verify ' + type);
+        if (!world.resetCode || token !== world.resetCode) {
+          return { data: { session: null }, error: Object.assign(new Error('Token has expired or is invalid'), { status: 403, code: 'otp_expired' }) };
+        }
+        world.resetCode = null; // a code works once
+        world.session = sessionFor(email);
+        if (world.authCb) world.authCb('SIGNED_IN', world.session);
+        return { data: { session: world.session, user: world.session.user }, error: null };
+      },
+      async updateUser({ password }) {
+        if (world.offline) return { data: null, error: offlineError() };
+        if (!world.session) return { data: null, error: new Error('Auth session missing!') };
+        if (password.length < 8) return { data: null, error: Object.assign(new Error('Password should be at least 8 characters.'), { code: 'weak_password' }) };
+        world.password = password;
+        return { data: { user: world.session.user }, error: null };
       },
       async getUser() { return { data: { user: world.session ? world.session.user : null }, error: null }; },
       startAutoRefresh() {},
@@ -189,6 +225,13 @@ function boot({ seed = {}, rows = {}, files = {}, session = sessionFor(), meta }
       }
       if (spec === './wipe') {
         return { afterReplace: () => wipeCalls.push('afterReplace'), sweepUnusedFiles: async () => { wipeCalls.push('sweep'); } };
+      }
+      if (spec === './components/Toast') return { toast: (message, action) => world.toasts.push({ message, action }) };
+      if (spec === 'expo-network') {
+        return {
+          getNetworkStateAsync: async () => ({ type: world.network, isConnected: true }),
+          addNetworkStateListener: (cb) => { world.netCb = cb; return { remove() {} }; },
+        };
       }
       if (spec.startsWith('.')) {
         const base = path.resolve(path.dirname(file), spec);
@@ -379,6 +422,202 @@ const scenarios = {
     await app.cloud.deleteAccount();
     assert.ok(app.world.log.includes('signOut global'), 'every session: ' + app.world.log.join(' | '));
     assert.equal(app.cloudState().lost, false);
+  },
+
+  async 'a newer copy is followed only from another phone, when this one changed nothing'() {
+    const app = boot();
+    const { newerCopyAction } = app.cloud;
+    const base = {
+      remoteAt: '2026-10-02T08:00:00.000Z', remoteDeviceId: 'dev-2', lastRemoteAt: T0, deviceId: 'dev-1',
+      localHash: 'h1', lastHash: 'h1', savePending: false, declinedAt: null,
+    };
+    assert.equal(newerCopyAction(base), 'follow');
+    const asks = {
+      'this phone changed something': { localHash: 'h2' },
+      'a change still waits to be saved': { savePending: true },
+      'the copy is older than the one last seen': { remoteAt: '2026-09-30T08:00:00.000Z' },
+      'the same copy': { remoteAt: T0 },
+      'this phone wrote it': { remoteDeviceId: 'dev-1' },
+      'nobody knows who wrote it': { remoteDeviceId: null },
+      'a first sign-in (nothing seen yet)': { lastRemoteAt: null },
+      'nothing sent yet': { lastHash: null },
+      'the user undid following this very copy': { declinedAt: '2026-10-02T08:00:00.000Z' },
+      'a time that is not one': { remoteAt: 'soon' },
+    };
+    for (const [why, change] of Object.entries(asks)) assert.equal(newerCopyAction({ ...base, ...change }), 'ask', why);
+    assert.equal(newerCopyAction({ ...base, declinedAt: '2026-10-01T09:00:00.000Z' }), 'follow', 'an older undo says nothing about a newer copy');
+    // the cloud's own times, with microseconds and an offset, as the database writes them
+    const { isoTime } = app.cloud;
+    assert.equal(isoTime('2026-10-09T15:56:08.222123+00:00'), Date.UTC(2026, 9, 9, 15, 56, 8, 222));
+    assert.equal(isoTime('2026-10-09T21:26:08.5+05:30'), Date.UTC(2026, 9, 9, 15, 56, 8, 500));
+    assert.equal(isoTime('2026-10-09T15:56:08Z'), Date.UTC(2026, 9, 9, 15, 56, 8));
+    assert.ok(Number.isNaN(isoTime('yesterday')));
+    assert.equal(newerCopyAction({ ...base, lastRemoteAt: '2026-10-01T08:00:00.000001+00:00', remoteAt: '2026-10-01T08:00:00.123456+00:00' }), 'follow');
+  },
+
+  async 'following a newer copy keeps a copy for the Undo, and the Undo turns it into a choice'() {
+    const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(app);
+    assert.equal(app.cloudState().status, 'idle');
+    assert.equal(app.world.log.filter((l) => l === 'upsert').length, 1, 'this phone backed up first');
+    // written on the tablet after this phone's own backup, by the cloud's clock
+    const later = new Date(Date.now() + 60 * 1000).toISOString();
+    app.world.rows.set(USER, {
+      user_id: USER, snapshot: backupOf({ ...SAM, settings: { name: 'From the tablet' } }), device: 'Tablet', device_id: 'dev-2',
+      bytes: 900, files: 0, updated_at: later,
+    });
+    app.store.flushSaves();
+    await app.cloud.check(false);
+    assert.equal(app.state().settings.name, 'From the tablet', 'the newer copy came here quietly');
+    assert.equal(app.cloudState().status, 'idle');
+    assert.equal(app.meta().lastRemoteAt, later);
+    const kept = app.storage.get(app.store.RECOVERY_KEY);
+    assert.ok(kept && kept.startsWith('{"_safety":'), "this phone's own data is kept for the Undo");
+    assert.equal(app.store.readSnapshot(kept).data.settings.name, 'Sam', 'and reads as a backup');
+    const t = app.world.toasts.find((x) => x.message === 'Updated from Tablet');
+    assert.ok(t && t.action && t.action.label === 'Undo', 'a toast offers the Undo: ' + JSON.stringify(app.world.toasts));
+    assert.equal(app.world.log.filter((l) => l === 'upsert').length, 1, 'nothing went up');
+
+    t.action.onPress();
+    await until(() => app.state().settings.name === 'Sam', 'the Undo');
+    await until(() => app.cloudState().status === 'choice', 'the choice after the Undo');
+    assert.equal(app.cloudState().reason, 'newer');
+    assert.equal(app.storage.has(app.store.RECOVERY_KEY), false, 'the kept copy goes once used');
+    assert.equal(app.meta().declinedAt, later);
+    await app.cloud.check(false);
+    assert.equal(app.state().settings.name, 'Sam', 'a copy undone is never followed again');
+    assert.equal(app.cloudState().status, 'choice');
+    assert.equal(app.world.log.filter((l) => l === 'upsert').length, 1, 'and nothing went over it');
+  },
+
+  async 'when both phones changed, the choice stays and nothing is replaced'() {
+    const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(app);
+    app.state().setSetting('name', 'Changed here');
+    app.world.rows.set(USER, {
+      user_id: USER, snapshot: backupOf({ ...SAM, settings: { name: 'Changed there' } }), device: 'Tablet', device_id: 'dev-2',
+      bytes: 900, files: 0, updated_at: new Date(Date.now() + 60 * 1000).toISOString(),
+    });
+    app.store.flushSaves();
+    await app.cloud.check(false);
+    assert.equal(app.cloudState().status, 'choice');
+    assert.equal(app.cloudState().reason, 'newer');
+    assert.equal(app.state().settings.name, 'Changed here');
+    assert.equal(app.storage.has(app.store.RECOVERY_KEY), false);
+    assert.equal(app.world.toasts.length, 0);
+  },
+
+  async 'a Deep Work session under way here is never ended by following quietly'() {
+    const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(app);
+    const session = { mode: 'countdown', targetMin: 50, running: true, startTs: Date.now(), accumSec: 0, startedAt: Date.now(), subject: '' };
+    app.state().setDeepWork(session);
+    app.world.rows.set(USER, {
+      user_id: USER, snapshot: backupOf({ ...SAM, settings: { name: 'From the tablet' } }), device: 'Tablet', device_id: 'dev-2',
+      bytes: 900, files: 0, updated_at: new Date(Date.now() + 60 * 1000).toISOString(),
+    });
+    app.store.flushSaves();
+    await app.cloud.check(false);
+    assert.equal(app.cloudState().status, 'choice', 'the user chooses');
+    assert.equal(app.state().settings.name, 'Sam');
+    assert.ok(app.state().deepWork && app.state().deepWork.running, 'the session runs on');
+    assert.equal(app.storage.has(app.store.RECOVERY_KEY), false);
+  },
+
+  async 'the open time stamped on a return, still waiting to be saved, does not stop a quiet follow'() {
+    const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(app);
+    app.world.rows.set(USER, {
+      user_id: USER, snapshot: backupOf({ ...SAM, settings: { name: 'From the tablet' } }), device: 'Tablet', device_id: 'dev-2',
+      bytes: 900, files: 0, updated_at: new Date(Date.now() + 60 * 1000).toISOString(),
+    });
+    app.store.flushSaves();
+    app.state().setSetting('lastOpenedAt', Date.now());
+    assert.equal(app.store.savePending(), true);
+    await app.cloud.check(false);
+    assert.equal(app.state().settings.name, 'From the tablet', 'followed once the pause had passed');
+    assert.equal(app.cloudState().status, 'idle');
+  },
+
+  async 'a copy kept for an Undo goes at the next launch; a kept copy of unreadable data never does'() {
+    const safety = '{"_safety":"x1","_app":"student-hub","_v":4,"settings":{"name":"Old"}}';
+    const app = boot({ seed: { [KEY]: saved(SAM), 'student-hub-v1.recovery': safety }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(app);
+    assert.equal(app.storage.has('student-hub-v1.recovery'), false);
+    assert.ok(app.wipeCalls.includes('sweep'), 'what it kept on the phone is swept');
+    const real = boot({ seed: { [KEY]: saved(SAM), 'student-hub-v1.recovery': '{"state":{},"version":5}' }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(real);
+    assert.equal(real.storage.get('student-hub-v1.recovery'), '{"state":{},"version":5}');
+  },
+
+  async 'attachments kept to Wi-Fi wait on mobile data, and go once allowed or on Wi-Fi'() {
+    const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    app.world.network = 'CELLULAR';
+    await until(() => app.store.hydrationSettled(), 'the store to load');
+    const a = app.attach('v1', Buffer.alloc(3 * 1024 * 1024, 7));
+    const n = app.state().addNote({ title: 'Lab video', body: '', folder: 'General' });
+    app.store.useStore.setState((s) => ({ notes: s.notes.map((x) => (x.id === n ? { ...x, attachments: [a] } : x)) }));
+    await start(app);
+    assert.equal(app.world.log.filter((l) => l === 'upsert').length, 1, 'the data went');
+    assert.ok(!app.world.log.some((l) => l.startsWith('upload')), 'the video did not');
+    assert.equal(app.cloudState().note, 'Attachments wait for Wi-Fi');
+    assert.equal(app.meta().filesWaiting, true);
+    assert.equal(app.world.rows.get(USER).files, 0, 'the copy counts only what is there');
+    assert.deepEqual(await app.cloud.mobileDataCost(), { bytes: 3 * 1024 * 1024, files: 1 });
+    // "Back up now" again without agreeing sends nothing more
+    await app.cloud.syncNow();
+    assert.ok(!app.world.log.some((l) => l.startsWith('upload')));
+    // agreeing sends it over mobile data, with the data unchanged
+    await app.cloud.syncNow(false, { mobileData: true });
+    assert.ok(app.world.log.includes('upload ' + USER + '/att/v1'));
+    assert.equal(app.meta().filesWaiting, false);
+    assert.equal(app.cloudState().note, null);
+    assert.equal(app.world.rows.get(USER).files, 1);
+    assert.equal(await app.cloud.mobileDataCost(), null, 'nothing waits now');
+
+    // a second file waits, and goes by itself once the phone is on Wi-Fi
+    const b = app.attach('v2', Buffer.from('a photo'));
+    app.store.useStore.setState((s) => ({ notes: s.notes.map((x) => (x.id === n ? { ...x, attachments: [a, b] } : x)) }));
+    await app.cloud.syncNow();
+    assert.equal(app.meta().filesWaiting, true);
+    app.world.network = 'WIFI';
+    app.world.netCb({ type: 'WIFI', isConnected: true });
+    await until(() => app.world.log.includes('upload ' + USER + '/att/v2'), 'the upload on Wi-Fi');
+    await until(() => app.cloudState().status === 'idle' && app.meta().filesWaiting === false, 'the backup on Wi-Fi');
+  },
+
+  async 'a password reset by emailed code signs this phone in with the new password'() {
+    const app = boot({ session: null });
+    await start(app);
+    assert.equal(app.cloudState().status, 'signed-out');
+    assert.equal(await app.cloud.sendResetCode(' sam@example.com '), 'sent');
+    assert.ok(app.world.log.includes('reset code to sam@example.com'));
+    assert.equal(await app.cloud.resetPasswordWithCode('sam@example.com', '123456', 'short'), 'weak', 'checked before the code is spent');
+    assert.equal(app.world.resetCode, '123456');
+    assert.equal(await app.cloud.resetPasswordWithCode('sam@example.com', '000000', 'a good password'), 'wrong-code');
+    assert.equal(await app.cloud.resetPasswordWithCode('sam@example.com', '12 34', 'a good password'), 'wrong-code');
+    // the cloud turns a password down after the code is spent: a second try needs no new code
+    assert.equal(await app.cloud.resetPasswordWithCode('sam@example.com', '123 456', 'seven7!'), 'weak');
+    assert.equal(app.world.resetCode, null, 'the code was spent');
+    assert.equal(await app.cloud.resetPasswordWithCode('sam@example.com', '123456', 'a good password'), 'ok');
+    assert.equal(app.world.password, 'a good password');
+    await until(() => app.cloudState().email === 'sam@example.com', 'signed in');
+    app.world.offline = true;
+    assert.equal(await app.cloud.sendResetCode('sam@example.com'), 'offline');
+    assert.equal(await app.cloud.resetPasswordWithCode('ann@example.com', '123456', 'another password'), 'offline');
+  },
+
+  async 'Forgot PIN checks the account password by signing in again'() {
+    const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(app);
+    assert.equal(await app.cloud.verifyAccountPassword('secret1'), 'ok');
+    assert.equal(await app.cloud.verifyAccountPassword('nope'), 'wrong');
+    assert.equal(app.cloudState().status !== 'signed-out', true, 'a wrong password signs nobody out');
+    app.world.offline = true;
+    assert.equal(await app.cloud.verifyAccountPassword('secret1'), 'offline');
+    const out = boot({ session: null });
+    await start(out);
+    assert.equal(await out.cloud.verifyAccountPassword('secret1'), 'signed-out');
   },
 };
 

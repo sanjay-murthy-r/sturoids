@@ -1,10 +1,10 @@
 import * as FileSystem from 'expo-file-system';
-import { useStore, JournalEntry } from './store';
+import { useStore, JournalEntry, trashedEntryIds } from './store';
 import { streaks, todayKey, uid } from './utils';
 
 // The Journal's data layer. The store keeps a small index per entry; the text of every entry lives in its
-// own file. The whole store is one AsyncStorage row, and Android cannot read a row over about 2 MB, which a
-// daily journal would eventually reach.
+// own file. The journal's index is one AsyncStorage row, and Android cannot read a row over about 2 MB,
+// which a daily journal's texts would eventually reach.
 
 const DIR = (FileSystem.documentDirectory || '') + 'journal/';
 /** where each entry's text lives, one file per entry (erasing the phone empties it) */
@@ -110,6 +110,11 @@ export async function saveEntry(d: EntryDraft): Promise<string> {
 export async function deleteEntry(id: string): Promise<void> {
   useStore.getState().removeJournalEntry(id);
   await deleteBody(id);
+}
+
+/** Deletes the texts of entries gone for good (from Recently deleted). */
+export async function deleteBodies(ids: string[]): Promise<void> {
+  await Promise.all(ids.map((id) => deleteBody(id)));
 }
 
 // ---------- days ----------
@@ -310,9 +315,17 @@ export async function loadBodies(ids: string[]): Promise<Map<string, string>> {
 
 // ---------- backups ----------
 
-/** The journal index with every entry's text, for a backup file. */
+/**
+ * The journal index with every entry's text, for a backup file or the cloud copy. The texts of entries in Recently
+ * deleted follow, as `{ id, body, inTrash }` with no day: their index travels in the trash, an import writes their
+ * texts back with the others (restoreBodies), and no version of the app takes them for entries.
+ */
 export async function journalForBackup(entries: JournalEntry[]) {
-  return Promise.all(entries.map(async (e) => ({ ...e, body: await readBody(e.id) })));
+  const live = await Promise.all(entries.map(async (e) => ({ ...e, body: await readBody(e.id) })));
+  const here = new Set(entries.map((e) => e.id));
+  const trashed = trashedEntryIds(useStore.getState().trash).filter((id) => !here.has(id));
+  const kept = await Promise.all(trashed.map(async (id) => ({ id, body: await readBody(id), inTrash: true as const })));
+  return [...live, ...kept];
 }
 
 /** Writes the text carried by a restored backup's entries to their files. */

@@ -101,3 +101,22 @@ $$;
 
 revoke all on function public.my_storage_bytes() from public, anon;
 grant execute on function public.my_storage_bytes() to authenticated;
+
+-- The cloud's own clock stamps every copy: a phone that follows a newer copy compares these times, and a phone's clock
+-- set wrong must never make an old copy look new.
+create or replace function public.stamp_backup_time()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+revoke all on function public.stamp_backup_time() from public, anon, authenticated;
+
+drop trigger if exists stamp_backup_time on public.backups;
+create trigger stamp_backup_time before insert or update on public.backups
+  for each row execute function public.stamp_backup_time();

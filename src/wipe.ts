@@ -2,11 +2,12 @@ import * as FileSystem from 'expo-file-system';
 import * as Notifications from 'expo-notifications';
 import {
   useStore, initialData, flushSaves, deleteRecoveryCopy, readRecoveryCopy, loadFailedThisLaunch, savingPaused,
+  clearSavedData, trashedAttachments, trashedEntryIds,
 } from './store';
 import { JOURNAL_DIR } from './journal';
 import { ATT_DIR } from './attachments';
 import { removePin, closeLock, noteScope, ALL_NOTES } from './lock';
-import { cancelCountdownEnd, rescheduleAllReminders } from './notifications';
+import { cancelBreakEnd, cancelCountdownEnd, rescheduleAllReminders } from './notifications';
 import { FINISH_NOTIF_ID } from './deepWork';
 
 /** Deletes the files inside a folder, keeping the folder: the modules that write there made it once and expect it. */
@@ -48,10 +49,10 @@ function closeAllLocks() {
 }
 
 /**
- * Erases everything this app keeps on this phone: every tool's data and settings, the journal's texts, note
- * attachments, the PIN, reminders, a kept copy of unreadable data, and the copies in the cache. The cloud account is
- * signed out first and this phone's record of the cloud is forgotten, so nothing empty is ever sent over the copy in
- * the cloud: signing in again finds that copy and asks.
+ * Erases everything this app keeps on this phone: every tool's data and settings, Recently deleted, the journal's
+ * texts, note attachments, the PIN, reminders, a kept copy of unreadable data, and the copies in the cache. The cloud
+ * account is signed out first and this phone's record of the cloud is forgotten, so nothing empty is ever sent over the
+ * copy in the cloud: signing in again finds that copy and asks.
  */
 export async function eraseThisPhone() {
   try {
@@ -63,10 +64,13 @@ export async function eraseThisPhone() {
     // no cloud module loaded, or already signed out
   }
   cancelCountdownEnd();
+  cancelBreakEnd();
   Notifications.cancelScheduledNotificationAsync(FINISH_NOTIF_ID).catch(() => {});
   await removePin();
   closeAllLocks();
   await Promise.all([emptyFolder(JOURNAL_DIR), emptyFolder(ATT_DIR), deleteRecoveryCopy().catch(() => {}), clearCache()]);
+  // every saved row goes, a collection that could not be loaded this launch included, and saving starts over
+  await clearSavedData();
   useStore.getState().replaceAll(initialData());
   flushSaves();
   rescheduleAllReminders().catch(() => {});
@@ -79,6 +83,7 @@ export async function eraseThisPhone() {
  */
 export function afterReplace() {
   cancelCountdownEnd();
+  cancelBreakEnd();
   Notifications.cancelScheduledNotificationAsync(FINISH_NOTIF_ID).catch(() => {});
   closeAllLocks();
   rescheduleAllReminders().catch(() => {});
@@ -95,16 +100,18 @@ const SWEEP_MARGIN_MS = 10 * 60 * 1000;
 
 /**
  * After a replace, deletes the journal texts and attachment files that nothing in the data refers to any more: the
- * replaced journal's words and orphaned videos would otherwise stay on the phone unseen. Files written since the
- * replace began (or shortly before it) are left alone. Nothing is swept while data that could not be opened is
- * still waiting (a kept copy, a failed load this launch): its pages refer to files this data does not.
+ * replaced journal's words and orphaned videos would otherwise stay on the phone unseen. What Recently deleted keeps
+ * counts as used. Files written since the replace began (or shortly before it) are left alone. Nothing is swept while
+ * data that could not be opened is still waiting (a kept copy, a failed load this launch): its pages refer to files
+ * this data does not.
  */
 export async function sweepUnusedFiles(replacedAt: number) {
   if (loadFailedThisLaunch() || savingPaused() || (await readRecoveryCopy()) != null) return;
-  const { journal, notes } = useStore.getState();
-  const texts = new Set(journal.map((e) => e.id + '.txt'));
+  const { journal, notes, trash } = useStore.getState();
+  const texts = new Set([...journal.map((e) => e.id), ...trashedEntryIds(trash)].map((id) => id + '.txt'));
   const files = new Set<string>();
-  for (const n of notes) for (const a of n.attachments || []) if (a.uri.startsWith(ATT_DIR)) files.add(a.uri.slice(ATT_DIR.length));
+  const kept = [...notes.flatMap((n) => n.attachments || []), ...trashedAttachments(trash)];
+  for (const a of kept) if (typeof a.uri === 'string' && a.uri.startsWith(ATT_DIR)) files.add(a.uri.slice(ATT_DIR.length));
   const sweep = async (dir: string, keep: Set<string>) => {
     const names = await FileSystem.readDirectoryAsync(dir).catch(() => [] as string[]);
     for (const name of names) {

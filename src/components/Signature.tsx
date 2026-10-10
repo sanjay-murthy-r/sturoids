@@ -7,16 +7,38 @@ import type { SharedValue } from 'react-native-reanimated';
 import Svg, { Circle, Defs, G, LinearGradient, Mask, Path, Rect, Stop } from 'react-native-svg';
 import { C, darkSh, liteSh } from '../theme';
 import { SIG } from '../signature';
-import type { SigDot, SigLine } from '../signature';
+import type { SigDot, SigLine, SigModel } from '../signature';
 import { DATE_FIT, DATE_PLACE, DIGITS, DIGIT_H } from '../handDate';
 import type { HandDot, HandLine } from '../handDate';
+import { buildDigits, buildSigModel, clampPlace, dateDigits, defaultPlace, fitDate } from '../sigModel';
+import type { Hand } from '../sigModel';
+import { useStore } from '../store';
+import type { OwnSignature } from '../store';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
-const LINES = SIG.strokes.filter((s): s is SigLine => s.type === 'line');
-const DOTS = SIG.strokes.filter((s): s is SigDot => s.type === 'dot');
+/** The creator's handwritten digits and where the date sits on his signature (src/handDate.ts). */
+export const BUILT_IN_HAND: Hand = { digits: DIGITS, place: DATE_PLACE, fit: DATE_FIT };
+
+/** A model's lines and dots, split once per model (the built-in one, or one recorded on this phone). */
+interface Art {
+  lines: readonly SigLine[];
+  dots: readonly SigDot[];
+}
+const ARTS = new WeakMap<SigModel, Art>();
+function artOf(model: SigModel): Art {
+  let art = ARTS.get(model);
+  if (!art) {
+    art = {
+      lines: model.strokes.filter((s): s is SigLine => s.type === 'line'),
+      dots: model.strokes.filter((s): s is SigDot => s.type === 'dot'),
+    };
+    ARTS.set(model, art);
+  }
+  return art;
+}
 
 /** on-screen line width in the final slot, px (the hero draws it heroScale times wider) */
 const LINE_PX = 1.7;
@@ -40,7 +62,7 @@ const SHINE_W = 58;
 const SHINE_ALPHA = 0.3;
 export const SHINE_SKEW = -18;
 /** how far the skew moves the band's foot sideways, viewBox units: the sweep runs this much further to clear it */
-const SHINE_SLANT = Math.tan((-SHINE_SKEW * Math.PI) / 180) * SIG.vh;
+const shineSlant = (vh: number) => Math.tan((-SHINE_SKEW * Math.PI) / 180) * vh;
 
 const CARVE_LIP = liteSh(0.55);
 const CARVE_DARK = darkSh(0.85);
@@ -53,7 +75,6 @@ const GROUP_GAP_MS = 200;
 /** the date is written a little quicker than the signature: its recorded timings run at 1 / DATE_SPEED */
 export const DATE_SPEED = 1.45;
 const GROUPS = ['dd', 'mm', 'yy'] as const;
-const DATE_SCALE = DATE_PLACE.size / DIGIT_H;
 
 interface PlacedDigit {
   key: string;
@@ -68,28 +89,30 @@ interface PlacedDigit {
 
 /**
  * The date's six digits placed on the signature as the Handwriting Lab placed them: each group anchored at the left
- * end of its baseline, scaled and turned about that anchor, its two digits side by side. `date` is ddmmyy.
+ * end of its baseline, scaled and turned about that anchor, its two digits side by side. `date` is ddmmyy; `hand` is
+ * whose digits and placement (the creator's by default).
  */
-export function layoutDate(date: string): { digits: PlacedDigit[]; total: number } {
+export function layoutDate(date: string, hand: Hand = BUILT_IN_HAND): { digits: PlacedDigit[]; total: number } {
+  const { place } = hand;
   const digits: PlacedDigit[] = [];
   let t = 0;
   GROUPS.forEach((group, gi) => {
-    const P = DATE_PLACE.groups[group];
+    const P = place.groups[group];
     if (gi) t += GROUP_GAP_MS;
     // a pair that would run into the signature makes room: tighter, and smaller only when it has to be
-    const fit = DATE_FIT[group][date.slice(gi * 2, gi * 2 + 2)];
-    const scale = DATE_SCALE * (fit?.scale ?? 1);
-    const gap = fit?.gap ?? DATE_PLACE.gap;
+    const fit = hand.fit[group][date.slice(gi * 2, gi * 2 + 2)];
+    const scale = (place.size / DIGIT_H) * (fit?.scale ?? 1);
+    const gap = fit?.gap ?? place.gap;
     let x = 0;
     for (let i = 0; i < 2; i++) {
       const ch = date[gi * 2 + i];
-      const m = DIGITS[ch];
+      const m = hand.digits[ch];
       if (!m) continue;
       if (i) t += DIGIT_GAP_MS;
       digits.push({
         key: group + i,
         ch,
-        transform: `translate(${P.x} ${P.y}) rotate(${DATE_PLACE.tilt}) scale(${scale.toFixed(4)}) `
+        transform: `translate(${P.x} ${P.y}) rotate(${place.tilt}) scale(${scale.toFixed(4)}) `
           + `translate(${(x - m.x0).toFixed(2)} ${-DIGIT_H})`,
         scale,
         t0: t,
@@ -101,24 +124,43 @@ export function layoutDate(date: string): { digits: PlacedDigit[]; total: number
   return { digits, total: t };
 }
 
+type Box = readonly [number, number, number, number];
+const DATE_BOXES = new WeakMap<Hand, Box>();
 /** Where any date could reach, signature units, so the canvas never clips a wide digit. */
-const DATE_BOX = (() => {
-  const rad = (DATE_PLACE.tilt * Math.PI) / 180;
-  const widest = Math.max(...Object.values(DIGITS).map((d) => Math.max(14, d.x1 - d.x0)));
-  const w = (2 * widest + DATE_PLACE.gap * DIGIT_H) * DATE_SCALE;
-  const top = -1.15 * DATE_PLACE.size;
-  const foot = 0.2 * DATE_PLACE.size;
+function dateBox(hand: Hand): Box {
+  const known = DATE_BOXES.get(hand);
+  if (known) return known;
+  const { place } = hand;
+  const rad = (place.tilt * Math.PI) / 180;
+  const widest = Math.max(...Object.values(hand.digits).map((d) => Math.max(14, d.x1 - d.x0)));
+  const w = (2 * widest + place.gap * DIGIT_H) * (place.size / DIGIT_H);
+  const top = -1.15 * place.size;
+  const foot = 0.2 * place.size;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   GROUPS.forEach((g) => {
-    const P = DATE_PLACE.groups[g];
+    const P = place.groups[g];
     [[0, top], [w, top], [0, foot], [w, foot]].forEach(([x, y]) => {
       const X = P.x + x * Math.cos(rad) - y * Math.sin(rad);
       const Y = P.y + x * Math.sin(rad) + y * Math.cos(rad);
       x0 = Math.min(x0, X); y0 = Math.min(y0, Y); x1 = Math.max(x1, X); y1 = Math.max(y1, Y);
     });
   });
-  return [x0, y0, x1, y1] as const;
-})();
+  const box = [x0, y0, x1, y1] as const;
+  DATE_BOXES.set(hand, box);
+  return box;
+}
+
+/**
+ * Everything a signature and its date can cover, viewBox units [x0, y0, x1, y1], its own box included: what a frame
+ * around it must leave room for (a date placed below the signature hangs out of its slot).
+ */
+export function inkExtent(model: SigModel, hand: Hand | null): Box {
+  const b = hand ? dateBox(hand) : model.bbox;
+  return [
+    Math.min(0, model.bbox[0], b[0]), Math.min(0, model.bbox[1], b[1]),
+    Math.max(model.vw, model.bbox[2], b[2]), Math.max(model.vh, model.bbox[3], b[3]),
+  ];
+}
 
 /**
  * Fraction of a line drawn at model time `tau`: binary search over the recorded sample times,
@@ -154,21 +196,23 @@ interface Geo {
   boxH: number;
 }
 
-function geometry(width: number): Geo {
-  const k = width / SIG.vw;
-  const height = SIG.vh * k;
+function geometry(width: number, model: SigModel, hand: Hand | null): Geo {
+  const k = width / model.vw;
+  const height = model.vh * k;
   const lineW = LINE_PX / k;
-  const x0 = Math.min(SIG.bbox[0], DATE_BOX[0]);
-  const y0 = Math.min(SIG.bbox[1], DATE_BOX[1]);
-  const x1 = Math.max(SIG.bbox[2], DATE_BOX[2]);
-  const y1 = Math.max(SIG.bbox[3], DATE_BOX[3]);
-  const overshoot = Math.max(0, -x0, -y0, x1 - SIG.vw, y1 - SIG.vh);
+  // a signature without a date pads for its own strokes alone
+  const box = hand ? dateBox(hand) : model.bbox;
+  const x0 = Math.min(model.bbox[0], box[0]);
+  const y0 = Math.min(model.bbox[1], box[1]);
+  const x1 = Math.max(model.bbox[2], box[2]);
+  const y1 = Math.max(model.bbox[3], box[3]);
+  const overshoot = Math.max(0, -x0, -y0, x1 - model.vw, y1 - model.vh);
   // half a line past the geometry for the caps, plus 2px for the lip offset and anti-aliasing
   const padU = Math.ceil(overshoot + lineW / 2 + 2 / k);
   const padPx = padU * k;
   return {
     k, width, height, lineW, padPx,
-    viewBox: `${-padU} ${-padU} ${SIG.vw + 2 * padU} ${SIG.vh + 2 * padU}`,
+    viewBox: `${-padU} ${-padU} ${model.vw + 2 * padU} ${model.vh + 2 * padU}`,
     boxW: width + 2 * padPx,
     boxH: height + 2 * padPx,
   };
@@ -181,15 +225,15 @@ const disc = (cx: number, cy: number, r: number, color: string) => ({
 });
 
 /** A date's digits drawn whole in one colour: the carve's lip or its dark cut, or the shine's mask. */
-function DateStrokes({ date, lineW, color }: { date: string; lineW: number; color: string }) {
-  const { digits } = useMemo(() => layoutDate(date), [date]);
+function DateStrokes({ date, hand, lineW, color }: { date: string; hand: Hand; lineW: number; color: string }) {
+  const { digits } = useMemo(() => layoutDate(date, hand), [date, hand]);
   return (
     <>
       {digits.map((p) => {
         const w = lineW / p.scale;
         return (
           <G key={p.key} transform={p.transform}>
-            {DIGITS[p.ch].strokes.map((st, i) => (st.type === 'line' ? (
+            {hand.digits[p.ch].strokes.map((st, i) => (st.type === 'line' ? (
               <Path
                 key={i} d={st.d} fill="none" stroke={color} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round"
               />
@@ -209,39 +253,42 @@ function DateStrokes({ date, lineW, color }: { date: string; lineW: number; colo
  * The signature, and the date when there is one, debossed into the material: a light lip under a dark carve. With
  * `engrave`, the date is not there yet: its own pen cuts it in as `engrave` runs, for a date written at the end.
  */
-function CarveArt({ g, date, engrave }: { g: Geo; date?: string; engrave?: SharedValue<number> }) {
+function CarveArt({ g, art, hand, date, engrave }: {
+  g: Geo; art: Art; hand: Hand | null; date?: string; engrave?: SharedValue<number>;
+}) {
   const lipX = LIP_DX / g.k;
   const lipY = LIP_DY / g.k;
+  const dated = hand && date ? hand : null;
   return (
     <>
       <Svg
         width={g.boxW} height={g.boxH} viewBox={g.viewBox}
         style={{ position: 'absolute', left: -g.padPx, top: -g.padPx }}
       >
-        {LINES.map((l, i) => (
+        {art.lines.map((l, i) => (
           <Path
             key={`lip${i}`} d={l.d} fill="none" stroke={CARVE_LIP} strokeWidth={g.lineW}
             strokeLinecap="round" strokeLinejoin="round" translateX={lipX} translateY={lipY}
           />
         ))}
-        {date ? (
+        {dated && date ? (
           <G transform={`translate(${lipX.toFixed(3)} ${lipY.toFixed(3)})`}>
             {engrave
-              ? <DateInk date={date} lineW={g.lineW} dateTau={engrave} color={CARVE_LIP} dotScale={1} />
-              : <DateStrokes date={date} lineW={g.lineW} color={CARVE_LIP} />}
+              ? <DateInk date={date} hand={dated} lineW={g.lineW} dateTau={engrave} color={CARVE_LIP} dotScale={1} />
+              : <DateStrokes date={date} hand={dated} lineW={g.lineW} color={CARVE_LIP} />}
           </G>
         ) : null}
-        {LINES.map((l, i) => (
+        {art.lines.map((l, i) => (
           <Path
             key={`dark${i}`} d={l.d} fill="none" stroke={CARVE_DARK} strokeWidth={g.lineW}
             strokeLinecap="round" strokeLinejoin="round"
           />
         ))}
-        {date ? (engrave
-          ? <DateInk date={date} lineW={g.lineW} dateTau={engrave} color={CARVE_DARK} dotScale={1} />
-          : <DateStrokes date={date} lineW={g.lineW} color={CARVE_DARK} />) : null}
+        {dated && date ? (engrave
+          ? <DateInk date={date} hand={dated} lineW={g.lineW} dateTau={engrave} color={CARVE_DARK} dotScale={1} />
+          : <DateStrokes date={date} hand={dated} lineW={g.lineW} color={CARVE_DARK} />) : null}
       </Svg>
-      {DOTS.map((d, i) => (
+      {art.dots.map((d, i) => (
         <React.Fragment key={i}>
           <View style={disc(d.cx * g.k + LIP_DX, d.cy * g.k + LIP_DY, CARVE_DOT_R, CARVE_LIP)} />
           <View style={disc(d.cx * g.k, d.cy * g.k, CARVE_DOT_R, CARVE_DARK)} />
@@ -311,17 +358,17 @@ function DateInkDot({ dot, r, dateTau, t0, color }: {
 }
 
 /** The date written stroke by stroke in one colour: ink over the page, or the lip or the cut of an engraving. */
-function DateInk({ date, lineW, dateTau, color = C.text, dotScale = 1.1 }: {
-  date: string; lineW: number; dateTau: SharedValue<number>; color?: string; dotScale?: number;
+function DateInk({ date, hand, lineW, dateTau, color = C.text, dotScale = 1.1 }: {
+  date: string; hand: Hand; lineW: number; dateTau: SharedValue<number>; color?: string; dotScale?: number;
 }) {
-  const { digits } = useMemo(() => layoutDate(date), [date]);
+  const { digits } = useMemo(() => layoutDate(date, hand), [date, hand]);
   return (
     <>
       {digits.map((p) => {
         const w = lineW / p.scale;
         return (
           <G key={p.key + p.ch} transform={p.transform}>
-            {DIGITS[p.ch].strokes.map((st, i) => (st.type === 'line' ? (
+            {hand.digits[p.ch].strokes.map((st, i) => (st.type === 'line' ? (
               <DateInkLine key={i} line={st} width={w} dateTau={dateTau} t0={p.t0} color={color} />
             ) : (
               <DateInkDot key={i} dot={st} r={w * dotScale} dateTau={dateTau} t0={p.t0} color={color} />
@@ -338,8 +385,8 @@ function DateInk({ date, lineW, dateTau, color = C.text, dotScale = 1.1 }: {
  * writing beat) lays out at hero size and is scaled down by 1/heroScale; the carve and glint lay
  * out at the final size, where they rest.
  */
-function InkArt({ g, heroScale, tau, date, dateTau }: {
-  g: Geo; heroScale: number; tau: SharedValue<number>; date?: string; dateTau?: SharedValue<number>;
+function InkArt({ g, art, hand, heroScale, tau, date, dateTau }: {
+  g: Geo; art: Art; hand: Hand | null; heroScale: number; tau: SharedValue<number>; date?: string; dateTau?: SharedValue<number>;
 }) {
   const w = g.boxW * heroScale;
   const h = g.boxH * heroScale;
@@ -353,11 +400,11 @@ function InkArt({ g, heroScale, tau, date, dateTau }: {
         }}
       >
         <Svg width={w} height={h} viewBox={g.viewBox}>
-          {LINES.map((l, i) => <InkLine key={i} line={l} lineW={g.lineW} tau={tau} />)}
-          {date && dateTau ? <DateInk date={date} lineW={g.lineW} dateTau={dateTau} /> : null}
+          {art.lines.map((l, i) => <InkLine key={i} line={l} lineW={g.lineW} tau={tau} />)}
+          {hand && date && dateTau ? <DateInk date={date} hand={hand} lineW={g.lineW} dateTau={dateTau} /> : null}
         </Svg>
       </View>
-      {DOTS.map((d, i) => <InkDot key={i} dot={d} k={g.k} tau={tau} />)}
+      {art.dots.map((d, i) => <InkDot key={i} dot={d} k={g.k} tau={tau} />)}
     </>
   );
 }
@@ -368,12 +415,15 @@ function InkArt({ g, heroScale, tau, date, dateTau }: {
  * One soft band of accent light, swept once across the carved signature and its date. The band is a gradient, clear
  * at both edges and brightest in the middle, and it is masked to the strokes themselves, so only the carve catches it.
  */
-function Shine({ g, glint, date }: { g: Geo; glint: SharedValue<number>; date?: string }) {
+function Shine({ g, model, art, hand, glint, date }: {
+  g: Geo; model: SigModel; art: Art; hand: Hand | null; glint: SharedValue<number>; date?: string;
+}) {
   const padU = g.padPx / g.k;
   const band = SHINE_W / g.k;
-  const tall = SIG.vh + 2 * padU;
+  const tall = model.vh + 2 * padU;
+  const reach = model.vw + band + shineSlant(model.vh);
   const animatedProps = useAnimatedProps(() => ({
-    x: -band + glint.value * (SIG.vw + band + SHINE_SLANT),
+    x: -band + glint.value * reach,
   }));
   return (
     <Svg
@@ -386,15 +436,15 @@ function Shine({ g, glint, date }: { g: Geo; glint: SharedValue<number>; date?: 
           <Stop offset="0.5" stopColor={C.accent} stopOpacity={SHINE_ALPHA} />
           <Stop offset="1" stopColor={C.accent} stopOpacity={0} />
         </LinearGradient>
-        <Mask id="sigShineMask" maskUnits="userSpaceOnUse" x={-padU} y={-padU} width={SIG.vw + 2 * padU} height={tall}>
-          {LINES.map((l, i) => (
+        <Mask id="sigShineMask" maskUnits="userSpaceOnUse" x={-padU} y={-padU} width={model.vw + 2 * padU} height={tall}>
+          {art.lines.map((l, i) => (
             <Path
               key={i} d={l.d} fill="none" stroke="#fff" strokeWidth={g.lineW * 1.3}
               strokeLinecap="round" strokeLinejoin="round"
             />
           ))}
-          {DOTS.map((d, i) => <Circle key={'dot' + i} cx={d.cx} cy={d.cy} r={g.lineW * 0.9} fill="#fff" />)}
-          {date ? <DateStrokes date={date} lineW={g.lineW * 1.3} color="#fff" /> : null}
+          {art.dots.map((d, i) => <Circle key={'dot' + i} cx={d.cx} cy={d.cy} r={g.lineW * 0.9} fill="#fff" />)}
+          {hand && date ? <DateStrokes date={date} hand={hand} lineW={g.lineW * 1.3} color="#fff" /> : null}
         </Mask>
       </Defs>
       <G mask="url(#sigShineMask)">
@@ -412,6 +462,10 @@ function Shine({ g, glint, date }: { g: Geo; glint: SharedValue<number>; date?: 
 export interface SignatureProps {
   /** width of the final slot, px; the height follows the recording's aspect */
   width: number;
+  /** whose signature: the creator's (SIG) when left out, or one recorded on this phone (src/sigModel.ts) */
+  model?: SigModel;
+  /** whose digits and where the date goes: the creator's when left out; null writes no date at all */
+  hand?: Hand | null;
   /** hero size relative to the final slot */
   heroScale: number;
   /** hero centre offset from the slot centre, px */
@@ -442,9 +496,11 @@ export interface SignatureProps {
  * (transforms only), sinking into a carve, with one soft accent catch of light along the carve.
  */
 export function Signature({
-  width, heroScale, heroX, heroY, tau, date, dateTau, dateLate, travel, ink, carve, glint,
+  width, model = SIG, hand = BUILT_IN_HAND, heroScale, heroX, heroY, tau, date, dateTau, dateLate, travel, ink, carve, glint,
 }: SignatureProps) {
-  const g = useMemo(() => geometry(width), [width]);
+  const g = useMemo(() => geometry(width, model, hand), [width, model, hand]);
+  const art = artOf(model);
+  const shown = hand ? date : undefined;
 
   const travelStyle = useAnimatedStyle(() => {
     const p = travel.value;
@@ -465,24 +521,81 @@ export function Signature({
   return (
     <Animated.View style={[{ width: g.width, height: g.height }, travelStyle]}>
       <Animated.View style={[StyleSheet.absoluteFill, carveStyle]}>
-        <CarveArt g={g} date={date} engrave={dateLate ? dateTau : undefined} />
+        <CarveArt g={g} art={art} hand={hand} date={shown} engrave={dateLate ? dateTau : undefined} />
       </Animated.View>
       <Animated.View style={[StyleSheet.absoluteFill, inkStyle]}>
-        <InkArt g={g} heroScale={heroScale} tau={tau} date={dateLate ? undefined : date} dateTau={dateTau} />
+        <InkArt
+          g={g} art={art} hand={hand} heroScale={heroScale} tau={tau} date={dateLate ? undefined : shown} dateTau={dateTau}
+        />
       </Animated.View>
       <Animated.View style={[StyleSheet.absoluteFill, glintStyle]}>
-        <Shine g={g} glint={glint} date={dateLate ? undefined : date} />
+        <Shine g={g} model={model} art={art} hand={hand} glint={glint} date={dateLate ? undefined : shown} />
       </Animated.View>
     </Animated.View>
   );
 }
 
 /** The composed end state: the carved signature, and the date when there is one, at rest, nothing animated. */
-export function SignatureStill({ width, date }: { width: number; date?: string }) {
-  const g = useMemo(() => geometry(width), [width]);
+export function SignatureStill({ width, date, model = SIG, hand = BUILT_IN_HAND }: {
+  width: number; date?: string; model?: SigModel; hand?: Hand | null;
+}) {
+  const g = useMemo(() => geometry(width, model, hand), [width, model, hand]);
   return (
     <View style={{ width: g.width, height: g.height }}>
-      <CarveArt g={g} date={date} />
+      <CarveArt g={g} art={artOf(model)} hand={hand} date={hand ? date : undefined} />
     </View>
   );
+}
+
+/* ------------------------------------------------------------------ the signature the intro plays */
+
+export interface IntroSignature {
+  model: SigModel;
+  /** null: a signature recorded without digits, which plays with no date */
+  hand: Hand | null;
+  /** the signature is one recorded on this phone */
+  own: boolean;
+}
+
+const CREATOR: IntroSignature = { model: SIG, hand: BUILT_IN_HAND, own: false };
+
+/**
+ * The signature the intro plays for these settings: the creator's, or the one recorded on this phone with its digits
+ * and their placement (a date placed automatically when the digits were never placed). Anything unusable falls back to
+ * the creator's; digits that do not build leave the recorded signature dateless. `dates` (ddmmyy) are the days the date
+ * may be written on, the only pairs whose room is worked out.
+ */
+export function resolveSignature(source: 'creator' | 'own', own: OwnSignature | null, dates: readonly string[]): IntroSignature {
+  if (source !== 'own' || !own) return CREATOR;
+  try {
+    const model = buildSigModel(own);
+    if (!model) return CREATOR;
+    const digits = own.digits ? buildDigits(own.digits) : null;
+    if (!digits) return { model, hand: null, own: true };
+    const place = own.date ? clampPlace(own.date) : defaultPlace(model, digits);
+    return { model, hand: { digits, place, fit: fitDate(model, digits, place, dates) }, own: true };
+  } catch {
+    return CREATOR;
+  }
+}
+
+let introCache: { source: string; own: OwnSignature | null; day: string; value: IntroSignature } | null = null;
+
+/**
+ * The active signature for the intro, built once: the models are worked out from the recording the first time they are
+ * asked for (on the launch frame, from the hydrated settings) and kept for as long as the settings and the day stay.
+ * The room the date makes is worked out for today and tomorrow, so an intro that runs over midnight writes either.
+ */
+export function useIntroSignature(): IntroSignature {
+  const source = useStore((s) => s.settings.signatureSource);
+  const own = useStore((s) => s.settings.ownSignature);
+  return useMemo(() => {
+    const now = new Date();
+    const day = dateDigits(now);
+    if (introCache && introCache.source === source && introCache.own === own && introCache.day === day) return introCache.value;
+    const tomorrow = dateDigits(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+    const value = resolveSignature(source, own, [day, tomorrow]);
+    introCache = { source, own, day, value };
+    return value;
+  }, [source, own]);
 }

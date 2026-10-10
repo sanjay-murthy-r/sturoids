@@ -1,4 +1,4 @@
-import { TextStyle } from 'react-native';
+import { Platform, TextStyle } from 'react-native';
 
 // ============================================================================
 // Sturoids v5 — dark soft-UI (dual-shadow neumorphism)
@@ -104,17 +104,18 @@ export const SH = Object.freeze({
 });
 
 // ---- accent themes (complementary colour, user-selectable) ----
-// seven curated accents, each distinct on the Claude surface; Terracotta is Claude's own orange (4.24:1 there)
+// seven curated accents, each distinct on the Claude surface. Iris and Terracotta (Claude's own orange, a shade lighter)
+// were lifted in 1.7 so small text in them reads at 4.5:1 there; the store moves a saved accent to the new hexes
 export const ACCENT_CHOICES: { key: string; label: string; color: string }[] = [
-  { key: 'iris', label: 'Iris', color: '#8B7CF8' },
+  { key: 'iris', label: 'Iris', color: '#9588F9' },
   { key: 'aqua', label: 'Aqua', color: '#4FC4B8' },
   { key: 'sky', label: 'Sky', color: '#5CA8F5' },
   { key: 'rose', label: 'Rose', color: '#F07E98' },
   { key: 'amber', label: 'Amber', color: '#EDAE49' },
   { key: 'mint', label: 'Mint', color: '#66D28F' },
-  { key: 'terracotta', label: 'Terracotta', color: '#D97757' },
+  { key: 'terracotta', label: 'Terracotta', color: '#DB7E5F' },
 ];
-export const DEFAULT_ACCENT = '#8B7CF8';
+export const DEFAULT_ACCENT = '#9588F9';
 
 // ---- tokens ----
 export const C = {
@@ -168,7 +169,19 @@ export const MIN = {
   border: liteSh(0.35),
 };
 
-export const bgFor = (theme: ThemeMode) => (theme === 'minimal' ? MIN.bg : C.bg);
+/**
+ * Whether this phone can draw the default theme's depth. Android draws box shadows only from 9 (API 28): below it every
+ * raised and carved surface would be the ground's own colour with no edge, so the default theme shows as Minimal there
+ * (Settings says why). Platform is read defensively: the store's tests load this file without React Native.
+ */
+export const shadowsSupported = !(
+  Platform?.OS === 'android' && typeof Platform.Version === 'number' && Platform.Version < 28
+);
+
+/** The theme as this phone shows it: the chosen one, or Minimal where shadows cannot be drawn. */
+export const shownTheme = (theme: ThemeMode): ThemeMode => (shadowsSupported ? theme : 'minimal');
+
+export const bgFor = (theme: ThemeMode) => (shownTheme(theme) === 'minimal' ? MIN.bg : C.bg);
 
 // spacing rhythm on a 2pt grid, set generously: sections breathe and stacked controls never touch
 export const S = {
@@ -222,6 +235,12 @@ export const TRACK = {
   /** small UPPERCASE labels: kickers, section caps, pills */
   caps: 1.3,
 };
+
+/**
+ * How far the phone's font size may grow fixed chrome (maxFontSizeMultiplier): chips, segmented controls, the tab bar's
+ * names, the PIN keypad, the time wheel. The tool header's compact title stops at 1.2. Reading text is never capped.
+ */
+export const CHROME_FONT_MAX = 1.3;
 
 // type scale (~1.25 ratio)
 export type TName =

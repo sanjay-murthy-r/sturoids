@@ -5,34 +5,27 @@ import { bgFor } from '../theme';
 import { useStore } from '../store';
 import { ToolKey, normaliseSlots } from '../tools';
 import { ScreenMode, SlotProvider } from '../toolNav';
-import { TasksScreen } from './TasksScreen';
-import { FocusScreen } from './FocusScreen';
-import { PlannerScreen } from './PlannerScreen';
-import { NotesListScreen } from './NotesListScreen';
-import { CalculatorScreen } from './CalculatorScreen';
-import { DesmosScreen } from './DesmosScreen';
-import { VaultLibraryScreen } from './VaultLibraryScreen';
-import { AiLinksScreen } from './AiLinksScreen';
-import { JournalScreen } from './JournalScreen';
-import { ScoresScreen } from './ScoresScreen';
 import { noteTransitionStart, pageTransition, useAnimLevel } from '../components/Motion';
 
+type SlotTool = React.ComponentType<{ mode: ScreenMode }>;
+
 /**
- * The screen each tool shows at the root of a bar slot. Every tool must register here (a missing one fails to
- * compile rather than leaving a blank tab), and its own pages get a route in every slot folder beside
+ * The screen each tool shows at the root of a bar slot, loaded the first time a slot shows it: a slot loads only its
+ * own tool, never the other nine (the calculator's maths engine, say) with it. Every tool must register here (a missing
+ * one fails to compile rather than leaving a blank tab), and its own pages get a route in every slot folder beside
  * `note/[id].tsx` and `video/[id].tsx`.
  */
-export const SLOT_SCREENS: Record<ToolKey, React.ComponentType<{ mode: ScreenMode }>> = {
-  tasks: TasksScreen,
-  focus: FocusScreen,
-  planner: PlannerScreen,
-  notes: NotesListScreen,
-  journal: JournalScreen,
-  scores: ScoresScreen,
-  calculator: CalculatorScreen,
-  desmos: DesmosScreen,
-  vault: VaultLibraryScreen,
-  ai: AiLinksScreen,
+export const SLOT_SCREENS: Record<ToolKey, () => SlotTool> = {
+  tasks: () => (require('./TasksScreen') as typeof import('./TasksScreen')).TasksScreen,
+  focus: () => (require('./FocusScreen') as typeof import('./FocusScreen')).FocusScreen,
+  planner: () => (require('./PlannerScreen') as typeof import('./PlannerScreen')).PlannerScreen,
+  notes: () => (require('./NotesListScreen') as typeof import('./NotesListScreen')).NotesListScreen,
+  journal: () => (require('./JournalScreen') as typeof import('./JournalScreen')).JournalScreen,
+  scores: () => (require('./ScoresScreen') as typeof import('./ScoresScreen')).ScoresScreen,
+  calculator: () => (require('./CalculatorScreen') as typeof import('./CalculatorScreen')).CalculatorScreen,
+  desmos: () => (require('./DesmosScreen') as typeof import('./DesmosScreen')).DesmosScreen,
+  vault: () => (require('./VaultLibraryScreen') as typeof import('./VaultLibraryScreen')).VaultLibraryScreen,
+  ai: () => (require('./AiLinksScreen') as typeof import('./AiLinksScreen')).AiLinksScreen,
 };
 
 /** The Stack inside bar slot `index`: the tool at its root, the tool's own pages (a note, a video) above. */
@@ -66,6 +59,7 @@ export function SlotScreen({ index }: { index: number }) {
     // pages the previous tool opened in this slot (a note, a video) leave with it
     if ((navigation.getState()?.index ?? 0) > 0) navigation.dispatch(StackActions.popToTop());
   }, [key, navigation]);
-  const Tool = key ? SLOT_SCREENS[key] : undefined;
+  // the tool's module loads here, once (a later call reads it from the module cache)
+  const Tool = key ? SLOT_SCREENS[key]() : undefined;
   return Tool ? <Tool key={key} mode="tab" /> : null;
 }

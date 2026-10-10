@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  View, Text, StyleSheet, Pressable, TextInput, Modal, ViewStyle,
+  View, Text, StyleSheet, Pressable, TextInput, Modal, ViewStyle, AccessibilityState, Keyboard,
   KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,22 +13,27 @@ import type { SharedValue } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import {
-  AnimLevel, C, F, MIN, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner,
+  AnimLevel, C, CHROME_FONT_MAX, F, MIN, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner,
+  shownTheme,
 } from '../theme';
 import { useStore } from '../store';
 import {
-  ARRIVE, Bouncy, CHANGE, EASE_OUT, FADE_IN, FADE_OUT, FadeSwap, LEAVE, RISE_OUT, glide, rowIn, rowOut, useAnimLevel,
-  useAppear, useBreath, useEntrance,
+  ARRIVE, Bouncy, CHANGE, EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, FadeSwap, LEAVE, PressRole, RISE_OUT, glide, rowIn,
+  rowOut, useAnimLevel, useAppear, useBreath, useEntrance,
 } from './Motion';
 import { tap, tick } from '../haptics';
 import { stepTab } from '../toolNav';
 import { READ_MAX, WIDE_AT } from '../layout';
+import { TimeWheel, defaultTime, isTime, timeLabel } from './TimeWheel';
+
+export { TimeWheel } from './TimeWheel';
 
 export const useTheme = (): ThemeMode => {
   // subscribing to the accent here makes EVERY themed component repaint the
   // moment a new accent is picked — no remount required
   useStore((s) => s.settings.accent);
-  return useStore((s) => s.settings.theme);
+  // a phone that cannot draw shadows shows the default theme as Minimal (see shadowsSupported)
+  return shownTheme(useStore((s) => s.settings.theme));
 };
 
 /**
@@ -280,9 +285,23 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
   // with full motion, only fills in with some, and is a step with none. The ground fills in over the same offsets, so
   // the big title leaves behind it, and the hairline and shade come with the ground, never before it. All on the UI thread
   const swap = useDerivedValue(() => (overlay ? swapProgress(y.value, level) : 0));
-  const titleStyle = useAnimatedStyle(() => (overlay
-    ? { opacity: swap.value, transform: [{ translateY: level === 'full' ? 4 * (1 - swap.value) : 0 }] }
-    : { opacity: 1, transform: [{ translateY: 0 }] }));
+  // A page's bar always shows its title. A screen that turns from a tab into a page in place (Scores going down a
+  // level from its root) fades the compact title in instead of showing it in one frame: it waits out the title's own
+  // dip, so the tab's old name never flashes up first. Going back to the tab, it fades out the same way.
+  const paged = useSharedValue(overlay ? 0 : 1);
+  const pagedOnce = React.useRef(overlay);
+  React.useEffect(() => {
+    if (pagedOnce.current === overlay) return;
+    pagedOnce.current = overlay;
+    if (level === 'none') { paged.value = overlay ? 0 : 1; return; }
+    paged.value = overlay
+      ? withTiming(0, { duration: 160, easing: EASE_EXIT })
+      : withDelay(110, withTiming(1, { duration: 220, easing: EASE_OUT }));
+  }, [overlay, level]);
+  const titleStyle = useAnimatedStyle(() => ({
+    opacity: Math.max(swap.value, paged.value),
+    transform: [{ translateY: overlay && level === 'full' ? 4 * (1 - swap.value) : 0 }],
+  }));
   const groundStyle = useAnimatedStyle(() => ({ opacity: swap.value }));
   // a ground that is more than half in takes touches too, so a tap on a bar that looks solid never reaches what has
   // scrolled up behind it. Only the flip crosses to the JS thread, never the scroll itself
@@ -325,8 +344,9 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
           {/* a title that changes in place (a tab's tool swapped, a page named differently) dips and comes back as
               the new words instead of snapping */}
           <FadeSwap swapKey={title}>
+            {/* fixed chrome: the bar's row is 40 high, so its title grows with the phone's font size only a little */}
             <Text
-              numberOfLines={1} style={hdr.title}
+              numberOfLines={1} style={hdr.title} maxFontSizeMultiplier={1.2}
               accessibilityRole={overlay ? undefined : 'header'}
               importantForAccessibility={overlay ? 'no' : 'auto'}
             >
@@ -411,8 +431,9 @@ function ToolHero({ title, tab, parts, live, covered, reserve }: {
   if (tab) {
     return (
       <View style={hdr.heroTab}>
+        {/* the big title sits level with the bar's tray, so it is chrome too: it grows at most by 1.3 */}
         <FadeSwap swapKey={title} style={reserve ? { paddingRight: reserve } : undefined}>
-          <Text numberOfLines={1} accessibilityRole="header" style={T.display}>{title}</Text>
+          <Text numberOfLines={1} accessibilityRole="header" maxFontSizeMultiplier={CHROME_FONT_MAX} style={T.display}>{title}</Text>
         </FadeSwap>
         {parts ? <ContextLine parts={parts} live={live} covered={covered} style={{ marginTop: 2 }} /> : null}
       </View>
@@ -482,8 +503,13 @@ const hdr = StyleSheet.create({
 });
 
 /** Small ⓘ that floats a short feature description in a raised dialog. */
-export function InfoDot({ text, size = 15 }: { text: string; size?: number }) {
+export function InfoDot({ text, size = 15, label = 'About this' }: {
+  text: string; size?: number;
+  /** what the dot is called to a screen reader */
+  label?: string;
+}) {
   const theme = useTheme();
+  const level = useAnimLevel();
   const { width: winW, height: winH } = useWindowDimensions();
   const [open, setOpen] = React.useState(false);
   const [pos, setPos] = React.useState({ x: 0, y: 0, top: 0 });
@@ -501,14 +527,20 @@ export function InfoDot({ text, size = 15 }: { text: string; size?: number }) {
   const top = bubbleH > 0 && below + bubbleH > winH - 16 ? Math.max(16, pos.top - 8 - bubbleH) : below;
   return (
     <>
-      <Pressable ref={ref} onPress={show} hitSlop={10} style={{ marginLeft: 6 }}>
+      <Pressable
+        ref={ref} onPress={show} hitSlop={15} style={{ marginLeft: 6 }}
+        accessibilityRole="button" accessibilityLabel={label}
+      >
         <Ionicons name="information-circle-outline" size={size} color={C.textFaint} />
       </Pressable>
       {/* statusBarTranslucent keeps this modal's window in the SAME coordinate
           space measureInWindow reported from — without it the content view
           starts below the translucent status bar and the bubble lands a
           status-bar height too low */}
-      <Modal visible={open} transparent statusBarTranslucent animationType="fade" onRequestClose={() => setOpen(false)}>
+      <Modal
+        visible={open} transparent statusBarTranslucent animationType={level === 'none' ? 'none' : 'fade'}
+        onRequestClose={() => setOpen(false)}
+      >
         <Pressable style={{ flex: 1 }} onPress={() => setOpen(false)}>
           <View
             onLayout={(e) => setBubbleH(e.nativeEvent.layout.height)}
@@ -533,16 +565,24 @@ export function InfoDot({ text, size = 15 }: { text: string; size?: number }) {
   );
 }
 
+/** What a pressable surface (a card, a row, a chip) can tell a screen reader beyond its own words. */
+export interface A11yProps {
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
+  accessibilityRole?: PressRole;
+}
+
 /**
  * Raised soft-UI surface: the kit's dual drop-shadow (light side toward the
  * 60° light, dark side at the exact opposite end), 6px distance both ways.
  */
 export function Card({
   children, style, pad = S.cardPad, onPress, onLongPress, hero = false,
+  accessibilityLabel, accessibilityHint, accessibilityRole,
 }: {
   children: React.ReactNode; style?: ViewStyle | ViewStyle[]; pad?: number;
   onPress?: () => void; onLongPress?: () => void; hero?: boolean;
-}) {
+} & A11yProps) {
   const theme = useTheme();
   const surface: ViewStyle =
     theme === 'minimal'
@@ -553,12 +593,24 @@ export function Card({
 
   if (onPress || onLongPress) {
     return (
-      <Bouncy onPress={onPress} onLongPress={onLongPress} radius={S.radius} style={[st.cardBase, surface, style as any]}>
+      <Bouncy
+        onPress={onPress} onLongPress={onLongPress} radius={S.radius} style={[st.cardBase, surface, style as any]}
+        accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint} accessibilityRole={accessibilityRole}
+      >
         {inner}
       </Bouncy>
     );
   }
-  return <View style={[st.cardBase, surface, style as any]}>{inner}</View>;
+  // a card that cannot be pressed reads as one element only when it is given a name of its own
+  return (
+    <View
+      style={[st.cardBase, surface, style as any]}
+      accessible={accessibilityLabel ? true : undefined}
+      accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint} accessibilityRole={accessibilityRole}
+    >
+      {inner}
+    </View>
+  );
 }
 
 export const GlassCard = Card;
@@ -585,21 +637,29 @@ export function Inset({ children, style, pad = 0 }: { children?: React.ReactNode
 export function SectionTitle({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <View style={st.sectionRow}>
-      <Text style={T.kicker}>{children}</Text>
+      <Text style={T.kicker} accessibilityRole="header">{children}</Text>
       {right}
     </View>
   );
 }
 
+/** a small chip is about 26 high: its reach grows to the rows' rhythm above and below, a little to the sides */
+const CHIP_SLOP_SMALL = { top: 8, bottom: 8, left: 5, right: 5 };
+const CHIP_SLOP = 5;
+
 /**
  * Chips are flat: an outline at rest, a quiet tint of their colour when on. They come in rows, and a row of
- * raised pills reads as clutter, so the depth stays on the surfaces around them.
+ * raised pills reads as clutter, so the depth stays on the surfaces around them. A screen reader hears a button that
+ * says whether it is chosen; a chip with nothing to do is disabled.
  */
 export function Chip({
   label, active, color, onPress, onLongPress, small, icon,
+  accessibilityLabel, accessibilityHint, accessibilityRole, accessibilityState,
 }: {
   label: string; active?: boolean; color?: string; onPress?: () => void; onLongPress?: () => void; small?: boolean; icon?: any;
-}) {
+  /** replaces the chosen state a chip reports by default (`selected` when active), e.g. `checked` for a checkbox */
+  accessibilityState?: AccessibilityState;
+} & A11yProps) {
   const theme = useTheme();
   const level = useAnimLevel();
   const c = color || C.accent;
@@ -612,12 +672,19 @@ export function Chip({
   const restStyle = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
   const textStyle = [st.chipText, small && { fontSize: 12, letterSpacing: TRACK.fine }, active && { fontFamily: F.semi }];
   const iconSize = small ? 13 : 15;
+  const inert = !onPress && !onLongPress;
   return (
     <Bouncy
       onPress={onPress}
       onLongPress={onLongPress}
+      disabled={inert}
       scaleTo={0.94}
       radius={999}
+      hitSlop={small ? CHIP_SLOP_SMALL : CHIP_SLOP}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
+      accessibilityRole={accessibilityRole ?? 'button'}
+      accessibilityState={accessibilityState ?? { selected: !!active }}
       style={[st.chip, small && st.chipSmall]}
     >
       <Animated.View pointerEvents="none" style={[st.chipEdge, { borderColor: theme === 'minimal' ? MIN.border : C.outline }, restStyle]} />
@@ -629,9 +696,13 @@ export function Chip({
             <Animated.View style={[st.ink, litStyle]}><Ionicons name={icon} size={iconSize} color={c} /></Animated.View>
           </View>
         ) : null}
+        {/* fixed chrome: chips sit in rows, so their words grow with the phone's font size only up to 1.3 */}
         <View>
-          <Animated.Text style={[textStyle, restStyle]}>{label}</Animated.Text>
-          <Animated.Text style={[textStyle, st.ink, { color: c }, litStyle]} importantForAccessibility="no" accessibilityElementsHidden>
+          <Animated.Text style={[textStyle, restStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{label}</Animated.Text>
+          <Animated.Text
+            style={[textStyle, st.ink, { color: c }, litStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}
+            importantForAccessibility="no" accessibilityElementsHidden
+          >
             {label}
           </Animated.Text>
         </View>
@@ -770,8 +841,9 @@ export function CheckCircle({ done, onPress, color = C.green, size = 26, label }
     transform: [{ scale: (0.6 + 0.4 * fill.value) * settle.value }],
   }));
   return (
+    // 30 across, so its reach grows by 10 all round: a tick is the only target on many rows
     <Bouncy
-      onPress={onPress} scaleTo={0.82} style={{ padding: 2 }}
+      onPress={onPress} scaleTo={0.82} style={{ padding: 2 }} hitSlop={10}
       accessibilityRole="checkbox" accessibilityState={{ checked: done }} accessibilityLabel={label}
     >
       <View>
@@ -845,11 +917,14 @@ export function Toggle({ value, onChange, color, label }: {
   );
 }
 
+export type FieldProps = React.ComponentProps<typeof TextInput> & { style?: any; label?: string };
+
 /**
  * A text field drawn as a line: an optional label above, the text, and a hairline underneath. While you type, an
- * accent line grows over the hairline from the left. Layout props go to the wrapper.
+ * accent line grows over the hairline from the left. Layout props go to the wrapper. The label is also what a screen
+ * reader calls the field, and a ref reaches the TextInput itself (to focus it once a sheet has risen, say).
  */
-export function Field({ label, ...props }: React.ComponentProps<typeof TextInput> & { style?: any; label?: string }) {
+export const Field = React.forwardRef<TextInput, FieldProps>(function Field({ label, ...props }, ref) {
   const theme = useTheme();
   const level = useAnimLevel();
   const [focused, setFocused] = React.useState(false);
@@ -870,11 +945,13 @@ export function Field({ label, ...props }: React.ComponentProps<typeof TextInput
   };
   return (
     <View style={wrapStyle}>
-      {label ? <Text style={st.fieldLabel}>{label}</Text> : null}
+      {label ? <Text style={st.fieldLabel} importantForAccessibility="no">{label}</Text> : null}
       <TextInput
+        ref={ref}
         placeholderTextColor={C.textFaint}
         selectionColor={C.accent}
         {...props}
+        accessibilityLabel={props.accessibilityLabel ?? label}
         onFocus={(e) => { setFocused(true); props.onFocus?.(e); }}
         onBlur={(e) => { setFocused(false); props.onBlur?.(e); }}
         style={[st.fieldInner, innerStyle]}
@@ -882,6 +959,66 @@ export function Field({ label, ...props }: React.ComponentProps<typeof TextInput
       <View style={[st.fieldLine, { backgroundColor: theme === 'minimal' ? MIN.border : C.borderBright }]}>
         <Animated.View pointerEvents="none" style={[st.fieldLineOn, { backgroundColor: C.accent }, lineStyle]} />
       </View>
+    </View>
+  );
+});
+
+/**
+ * A time, set on the time wheel: a row drawn as a Field is (the label above, the time or the placeholder, a hairline
+ * under it) that opens a sheet holding a TimeWheel, with Done and, when `clearable` and a time is set, Clear. Values are
+ * 'HH:MM' and '' means no time; the clock (12 or 24 hours) is the user's setting. A field with no time opens on the next
+ * whole hour, and Done keeps it. Closing the sheet any other way changes nothing, and so does Done when no wheel was
+ * turned: a saved time off the wheels' five-minute steps stays exactly as it was. `allowEndOfDay` offers Midnight
+ * ('24:00'), for an end time. Layout props (flex, width, margins) go in `style`, as a Field's do.
+ */
+export function TimeField({
+  label, value, onChange, placeholder = 'Add a time', clearable = false, allowEndOfDay = false, style,
+}: {
+  label?: string; value: string; onChange: (value: string) => void; placeholder?: string; clearable?: boolean;
+  allowEndOfDay?: boolean; style?: ViewStyle | ViewStyle[];
+}) {
+  const theme = useTheme();
+  const hour24 = useStore((s) => s.settings.hour24);
+  const [open, setOpen] = React.useState(false);
+  const [draft, setDraft] = React.useState(value);
+  // whether a wheel was turned since the sheet opened: if not, Done keeps the time exactly as it was
+  const turned = React.useRef(false);
+  const has = isTime(value, allowEndOfDay);
+  const shown = has ? timeLabel(value, hour24) : placeholder;
+  const show = () => {
+    Keyboard.dismiss();
+    turned.current = false;
+    setDraft(has ? value : defaultTime());
+    setOpen(true);
+  };
+  const done = () => {
+    if (turned.current || !has) onChange(draft);
+    setOpen(false);
+  };
+  const turn = React.useCallback((v: string) => { turned.current = true; setDraft(v); }, []);
+  return (
+    <View style={[st.timeWrap, style as any]}>
+      {label ? <Text style={st.fieldLabel} importantForAccessibility="no">{label}</Text> : null}
+      <Pressable
+        onPress={show}
+        accessibilityRole="button"
+        accessibilityLabel={label ? label + ', ' + shown : shown}
+        accessibilityHint="Opens a time wheel"
+        style={({ pressed }) => [st.timeRow, pressed && st.timeRowPressed]}
+      >
+        <Text numberOfLines={1} style={[st.fieldInner, st.timeText, !has && { color: C.textFaint }]}>{shown}</Text>
+        <Ionicons name="time-outline" size={16} color={C.textFaint} />
+      </Pressable>
+      <View style={[st.fieldLine, { backgroundColor: theme === 'minimal' ? MIN.border : C.borderBright }]} />
+      <Sheet visible={open} onClose={() => setOpen(false)} title={label || 'Choose a time'}>
+        <TimeWheel value={draft} onChange={turn} hour24={hour24} allowEndOfDay={allowEndOfDay} />
+        <Row style={st.timeActions}>
+          {clearable && has ? (
+            <PillButton label="Clear" outline color={C.textDim} onPress={() => { onChange(''); setOpen(false); }} style={{ flex: 1 }} />
+          ) : null}
+          <PillButton label="Done" onPress={done} style={{ flex: 1 }} />
+        </Row>
+      </Sheet>
     </View>
   );
 }
@@ -936,6 +1073,9 @@ export function ProgressBar({ value, color, height = 8 }: { value: number; color
   return (
     <View
       onLayout={(e) => { trackW.value = e.nativeEvent.layout.width; }}
+      accessible
+      accessibilityRole="progressbar"
+      accessibilityValue={{ min: 0, max: 100, now: Math.round(v * 100) }}
       style={[
         { height, borderRadius: height / 2, overflow: 'hidden' },
         theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...neuInset('hairline') },
@@ -965,24 +1105,42 @@ const FADE = { arrive: FADE_IN, leave: FADE_OUT };
  * Bottom sheet: the backdrop fades while the panel rises from below the screen's edge, its whole height. It rises on the
  * emphasised out-curve, quick off the mark and long to settle, and leaves in about two thirds of the time on an
  * accelerating one. With only some motion nothing travels: the panel fades in place, a little quicker out than in.
+ * While it leaves, neither the panel nor the backdrop takes a tap, so nothing in it can run twice on the way out.
  */
 export function Sheet({
-  visible, onClose, onClosed, title, children,
+  visible, onClose, onClosed, onRisen, title, children,
 }: {
   visible: boolean; onClose: () => void; title?: string; children: React.ReactNode;
   /** runs once the sheet has finished closing: the moment to open another sheet or show a toast */
   onClosed?: () => void;
+  /** runs once the sheet has finished rising: the moment to focus a field, so the keyboard never rides the rise */
+  onRisen?: () => void;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
+  const insets = useSafeAreaInsets();
   const { height: winH, width: winW } = useWindowDimensions();
   // on a wide window a sheet keeps a phone's proportions: at most 560 wide, centred, still rising from the bottom
   const narrowPanel = winW >= WIDE_AT ? st.sheetWide : null;
+  const [render, setRender] = React.useState(visible);
+  // the keyboard's height while the sheet is up: the window shrinks above it, and the panel must still fit there
+  const [kb, setKb] = React.useState(0);
+  React.useEffect(() => {
+    if (!render) return undefined;
+    // a keyboard already up as the sheet arrives counts too
+    setKb(Keyboard.isVisible() ? Keyboard.metrics()?.height ?? 0 : 0);
+    const shown = Keyboard.addListener('keyboardDidShow', (e) => setKb(e.endCoordinates.height));
+    const hidden = Keyboard.addListener('keyboardDidHide', () => setKb(0));
+    return () => { shown.remove(); hidden.remove(); };
+  }, [render]);
   // the panel's fixed chrome (padding 22 + paddingBottom 36 + handle 21 +
   // title 38, about 120dp) sits OUTSIDE this scroller, so the cap has to come
-  // off the screen — a flat 540 pushed the primary button below a short display
-  const scrollMax = Math.min(540, Math.max(220, winH * 0.72 - 120));
-  const [render, setRender] = React.useState(visible);
+  // off the room left — a flat 540 pushed the primary button below a short display, and with the keyboard up a full
+  // panel pushed its handle and title (the pull that closes it) off the top
+  const room = Math.min(winH * 0.72, winH - kb - insets.top - 24);
+  const scrollMax = Math.min(540, Math.max(160, room - 120));
+  // set while the sheet leaves: it takes no taps until it is gone, or opened again
+  const [closing, setClosing] = React.useState(false);
   // a sheet built already open still rises into view, so it starts below the edge unless motion is off
   const prog = useSharedValue(visible && level === 'none' ? 1 : 0);
   // the backdrop fades on its own value beside the panel's, so correcting where the panel is never makes it flicker
@@ -1003,6 +1161,9 @@ export function Sheet({
   const mounted = React.useRef(visible);
   const closedRef = React.useRef(onClosed);
   closedRef.current = onClosed;
+  const risenRef = React.useRef(onRisen);
+  risenRef.current = onRisen;
+  const risen = React.useCallback(() => { risenRef.current?.(); }, []);
   const finishClose = React.useCallback(() => {
     leaving.current = false;
     mounted.current = false;
@@ -1012,11 +1173,14 @@ export function Sheet({
   const rise = React.useCallback(() => {
     waiting.current = false;
     dim.value = withTiming(1, motion.current.arrive);
-    prog.value = withTiming(1, motion.current.arrive);
+    prog.value = withTiming(1, motion.current.arrive, (fin) => {
+      if (fin) runOnJS(risen)();
+    });
   }, []);
   React.useEffect(() => {
     if (visible) {
       tap();
+      setClosing(false);
       if (level === 'none') {
         drag.value = 0;
         leaving.current = false;
@@ -1024,7 +1188,9 @@ export function Sheet({
         prog.value = 1;
         dim.value = 1;
         setRender(true);
-        return undefined;
+        // nothing rises: the sheet is up once its window is on screen
+        const up = setTimeout(risen, 50);
+        return () => clearTimeout(up);
       }
       if (leaving.current) {
         // opened again while it was still leaving: it turns round from where it is, and a pull it had been taken
@@ -1051,6 +1217,7 @@ export function Sheet({
       if (level === 'none') { prog.value = 0; dim.value = 0; finishClose(); }
       else {
         leaving.current = true;
+        setClosing(true);
         dim.value = withTiming(0, motion.current.leave);
         prog.value = withTiming(0, motion.current.leave, (fin) => {
           if (fin) runOnJS(finishClose)();
@@ -1068,7 +1235,9 @@ export function Sheet({
       const off = (1 - p) * (panelH.value + 24);
       panelH.value = h;
       prog.value = Math.max(0, Math.min(1, 1 - off / (h + 24)));
-      prog.value = withTiming(1, ARRIVE);
+      prog.value = withTiming(1, ARRIVE, (fin) => {
+        if (fin) runOnJS(risen)();
+      });
       return;
     }
     panelH.value = h;
@@ -1103,8 +1272,9 @@ export function Sheet({
     <Modal visible transparent statusBarTranslucent animationType="none" onRequestClose={onClose}>
       {/* a modal is its own window: gestures inside it need their own root */}
       <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={{ flex: 1 }} pointerEvents={closing ? 'none' : 'box-none'}>
       <Animated.View style={[st.sheetOverlay, backdropStyle]}>
-        <Pressable style={{ flex: 1 }} onPress={onClose} />
+        <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" />
       </Animated.View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Animated.View
@@ -1116,7 +1286,7 @@ export function Sheet({
           <GestureDetector gesture={pull}>
             <View collapsable={false} style={st.grab}>
               <View style={[st.sheetHandle, theme === 'minimal' ? { backgroundColor: MIN.border } : neuInset('hairline')]} />
-              {title ? <Text style={st.sheetTitle}>{title}</Text> : null}
+              {title ? <Text style={st.sheetTitle} accessibilityRole="header">{title}</Text> : null}
             </View>
           </GestureDetector>
           {/* negative margin + matching padding: children's raised shadows get
@@ -1132,31 +1302,43 @@ export function Sheet({
           </ScrollView>
         </Animated.View>
       </KeyboardAvoidingView>
+      </View>
       </GestureHandlerRootView>
     </Modal>
   );
 }
 
 export function DotMenu({
-  visible, onClose, items,
+  visible, onClose, items, title,
 }: {
   visible: boolean; onClose: () => void;
   items: { label: string; icon: any; color?: string; onPress: () => void }[];
+  /** what the actions act on, above them (a note's name, say); none, and the menu is only its actions */
+  title?: string;
 }) {
   // the chosen action runs once the menu has closed, so a sheet it opens or a toast it shows is never behind it
   const pending = React.useRef<(() => void) | null>(null);
   return (
-    <Sheet visible={visible} onClose={onClose} onClosed={() => { const run = pending.current; pending.current = null; run?.(); }}>
+    <Sheet
+      visible={visible} onClose={onClose} title={title}
+      onClosed={() => { const run = pending.current; pending.current = null; run?.(); }}
+    >
       {items.map((it, i) => (
-        <MenuItem key={i} index={i} item={it} onPick={() => { pending.current = it.onPress; onClose(); }} />
+        <MenuItem
+          key={i} index={i} item={it} last={i === items.length - 1}
+          onPick={() => { pending.current = it.onPress; onClose(); }}
+        />
       ))}
     </Sheet>
   );
 }
 
-/** One action of a menu: the actions come up in turn behind the rising sheet, a short way and quickly. */
-function MenuItem({ index, item, onPick }: {
-  index: number; item: { label: string; icon: any; color?: string }; onPick: () => void;
+/**
+ * One action of a menu: the actions come up in turn behind the rising sheet, a short way and quickly. A hairline parts
+ * each from the next; the last has none, so nothing floats above the sheet's foot.
+ */
+function MenuItem({ index, item, last, onPick }: {
+  index: number; item: { label: string; icon: any; color?: string }; last: boolean; onPick: () => void;
 }) {
   const level = useAnimLevel();
   const shown = useSharedValue(level === 'full' ? 0 : 1);
@@ -1166,7 +1348,7 @@ function MenuItem({ index, item, onPick }: {
   const aStyle = useAnimatedStyle(() => ({ opacity: shown.value, transform: [{ translateY: 6 * (1 - shown.value) }] }));
   return (
     <Animated.View style={aStyle}>
-      <Bouncy onPress={onPick} style={st.menuRow}>
+      <Bouncy onPress={onPick} style={[st.menuRow, last && st.menuRowLast]}>
         <Ionicons name={item.icon} size={19} color={item.color || C.textDim} />
         <Text style={[T.body, { marginLeft: 14, color: item.color || C.text }]}>{item.label}</Text>
       </Bouncy>
@@ -1269,12 +1451,28 @@ export function ListSlice({ first, last, enter = false, children }: {
 }
 
 /** A pressable row inside a list card: it stays in place and carves in while pressed. */
-export function ListRow({ children, onPress, onLongPress, style }: {
+export function ListRow({
+  children, onPress, onLongPress, style, accessibilityLabel, accessibilityHint, accessibilityRole,
+}: {
   children: React.ReactNode; onPress?: () => void; onLongPress?: () => void; style?: ViewStyle | ViewStyle[];
-}) {
-  if (!onPress && !onLongPress) return <View style={[lst.row, style]}>{children}</View>;
+} & A11yProps) {
+  if (!onPress && !onLongPress) {
+    // a row that cannot be pressed reads as one element only when it is given a name of its own
+    return (
+      <View
+        style={[lst.row, style]}
+        accessible={accessibilityLabel ? true : undefined}
+        accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint} accessibilityRole={accessibilityRole}
+      >
+        {children}
+      </View>
+    );
+  }
   return (
-    <Bouncy onPress={onPress} onLongPress={onLongPress} scaleTo={1} sink={false} radius={14} style={[lst.row, style]}>
+    <Bouncy
+      onPress={onPress} onLongPress={onLongPress} scaleTo={1} sink={false} radius={14} style={[lst.row, style]}
+      accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint} accessibilityRole={accessibilityRole}
+    >
       {children}
     </Bouncy>
   );
@@ -1417,6 +1615,12 @@ const st = StyleSheet.create({
   },
   fieldLine: { height: 1 },
   fieldLineOn: { position: 'absolute', left: 0, right: 0, top: -0.5, height: 2, transformOrigin: 'left' },
+  // a TimeField keeps a Field's rhythm: the same label, text and line, and the same 14 below
+  timeWrap: { marginBottom: 14 },
+  timeRow: { flexDirection: 'row', alignItems: 'center', paddingRight: 2 },
+  timeRowPressed: { opacity: 0.6 },
+  timeText: { flex: 1 },
+  timeActions: { gap: 12, marginTop: 20 },
   emptyWrap: { alignItems: 'center', marginVertical: 24, paddingHorizontal: 16 },
   emptyWell: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   emptyTitle: { color: C.text, fontFamily: F.semi, fontSize: 15, letterSpacing: TRACK.body, textAlign: 'center' },
@@ -1443,4 +1647,5 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', paddingVertical: 15, paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.hairline,
   },
+  menuRowLast: { borderBottomWidth: 0 },
 });

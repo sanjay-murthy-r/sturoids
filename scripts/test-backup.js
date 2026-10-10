@@ -8,6 +8,8 @@
  *   - a missing file is left out and counted; a file the platform reads in short pieces still restores whole
  *   - a backup cut short keeps the files before the cut and leaves no half-written file behind
  *   - on the same phone, a cut-short backup leaves the files already there untouched; a whole one replaces them
+ *   - the files kept in Recently deleted travel too, and a restore writes them back even when the caller only names
+ *     the notes' own
  * Usage: node scripts/test-backup.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -85,6 +87,13 @@ class File {
   open() { return new Handle(this.p); }
 }
 
+// ---- the store, as much of it as a backup reads: what Recently deleted keeps
+let trash = [];
+const storeStub = {
+  useStore: { getState: () => ({ trash }) },
+  trashedAttachments: (items) => items.flatMap((t) => (t.kind === 'note' ? t.data.attachments : t.kind === 'attachment' ? [t.data] : [])),
+};
+
 // ---- src/backup.ts, loaded with the platform above
 function load(file, registry = new Map()) {
   if (registry.has(file)) return registry.get(file).exports;
@@ -96,6 +105,7 @@ function load(file, registry = new Map()) {
   const req = (spec) => {
     if (spec === 'expo-file-system') return legacy;
     if (spec === 'expo-file-system/next') return { File };
+    if (spec === './store') return storeStub;
     if (spec.startsWith('.')) {
       const base = path.resolve(path.dirname(file), spec);
       const hit = [base + '.ts', base + '.tsx'].find((p) => fs.existsSync(p));
@@ -288,6 +298,40 @@ function data(notes) {
     assert.equal(result.complete, true);
     assert.deepEqual(fs.readFileSync(toPath(a.uri)), bytes);
     assert.equal(fs.existsSync(toPath(a.uri + '.part')), false);
+  });
+
+  await check('the files kept in Recently deleted travel too, and come back to their place', async () => {
+    const live = crypto.randomBytes(2000);
+    const gone = crypto.randomBytes(CHUNK + 3);
+    const part = crypto.randomBytes(700);
+    const a = attach('live1', live);
+    const b = attach('trashed-note-file', gone);
+    const c = attach('trashed-file', part);
+    const d = data([{ id: 'n1', title: 'Here', body: '', attachments: [a] }]);
+    trash = [
+      { id: 't1', kind: 'note', data: { id: 'n2', title: 'Deleted', attachments: [b, a] } },
+      { id: 't2', kind: 'attachment', parentId: 'n1', data: c },
+      { id: 't3', kind: 'journal', data: { id: 'j9', dateKey: '2026-10-01' } },
+    ];
+    try {
+      const uri = CACHE + 'trash.json';
+      const need = await backup.estimateBackupBytes(JSON.stringify(d, null, 2), d.notes);
+      assert.ok(need > (live.length + gone.length + part.length) * 4 / 3, 'the estimate counts them');
+      const w = await backup.writeBackup(uri, JSON.stringify(d, null, 2), d.notes);
+      assert.deepEqual(w, { carried: 3, missing: 0 }, 'a file shared with a note travels once');
+      const whole = JSON.parse(fs.readFileSync(toPath(uri), 'utf8'));
+      assert.deepEqual(Object.keys(whole.__sturoidsFiles).sort(), ['live1', 'trashed-file', 'trashed-note-file']);
+      // a new phone: the caller names only the notes' attachments, as Settings does
+      fs.rmSync(toPath(ATT_DIR), { recursive: true, force: true });
+      const opened = await backup.openBackup(uri);
+      const result = await opened.restoreFiles((id) => (id === 'live1' ? backup.restoredPath(a) : null));
+      assert.equal(result.complete, true);
+      assert.deepEqual(Object.keys(result.files).sort(), ['live1', 'trashed-file', 'trashed-note-file']);
+      assert.deepEqual(fs.readFileSync(toPath(result.files['trashed-note-file'])), gone);
+      assert.deepEqual(fs.readFileSync(toPath(result.files['trashed-file'])), part);
+    } finally {
+      trash = [];
+    }
   });
 
   fs.rmSync(PHONE, { recursive: true, force: true });
