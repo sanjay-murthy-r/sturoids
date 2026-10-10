@@ -1451,7 +1451,9 @@ export default function Settings() {
               <Row style={{ justifyContent: 'space-between', marginBottom: 10 }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[T.body, { fontFamily: F.med }]}>Seconds on the ambient screen</Text>
-                  <Text style={[T.caption, { marginTop: 2 }]}>Off, it shows whole minutes.</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>
+                    {settings.ambientSeconds ? 'The timer counts each second.' : 'The timer shows whole minutes.'}
+                  </Text>
                 </View>
                 <Toggle value={settings.ambientSeconds} onChange={(v) => setSetting('ambientSeconds', v)} color={C.accent} label="Seconds on the ambient screen" />
               </Row>
