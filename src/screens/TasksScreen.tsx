@@ -37,10 +37,15 @@ const clock = (hhmm: string, hour24: boolean) => {
   return m < 0 ? hhmm : fmtClockTime(m, hour24);
 };
 
-/** The minutes from `now` until a deadline falls due. A deadline with no time of day falls due as that day turns. */
-const minutesToDue = (deadline: string, now: Date) => {
+/**
+ * The minutes from `now` until a deadline falls due: at its time of day, or, with none, as that day turns. Worked out
+ * from the dates themselves, so a task due just after midnight is near late the evening before.
+ */
+const minutesToDue = (deadline: string, now: Date, time?: string) => {
   const end = new Date(deadline + 'T00:00:00');
-  end.setDate(end.getDate() + 1);
+  const at = time ? toMinutes(time) : -1;
+  if (at >= 0) end.setMinutes(at);
+  else end.setDate(end.getDate() + 1);
   return Math.round((end.getTime() - now.getTime()) / 60000);
 };
 
@@ -243,13 +248,18 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const nowMin = now.getHours() * 60 + now.getMinutes();
     const out: DueSoon[] = [];
     for (const t of dailyTasks) {
-      if (t.doneOn === today || !t.time) continue;
-      const left = toMinutes(t.time) - nowMin;
+      if (!t.time) continue;
+      let left = toMinutes(t.time) - nowMin;
+      // a time already past today is next due tomorrow: late in the evening, one just after midnight is within the hour.
+      // Tomorrow it is open unless it is a one-off ticked today, which goes as the day turns
+      const tomorrow = left <= 0;
+      if (tomorrow) left += 1440;
+      if (t.doneOn === today && (!tomorrow || t.repeat !== 'daily')) continue;
       if (left > 0 && left <= 60) out.push({ title: t.title, time: t.time });
     }
     for (const m of missions) {
       if (m.done) continue;
-      const left = m.time ? (daysUntil(m.deadline) === 0 ? toMinutes(m.time) - nowMin : -1) : minutesToDue(m.deadline, now);
+      const left = minutesToDue(m.deadline, now, m.time);
       if (left > 0 && left <= 60) out.push({ title: m.title, time: m.time || '' });
     }
     return out;
@@ -431,7 +441,7 @@ const DailyRow = React.memo(function DailyRow({ task, done, hour24, onToggle, on
   const by = task.time ? 'by ' + shortClock(task.time, hour24) : '';
   const daily = task.repeat === 'daily';
   return (
-    <ListRow onLongPress={() => onEdit(task)}>
+    <ListRow onLongPress={() => onEdit(task)} accessibilityHint="Double tap and hold to edit">
       <CheckCircle done={done} onPress={() => onToggle(task.id)} label={task.title + (daily ? ', every day' : '') + (by ? ', ' + by : '')} />
       <View style={st.taskWrap}>
         <StrikeText done={done} style={st.taskText}>{task.title}</StrikeText>

@@ -138,9 +138,19 @@ export interface TrashItem {
 /** How long Recently deleted keeps an item. */
 export const TRASH_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** Whole days an item has left in Recently deleted (at least 1 while it is still there). */
+/**
+ * Days an item has left in Recently deleted (at least 1 while it is still there), counted in calendar days: it stays
+ * through the day its 30 days are up and goes the day after (purgeTrash), so the count turns over at midnight, never
+ * mid-afternoon.
+ */
 export function trashDaysLeft(item: TrashItem, now = Date.now()): number {
-  return Math.max(1, Math.ceil((item.deletedAt + TRASH_KEEP_MS - now) / (24 * 60 * 60 * 1000)));
+  const end = new Date(item.deletedAt + TRASH_KEEP_MS);
+  const today = new Date(now);
+  const days = Math.round(
+    (Date.UTC(end.getFullYear(), end.getMonth(), end.getDate()) - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()))
+      / (24 * 60 * 60 * 1000),
+  );
+  return Math.max(1, days);
 }
 
 /** One recorded pen point: x and y as fractions of the pad, t in ms from the first touch. */
@@ -1508,7 +1518,11 @@ export const useStore = create<AppState>()(
           const at = s.dailyTasks.findIndex((t) => t.id === id);
           if (at < 0) return {};
           const list = [...s.dailyTasks];
-          list[at] = cleanDaily(patched(list[at], patch));
+          const next = cleanDaily(patched(list[at], patch));
+          // an every-day ToDo ticked on an earlier day is open today: made a one-off, that old tick would read as a
+          // one-off done before today and the new day's tidy-up would delete it, so it goes
+          if (!next.repeat && next.doneOn && next.doneOn !== todayKey()) next.doneOn = null;
+          list[at] = next;
           return { dailyTasks: list };
         }),
       removeDaily: (id) => set((s) => ({ dailyTasks: s.dailyTasks.filter((t) => t.id !== id) })),
@@ -2268,7 +2282,10 @@ export const useStore = create<AppState>()(
       },
       purgeTrash: (now) => {
         const s = get();
-        const old = s.trash.filter((t) => !(t.deletedAt > now - TRASH_KEEP_MS));
+        // an item goes on the first day after its 30 days are up, whatever the hour the app opens, so it lasts the whole
+        // of the last day Recently deleted counts down ("1 day left")
+        const today = todayKey(new Date(now));
+        const old = s.trash.filter((t) => !(todayKey(new Date(t.deletedAt + TRASH_KEEP_MS)) >= today));
         if (old.length) dropForGood(s, old, set);
       },
 

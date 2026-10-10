@@ -394,6 +394,9 @@ function Archive({ tabMode }: { tabMode: boolean }) {
 
   const empty = journal.length === 0 ? (
     <EmptyState icon="journal-outline" title="Your first page is waiting" actionLabel="Write today" onAction={() => open(journalDayFor(new Date(), cutoff))} />
+  ) : !filterCount && !pinnedOnly ? (
+    // only the search is narrowing the list, so the note speaks of the search
+    <EmptyState icon="search-outline" title="Nothing matches that search" actionLabel="Clear search" onAction={clearAll} />
   ) : (
     <EmptyState icon="search-outline" title="Nothing matches those filters" actionLabel="Clear filters" onAction={clearAll} />
   );

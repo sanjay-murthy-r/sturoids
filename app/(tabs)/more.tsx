@@ -117,7 +117,7 @@ export default function More() {
 
   // an archive can be undone from its toast; Archived, at the end of the list, keeps it otherwise
   const archive = (t: Tool) => {
-    if (setToolArchived(t.key, true)) toast(t.label + ' archived.', { label: 'Undo', onPress: () => { setToolArchived(t.key, false); } });
+    if (setToolArchived(t.key, true)) toast(t.label + ' archived', { label: 'Undo', onPress: () => { setToolArchived(t.key, false); } });
     else toast('End the Deep Work session first.');
   };
 

@@ -69,6 +69,8 @@ export function ShareIntake() {
   const said = React.useRef<string | null>(null);
   // the button still answers while the sheet slides away, and a second tap would add the video twice
   const adding = React.useRef(false);
+  // and while it waits for a title still on its way (a few seconds at most), it says so, until the sheet has gone
+  const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
     if (!shared) return;
@@ -83,6 +85,7 @@ export function ShareIntake() {
     const wait = fetchTitle(shared.videoId);
     titleWait.current = wait;
     adding.current = false;
+    setBusy(false);
     setTitle(null);
     setFolderId(null);
     setOffer({ url: shared.url, videoId: shared.videoId });
@@ -93,6 +96,7 @@ export function ShareIntake() {
     const o = offer;
     if (!o || adding.current) return;
     adding.current = true;
+    setBusy(true);
     // a title still on its way is waited for (it gives up by itself after a few seconds)
     const got = await (titleWait.current ?? Promise.resolve(null));
     const s = useStore.getState();
@@ -151,7 +155,10 @@ export function ShareIntake() {
           />
         ))}
       </Row>
-      <PillButton label="Add" icon="add" color={C.pink} onPress={() => { add().catch(() => { adding.current = false; }); }} style={{ marginTop: 8 }} />
+      <PillButton
+        label={busy ? 'Adding' : 'Add'} icon="add" color={C.pink}
+        onPress={() => { add().catch(() => { adding.current = false; setBusy(false); }); }} style={{ marginTop: 8 }}
+      />
     </Sheet>
   );
 }

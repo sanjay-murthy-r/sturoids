@@ -495,7 +495,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
             // Android before 13 says nothing of its own when something is copied
             onPress: () => {
               Clipboard.setStringAsync([draft.current.title.trim(), draft.current.body.trim()].filter(Boolean).join('\n\n'))
-                .then(() => toast('Copied.'))
+                .then(() => toast('Copied'))
                 .catch(() => {});
             },
           },
@@ -543,7 +543,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       if (e) s.patchJournalEntry(id, { tags: e.tags.filter((x) => x !== t) });
     });
     if (onPage) setPageTags(page.tags.filter((x) => x !== t));
-    toast('Deleted the ' + t + ' tag.', {
+    toast('Deleted the ' + t + ' tag', {
       label: 'Undo',
       onPress: () => {
         const now = useStore.getState();

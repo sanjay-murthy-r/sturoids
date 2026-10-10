@@ -287,8 +287,9 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
               domStorageEnabled // lets Desmos remember the session's graph state
             />
             {loading ? (
+              // the plate takes the touches meant for the page it hides: a tap on it never lands on an unseen graph
               <Animated.View
-                pointerEvents={slow ? 'auto' : 'none'}
+                pointerEvents="auto"
                 exiting={level === 'none' ? undefined : FadeOut.duration(level === 'full' ? 280 : 180).easing(Easing.out(Easing.quad))}
                 style={[StyleSheet.absoluteFill, st.cover, { backgroundColor: bg }]}
               >

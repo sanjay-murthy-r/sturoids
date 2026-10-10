@@ -31,7 +31,7 @@ import { ATT_DIR } from '../attachments';
 import { toastTrashed } from '../trashToast';
 import { useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
-import { FolderNameSheet, takeFreshNote } from './NotesListScreen';
+import { FolderNameSheet, isBlankNote, takeFreshNote } from './NotesListScreen';
 
 const LINE_H = 24;
 const FREE_LINES = 9; // keep ~8-10 lines of breathing room while dictating
@@ -296,7 +296,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     if (!id || !takeFreshNote(id)) return;
     const s = useStore.getState();
     const n = s.notes.find((x) => x.id === id);
-    if (n && !n.title.trim() && !n.body.trim() && n.attachments.length === 0) {
+    if (n && isBlankNote(n)) {
       leaving.current = true;
       s.deleteNote(n.id);
     }
@@ -339,10 +339,20 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     setLockPin(true);
   };
 
+  /** Nothing typed, nothing attached: deleting it keeps nothing in Recently deleted, as closing a blank new note does. */
+  const blankNow = () => !!note && isBlankNote({ ...draft.current, attachments: note.attachments });
+
   const deleteThis = () => {
     if (!note) return;
     // what was typed goes with it, so the note comes back from Recently deleted as it was last seen
     commit();
+    if (blankNow()) {
+      takeFreshNote(note.id);
+      leaving.current = true;
+      useStore.getState().deleteNote(note.id);
+      router.back();
+      return;
+    }
     // Recently deleted could not take it: the note stays, and so does its page
     if (!toastTrashed(useStore.getState().trashNote(note.id))) return;
     // the page keeps showing the note while it leaves
@@ -380,10 +390,10 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       }]),
       {
         icon: 'trash-outline', label: 'Delete note', color: C.danger,
-        onPress: () => Alert.alert('Delete note', 'You can restore it from Recently deleted for 30 days.', [
+        onPress: () => (blankNow() ? deleteThis() : Alert.alert('Delete note', 'You can restore it from Recently deleted for 30 days.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Delete', style: 'destructive', onPress: deleteThis },
-        ]),
+        ])),
       },
     ] : undefined,
   });
@@ -544,7 +554,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       }
       if (lost) toast(NOT_KEPT);
     } catch (e: any) {
-      toast('Could not attach that file.');
+      toast('Could not attach that file');
     }
   };
 
@@ -561,7 +571,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     } catch (e: any) {
       toast(/permission/i.test(String(e?.code) + String(e?.message))
         ? 'Allow the camera in the phone\'s settings to take a photo.'
-        : 'Could not take a photo.');
+        : 'Could not take a photo');
     }
   };
 
@@ -574,7 +584,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       addAttachment(note.id, { kind: 'file', uri: stored.uri, name: f.name || 'file' });
       if (!stored.kept) toast(NOT_KEPT);
     } catch (e: any) {
-      toast('Could not attach that file.');
+      toast('Could not attach that file');
     }
   };
 

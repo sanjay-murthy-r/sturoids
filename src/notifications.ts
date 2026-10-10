@@ -467,7 +467,7 @@ async function layOutReminders() {
           const start = minutesOf(b.start);
           if (start < 0) continue;
           const end = toMinutes(b.end);
-          const body = 'Starts at ' + fmtClockTime(start, hour24) + (end > start ? ', until ' + fmtClockTime(end, hour24) : '');
+          const body = 'Starts at ' + fmtClockTime(start, hour24) + (end > start ? ', until ' + (end >= 1440 ? 'midnight' : fmtClockTime(end, hour24)) : '');
           add(`block:${b.id}:${key}`, start - 5, String(b.subject || '').trim() || 'Planner block', body, 'planner');
         }
       }

@@ -143,6 +143,7 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
       const task = editing as DailyTask;
       const repeat = daily ? 'daily' : null;
       if (t !== task.title || repeat !== (task.repeat ?? null) || timeChanged) {
+        // updateDaily clears an earlier day's tick when the ToDo becomes a one-off, so it stays open
         updateDaily(task.id, { title: t, repeat, time: at || null, remind: rem });
         saved.current = 'ToDo saved';
       }

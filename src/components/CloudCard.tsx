@@ -5,7 +5,7 @@ import { C, F, T, TRACK } from '../theme';
 import { useStore, exportSnapshot, hasAnyUserData } from '../store';
 import {
   QUOTA_BYTES, changePassword, deleteAccount, deleteCloudCopy, initCloud, keepThisPhone, mobileDataCost, resetPasswordWithCode,
-  restoreFromCloud, sendResetCode, setAuto, signIn, signOut, signUp, syncNow, useCloud, describe,
+  restoreFromCloud, sendResetCode, setAuto, signIn, signOut, signUp, syncNow, useCloud, describe, isoTime,
 } from '../cloud';
 import { eraseThisPhone } from '../wipe';
 import { pinStatus } from '../lock';
@@ -255,8 +255,10 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
       : c.lastSyncedAt ? 'Backed up ' + ago(c.lastSyncedAt, hour24) + (c.pending && !c.auto ? '. Changes waiting.' : '')
         : 'Not backed up yet';
   const remote = c.remote;
+  // the cloud's own time has microseconds and an offset, which not every engine's Date reads: read by hand, as cloud.ts does
+  const remoteAt = remote ? isoTime(remote.updatedAt) : NaN;
   const from = remote
-    ? (remote.device || 'another phone') + ', ' + ago(new Date(remote.updatedAt).getTime(), hour24) + withFiles(remote.files)
+    ? (remote.device || 'another phone') + (Number.isFinite(remoteAt) ? ', ' + ago(remoteAt, hour24) : '') + withFiles(remote.files)
     : '';
   const choiceTitle = c.reason === 'rescue' ? 'This phone could not open its data'
     : c.reason === 'empty' ? 'This phone holds none of your data'
@@ -441,6 +443,14 @@ function ResetSheet({ visible, startEmail, onClose }: { visible: boolean; startE
   const codeRef = React.useRef<TextInput>(null);
   const nextRef = React.useRef<TextInput>(null);
   const againRef = React.useRef<TextInput>(null);
+  // A step the wait cut short ("offline") may still reach the cloud: its late answer wins. A reset that went through
+  // signed this phone in, so the sheet says so instead of an error; a retry meanwhile waits for it rather than spending
+  // the same code a second time.
+  const late = React.useRef<Promise<string> | null>(null);
+  const visibleRef = React.useRef(visible);
+  visibleRef.current = visible;
+  const stepRef = React.useRef(step);
+  stepRef.current = step;
   React.useEffect(() => {
     if (!visible) return;
     setError('');
@@ -461,15 +471,26 @@ function ResetSheet({ visible, startEmail, onClose }: { visible: boolean; startE
     setBusy('send');
     setError('');
     setInfo('');
+    const sent = (again: boolean) => {
+      setError('');
+      setStep('code');
+      setInfo((again ? 'A new code is on its way to ' : 'We sent a 6-digit code to ') + address
+        + '. It can take a minute to arrive, so check spam too.');
+      if (visibleRef.current) setTimeout(() => codeRef.current?.focus(), 60);
+    };
     try {
-      const r = await inTime(sendResetCode(address));
+      const work = sendResetCode(address);
+      const r = await inTime(work);
       if (r === 'sent') {
-        setStep('code');
-        setInfo((resend ? 'A new code is on its way to ' : 'We sent a 6-digit code to ') + address
-          + '. It can take a minute to arrive, so check spam too.');
-        setTimeout(() => codeRef.current?.focus(), 60);
+        sent(resend);
       } else {
         setError(r === 'offline' ? RESET_OFFLINE : 'The code could not be sent. Wait a minute, then try again.');
+        // the email may still go out after the wait: then the code step opens, as it would have
+        if (r === 'offline') {
+          work.then((v) => {
+            if (v === 'sent' && !busyRef.current && stepRef.current === (resend ? 'code' : 'email')) sent(resend);
+          }).catch(() => {});
+        }
       }
     } finally {
       busyRef.current = false;
@@ -485,17 +506,38 @@ function ResetSheet({ visible, startEmail, onClose }: { visible: boolean; startE
     busyRef.current = true;
     setBusy('reset');
     setError('');
+    const finish = () => {
+      tap();
+      // the password is not kept a moment longer than it is needed
+      setNext('');
+      setAgain('');
+      setCode('');
+      setInfo('');
+      setError('');
+      setStep('done');
+      // closed meanwhile: the account card behind it has turned signed in, and this says why
+      if (!visibleRef.current) toast('Password changed');
+    };
     try {
-      const r = await inTime(resetPasswordWithCode(email, code, next));
+      // a step cut short earlier is still on its way: its answer comes first, and only a refusal tries again
+      const earlier = late.current;
+      if (earlier) {
+        if ((await inTime(earlier)) === 'ok') { late.current = null; finish(); return; }
+        if (late.current === earlier) { setError(RESET_OFFLINE); return; }
+      }
+      const work = resetPasswordWithCode(email, code, next);
+      const r = await inTime(work);
       if (r === 'ok') {
-        tap();
-        // the password is not kept a moment longer than it is needed
-        setNext('');
-        setAgain('');
-        setCode('');
-        setInfo('');
-        setStep('done');
+        finish();
         return;
+      }
+      if (r === 'offline') {
+        late.current = work;
+        work.then((v) => {
+          if (late.current !== work) return;
+          late.current = null;
+          if (v === 'ok' && !busyRef.current && stepRef.current === 'code') finish();
+        }).catch(() => {});
       }
       setError(
         r === 'wrong-code' ? "That code didn't work. It may be mistyped or out of date: check the email, or send a new code."
@@ -751,8 +793,9 @@ const st = StyleSheet.create({
   title: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
   problem: { color: C.danger, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -4, marginBottom: 12 },
   info: { color: C.textDim, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -4, marginBottom: 12 },
-  // the links sit where they always did; their touch area reaches 44 above and below the words
-  links: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 5, marginBottom: -13, paddingHorizontal: 4 },
+  // the links sit where they always did; their touch area reaches 44 above and below the words. At a large font size
+  // the second goes under the first rather than off the edge of a narrow phone
+  links: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, justifyContent: 'space-between', marginTop: 5, marginBottom: -13, paddingHorizontal: 4 },
   linkHit: { minHeight: 44, justifyContent: 'center' },
   link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   danger: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 8, marginLeft: 4 },

@@ -95,7 +95,8 @@ function offerBreak(at: number, next: NextBlock) {
 /** A break of `min` minutes starts now: a calm countdown, never logged as focus, with its own heads-up for a phone away. */
 function startBreak(min: number) {
   const b = between;
-  if (!b) return;
+  // a break is taken from the offer, once: a second tap that lands as the offer gives way never starts another
+  if (!b || b.stage !== 'offer') return;
   const endAt = Date.now() + min * 60_000;
   setBetween({ stage: 'break', at: Date.now(), endAt, min, next: b.next });
   void scheduleBreakEnd(endAt, min);
@@ -141,6 +142,11 @@ function betweenAt(b: Between | null, t: number): Between | null {
 // block resumed from the store after the app was closed, before Deep Work is opened at all: Today starts the watch.
 let screensOpen = 0;
 let awayEndTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * The end of the block last heard while no Deep Work screen was open (ms). Its toast's Open brings Deep Work up within
+ * moments, while that end still counts as fresh there: it must not buzz and chime a second time.
+ */
+let heardEndAt = 0;
 
 /** Watches the end of the block in the store, while no Deep Work screen is open to do it. */
 export function watchAwayEnd() {
@@ -155,6 +161,7 @@ export function watchAwayEnd() {
     if (screensOpen > 0 || !now || now.startedAt !== dw.startedAt || now.startTs !== dw.startTs || !now.running) return;
     if (AppState.currentState !== 'active' || Date.now() - endAt > FRESH_MS) return;
     playSessionEnd();
+    heardEndAt = endAt;
     const name = (now.subject || '').trim();
     toastWhenSeen(name ? name + ' block done' : 'Block done', { label: 'Open', onPress: () => openTool('focus') }, () => screensOpen === 0);
   }, Math.max(0, endAt - Date.now()));
@@ -312,8 +319,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       if (endedRef.current) return;
       endedRef.current = true;
       // read as it fires: a block that ran out while the app was closed or asleep (the timer fires late on return)
-      // ended where the notification spoke, so it is neither heard again nor pulsed
-      const fresh = Date.now() - endAt < FRESH_MS;
+      // ended where the notification spoke, so it is neither heard again nor pulsed; so did one already heard while no
+      // Deep Work screen was open (its toast's Open brought this one up)
+      const fresh = Date.now() - endAt < FRESH_MS && endAt !== heardEndAt;
       // the buzz, and the chime when it is on, wherever in the app the student is
       if (fresh && AppState.currentState === 'active') playSessionEnd();
       // the completion pulse is a scale: only full motion plays it, and a resumed session that ran out ends at once

@@ -16,6 +16,7 @@ import {
 } from '../src/store';
 import { compareVersions, fmtShortDate, todayKey } from '../src/utils';
 import { openPage } from '../src/toolNav';
+import { useToday } from '../src/hooks/useNow';
 import { SignatureStill } from '../src/components/Signature';
 import {
   ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu,
@@ -34,7 +35,7 @@ import { afterReplace, sweepUnusedFiles } from '../src/wipe';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../src/tools';
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
 import { CloudSection, DeleteSection, ago, dayOf, locksNeedPin } from '../src/components/CloudCard';
-import { useCloud } from '../src/cloud';
+import { isFollowCopy, useCloud } from '../src/cloud';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.7.0';
@@ -718,7 +719,11 @@ function deletedOn(at: number, now = new Date()): string {
 }
 
 /** One deleted thing: its kind's icon, its name, and how long it has left. A tap offers Restore and Delete now. */
-const TrashRow = React.memo(function TrashRow({ item, onOpen }: { item: TrashItem; onOpen: (id: string) => void }) {
+const TrashRow = React.memo(function TrashRow({ item, onOpen }: {
+  item: TrashItem; onOpen: (id: string) => void;
+  /** today's date: the days left are counted again when it turns over */
+  today: string;
+}) {
   useTheme();
   const kind = TRASH_KINDS[item.kind];
   const title = trashTitle(item);
@@ -753,6 +758,8 @@ const TrashSection = React.memo(function TrashSection() {
   const menuItem = useHeld(menuId ? trash.find((t) => t.id === menuId) ?? null : null);
   const [pinFor, setPinFor] = useState<null | { tint: string; run: () => void }>(null);
   const pinHeld = useHeld(pinFor);
+  // Today and Yesterday, and the days left, move on at midnight while the page stays open
+  const today = useToday();
   const groups = useMemo(() => {
     const out: { label: string; items: TrashItem[] }[] = [];
     for (const t of [...trash].sort((a, b) => b.deletedAt - a.deletedAt)) {
@@ -762,7 +769,7 @@ const TrashSection = React.memo(function TrashSection() {
       else out.push({ label, items: [t] });
     }
     return out;
-  }, [trash]);
+  }, [trash, today]);
 
   const find = (id: string) => useStore.getState().trash.find((t) => t.id === id);
   /** runs at once, or once the PIN is given when the item is locked and a PIN is set */
@@ -822,7 +829,7 @@ const TrashSection = React.memo(function TrashSection() {
             <View key={g.label}>
               <SectionTitle>{g.label}</SectionTitle>
               <ListCard>
-                {g.items.map((t) => <TrashRow key={t.id} item={t} onOpen={setMenuId} />)}
+                {g.items.map((t) => <TrashRow key={t.id} item={t} onOpen={setMenuId} today={today} />)}
               </ListCard>
             </View>
           ))}
@@ -1141,7 +1148,8 @@ export default function Settings() {
   // a copy of saved data that could not be opened (see store.ts): share it, restore it, or let it go
   const [recovery, setRecovery] = useState<string | null>(null);
   useEffect(() => {
-    readRecoveryCopy().then(setRecovery);
+    // the copy a quiet follow of the cloud keeps for its Undo, for a few seconds, is not one of these
+    readRecoveryCopy().then((raw) => setRecovery(isFollowCopy(raw) ? null : raw));
   }, []);
   // the kept copy holds whatever was locked when it was set aside, which the data on screen cannot tell: with a PIN
   // set, sharing or restoring it asks for the PIN

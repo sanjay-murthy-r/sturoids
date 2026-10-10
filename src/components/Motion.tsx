@@ -238,8 +238,15 @@ export function FadeSwap({ swapKey, children, style }: {
     });
   }, [swapKey]);
   const aStyle = useAnimatedStyle(() => ({ opacity: o.value }));
-  // the held words stay up while they dip out; once the new key has landed, the children render live again
-  return <Animated.View style={[style as any, aStyle]}>{swapKey === held.key ? children : held.node}</Animated.View>;
+  // the held words stay up while they dip out; once the new key has landed, the children render live again. What is
+  // dipping out is already gone as far as the user is concerned, so it takes no touches: a quick second tap must not
+  // land on the old buttons (and their old handlers) during the dip.
+  const swapping = swapKey !== held.key;
+  return (
+    <Animated.View style={[style as any, aStyle]} pointerEvents={swapping ? 'none' : 'auto'}>
+      {swapping ? held.node : children}
+    </Animated.View>
+  );
 }
 
 /** The tab navigator a screen sits in, if any: the nearest navigator up the tree whose state is a tab bar's. */

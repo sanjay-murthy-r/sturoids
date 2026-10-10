@@ -266,10 +266,28 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [sel, setSel] = useState({ start: kept.expr.length, end: kept.expr.length });
   const selRef = useRef(sel);
   const focusedRef = useRef(false);
+  // The caret a key has just set, until the field reports it back. The field reports each step of an update (the text
+  // replaced, which moves its caret, then the caret placed), and those reports reach here a moment later: two quick
+  // keys can both be pressed first, and the first one's reports would then put the caret back where it left it, so the
+  // next key lands one place behind. While a key's caret is on its way, only the report that matches it is taken; a
+  // report that never comes lets go after a short while.
+  const awaited = useRef<{ start: number; end: number; until: number } | null>(null);
   const placeCaret = useCallback((at: number) => {
     const v = { start: at, end: at };
     selRef.current = v;
+    // an untapped field reports nothing, and needs no waiting for
+    awaited.current = focusedRef.current ? { ...v, until: Date.now() + 400 } : null;
     setSel(v);
+  }, []);
+  const onSelection = useCallback((s: { start: number; end: number }) => {
+    const w = awaited.current;
+    if (w) {
+      const caughtUp = s.start === w.start && s.end === w.end;
+      if (!caughtUp && Date.now() < w.until) return;
+      awaited.current = null;
+    }
+    selRef.current = s;
+    setSel(s);
   }, []);
 
   /**
@@ -412,6 +430,8 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   /** Text the field took in itself (a paste, a hardware keyboard): the keypad's own signs, on one line. */
   const typed = (text: string) => {
     setEvalError(null);
+    // the field placed its own caret for what it took in: its next report is the one to follow
+    awaited.current = null;
     write(text.replace(/[\r\n]/g, '').replace(/\*/g, '×').replace(/\//g, '÷').replace(/-/g, '−'), false, live.current.fromAns, null);
   };
 
@@ -446,7 +466,12 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const s = live.current;
     const out = s.justEvaluated ? s.ansAscii : answerRef.current?.ascii;
     if (!out) return;
-    await Clipboard.setStringAsync(out);
+    try {
+      await Clipboard.setStringAsync(out);
+    } catch {
+      // the clipboard said no: nothing was copied, so nothing says it was
+      return;
+    }
     tick();
     // a haptic only answers at full motion: the copy says so in words too
     toast('Copied ' + out);
@@ -559,9 +584,9 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <TextInput
             value={expr}
             selection={{ start: Math.min(sel.start, expr.length), end: Math.min(sel.end, expr.length) }}
-            onSelectionChange={(e) => { selRef.current = e.nativeEvent.selection; setSel(e.nativeEvent.selection); }}
-            onFocus={() => { focusedRef.current = true; }}
-            onBlur={() => { focusedRef.current = false; }}
+            onSelectionChange={(e) => onSelection(e.nativeEvent.selection)}
+            onFocus={() => { focusedRef.current = true; awaited.current = null; }}
+            onBlur={() => { focusedRef.current = false; awaited.current = null; }}
             onChangeText={typed}
             showSoftInputOnFocus={false}
             multiline

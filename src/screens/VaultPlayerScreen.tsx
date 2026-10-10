@@ -422,7 +422,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const open = (id: string) => ({ label: 'Open', onPress: () => nav.openNote(id) });
     if (!old) {
       const id = s.addNote({ title: 'Revision: ' + video.title, body, folder: 'General' });
-      toast('Revision sheet added to Notes.', open(id));
+      toast('Revision sheet added to Notes', open(id));
       return;
     }
     if (old.body === body) {
@@ -436,7 +436,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         text: 'Update',
         onPress: () => {
           useStore.getState().updateNote(old.id, { body });
-          toast('Revision sheet updated.', open(old.id));
+          toast('Revision sheet updated', open(old.id));
         },
       },
     ]);
@@ -446,7 +446,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const dropTag = (x: string) => {
     const was = video.tags.indexOf(x);
     removeVideoTag(video.id, x);
-    toast('Removed #' + x + '.', {
+    toast('Removed #' + x, {
       label: 'Undo',
       onPress: () => {
         const v = useStore.getState().vaultVideos.find((y) => y.id === video.id);

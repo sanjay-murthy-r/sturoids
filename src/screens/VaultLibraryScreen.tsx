@@ -225,7 +225,8 @@ const AddCard = React.memo(function AddCard({ cwd, folderName, onAdded }: {
     }
   };
   const paste = async () => {
-    const t = await Clipboard.getStringAsync();
+    // a clipboard the phone will not read counts as an empty one
+    const t = await Clipboard.getStringAsync().catch(() => '');
     if (t) submit(t);
     else toast('Copy a YouTube link first.');
   };

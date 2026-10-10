@@ -243,7 +243,8 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     actions: [
       {
         icon: alertsOn ? 'notifications' : 'notifications-outline',
-        label: alertsOn ? 'Block alerts, on' : 'Block alerts, off',
+        label: 'Block alerts',
+        on: alertsOn,
         color: alertsOn ? C.accent : undefined,
         onPress: () => { void toggleAlerts(); },
       },
@@ -472,7 +473,9 @@ const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onTo
     : [current > 0 ? current + ' current' : '', best > 0 ? best + ' best' : ''].filter(Boolean).join(' · ');
   const time = h.remindTime ? clock(h.remindTime, hour24) : '';
   return (
-    <ListRow style={st.habitRow} onLongPress={() => onEdit(h)}>
+    // the row holds its own tick, its week and its buttons, each reached on its own by a screen reader; the row itself
+    // is the long press that edits it, and says so
+    <ListRow style={st.habitRow} onLongPress={() => onEdit(h)} accessibilityHint="Double tap and hold to edit">
       <Row>
         <CheckCircle done={done} onPress={() => onToggle(h.id)} label={h.title + ', today'} />
         <View style={{ flex: 1, marginLeft: 12 }}>
@@ -528,7 +531,10 @@ const WeekStrip = React.memo(function WeekStrip({ id, title, doneDates, today, o
     return Array.from({ length: 7 }, (_, i) => {
       const date = new Date(y, m - 1, d - 6 + i);
       const key = todayKey(date);
-      return { key, initial: DAY_NAMES[(date.getDay() + 6) % 7][0], spoken: SPOKEN_DAYS[date.getDay()], done: done.has(key), isToday: i === 6 };
+      return {
+        key, initial: DAY_NAMES[(date.getDay() + 6) % 7][0], spoken: i === 5 ? 'yesterday' : SPOKEN_DAYS[date.getDay()],
+        done: done.has(key), isToday: i === 6,
+      };
     });
   }, [doneDates, today]);
   return (

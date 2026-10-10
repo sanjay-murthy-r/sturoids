@@ -125,8 +125,11 @@ export function ToastHost() {
               key={key}
               onPress={() => {
                 tick();
+                const said = counter.current;
                 action.onPress();
-                hide(160);
+                // an action that answers with a toast of its own ("Restore the video first.") leaves that one up for its
+                // full time; otherwise the card goes once its action is used
+                if (counter.current === said) hide(160);
               }}
               hitSlop={10}
               accessibilityRole="button"

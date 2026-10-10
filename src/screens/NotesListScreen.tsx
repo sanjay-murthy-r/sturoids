@@ -29,6 +29,14 @@ export function takeFreshNote(id: string): boolean {
   return freshNotes.delete(id);
 }
 
+/**
+ * A note with nothing in it: no title, no words, no attachment. Deleting one takes it away for good, on the list and
+ * in the note alike, since Recently deleted would only keep an "Untitled note" with nothing to bring back.
+ */
+export function isBlankNote(n: Pick<Note, 'title' | 'body' | 'attachments'>): boolean {
+  return !n.title.trim() && !n.body.trim() && !(n.attachments?.length);
+}
+
 /** A second tap on a row or on New note while the first one's page is on its way is the same tap. */
 const PUSH_GAP_MS = 600;
 
@@ -372,11 +380,15 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
             label: 'Delete note',
             icon: 'trash-outline',
             color: C.danger,
-            onPress: () =>
+            onPress: () => {
+              // a blank note has nothing to keep: it simply goes
+              const now = useStore.getState().notes.find((n) => n.id === heldNote.id);
+              if (now && isBlankNote(now)) { tap(); useStore.getState().deleteNote(now.id); return; }
               Alert.alert('Delete note', 'You can restore it from Recently deleted for 30 days.', [
                 { text: 'Cancel', style: 'cancel' },
                 { text: 'Delete', style: 'destructive', onPress: () => { toastTrashed(useStore.getState().trashNote(heldNote.id)); } },
-              ]),
+              ]);
+            },
           },
         ] : []}
       />

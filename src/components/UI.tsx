@@ -90,6 +90,11 @@ export interface ToolAction {
   onPress: () => void;
   /** the icon's colour; the dim text ink when left out */
   color?: string;
+  /**
+   * For an action that switches something on and off (the Planner's bell): whether it is on now. A screen reader then
+   * hears a switch with its state, under one name that never changes.
+   */
+  on?: boolean;
 }
 
 export interface ToolHeaderOptions {
@@ -253,10 +258,12 @@ export function NeuHeader({ title, right, onBack, variant = 'page' }: {
 
 /** One flat icon button of the tray: it carves in while pressed. */
 function TrayButton({ action }: { action: ToolAction }) {
+  const toggles = action.on !== undefined;
   return (
     <Bouncy
       onPress={action.onPress} scaleTo={1} sink={false} radius={18} hitSlop={4}
-      accessibilityLabel={action.label} accessibilityRole="button" style={hdr.trayBtn}
+      accessibilityLabel={action.label} accessibilityRole={toggles ? 'switch' : 'button'}
+      accessibilityState={toggles ? { checked: action.on } : undefined} style={hdr.trayBtn}
     >
       <Ionicons name={action.icon} size={19} color={action.color || C.textDim} />
     </Bouncy>
@@ -362,7 +369,9 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
               minimal ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, padding: 1 } : { backgroundColor: C.inset, ...neuInset('hairline') },
             ]}
           >
-            {shown.map((a) => <TrayButton key={a.label} action={a} />)}
+            {/* keyed by place, not by label or icon: an action whose look changes as it is used (a bell turned on)
+                stays the same button, so a screen reader's focus stays on it */}
+            {shown.map((a, i) => <TrayButton key={i} action={a} />)}
             {rest.length ? (
               <TrayButton action={{ icon: 'ellipsis-horizontal', label: 'More actions', onPress: () => setOverflow(true) }} />
             ) : null}

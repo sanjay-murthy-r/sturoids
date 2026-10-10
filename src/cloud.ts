@@ -1033,9 +1033,10 @@ function sweepAfterReplace(startedAt: number) {
 /**
  * Brings the cloud copy here, replacing this phone's data: the data, the journal's texts, then each attachment (those
  * kept in Recently deleted too). Runs inside `running`. Throws only before anything here is replaced; `onReplaced`
- * hears the moment the data is. Returns how many attachments could not be brought down.
+ * hears the moment the data is, and `mayReplace`, asked once the copy is here and read, can still stop it then.
+ * Returns how many attachments could not be brought down.
  */
-async function bringDown(s: Session, onReplaced?: () => void): Promise<{ missing: number }> {
+async function bringDown(s: Session, onReplaced?: () => void, mayReplace?: () => boolean): Promise<{ missing: number }> {
   const { data, error } = await cloud().from('backups').select('snapshot, updated_at').eq('user_id', s.user.id).maybeSingle();
   if (error) throw error;
   if (!data) {
@@ -1047,6 +1048,7 @@ async function bringDown(s: Session, onReplaced?: () => void): Promise<{ missing
   try { parsed = JSON.parse(data.snapshot); } catch { /* refused just below */ }
   const read = readSnapshot(parsed);
   if (!read) throw said('The cloud copy could not be read by this version of the app.');
+  if (mayReplace && !mayReplace()) throw said('This phone changed while the cloud copy came down.');
   applySnapshot(read);
   onReplaced?.();
   let missing = 0;
@@ -1153,6 +1155,12 @@ function isSafetyCopy(raw: string | null, id: string | null): boolean {
   return id == null || raw.startsWith(SAFETY_PREFIX + JSON.stringify(id) + ',');
 }
 
+/**
+ * Whether what the recovery row holds is only the copy kept for a quiet follow's Undo: it is no copy of data that
+ * could not be opened, so Settings never offers it as one (restoring it later would undo the follow unasked).
+ */
+export const isFollowCopy = (raw: string | null) => isSafetyCopy(raw, null);
+
 /** Removes the copy this module kept for an Undo (never a kept copy of data that could not be opened). True if it went. */
 async function dropSafetyCopy(id: string | null): Promise<boolean> {
   try {
@@ -1212,12 +1220,19 @@ async function follow(s: Session, remote: RemoteCopy): Promise<boolean> {
   const before = { lastRemoteAt: meta.lastRemoteAt, lastHash: meta.lastHash, lastSyncedAt: meta.lastSyncedAt, filesWaiting: !!meta.filesWaiting };
   const startedAt = Date.now();
   let replaced = false;
+  // something done here while the copy was on its way down (a tick, a note saved) is a change of this phone's own: then
+  // both sides changed, nothing is replaced, and the user chooses
+  let moved = false;
   patch({ status: 'syncing', error: null, progress: null, note: null });
   try {
-    await bringDown(s, () => { replaced = true; });
+    await bringDown(s, () => { replaced = true; }, () => {
+      moved = changes !== atBuild || savePending();
+      return !moved;
+    });
   } catch (e) {
     if (!replaced) {
       await dropSafetyCopy(safetyId);
+      if (moved) return false;
       throw e;
     }
   }
