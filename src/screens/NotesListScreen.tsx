@@ -13,7 +13,7 @@ import {
 } from '../components/UI';
 import { ARRIVE, Bouncy, EASE_OUT, Enter, FADE_IN, glide, useAnimLevel } from '../components/Motion';
 import { tap } from '../haptics';
-import { deleteAttachmentFiles } from '../attachments';
+import { toastTrashed } from '../trashToast';
 import { ToolGate } from '../components/LockGate';
 import { fmtClockTime, todayKey, yesterdayKey } from '../utils';
 import { useToday } from '../hooks/useNow';
@@ -155,7 +155,6 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const addNote = useStore((s) => s.addNote);
   const addNoteFolder = useStore((s) => s.addNoteFolder);
   const updateNote = useStore((s) => s.updateNote);
-  const deleteNote = useStore((s) => s.deleteNote);
   const renameNoteFolder = useStore((s) => s.renameNoteFolder);
   const deleteNoteFolder = useStore((s) => s.deleteNoteFolder);
 
@@ -366,16 +365,17 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
           {
             label: heldNote.pinned ? 'Unpin' : 'Pin to top',
             icon: heldNote.pinned ? 'pin' : 'pin-outline',
-            onPress: () => updateNote(heldNote.id, { pinned: !heldNote.pinned }),
+            // a pin is not an edit: the note keeps its place among the others by when it was written
+            onPress: () => updateNote(heldNote.id, { pinned: !heldNote.pinned }, { touch: false }),
           },
           {
             label: 'Delete note',
             icon: 'trash-outline',
             color: C.danger,
             onPress: () =>
-              Alert.alert('Delete note', 'This cannot be undone.', [
+              Alert.alert('Delete note', 'You can restore it from Recently deleted for 30 days.', [
                 { text: 'Cancel', style: 'cancel' },
-                { text: 'Delete', style: 'destructive', onPress: () => deleteAttachmentFiles(deleteNote(heldNote.id)) },
+                { text: 'Delete', style: 'destructive', onPress: () => { toastTrashed(useStore.getState().trashNote(heldNote.id)); } },
               ]),
           },
         ] : []}

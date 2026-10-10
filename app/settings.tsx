@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo } from 'react-native';
 import Animated, { Easing, LayoutAnimationConfig, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -9,24 +9,27 @@ import Constants from 'expo-constants';
 import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, bgFor, neuInset, neuRaised } from '../src/theme';
+import { C, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, bgFor, neuInset, neuRaised, shadowsSupported } from '../src/theme';
 import {
   useStore, exportSnapshot, importSnapshot, readSnapshot, applySnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves,
-  savedSize, savesFailing, subscribeSaveProblems, SAVE_WARN_CHARS, ReadSnapshot,
+  savedSize, savesFailing, subscribeSaveProblems, SAVE_WARN_CHARS, ReadSnapshot, TrashItem, TrashKind, trashDaysLeft,
 } from '../src/store';
 import { compareVersions, fmtShortDate, todayKey } from '../src/utils';
 import { openPage } from '../src/toolNav';
 import { SignatureStill } from '../src/components/Signature';
-import { ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu, EdgeScroll, useTheme } from '../src/components/UI';
+import {
+  ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu,
+  EdgeScroll, EmptyState, useTheme,
+} from '../src/components/UI';
 import { toast } from '../src/components/Toast';
 import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt, useEntrance } from '../src/components/Motion';
-import { tick } from '../src/haptics';
+import { tap, tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
 import { PinSheet } from '../src/components/LockGate';
 import { journalForBackup, restoreBodies } from '../src/journal';
 import { BackupOpened, estimateBackupBytes, openBackup, restoredPath, writeBackup } from '../src/backup';
 import { deviceAuthAvailable, isOpen, markOpen, pinStatus, removePin } from '../src/lock';
-import { ensurePermission, rescheduleAllReminders } from '../src/notifications';
+import { ensurePermission, rescheduleAllReminders, turnOnReminders } from '../src/notifications';
 import { afterReplace, sweepUnusedFiles } from '../src/wipe';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../src/tools';
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
@@ -34,7 +37,7 @@ import { CloudSection, DeleteSection, ago, dayOf, locksNeedPin } from '../src/co
 import { useCloud } from '../src/cloud';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
-const APP_VERSION = Constants.expoConfig?.version || '1.6.0';
+const APP_VERSION = Constants.expoConfig?.version || '1.7.0';
 
 /** When the last backup file was made, kept apart from the data so it never reaches the cloud's fingerprint. */
 const LAST_EXPORT_KEY = 'sturoids-last-export';
@@ -43,6 +46,9 @@ const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
   { key: 'default', label: 'Default', desc: 'Soft grey with raised surfaces' },
   { key: 'minimal', label: 'Minimalistic', desc: 'High contrast, flat, maximum legibility' },
 ];
+/** the themes as offered here: a phone that cannot draw shadows shows Minimal for Default too, and Default says so */
+const SHOWN_THEMES = shadowsSupported ? THEMES
+  : THEMES.map((t) => (t.key === 'default' ? { ...t, desc: "This phone can't draw its shadows, so Minimal is used." } : t));
 
 
 const ANIMS: { key: AnimLevel; label: string; desc: string }[] = [
@@ -305,6 +311,7 @@ function Avatar({ size }: { size: number }) {
 
 /** The photo and the name the greeting uses. What is typed stays in the field until a pause (see useSettingDraft). */
 const ProfileCard = React.memo(function ProfileCard() {
+  useTheme(); // the photo link is in the accent
   const name = useSettingDraft('name');
   const avatar = useStore((s) => s.settings.avatar);
   const setSetting = useStore((s) => s.setSetting);
@@ -334,7 +341,7 @@ const ProfileCard = React.memo(function ProfileCard() {
       <Text style={st.label}>Name (used in the greeting)</Text>
       <Field
         value={name.draft} onChangeText={name.change} onBlur={name.commit} placeholder="Your name"
-        autoCapitalize="words" autoComplete="name" textContentType="name"
+        autoCapitalize="words" autoComplete="name" textContentType="name" maxLength={30}
       />
       <DotMenu
         visible={menu} onClose={() => setMenu(false)}
@@ -465,12 +472,13 @@ const PAGE_IN_SOME = { duration: 180, easing: EASE_OUT };
 const PAGE_OUT = { duration: 220, easing: Easing.in(Easing.quad) };
 const PAGE_OUT_SOME = { duration: 160, easing: Easing.in(Easing.quad) };
 
-type Page = 'account' | 'appearance' | 'tools' | 'motion' | 'time' | 'deepwork' | 'privacy' | 'backup' | 'updates' | 'delete';
+type Page = 'account' | 'appearance' | 'tools' | 'motion' | 'time' | 'deepwork' | 'privacy' | 'backup' | 'trash' | 'updates'
+  | 'delete';
 
 const PAGE_TITLES: Record<Page, string> = {
   account: 'Account', appearance: 'Appearance', tools: 'Tabs and tools', motion: 'Motion and start screen',
-  time: 'Time and reminders', deepwork: 'Deep Work', privacy: 'Privacy and locks', backup: 'Backup', updates: 'Updates',
-  delete: 'Delete',
+  time: 'Time and reminders', deepwork: 'Deep Work', privacy: 'Privacy and locks', backup: 'Backup',
+  trash: 'Recently deleted', updates: 'Updates', delete: 'Delete',
 };
 const isPage = (p: unknown): p is Page => typeof p === 'string' && Object.prototype.hasOwnProperty.call(PAGE_TITLES, p);
 
@@ -682,6 +690,171 @@ const UpdatesCard = React.memo(function UpdatesCard() {
   );
 });
 
+/** What each kind of deleted thing is called and drawn as, and what it is called while it stands behind the PIN. */
+const TRASH_KINDS: Record<TrashKind, { icon: string; label: string; locked: string }> = {
+  note: { icon: 'document-text-outline', label: 'Note', locked: 'Locked note' },
+  journal: { icon: 'journal-outline', label: 'Journal entry', locked: 'Locked entry' },
+  video: { icon: 'play-circle-outline', label: 'Video', locked: 'Locked video' },
+  timedNote: { icon: 'chatbox-ellipses-outline', label: 'Note on a video', locked: 'Locked note' },
+  bookmark: { icon: 'bookmark-outline', label: 'Bookmark', locked: 'Locked bookmark' },
+  attachment: { icon: 'attach-outline', label: 'Attachment', locked: 'Locked attachment' },
+};
+
+/** A deleted thing's name on its row: what it was called, or only its kind while it is locked. */
+const trashTitle = (t: TrashItem) => (t.locked ? TRASH_KINDS[t.kind].locked : t.title.trim() || 'Untitled');
+
+/** The PIN pad's tint for a locked item: the colour of the tool it came from. */
+const trashTint = (t: TrashItem) => (t.kind === 'journal' ? C.gold : t.kind === 'note' || t.kind === 'attachment' ? C.green : C.accent);
+
+/** "Today", "Yesterday", or the day ("3 Oct", with the year when it is not this one). */
+function deletedOn(at: number, now = new Date()): string {
+  const key = todayKey(new Date(at));
+  if (key === todayKey(now)) return 'Today';
+  const y = new Date(now);
+  y.setDate(y.getDate() - 1);
+  if (key === todayKey(y)) return 'Yesterday';
+  const year = new Date(at).getFullYear();
+  return dayOf(at) + (year !== now.getFullYear() ? ' ' + year : '');
+}
+
+/** One deleted thing: its kind's icon, its name, and how long it has left. A tap offers Restore and Delete now. */
+const TrashRow = React.memo(function TrashRow({ item, onOpen }: { item: TrashItem; onOpen: (id: string) => void }) {
+  useTheme();
+  const kind = TRASH_KINDS[item.kind];
+  const title = trashTitle(item);
+  const left = trashDaysLeft(item);
+  const days = left + (left === 1 ? ' day left' : ' days left');
+  const caption = item.locked ? days : kind.label + ' · ' + days;
+  return (
+    <ListRow
+      onPress={() => { tick(); onOpen(item.id); }} style={st.trashRow}
+      accessibilityLabel={title + ', ' + (item.locked ? '' : kind.label + ', ') + days} accessibilityHint="Restore it, or delete it now"
+    >
+      <Ionicons name={kind.icon as any} size={20} color={C.textDim} />
+      <View style={{ flex: 1, marginLeft: 14 }}>
+        <Text style={[T.body, { fontFamily: F.med }]} numberOfLines={1}>{title}</Text>
+        <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{caption}</Text>
+      </View>
+      <Ionicons name="ellipsis-horizontal" size={17} color={C.textFaint} />
+    </ListRow>
+  );
+});
+
+/**
+ * Recently deleted: what was deleted in the last 30 days, grouped by the day it was deleted, newest first. Each thing
+ * can be restored or deleted now, and the whole page emptied. A locked thing shows only its kind, and the PIN is asked
+ * for before it is restored or deleted (or before an empty that takes one with it).
+ */
+const TrashSection = React.memo(function TrashSection() {
+  useTheme();
+  const trash = useStore((s) => s.trash);
+  const [menuId, setMenuId] = useState<string | null>(null);
+  // the menu keeps naming its item while it closes, even once the item has gone
+  const menuItem = useHeld(menuId ? trash.find((t) => t.id === menuId) ?? null : null);
+  const [pinFor, setPinFor] = useState<null | { tint: string; run: () => void }>(null);
+  const pinHeld = useHeld(pinFor);
+  const groups = useMemo(() => {
+    const out: { label: string; items: TrashItem[] }[] = [];
+    for (const t of [...trash].sort((a, b) => b.deletedAt - a.deletedAt)) {
+      const label = deletedOn(t.deletedAt);
+      const last = out[out.length - 1];
+      if (last && last.label === label) last.items.push(t);
+      else out.push({ label, items: [t] });
+    }
+    return out;
+  }, [trash]);
+
+  const find = (id: string) => useStore.getState().trash.find((t) => t.id === id);
+  /** runs at once, or once the PIN is given when the item is locked and a PIN is set */
+  const withPin = async (locked: boolean, tint: string, run: () => void) => {
+    if (locked && (await pinStatus()) !== 'none') setPinFor({ tint, run });
+    else run();
+  };
+
+  const restore = (id: string) => {
+    const item = find(id);
+    if (!item) return;
+    withPin(item.locked, trashTint(item), () => {
+      // gone meanwhile (an Undo elsewhere put it back, or it was purged), so there is nothing to say
+      if (!find(id)) return;
+      if (useStore.getState().restoreFromTrash(id) === 'parent-missing') {
+        toast(item.kind === 'attachment' ? 'Restore the note first.' : 'Restore the video first.');
+        return;
+      }
+      tap();
+      toast('Restored');
+    });
+  };
+
+  const deleteNow = (id: string) => {
+    const item = find(id);
+    if (!item) return;
+    Alert.alert('Delete it for good?', '"' + trashTitle(item) + '" cannot be restored after this.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: () => withPin(item.locked, trashTint(item), () => useStore.getState().deleteFromTrash(id)),
+      },
+    ]);
+  };
+
+  const emptyAll = () => {
+    const n = useStore.getState().trash.length;
+    if (!n) return;
+    Alert.alert(
+      'Empty Recently deleted?',
+      (n === 1 ? 'The item here is' : 'All ' + n + ' items here are') + ' deleted for good. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Empty', style: 'destructive',
+          onPress: () => withPin(useStore.getState().trash.some((t) => t.locked), C.accent, () => useStore.getState().emptyTrash()),
+        },
+      ],
+    );
+  };
+
+  return (
+    <>
+      {groups.length ? (
+        <>
+          {groups.map((g) => (
+            <View key={g.label}>
+              <SectionTitle>{g.label}</SectionTitle>
+              <ListCard>
+                {g.items.map((t) => <TrashRow key={t.id} item={t} onOpen={setMenuId} />)}
+              </ListCard>
+            </View>
+          ))}
+          <Text style={[T.caption, st.trashNote]}>Deleted things stay here for 30 days, then they are deleted for good.</Text>
+          <PillButton label="Empty Recently deleted" icon="trash-outline" color={C.danger} outline onPress={emptyAll} style={{ marginTop: 14 }} />
+        </>
+      ) : (
+        <EmptyState
+          icon="trash-bin-outline" title="Nothing recently deleted"
+          body="Notes, journal entries and videos you delete stay here for 30 days, then they are deleted for good."
+        />
+      )}
+      <DotMenu
+        visible={!!menuId} onClose={() => setMenuId(null)} title={menuItem ? trashTitle(menuItem) : undefined}
+        items={menuItem ? [
+          { label: 'Restore', icon: 'arrow-undo-outline', onPress: () => restore(menuItem.id) },
+          { label: 'Delete now', icon: 'trash-outline', color: C.danger, onPress: () => deleteNow(menuItem.id) },
+        ] : []}
+      />
+      <PinSheet
+        visible={!!pinFor} mode="enter" tint={pinHeld?.tint ?? C.accent}
+        onClose={() => setPinFor(null)}
+        onDone={() => {
+          const step = pinFor;
+          setPinFor(null);
+          step?.run();
+        }}
+      />
+    </>
+  );
+});
+
 export default function Settings() {
   const theme = useTheme(); // a new accent or theme repaints the page's toggles and pills, which take the accent as a prop
   const level = useAnimLevel();
@@ -771,6 +944,12 @@ export default function Settings() {
   const setSetting = useStore((s) => s.setSetting);
   const pickTheme = useCallback((k: ThemeMode) => setSetting('theme', k), [setSetting]);
   const pickAnim = useCallback((k: AnimLevel) => setSetting('animLevel', k), [setSetting]);
+
+  // exam evenings ring only while the master switch is on: turning them on with it off asks for permission and turns it on
+  const toggleExamReminders = async (v: boolean) => {
+    if (v && !useStore.getState().settings.remindersEnabled && !(await turnOnReminders())) return;
+    setSetting('examReminders', v);
+  };
 
   const toggleReminders = async (v: boolean) => {
     if (v) {
@@ -1025,6 +1204,7 @@ export default function Settings() {
 
   // ---- privacy: what is locked, what may open it, the app PIN, and how soon an open lock closes again ----
   const lockedNotes = useStore((s) => s.notes.filter((n) => n.locked).length);
+  const trashCount = useStore((s) => s.trash.length);
   const [pinState, setPinState] = useState<'set' | 'legacy' | 'none'>('none');
   // until the PIN's state has been read, its line is shown as it was; only a later change dips and swaps it
   const [pinKnown, setPinKnown] = useState(false);
@@ -1124,8 +1304,8 @@ export default function Settings() {
           ? 'logo first' + (ownSignatureOn ? ', your signature' : '')
           : (ownSignatureOn ? 'your signature first' : 'signature first')),
     time: (settings.hour24 ? '24-hour clock' : '12-hour clock') + ', reminders ' + (settings.remindersEnabled ? 'on' : 'off'),
-    deepwork: 'Ambient screen: ' + [settings.ambientSeconds ? 'seconds' : '', settings.ambientClock ? 'time of day' : '']
-      .filter(Boolean).join(' and ').replace(/^$/, 'minutes only'),
+    deepwork: (settings.focusChime ? 'Chime on' : 'Chime off') + ', ambient screen: '
+      + ([settings.ambientSeconds ? 'seconds' : '', settings.ambientClock ? 'time of day' : ''].filter(Boolean).join(' and ') || 'minutes only'),
     // single locked notes count too; with the whole Notes tool locked, "Notes locked" already says it
     privacy: [
       settings.journalLocked ? 'Journal locked' : '',
@@ -1134,6 +1314,7 @@ export default function Settings() {
     backup: saveTrouble ? 'Your latest changes could not be saved'
       : recovery ? 'A kept copy is waiting'
         : lastExport ? 'Last exported ' + dayOf(lastExport) : 'Export or import a backup file',
+    trash: trashCount ? trashCount + (trashCount === 1 ? ' item' : ' items') : 'Empty',
     updates: 'Version ' + APP_VERSION,
     delete: signedIn ? 'Your account, cloud data or this phone' : 'Everything on this phone',
   };
@@ -1152,7 +1333,7 @@ export default function Settings() {
           <>
             <SectionTitle>Theme</SectionTitle>
             <Card pad={12}>
-              <OptionPicker options={THEMES} value={settings.theme} onPick={pickTheme} />
+              <OptionPicker options={SHOWN_THEMES} value={settings.theme} onPick={pickTheme} />
             </Card>
             <SectionTitle>Accent colour</SectionTitle>
             <AccentCard />
@@ -1181,6 +1362,17 @@ export default function Settings() {
                   onChange={(v) => setSetting('introStyle', v ? 'logo' : 'signed')}
                   color={C.accent}
                   label="Disable the big signature"
+                />
+              </Row>
+              <Hairline />
+              <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>Tap to skip the intro</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>A tap during the start screen goes straight to Today.</Text>
+                </View>
+                <Toggle
+                  value={settings.introTapSkip} onChange={(v) => setSetting('introTapSkip', v)} color={C.accent}
+                  label="Tap to skip the intro"
                 />
               </Row>
               <Hairline />
@@ -1217,12 +1409,35 @@ export default function Settings() {
                 </Row>
                 <Toggle value={settings.remindersEnabled} onChange={toggleReminders} color={C.green} label="All reminders" />
               </Row>
+              <Hairline />
+              <Row style={{ justifyContent: 'space-between', marginTop: 12 }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={T.body}>Exam reminders</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>
+                    The evening before each dated exam, at {settings.hour24 ? '19:00' : '7 pm'}.
+                  </Text>
+                </View>
+                <Toggle
+                  value={settings.examReminders && settings.remindersEnabled} onChange={toggleExamReminders} color={C.accent}
+                  label="Exam reminders"
+                />
+              </Row>
             </Card>
           </>
         );
       case 'deepwork':
         return (
           <>
+            <SectionTitle>When a block ends</SectionTitle>
+            <Card>
+              <Row style={{ justifyContent: 'space-between' }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>Chime when a block ends</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>The phone always buzzes. This adds a soft chime.</Text>
+                </View>
+                <Toggle value={settings.focusChime} onChange={(v) => setSetting('focusChime', v)} color={C.accent} label="Chime when a block ends" />
+              </Row>
+            </Card>
             <SectionTitle>Ambient screen</SectionTitle>
             <Card>
               <Row style={{ justifyContent: 'space-between', marginBottom: 10 }}>
@@ -1367,6 +1582,8 @@ export default function Settings() {
             </Card>
           </>
         );
+      case 'trash':
+        return <TrashSection />;
       case 'updates':
         return (
           <>
@@ -1385,7 +1602,13 @@ export default function Settings() {
   const groups: { title: string; rows: { p: Page; icon: string; danger?: boolean }[] }[] = [
     { title: 'Look and feel', rows: [{ p: 'appearance', icon: 'color-palette-outline' }, { p: 'tools', icon: 'apps-outline' }, { p: 'motion', icon: 'sparkles-outline' }] },
     { title: 'Your day', rows: [{ p: 'time', icon: 'time-outline' }, { p: 'deepwork', icon: (toolByKey('focus')?.icon || 'hourglass-outline') }, { p: 'privacy', icon: 'lock-closed-outline' }] },
-    { title: 'Data', rows: [{ p: 'account', icon: 'cloud-outline' }, { p: 'backup', icon: 'archive-outline' }, { p: 'updates', icon: 'cloud-download-outline' }] },
+    {
+      title: 'Data',
+      rows: [
+        { p: 'account', icon: 'cloud-outline' }, { p: 'backup', icon: 'archive-outline' }, { p: 'trash', icon: 'trash-bin-outline' },
+        { p: 'updates', icon: 'cloud-download-outline' },
+      ],
+    },
     { title: 'Delete', rows: [{ p: 'delete', icon: 'trash-outline', danger: true }] },
   ];
 
@@ -1482,6 +1705,8 @@ const st = StyleSheet.create({
   /** a slot's tool (its icon and its name), which dips and comes back as a new tool takes the slot */
   slotTool: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   archivedLine: { flex: 1, marginLeft: 10 },
+  trashRow: { paddingVertical: 12 },
+  trashNote: { marginTop: 18, marginHorizontal: 4 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 4 },
   label: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, marginBottom: 8 },
   hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 10, lineHeight: 17 },

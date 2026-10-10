@@ -4,7 +4,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import { ScoreTag, TAG_COLORS, categoriesOf, plainTagsOf, promoteToCategory, tagUse, tagsOf } from '../scores';
-import { toast } from './Toast';
 import { Appear } from './Motion';
 import { Chip, Field, IconBtn, PillButton, Row, Sheet, Hairline, Toggle } from './UI';
 import { tick } from '../haptics';
@@ -123,11 +122,14 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
   const addScoreTag = useStore((s) => s.addScoreTag);
   const patchScoreTag = useStore((s) => s.patchScoreTag);
   const removeScoreTag = useStore((s) => s.removeScoreTag);
+  const restoreScoreTag = useStore((s) => s.restoreScoreTag);
   // the tag sheet keeps its tag while it closes, so its title and its Delete button never change on the way out
   const [edit, setEdit] = React.useState<ScoreTag | null>(null);
   const [editOpen, setEditOpen] = React.useState(false);
   const [name, setName] = React.useState('');
   const [taken, setTaken] = React.useState<'' | 'taken' | 'empty'>('');
+  // what making a tag a category left out: said here, in the sheet, where a toast would be hidden behind it
+  const [dropNote, setDropNote] = React.useState('');
   const [draft, setDraft] = React.useState('');
   const [catDraft, setCatDraft] = React.useState('');
   // the last delete and its Undo. A sheet is its own window and would cover a toast, so the Undo is offered here, in
@@ -138,7 +140,7 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
   const cats = categoriesOf(tags);
   const plain = plainTagsOf(tags);
 
-  const open = (t: ScoreTag) => { setEdit(t); setEditOpen(true); setName(t.label); setTaken(''); };
+  const open = (t: ScoreTag) => { setEdit(t); setEditOpen(true); setName(t.label); setTaken(''); setDropNote(''); };
   const saveName = () => {
     if (!edit) return;
     if (!name.trim()) { setTaken('empty'); return; }
@@ -147,29 +149,13 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
     setEditOpen(false);
   };
 
-  // Deleting takes the tag off everything carrying it, so what carried it is noted first and an Undo puts it back: the
-  // tag again (a category again), in its colour, on the same exams, subjects and learnings, in the same place among
-  // their tags (a category first, as it was).
+  // Deleting takes the tag off everything carrying it. The store notes what carried it, and an Undo puts it back: the
+  // same tag (a category again), with its colour and its place in the list, on the same exams, subjects and learnings,
+  // in the same place among their tags.
   const deleteTag = (t: ScoreTag) => {
-    const s = useStore.getState();
-    if (!s.scoreTags.some((x) => x.id === t.id)) return; // a second tap while the sheet closes
-    const onNodes: Record<string, string[]> = {};
-    for (const n of s.scores) if (n.tags?.includes(t.id)) onNodes[n.id] = [...n.tags];
-    const onLearnings = s.learnings.filter((l) => l.tags.includes(t.id)).map((l) => ({ id: l.id, tags: [...l.tags] }));
-    removeScoreTag(t.id);
-    setGone({
-      label: t.label,
-      category: !!t.category,
-      undo: () => {
-        const now = useStore.getState();
-        const back = now.addScoreTag(t.label, t.category ? { category: true } : undefined);
-        if (!back) return;
-        now.patchScoreTag(back, { color: t.color });
-        const swap = (ids: string[]) => ids.map((id) => (id === t.id ? back : id));
-        now.restoreExamTags(Object.fromEntries(Object.entries(onNodes).map(([id, ids]) => [id, swap(ids)])));
-        for (const l of onLearnings) now.patchLearning(l.id, { tags: swap(l.tags) });
-      },
-    });
+    const removed = removeScoreTag(t.id);
+    if (!removed) return; // a second tap while the sheet closes
+    setGone({ label: t.label, category: !!t.category, undo: () => restoreScoreTag(removed) });
     setEditOpen(false);
   };
 
@@ -270,14 +256,14 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
               const dropped = v && !edit.category ? promoteToCategory(st0.scores, st0.scoreTags, edit.id).dropped : 0;
               patchScoreTag(edit.id, { category: v });
               setEdit({ ...edit, category: v || undefined });
-              if (dropped) {
-                toast(dropped === 1
+              setDropNote(!dropped ? ''
+                : dropped === 1
                   ? 'One exam was already in another category. It stays there, without ' + edit.label + '.'
                   : dropped + ' exams were already in another category. They stay there, without ' + edit.label + '.');
-              }
             }}
           />
         </Row>
+        {dropNote ? <Appear><Text style={[T.caption, { marginBottom: 6 }]}>{dropNote}</Text></Appear> : null}
         <Text style={[st.label, { marginTop: 14 }]}>Colour</Text>
         <View style={st.row}>
           {TAG_COLORS.map((c, i) => {

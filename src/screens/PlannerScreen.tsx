@@ -3,14 +3,17 @@ import { View, Text, StyleSheet, Pressable, Alert, useWindowDimensions } from 'r
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useFocusEffect } from 'expo-router';
-import { C, F, S, T, TRACK, BLOCK_COLORS } from '../theme';
+import { C, CHROME_FONT_MAX, F, S, T, TRACK, BLOCK_COLORS } from '../theme';
 import { useStore, PlannerBlock, PlannerWeek, Habit } from '../store';
-import { DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours } from '../utils';
+import {
+  DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours, blockOnNow,
+} from '../utils';
 import { useNow, useToday } from '../hooks/useNow';
 import {
   ScreenBG, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, CheckCircle, useTheme, useToolHeader,
-  contextLine, ListCard, ListRow,
+  contextLine, ListCard, ListRow, TimeField, TimeWheel,
 } from '../components/UI';
+import { defaultTime } from '../components/TimeWheel';
 import { Ionicons } from '@expo/vector-icons';
 import { Wheel } from '../components/Wheel';
 import {
@@ -29,11 +32,17 @@ const fullDay = (d: DayName) => FULL_DAYS[DAY_NAMES.indexOf(d)];
 /** the wheel's labels, made once, so the wheel is never handed a new function on the minute */
 const dayLabel = (i: number) => ({ full: FULL_DAYS[i], short: DAY_NAMES[i] });
 
-/** a stored HH:MM as the clock reads (12 or 24 hours, the setting's choice); a time that cannot be read shows as saved */
+/**
+ * a stored HH:MM as the clock reads (12 or 24 hours, the setting's choice), and a block's end of 24:00 as midnight; a
+ * time that cannot be read shows as saved
+ */
 const clock = (hhmm: string, hour24: boolean) => {
   const m = toMinutes(hhmm);
-  return m < 0 ? hhmm : fmtClockTime(m, hour24);
+  return m < 0 ? hhmm : m >= 1440 ? 'midnight' : fmtClockTime(m, hour24);
 };
+
+/** minutes since midnight as 'HH:MM' (1440 is '24:00') */
+const hhmmOf = (m: number) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
 
 /** each block colour's name, for a screen reader: a swatch is only a colour */
 const COLOR_NAMES: Record<string, string> = {
@@ -54,12 +63,15 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const habits = useStore((s) => s.habits);
   const toggleHabitToday = useStore((s) => s.toggleHabitToday);
+  const toggleHabitDay = useStore((s) => s.toggleHabitDay);
   const removeHabit = useStore((s) => s.removeHabit);
   const restoreHabit = useStore((s) => s.restoreHabit);
   // a change made from a sheet says so once the sheet has gone, where its Undo can be seen
   const afterSheet = React.useRef<(() => void) | null>(null);
   const runAfterSheet = useCallback(() => { const f = afterSheet.current; afterSheet.current = null; f?.(); }, []);
   const hour24 = useStore((s) => s.settings.hour24);
+  // the alerts ring only while reminders as a whole are on, so the bell looks on only then
+  const alertsOn = useStore((s) => s.settings.blockAlerts && s.settings.remindersEnabled);
   // an archived Deep Work takes the way into it out of the blocks, as Today does
   const deepWork = useStore((s) => !(s.settings.archivedTools || []).includes('focus'));
 
@@ -91,13 +103,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // the header speaks of today, whichever day the wheel is on. Of two blocks that overlap (allowed, on purpose), the one
   // that ends first is the one on now. Blocks cannot be ticked off, so there is no count of done ones to give.
   const todayBlocks = planner[dayName(now)] ?? [];
-  const onNow = useMemo(() => {
-    let cur: PlannerBlock | null = null;
-    for (const b of todayBlocks) {
-      if (toMinutes(b.start) <= nowMin && nowMin < toMinutes(b.end) && (!cur || toMinutes(b.end) < toMinutes(cur.end))) cur = b;
-    }
-    return cur;
-  }, [todayBlocks, nowMin]);
+  const onNow = useMemo(() => blockOnNow(todayBlocks, nowMin), [todayBlocks, nowMin]);
   // with nothing on: the next block today, and once today's are over, where tomorrow starts
   const nextToday = useMemo(() => {
     let next: PlannerBlock | null = null;
@@ -192,6 +198,31 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const openHabit = useCallback((h: Habit | null) => { setHabitEdit(h); setHabitSheet(true); }, []);
 
+  // The bell in the tray: on, a notification comes five minutes before each block. Turning it on with reminders off
+  // asks for permission and turns them on; refused, it stays off, so the bell never looks on for alerts that cannot ring.
+  const busyBell = React.useRef(false);
+  const toggleAlerts = useCallback(async () => {
+    if (busyBell.current) return;
+    const { settings, setSetting } = useStore.getState();
+    if (settings.blockAlerts && settings.remindersEnabled) {
+      setSetting('blockAlerts', false);
+      toast('Block alerts off');
+      return;
+    }
+    busyBell.current = true;
+    try {
+      setSetting('blockAlerts', true);
+      const ok = settings.remindersEnabled || await turnOnReminders();
+      if (!ok) {
+        useStore.getState().setSetting('blockAlerts', false);
+        return;
+      }
+      toast('Block alerts on, 5 minutes before each block');
+    } finally {
+      busyBell.current = false;
+    }
+  }, []);
+
   const tabMode = mode === 'tab';
   // a sideways tablet sets the day's blocks and the streaks side by side; a phone keeps its one column exactly
   const { width: winW } = useWindowDimensions();
@@ -202,13 +233,20 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     mode: tabMode ? 'tab' : 'page',
     context: contextLine(
       onNow
-        ? [{ em: onNow.subject }, ' until ' + fmtClockTime(toMinutes(onNow.end), hour24)]
+        ? [{ em: onNow.subject }, ' until ' + clock(onNow.end, hour24)]
         : nextToday
-          ? ['Next ', { em: nextToday.subject }, ' at ' + fmtClockTime(toMinutes(nextToday.start), hour24)]
+          ? ['Next ', { em: nextToday.subject }, ' at ' + clock(nextToday.start, hour24)]
           : tomorrowFrom >= 0 && 'Tomorrow from ' + fmtClockTime(tomorrowFrom, hour24),
     ),
     live: onNow != null,
+    // the bell stands in the tray, and the day's other actions fold under the overflow beside it
     actions: [
+      {
+        icon: alertsOn ? 'notifications' : 'notifications-outline',
+        label: alertsOn ? 'Block alerts, on' : 'Block alerts, off',
+        color: alertsOn ? C.accent : undefined,
+        onPress: () => { void toggleAlerts(); },
+      },
       { icon: 'copy-outline', label: 'Copy this day', onPress: () => setCopySheet(true) },
       { icon: 'albums-outline', label: 'Week templates', onPress: () => setTplSheet(true) },
     ],
@@ -247,7 +285,8 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
             {habits.map((h) => (
               <HabitRow
                 key={h.id} h={h} today={today} hour24={hour24}
-                onToggle={toggleHabitToday} onEdit={openHabit} onRemind={setRemindEdit} onDelete={deleteHabit}
+                onToggle={toggleHabitToday} onToggleDay={toggleHabitDay} onEdit={openHabit} onRemind={setRemindEdit}
+                onDelete={deleteHabit}
               />
             ))}
           </ListCard>
@@ -377,7 +416,7 @@ const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, past, deepWork
   onEdit: (b: PlannerBlock) => void; onDelete: (b: PlannerBlock) => void;
 }) {
   useTheme(); // a memo row: it follows a new accent itself, since its props do not change with one
-  const span = fmtClockTime(toMinutes(b.start), hour24) + ' – ' + fmtClockTime(toMinutes(b.end), hour24);
+  const span = clock(b.start, hour24) + ' – ' + clock(b.end, hour24);
   const body = (
     <>
       <View style={[st.colorBar, { backgroundColor: b.color }]} />
@@ -414,13 +453,14 @@ const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, past, deepWork
 });
 
 /**
- * One habit with its streak. Memoised, and its streak is worked out only when its dates or the day change, so ticking
- * one habit re-renders that habit alone. The streak line never states a zero: a habit with no streak yet shows none.
- * A long press opens it for editing.
+ * One habit with its streak, and its last seven days beneath. Memoised, and its streak is worked out only when its
+ * dates or the day change, so ticking one habit re-renders that habit alone. The streak line never states a zero: a
+ * habit with no streak yet shows none. A long press opens it for editing.
  */
-const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onEdit, onRemind, onDelete }: {
+const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onToggleDay, onEdit, onRemind, onDelete }: {
   h: Habit; today: string; hour24: boolean;
-  onToggle: (id: string) => void; onEdit: (h: Habit) => void; onRemind: (h: Habit) => void; onDelete: (h: Habit) => void;
+  onToggle: (id: string) => void; onToggleDay: (id: string, dateKey: string) => void;
+  onEdit: (h: Habit) => void; onRemind: (h: Habit) => void; onDelete: (h: Habit) => void;
 }) {
   useTheme(); // a memo row: it follows a new accent itself, since its props do not change with one
   // the current streak counts back from today, so a new day can end it with no tick at all
@@ -432,40 +472,101 @@ const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onEd
     : [current > 0 ? current + ' current' : '', best > 0 ? best + ' best' : ''].filter(Boolean).join(' · ');
   const time = h.remindTime ? clock(h.remindTime, hour24) : '';
   return (
-    <ListRow style={{ paddingVertical: 12 }} onLongPress={() => onEdit(h)}>
-      <CheckCircle done={done} onPress={() => onToggle(h.id)} label={h.title + ', today'} />
-      <View style={{ flex: 1, marginLeft: 12 }}>
-        <Text style={T.title}>{h.title}</Text>
-        {streakText || time ? (
-          // the streak's figures dip and come back as the tick lands, instead of jumping
-          <FadeSwap swapKey={streakText}>
-            <Row style={{ marginTop: 3 }}>
-              {streakText ? (
-                <>
-                  <Ionicons name="flame-outline" size={13} color={C.textFaint} style={{ marginRight: 4 }} />
-                  <Text style={T.caption}>{streakText}</Text>
-                </>
-              ) : null}
-              {time ? (
-                <>
-                  <Ionicons name="alarm-outline" size={13} color={C.textFaint} style={{ marginLeft: streakText ? 10 : 0 }} />
-                  <Text style={[T.caption, { marginLeft: 4 }]}>{time}</Text>
-                </>
-              ) : null}
-            </Row>
-          </FadeSwap>
-        ) : null}
-      </View>
-      <IconBtn
-        name="alarm-outline" size={18}
-        color={time ? C.accent : C.textFaint}
-        onPress={() => onRemind(h)}
-        accessibilityLabel={time ? 'Reminder at ' + time : 'Set a reminder'}
-      />
-      <IconBtn name="trash-outline" size={18} onPress={() => onDelete(h)} accessibilityLabel={'Delete ' + h.title} />
+    <ListRow style={st.habitRow} onLongPress={() => onEdit(h)}>
+      <Row>
+        <CheckCircle done={done} onPress={() => onToggle(h.id)} label={h.title + ', today'} />
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={T.title}>{h.title}</Text>
+          {streakText || time ? (
+            // the streak's figures dip and come back as the tick lands, instead of jumping
+            <FadeSwap swapKey={streakText}>
+              <Row style={{ marginTop: 3 }}>
+                {streakText ? (
+                  <>
+                    <Ionicons name="flame-outline" size={13} color={C.textFaint} style={{ marginRight: 4 }} />
+                    <Text style={T.caption}>{streakText}</Text>
+                  </>
+                ) : null}
+                {time ? (
+                  <>
+                    <Ionicons name="alarm-outline" size={13} color={C.textFaint} style={{ marginLeft: streakText ? 10 : 0 }} />
+                    <Text style={[T.caption, { marginLeft: 4 }]}>{time}</Text>
+                  </>
+                ) : null}
+              </Row>
+            </FadeSwap>
+          ) : null}
+        </View>
+        <IconBtn
+          name="alarm-outline" size={18}
+          color={time ? C.accent : C.textFaint}
+          onPress={() => onRemind(h)}
+          accessibilityLabel={time ? 'Reminder at ' + time : 'Set a reminder'}
+        />
+        <IconBtn name="trash-outline" size={18} onPress={() => onDelete(h)} accessibilityLabel={'Delete ' + h.title} />
+      </Row>
+      <WeekStrip id={h.id} title={h.title} doneDates={h.doneDates} today={today} onToggleDay={onToggleDay} />
     </ListRow>
   );
 });
+
+/** The weekday names for a screen reader, Sunday first, as Date counts them. */
+const SPOKEN_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * A habit's last seven days, today last: small flat cells, each a weekday's initial over a dot that fills when the day
+ * was done. Any of them ticks or unticks its day, so a day missed by a tap can be put right. Today's initial is in the
+ * accent. Its own memoised part, so it re-renders only when the habit's days or the date change.
+ */
+const WeekStrip = React.memo(function WeekStrip({ id, title, doneDates, today, onToggleDay }: {
+  id: string; title: string; doneDates: string[]; today: string; onToggleDay: (id: string, dateKey: string) => void;
+}) {
+  useTheme(); // a memo part: today's initial is the accent, which its props do not change with
+  const days = useMemo(() => {
+    const [y, m, d] = today.split('-').map(Number);
+    const done = new Set(doneDates);
+    return Array.from({ length: 7 }, (_, i) => {
+      const date = new Date(y, m - 1, d - 6 + i);
+      const key = todayKey(date);
+      return { key, initial: DAY_NAMES[(date.getDay() + 6) % 7][0], spoken: SPOKEN_DAYS[date.getDay()], done: done.has(key), isToday: i === 6 };
+    });
+  }, [doneDates, today]);
+  return (
+    <View style={st.strip}>
+      {days.map((c) => (
+        <DayCell key={c.key} {...c} onPress={() => { tick(); onToggleDay(id, c.key); }} habit={title} />
+      ))}
+    </View>
+  );
+});
+
+/** One day of the strip: flat, its dot filling in green as the day is ticked. */
+function DayCell({ initial, spoken, done, isToday, habit, onPress }: {
+  initial: string; spoken: string; done: boolean; isToday: boolean; habit: string; onPress: () => void;
+}) {
+  const level = useAnimLevel();
+  const fill = useSharedValue(done ? 1 : 0);
+  React.useEffect(() => {
+    fill.value = level === 'none' ? (done ? 1 : 0) : withTiming(done ? 1 : 0, CHANGE);
+  }, [done, level]);
+  // the dot grows as it fills with every animation on; with some, it only fades
+  const grow = level === 'full';
+  const dotStyle = useAnimatedStyle(() => ({
+    opacity: fill.value, transform: [{ scale: grow ? 0.5 + 0.5 * fill.value : 1 }],
+  }), [grow]);
+  return (
+    <Pressable
+      onPress={onPress} hitSlop={{ top: 6, bottom: 6 }} style={({ pressed }) => [st.cell, pressed && { opacity: 0.6 }]}
+      accessibilityRole="checkbox" accessibilityState={{ checked: done }}
+      accessibilityLabel={habit + ', ' + (isToday ? 'today' : spoken)}
+    >
+      <Text style={[st.cellDay, isToday && { color: C.accent, fontFamily: F.semi }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{initial}</Text>
+      <View style={[st.cellDot, { borderColor: C.outline }]}>
+        <Animated.View style={[st.cellFill, { backgroundColor: C.green }, dotStyle]} />
+      </View>
+    </Pressable>
+  );
+}
 
 /** A block colour: flat, with a ring in its own colour that fades in round the chosen one. */
 function Swatch({ color, active, onPress }: { color: string; active: boolean; onPress: () => void }) {
@@ -513,11 +614,18 @@ function BlockSheet({ visible, day, editing, onClose }: {
     setColor(editing ? editing.color : BLOCK_COLORS[0]);
   }, [visible]);
 
+  // a start picked with no end yet gives the block an hour, kept inside the day, so most blocks need one turn of the wheel
+  const pickStart = (v: string) => {
+    setStart(v);
+    const from = toMinutes(v);
+    if (from >= 0 && toMinutes(end) < 0) setEnd(hhmmOf(Math.min(from + 60, 1440)));
+  };
+
   const submit = () => {
     if (busy.current) return;
-    const s = start.trim(), e = end.trim(), t = subj.trim();
+    const s = start, e = end, t = subj.trim();
     if (!t) { Alert.alert('Missing subject', 'Give the block a subject.'); return; }
-    if (toMinutes(s) < 0 || toMinutes(e) < 0) { Alert.alert('Time format', 'Use 24h HH:MM, e.g. 16:00'); return; }
+    if (toMinutes(s) < 0 || toMinutes(e) < 0) { Alert.alert('Missing time', 'Pick when the block starts and ends.'); return; }
     if (toMinutes(e) <= toMinutes(s)) { Alert.alert('Time order', 'End must be after start.'); return; }
     busy.current = true;
     const save = () => {
@@ -546,9 +654,10 @@ function BlockSheet({ visible, day, editing, onClose }: {
   return (
     <Sheet visible={visible} onClose={onClose} title={editing ? 'Edit block' : 'New block for ' + fullDay(day)}>
       <Field label="Subject" value={subj} onChangeText={setSubj} placeholder="e.g. Physics" autoFocus maxLength={40} />
-      <Row style={{ gap: 14 }}>
-        <Field label="Starts" value={start} onChangeText={setStart} placeholder="16:00" style={{ flex: 1 }} keyboardType="numbers-and-punctuation" />
-        <Field label="Ends" value={end} onChangeText={setEnd} placeholder="17:30" style={{ flex: 1 }} keyboardType="numbers-and-punctuation" />
+      {/* the end may be midnight, the end of the day; a start never is */}
+      <Row style={{ gap: 14, alignItems: 'flex-start' }}>
+        <TimeField label="Starts" value={start} onChange={pickStart} placeholder="Pick a time" style={{ flex: 1 }} />
+        <TimeField label="Ends" value={end} onChange={setEnd} placeholder="Pick a time" allowEndOfDay style={{ flex: 1 }} />
       </Row>
       <Row style={{ flexWrap: 'wrap', gap: 10, marginBottom: 12, marginTop: 2 }}>
         {BLOCK_COLORS.map((c) => (
@@ -700,21 +809,20 @@ function TemplateRows({ names, onApply }: { names: string[]; onApply: (name: str
   );
 }
 
-/**
- * Saves a habit's new name and time. The store has no rename yet, so the habit is taken out and put back where it
- * stood in the same moment: one render, and its id, its ticks and so its streak all stay.
- */
+/** Saves a habit's new name and time in place: its id, its ticks and so its streak all stay. */
 function saveHabit(id: string, title: string, remindTime?: string) {
   const s = useStore.getState();
-  const index = s.habits.findIndex((h) => h.id === id);
-  if (index < 0) return;
-  const h = s.habits[index];
-  s.removeHabit(id);
-  s.restoreHabit({ ...h, title, remindTime }, index);
+  const h = s.habits.find((x) => x.id === id);
+  if (!h) return;
+  if (h.title !== title) s.renameHabit(id, title);
+  if ((h.remindTime || undefined) !== remindTime) s.setHabitReminder(id, remindTime);
 }
 
-/** A time typed for a reminder: HH:MM on a 24-hour clock, or nothing. */
-const readTime = (typed: string) => (/^\d{1,2}:\d{2}$/.test(typed) && toMinutes(typed) >= 0 ? typed : undefined);
+/** A reminder's time from the wheel: a time of day, or nothing ('' is none). */
+const readTime = (picked: string) => {
+  const m = toMinutes(picked);
+  return m >= 0 && m < 1440 ? picked : undefined;
+};
 
 /**
  * A new habit, or an edit of one (its name and its reminder time). What is typed lives here, so a keystroke re-renders
@@ -739,10 +847,7 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
     if (done.current) return;
     const t = habitTitle.trim();
     if (!t) return;
-    const typed = habitTime.trim();
-    const time = readTime(typed);
-    // a time that could never ring is said to be wrong, never saved looking like a working reminder
-    if (typed && !time) { Alert.alert('Time format', 'Use 24h HH:MM, like 21:00, or leave it empty.'); return; }
+    const time = readTime(habitTime);
     done.current = true;
     if (editing) {
       saveHabit(editing.id, t, time);
@@ -767,10 +872,7 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
       <Field
         value={habitTitle} onChangeText={setHabitTitle} placeholder="e.g. Revise formula sheet" autoFocus maxLength={80}
       />
-      <Field
-        value={habitTime} onChangeText={setHabitTime} placeholder="Reminder time, like 21:00 (optional)"
-        keyboardType="numbers-and-punctuation"
-      />
+      <TimeField label="Reminder" value={habitTime} onChange={setHabitTime} placeholder="No reminder" clearable />
       <PillButton label={editing ? 'Save' : 'Add habit'} onPress={submit} />
       {!remindersEnabled && (
         <Text style={[T.caption, { marginTop: 10 }]}>
@@ -781,10 +883,14 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
   );
 }
 
-/** A habit's reminder time. The time being typed lives here. */
+/**
+ * A habit's reminder time, on the time wheel itself: the alarm on a habit's row comes straight here, one step from the
+ * time. The time being turned to lives here.
+ */
 function ReminderSheet({ habit, onClose }: { habit: Habit | null; onClose: () => void }) {
   const setHabitReminder = useStore((s) => s.setHabitReminder);
   const remindersEnabled = useStore((s) => s.settings.remindersEnabled);
+  const hour24 = useStore((s) => s.settings.hour24);
   const [draft, setDraft] = useState('');
   // the sheet keeps the habit it was opened for while it closes, so its title never blanks on the way out
   const [shown, setShown] = useState<Habit | null>(habit);
@@ -794,18 +900,17 @@ function ReminderSheet({ habit, onClose }: { habit: Habit | null; onClose: () =>
     if (!habit) return;
     done.current = false;
     setShown(habit);
-    setDraft(habit.remindTime || '');
+    // a habit with no reminder yet starts the wheels on the next whole hour
+    setDraft(readTime(habit.remindTime || '') ?? defaultTime());
   }, [habit]);
   const save = () => {
     if (!habit || done.current) return;
-    const t = draft.trim();
-    const time = readTime(t);
-    if (t && !time) { Alert.alert('Time format', 'Use 24h HH:MM, like 21:00, or leave it empty to clear.'); return; }
+    const time = readTime(draft);
+    if (!time) return;
     done.current = true;
     setHabitReminder(habit.id, time);
     onClose();
-    if (time) void turnOnReminders();
-    else void rescheduleAllReminders();
+    void turnOnReminders();
   };
   const turnOff = () => {
     if (!habit || done.current) return;
@@ -816,11 +921,8 @@ function ReminderSheet({ habit, onClose }: { habit: Habit | null; onClose: () =>
   };
   return (
     <Sheet visible={!!habit} onClose={onClose} title={`Reminder for ${shown?.title || 'this habit'}`}>
-      <Field
-        value={draft} onChangeText={setDraft} placeholder="21:00" keyboardType="numbers-and-punctuation" autoFocus
-        returnKeyType="done" onSubmitEditing={save}
-      />
-      <PillButton label="Save" onPress={save} />
+      <TimeWheel value={draft} onChange={setDraft} hour24={hour24} />
+      <PillButton label="Save" onPress={save} style={{ marginTop: 20 }} />
       {shown?.remindTime ? (
         <Pressable onPress={turnOff} hitSlop={12} style={st.turnOff} accessibilityRole="button">
           <Text style={[st.todayText, { color: C.accent }]}>Turn off</Text>
@@ -859,4 +961,13 @@ const st = StyleSheet.create({
   },
   swatchRing: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 20, borderWidth: 2 },
   swatchDisc: { width: 24, height: 24, borderRadius: 12 },
+  // a habit: its own line on top, its week beneath
+  habitRow: { flexDirection: 'column', alignItems: 'stretch', paddingVertical: 12 },
+  // the week starts under the habit's name, past its tick (30 across) and the gap after it
+  strip: { flexDirection: 'row', marginTop: 10, marginLeft: 42, marginRight: 4 },
+  // flat: no surface of its own, only a press that dims
+  cell: { flex: 1, alignItems: 'center', paddingVertical: 4, borderRadius: 10 },
+  cellDay: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginBottom: 5 },
+  cellDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1, overflow: 'hidden' },
+  cellFill: { position: 'absolute', top: -1, left: -1, right: -1, bottom: -1, borderRadius: 5 },
 });

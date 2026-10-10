@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppState, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { AppState, Dimensions, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, {
   Easing, FadeIn, FadeOut, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withTiming,
 } from 'react-native-reanimated';
@@ -8,6 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Brightness from 'expo-brightness';
 import * as NavigationBar from 'expo-navigation-bar';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { C, F } from '../theme';
 import { useStore } from '../store';
 import { fmtClockTime } from '../utils';
@@ -86,6 +87,31 @@ function useAmbientSystem() {
       sub.remove();
       restore();
       if (Platform.OS === 'android') NavigationBar.setVisibilityAsync('visible').catch(() => {});
+    };
+  }, []);
+}
+
+/**
+ * A phone propped on a desk usually lies on its side, so while the ambient screen is open a phone may turn with it; it
+ * is upright again on exit, and while the app is away, so nothing else in the app is ever seen sideways on a phone. A
+ * tablet turns everywhere already (the root layout unlocks it) and is left alone. Decided by the screen, not the window,
+ * as the root layout decides it. The face fits either shape (see AmbientBody's measure).
+ */
+function useAmbientRotation() {
+  React.useEffect(() => {
+    const screen = Dimensions.get('screen');
+    if (Math.min(screen.width, screen.height) >= 600) return undefined;
+    const upright = () => { ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {}); };
+    // the phone's own rotation setting still decides: an unlocked screen only turns when auto-rotate is on
+    const free = () => { ScreenOrientation.unlockAsync().catch(() => {}); };
+    free();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') free();
+      else upright();
+    });
+    return () => {
+      sub.remove();
+      upright();
     };
   }, []);
 }
@@ -236,6 +262,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
 
 function AmbientBody({ onExit, ...face }: Omit<AmbientProps, 'visible'>) {
   useAmbientSystem();
+  useAmbientRotation();
   const level = useAnimLevel();
   // the screen's spoken label carries the time in words, which change once a minute
   useSessionTick(face.timer, !useAppActive(), 60);

@@ -29,6 +29,7 @@ import { setIntroPhase } from '../src/intro';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ToastHost } from '../src/components/Toast';
+import { ShareIntake } from '../src/shareIntake';
 import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
 
 // the native splash stays up until the intro (or the app) has painted its first
@@ -245,6 +246,8 @@ export default function RootLayout() {
         </View>
       )}
       {showApp && <ToastHost />}
+      {/* a YouTube link shared to the app is offered to YT Vault, once the intro is over */}
+      {showApp && <ShareIntake />}
       {!introDone && (
         <StartScreen onReveal={() => setRevealed(true)} onDone={() => setIntroDone(true)} />
       )}

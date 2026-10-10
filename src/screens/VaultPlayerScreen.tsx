@@ -1,15 +1,17 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Alert, AppState, BackHandler, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, Alert, AppState, BackHandler, Dimensions, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import YoutubePlayer, { YoutubeIframeRef } from 'react-native-youtube-iframe';
-import Animated from 'react-native-reanimated';
+import Animated, { useAnimatedScrollHandler, useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { C, F, S, T, TRACK } from '../theme';
-import { useStore, TimedNote, Bookmark } from '../store';
+import { useStore, TimedNote, Bookmark, flushSaves } from '../store';
 import { fmtMediaTime } from '../utils';
 import {
-  ScreenBG, Card, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, DotMenu, useToolHeader,
+  ScreenBG, Card, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, DotMenu, ScrollEdge, edgeStrength,
+  useToolHeader,
 } from '../components/UI';
 import { toast } from '../components/Toast';
+import { toastTrashed } from '../trashToast';
 import { glide, rowIn, rowOut, useAnimLevel, useBuilt, useEntrance } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { READ_MAX, TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth, frame } from '../layout';
@@ -22,6 +24,12 @@ const PLAYER_MAX_H = 0.55;
 const COL_GAP = 28;
 /** how long a title may take before the video is saved without it, so a stalled connection never holds the add key */
 const TITLE_WAIT_MS = 6000;
+/** while it plays, where the video is gets saved this often (and on a pause, a leave, the app put away) */
+const PROGRESS_EVERY_MS = 10_000;
+/** a video opens this far before where it was left, so the sentence it stopped in starts again */
+const RESUME_BACK_S = 2;
+/** left this close to the end, it counts as watched through, and opens from the start next time */
+const END_MARGIN_S = 10;
 
 /** The name a video is saved under when its title could not be had. One that still wears it asks again when opened. */
 export const placeholderTitle = (videoId: string) => 'Video ' + videoId;
@@ -46,25 +54,10 @@ export async function fetchTitle(videoId: string): Promise<{ title: string; foun
   }
 }
 
-/** Takes a timed note or a bookmark off its video, with an Undo that puts the same one back in its place. */
+/** Moves a timed note or a bookmark to Recently deleted, with an Undo that puts the same one back in its place. */
 export function removeVaultItem(videoId: string, item: TimedNote | Bookmark, isBookmark: boolean) {
   const s = useStore.getState();
-  if (isBookmark) s.removeBookmark(videoId, item.id);
-  else s.removeTimedNote(videoId, item.id);
-  toast(isBookmark ? 'Bookmark deleted.' : 'Timed note deleted.', {
-    label: 'Undo',
-    onPress: () => {
-      const now = useStore.getState();
-      const v = now.vaultVideos.find((x) => x.id === videoId);
-      if (!v) return;
-      const byTime = (a: { time: number }, b: { time: number }) => a.time - b.time;
-      if (isBookmark) {
-        if (!v.bookmarks.some((b) => b.id === item.id)) now.updateVideo(videoId, { bookmarks: [...v.bookmarks, item as Bookmark].sort(byTime) });
-      } else if (!v.notes.some((n) => n.id === item.id)) {
-        now.updateVideo(videoId, { notes: [...v.notes, item as TimedNote].sort(byTime) });
-      }
-    },
-  });
+  toastTrashed(isBookmark ? s.trashBookmark(videoId, item.id) : s.trashTimedNote(videoId, item.id));
 }
 
 /** The last value that was not null, so a sheet keeps its title and its rows while it closes. */
@@ -157,7 +150,11 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const built = useBuilt();
   const { id, t } = useLocalSearchParams<{ id: string; t?: string }>();
   const { width, height } = useWindowDimensions();
-  const wide = width >= WIDE_AT;
+  // Decided by the screen too, as the root layout decides what may turn: a phone stays a phone while a fullscreen video
+  // turns it on its side, so the page under the video keeps its shape and the player is never built again (a rebuilt
+  // player strands the fullscreen video over the app)
+  const screen = Dimensions.get('screen');
+  const wide = width >= WIDE_AT && Math.min(screen.width, screen.height) >= WIDE_AT;
   // the screen's area: the window on a phone; on a wide window known ahead (less the rail in a tab), then measured
   const [areaW, setAreaW] = useState(() => columnWidth(width, mode === 'tab', WIDE_MAX));
   const video = useStore((s) => s.vaultVideos.find((v) => v.id === id));
@@ -230,18 +227,80 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     });
   }, [dbId, ytId]);
 
+  // ---- Recently watched: when it was opened, and where it was left ----
+  const markVideoOpened = useStore((s) => s.markVideoOpened);
+  useFocusEffect(useCallback(() => { if (dbId) markVideoOpened(dbId); }, [dbId, markVideoOpened]));
+  // The video's length, once the player knows it, and the last place read from it with when that was and whether it
+  // was playing then, so a leave can work out where it is now without waiting on the player
+  const duration = useRef(0);
+  const lastPos = useRef<{ sec: number; at: number; playing: boolean } | null>(null);
+  const readPos = useCallback(async (): Promise<number | null> => {
+    try {
+      const sec = await playerRef.current?.getCurrentTime();
+      return typeof sec === 'number' && Number.isFinite(sec) ? sec : null;
+    } catch {
+      return null;
+    }
+  }, []);
+  const readLength = useCallback(() => {
+    if (duration.current > 0) return;
+    playerRef.current?.getDuration()
+      .then((d) => { if (typeof d === 'number' && Number.isFinite(d) && d > 0) duration.current = d; })
+      .catch(() => {});
+  }, []);
+  /** Saves where it is: left at its very end, it is watched through and starts from the beginning next time. */
+  const keepPlace = useCallback((sec: number) => {
+    if (!dbId || !Number.isFinite(sec) || sec < 0) return;
+    const d = duration.current;
+    useStore.getState().setVideoProgress(dbId, d > 0 && sec >= d - END_MARGIN_S ? 0 : sec);
+  }, [dbId]);
+  /** Reads the player, and saves unless `save` is false; `playing` says whether it goes on from there. */
+  const savePlace = useCallback(async (playing: boolean, save = true) => {
+    const sec = await readPos();
+    if (sec == null) return;
+    lastPos.current = { sec, at: Date.now(), playing };
+    if (save) keepPlace(sec);
+  }, [readPos, keepPlace]);
+  /**
+   * On a leave or with the app put away: saved at once from the last reading, then from the player if it answers. Not
+   * played on this visit, it says nothing: a player that has not started reads 0, which would lose the place.
+   */
+  const leavePlace = useCallback(() => {
+    const p = lastPos.current;
+    if (!p) return;
+    keepPlace(p.playing ? p.sec + (Date.now() - p.at) / 1000 : p.sec);
+    savePlace(false).catch(() => {});
+  }, [keepPlace, savePlace]);
+  // every 10 s while it plays, never more often
+  React.useEffect(() => {
+    if (!playing) return undefined;
+    const timer = setInterval(() => { savePlace(true).catch(() => {}); }, PROGRESS_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [playing, savePlace]);
+  useFocusEffect(useCallback(() => () => leavePlace(), [leavePlace]));
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s !== 'background') return;
+      leavePlace();
+      // the store wrote what was waiting as the app went, before this; the place is written straight after it
+      flushSaves();
+    });
+    return () => sub.remove();
+  }, [leavePlace]);
+
   const seek = useCallback((sec: number) => {
     playerRef.current?.seekTo(sec, true);
     setPlaying(true);
   }, []);
   const onReady = useCallback(() => {
+    readLength();
     const start = parseInt(String(t || ''), 10);
     if (!seekDone.current && start > 0) {
       seekDone.current = true;
       playerRef.current?.seekTo(start, true);
       setPlaying(true);
     }
-  }, [t]);
+  }, [t, readLength]);
   const onError = useCallback((e: string) => toast(
     e === 'embed_not_allowed' || e === 'HTML5_error'
       ? 'This video cannot play inside the app. Your notes and bookmarks are still here.'
@@ -251,9 +310,43 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   ), []);
   const onFullScreen = useCallback((f: boolean) => { fullscreen.current = f; }, []);
   const onState = useCallback((s: string) => {
-    if (s === 'playing') setPlaying(true);
-    if (s === 'paused' || s === 'ended') setPlaying(false);
-  }, []);
+    if (s === 'playing') {
+      setPlaying(true);
+      readLength();
+      // only noted: the place is saved 10 s on, or at a pause or a leave
+      savePlace(true, false).catch(() => {});
+    }
+    if (s === 'paused') {
+      setPlaying(false);
+      savePlace(false).catch(() => {});
+    }
+    if (s === 'ended') {
+      setPlaying(false);
+      // watched through: the next opening starts from the beginning
+      lastPos.current = null;
+      if (dbId) useStore.getState().setVideoProgress(dbId, 0);
+    }
+  }, [readLength, savePlace, dbId]);
+
+  // It opens where it was left (a moment before), worked out once, as the player is first made: the player reads its
+  // start only then. A link to a moment (a timed note, a bookmark) goes there instead, as it always did. One left at its
+  // end was saved as watched through, and opens from the start
+  const opening = useRef<{ start: number } | null>(null);
+  if (!opening.current && video) {
+    const linked = parseInt(String(t || ''), 10) > 0;
+    const back = Math.floor((video.resumeAt ?? 0) - RESUME_BACK_S);
+    opening.current = { start: !linked && back > 0 ? back : 0 };
+  }
+  const startParams = useMemo(
+    () => (opening.current && opening.current.start > 0 ? { start: opening.current.start } : undefined),
+    [video?.videoId],
+  );
+
+  // On a phone the video stays under the bar and the rest scrolls beneath it: its edge is drawn at the video's foot
+  const pinned = !wide;
+  const notesY = useSharedValue(0);
+  const onNotesScroll = useAnimatedScrollHandler((e) => { notesY.value = e.contentOffset.y; });
+  const notesEdge = useDerivedValue(() => edgeStrength(notesY.value, level));
 
   // a sideways tablet sets the notes beside the video; otherwise one column, the video across its top
   const twoCol = wide && areaW >= TWO_COL_AT;
@@ -281,8 +374,9 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       onFullScreenChange={onFullScreen}
       onChangeState={onState}
       webViewProps={webViewProps}
+      initialPlayerParams={startParams}
     />
-  ) : null), [videoId, playerW, playerH, playing, onReady, onError, onFullScreen, onState, webViewProps]);
+  ) : null), [videoId, playerW, playerH, playing, onReady, onError, onFullScreen, onState, webViewProps, startParams]);
 
   const openMenu = useCallback((m: { item: TimedNote | Bookmark; isBookmark: boolean }) => setMenu(m), []);
 
@@ -425,29 +519,49 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     <ScreenBG maxWidth={WIDE_MAX}>
       {/* above the scroll, so the bar's shade falls over the video and the notes rather than behind them */}
       <View style={[frame(twoCol ? WIDE_MAX : READ_MAX), st.barLayer]}>{header.bar}</View>
-      <Animated.ScrollView
-        {...header.scrollProps}
-        onLayout={(e) => { const w = e.nativeEvent.layout.width; if (Math.abs(w - areaW) > 0.5) setAreaW(w); }}
-        contentContainerStyle={{ paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
-      >
-        {twoCol ? (
-          <View style={st.cols}>
-            <View style={st.main}>
-              <View style={{ alignItems: 'center' }}>{player}</View>
-              <View style={{ paddingTop: S.pad }}>{info}</View>
-            </View>
-            <View style={st.side}>{lists}</View>
-          </View>
-        ) : (
-          <View style={frame(READ_MAX)}>
-            {wide ? <View style={{ alignItems: 'center' }}>{player}</View> : player}
-            <View style={{ padding: S.pad }}>
+      {pinned ? (
+        // a phone: the video stays under the bar, and its title, its actions and the notes scroll beneath it
+        <View style={[frame(READ_MAX), { flex: 1 }]}>
+          {player}
+          <View style={{ flex: 1 }}>
+            <Animated.ScrollView
+              onScroll={onNotesScroll}
+              scrollEventThrottle={16}
+              keyboardShouldPersistTaps="handled"
+              onLayout={(e) => { const w = e.nativeEvent.layout.width; if (Math.abs(w - areaW) > 0.5) setAreaW(w); }}
+              contentContainerStyle={{ padding: S.pad, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
+            >
               {info}
               {lists}
-            </View>
+            </Animated.ScrollView>
+            <ScrollEdge at={notesEdge} />
           </View>
-        )}
-      </Animated.ScrollView>
+        </View>
+      ) : (
+        <Animated.ScrollView
+          {...header.scrollProps}
+          onLayout={(e) => { const w = e.nativeEvent.layout.width; if (Math.abs(w - areaW) > 0.5) setAreaW(w); }}
+          contentContainerStyle={{ paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
+        >
+          {twoCol ? (
+            <View style={st.cols}>
+              <View style={st.main}>
+                <View style={{ alignItems: 'center' }}>{player}</View>
+                <View style={{ paddingTop: S.pad }}>{info}</View>
+              </View>
+              <View style={st.side}>{lists}</View>
+            </View>
+          ) : (
+            <View style={frame(READ_MAX)}>
+              {wide ? <View style={{ alignItems: 'center' }}>{player}</View> : player}
+              <View style={{ padding: S.pad }}>
+                {info}
+                {lists}
+              </View>
+            </View>
+          )}
+        </Animated.ScrollView>
+      )}
 
       <DraftSheet
         visible={!!noteSheet} onClose={() => setNoteSheet(null)} title={'Note @ ' + fmtMediaTime(heldNote?.time || 0)}

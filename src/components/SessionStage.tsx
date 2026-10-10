@@ -5,7 +5,7 @@ import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { fmtClockTime } from '../utils';
 import { TimerState, displayOf, shownSecondsOf, spokenTimeOf, useSessionTick } from '../deepWork';
 import { WIDE_AT } from '../layout';
-import { Appear, CHANGE, EASE_OUT, FadeSwap, useAnimLevel, useBuilt } from './Motion';
+import { Appear, Bouncy, CHANGE, EASE_OUT, FadeSwap, useAnimLevel, useBuilt } from './Motion';
 import { ClockDigits, clockWidth } from './ClockDigits';
 import { CheckCircle, Chip, NeuIconBtn, PillButton, ProgressBar, useTheme } from './UI';
 
@@ -236,6 +236,155 @@ export function SessionStage({
   );
 }
 
+/** a break's minutes: calmer than a block's, so the plate reads as rest rather than work */
+const BREAK_BIG = 72;
+const BREAK_BIG_WIDE = 112;
+
+/** A break's time said for a screen reader, to the minute as its clock rounds. */
+function breakSpoken(secs: number): string {
+  const mins = Math.ceil(secs / 60);
+  if (mins <= 0) return 'Break over';
+  return mins + (mins === 1 ? ' minute' : ' minutes') + ' of break left';
+}
+
+/** A break's calm countdown: the minutes without the roll, the seconds small, a quiet rule and when it ends. */
+function BreakClock({ endAt, min, base, availW, hour24, hold }: {
+  endAt: number; min: number; base: number; availW: number; hour24: boolean; hold?: boolean;
+}) {
+  // a break is a countdown that started `min` minutes before its end and never pauses
+  const timer: TimerState = { mode: 'countdown', targetMin: min, running: true, startTs: endAt - min * 60_000, accumSec: 0 };
+  useSessionTick(timer, hold);
+  const secs = shownSecondsOf(timer);
+  const [big, sec] = splitClock(secs);
+  const size = fitSize(big, sec, base, availW);
+  const progress = min > 0 ? 1 - displayOf(timer) / (min * 60) : 1;
+  return (
+    <>
+      <View style={st.time} accessible accessibilityLabel={breakSpoken(secs)}>
+        <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} roll={false} />
+        <ClockDigits
+          text={sec}
+          size={size * SEC}
+          color={C.textFaint}
+          roll={false}
+          style={{ marginTop: Math.round(size * SEC_TOP), marginLeft: size * SEC_GAP }}
+        />
+      </View>
+      <View style={st.rule}>
+        <ProgressBar value={Math.min(1, Math.max(0, progress))} height={6} color={C.textDim} />
+      </View>
+      <View style={st.meta}>
+        <Text style={st.metaText} numberOfLines={1}>{min + ' min break'}</Text>
+        <Text style={[st.metaText, st.metaRight]} numberOfLines={1}>{'Ends ' + clockAt(endAt, hour24)}</Text>
+      </View>
+    </>
+  );
+}
+
+/**
+ * The time between two countdown blocks, in the stage's place. When a block runs out (`offer`) it offers a 5, 10 or 15
+ * minute break, or the next block straight away; a break (`break`) is a calm countdown that is never logged as focus,
+ * and can be skipped; once it is over (`over`) the next block is offered, with the subject and the length of the one
+ * before. "Not now" goes back to setting up a session.
+ */
+export function BreakStage({
+  stage, subject, endAt, min, lengths, nextDetail, hour24, onBreak, onSkip, onNext, onDismiss, hold,
+}: {
+  stage: 'offer' | 'break' | 'over';
+  /** the subject of the block just done, '' for none */
+  subject: string;
+  /** the running break's end and length */
+  endAt: number;
+  min: number;
+  /** the break lengths offered, in minutes */
+  lengths: number[];
+  /** the next block under "Start the next block": "Physics · 50 min" */
+  nextDetail: string;
+  hour24: boolean;
+  onBreak: (min: number) => void;
+  onSkip: () => void;
+  onNext: () => void;
+  onDismiss: () => void;
+  /** the plate is out of sight: its clock rests */
+  hold?: boolean;
+}) {
+  const theme = useTheme();
+  const { width } = useWindowDimensions();
+  const wide = width >= WIDE_AT;
+  const [innerW, setInnerW] = React.useState(wide ? 0 : width - S.pad * 2 - PAD_X * 2);
+  const minimal = theme === 'minimal';
+  const surface = minimal
+    ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
+    : { backgroundColor: C.card, ...neuRaised('high') };
+  const kicker = stage === 'offer' ? (subject ? subject + ' block done' : 'Block done') : stage === 'break' ? 'Break' : 'Break over';
+  return (
+    <View
+      style={[st.plate, surface]}
+      onLayout={(e) => setInnerW(Math.round(e.nativeEvent.layout.width) - PAD_X * 2 - (minimal ? 2 : 0))}
+    >
+      <FadeSwap swapKey={kicker}>
+        <Text style={[T.kicker, { color: stage === 'break' ? C.textDim : C.accent }]} numberOfLines={1}>{kicker}</Text>
+      </FadeSwap>
+      {/* what the plate holds dips over as the time between blocks moves on */}
+      <FadeSwap swapKey={stage}>
+        {stage === 'offer' ? (
+          <View>
+            <Text style={st.betweenTitle} accessibilityRole="header">Take a break</Text>
+            <View style={st.lengths}>
+              {lengths.map((m) => (
+                <Chip key={m} label={m + ' min'} onPress={() => onBreak(m)} accessibilityLabel={'Take a ' + m + ' minute break'} />
+              ))}
+            </View>
+            <NextKey detail={nextDetail} outline onPress={onNext} />
+          </View>
+        ) : stage === 'break' ? (
+          <View>
+            <BreakClock endAt={endAt} min={min} base={wide ? BREAK_BIG_WIDE : BREAK_BIG} availW={innerW} hour24={hour24} hold={hold} />
+            <PillButton label="Skip break" outline color={C.textDim} onPress={onSkip} style={st.skip} />
+          </View>
+        ) : (
+          <View>
+            <Text style={st.betweenTitle} accessibilityRole="header">Ready for the next one</Text>
+            <NextKey detail={nextDetail} onPress={onNext} />
+          </View>
+        )}
+      </FadeSwap>
+      {stage === 'break' ? null : (
+        // a quiet way out, under the answer
+        <Bouncy onPress={onDismiss} scaleTo={1} sink={false} radius={12} accessibilityRole="button" style={st.notNow}>
+          <Text style={st.notNowText}>Not now</Text>
+        </Bouncy>
+      )}
+    </View>
+  );
+}
+
+/**
+ * "Start the next block" with the block under it on a second line (its subject and length), so a long subject never
+ * wraps the words of a one-line pill. Drawn as a PillButton is: raised, or an outline when it is the second choice.
+ */
+function NextKey({ detail, outline, onPress }: { detail: string; outline?: boolean; onPress: () => void }) {
+  const theme = useTheme();
+  const c = C.accent;
+  return (
+    <Bouncy
+      onPress={onPress} scaleTo={0.96} radius={999}
+      accessibilityRole="button" accessibilityLabel={'Start the next block' + (detail ? ', ' + detail : '')}
+      style={[
+        st.nextKey,
+        outline
+          ? { borderColor: c + '88', borderWidth: 1.5 }
+          : theme === 'minimal'
+            ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: c + '77' }
+            : { backgroundColor: C.card, ...neuRaised('low') },
+      ]}
+    >
+      <Text style={[st.nextTitle, { color: c }]} numberOfLines={1}>Start the next block</Text>
+      {detail ? <Text style={st.nextDetail} numberOfLines={1}>{detail}</Text> : null}
+    </Bouncy>
+  );
+}
+
 /** A part that fades in (see Appear) only when it turns up after its surroundings were built; decided once, as it mounts. */
 function Arrive({ late, style, children }: { late: boolean; style: any; children: React.ReactNode }) {
   const [fade] = React.useState(late);
@@ -266,4 +415,16 @@ const st = StyleSheet.create({
   currentText: { flex: 1, minWidth: 0 },
   currentKick: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.caps, textTransform: 'uppercase' },
   currentTitle: { color: C.text, fontFamily: F.med, fontSize: 15, letterSpacing: TRACK.body, marginTop: 3 },
+  betweenTitle: { ...T.title, marginTop: 10 },
+  // a chip carries its own right and bottom margins for a row of chips: the row gives the bottom one back
+  lengths: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 14, marginBottom: -10 },
+  skip: { marginTop: 20 },
+  nextKey: {
+    alignItems: 'center', justifyContent: 'center', marginTop: 20,
+    paddingVertical: 11, paddingHorizontal: 20, borderRadius: 999, overflow: 'hidden',
+  },
+  nextTitle: { fontFamily: F.semi, fontSize: 15, letterSpacing: TRACK.body },
+  nextDetail: { color: C.textDim, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 2 },
+  notNow: { alignSelf: 'center', paddingVertical: 12, paddingHorizontal: 18, marginTop: 6, marginBottom: -10 },
+  notNowText: { color: C.textDim, fontFamily: F.med, fontSize: 14, letterSpacing: TRACK.small },
 });

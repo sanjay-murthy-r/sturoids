@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, InteractionManager, useWindowDimensions } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, InteractionManager, useWindowDimensions } from 'react-native';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
@@ -136,12 +136,12 @@ const CONTINUE = [...BINARY, '!', '%', '×10^'];
 const TOKENS = ['asin(', 'acos(', 'atan(', 'sin(', 'cos(', 'tan(', 'abs(', 'log(', 'ln(', '√(', ' mod ', '×10^', 'π'];
 
 /**
- * The calculator as it was left, in memory only (a sum is never saved): a page closed and opened again comes back with
- * its sum, its answer and its switches. `fromAns` marks a sum that carries on from the answer at its start.
+ * The sum as it was left, in memory only (a sum is never saved): a page closed and opened again comes back with its sum
+ * and its answer. The switches (DEG or RAD, the functions, the notation) are settings, kept for good. `fromAns` marks a
+ * sum that carries on from the answer at its start.
  */
 const kept = {
   expr: '', justEvaluated: false, fromAns: false, ans: null as any, ansText: '', ansAscii: '',
-  deg: true, sci: false, sciNotation: false,
 };
 type Sum = Pick<typeof kept, 'expr' | 'justEvaluated' | 'fromAns' | 'ans' | 'ansText' | 'ansAscii'>;
 
@@ -226,12 +226,14 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const pushCalc = useStore((s) => s.pushCalc);
   const history = useStore((s) => s.calcHistory);
   const clearCalcHistory = useStore((s) => s.clearCalcHistory);
+  const setSetting = useStore((s) => s.setSetting);
+  // the switches are remembered: the angle, the functions' keys and the notation answers are written in
+  const deg = useStore((s) => s.settings.calcAngle) !== 'rad';
+  const sci = useStore((s) => s.settings.calcFunctions);
+  const sciNotation = useStore((s) => s.settings.calcSci);
 
-  // everything starts as it was left (see kept)
+  // the sum starts as it was left (see kept)
   const [expr, setExpr] = useState(kept.expr);
-  const [deg, setDeg] = useState(kept.deg);
-  const [sci, setSci] = useState(kept.sci);
-  const [sciNotation, setSciNotation] = useState(kept.sciNotation);
   const [histSheet, setHistSheet] = useState(false);
   const [justEvaluated, setJustEvaluated] = useState(kept.justEvaluated);
   // the sum as the keys read and write it: a key reads this rather than the last render, since two thumbs can press
@@ -258,8 +260,23 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const level = useAnimLevel();
   const [answers, setAnswers] = useState(0);
 
-  /** Sets the sum. It carries on from the answer while it still starts with the answer and an operator follows it. */
-  const write = useCallback((next: string, evaluated: boolean, fromAns = live.current.fromAns) => {
+  // The caret: the display is a text field that never opens the keyboard. Tapped, it takes a caret (or a selection)
+  // where the finger lands, and the keys write there; with the caret at the end, or the field never tapped, they go on
+  // at the end as they always have. Read through the ref, since two quick keys come before a render.
+  const [sel, setSel] = useState({ start: kept.expr.length, end: kept.expr.length });
+  const selRef = useRef(sel);
+  const focusedRef = useRef(false);
+  const placeCaret = useCallback((at: number) => {
+    const v = { start: at, end: at };
+    selRef.current = v;
+    setSel(v);
+  }, []);
+
+  /**
+   * Sets the sum, with the caret at `caret` (the end unless given; null leaves it where the field put it). The sum
+   * carries on from the answer while it still starts with the answer and an operator follows it.
+   */
+  const write = useCallback((next: string, evaluated: boolean, fromAns = live.current.fromAns, caret: number | null = next.length) => {
     const s = live.current;
     const after = next[s.ansText.length];
     s.fromAns = fromAns && !evaluated && next.startsWith(s.ansText) && after !== undefined && !/[\d.]/.test(after);
@@ -268,7 +285,8 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     Object.assign(kept, s);
     setExpr(next);
     setJustEvaluated(evaluated);
-  }, []);
+    if (caret != null) placeCaret(caret);
+  }, [placeCaret]);
 
   const evalExpr = (raw: string) => {
     const s = live.current;
@@ -317,6 +335,11 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const s = live.current;
     setEvalError(null);
     if (k === 'C') { write('', false, false); return; }
+    // a caret placed inside the sum, or a selection, takes the key there
+    const len = s.expr.length;
+    const a = Math.min(len, selRef.current.start, selRef.current.end);
+    const b = Math.min(len, Math.max(selRef.current.start, selRef.current.end));
+    if (focusedRef.current && (a !== b || a < len)) { editAt(k, a, b); return; }
     if (k === '⌫') {
       // a function's name, mod and ×10^ go whole, leaving no "si" or " mo" behind. Cutting into an answer makes it
       // ordinary digits, which the next key adds to rather than replaces
@@ -351,6 +374,47 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     write(e + k, false);
   };
 
+  /** The operator a piece of a sum ends with, if any. */
+  const endOp = (x: string) => ['×10^', ...BINARY].find((op) => x.endsWith(op));
+
+  /**
+   * A key at the caret, or over a selection from `from` to `to`: the same rules as at the end, read from what stands
+   * before the caret. ⌫ takes what stands before it (a function's name, mod or ×10^ whole), or the selection; an
+   * answer cut into becomes ordinary digits.
+   */
+  const editAt = (k: string, from: number, to: number) => {
+    const s = live.current;
+    let before = s.expr.slice(0, from);
+    const after = s.expr.slice(to);
+    if (k === '⌫') {
+      if (from === to) {
+        if (!before) return;
+        const t = TOKENS.find((x) => before.endsWith(x));
+        before = before.slice(0, before.length - (t ? t.length : 1));
+      }
+    } else {
+      // a second point in the number the caret stands in would leave a sum that cannot be read
+      if (k === '.' && ((before.match(/[\d.]*$/)?.[0] ?? '') + (after.match(/^[\d.]*/)?.[0] ?? '')).includes('.')) return;
+      if (BINARY.includes(k)) {
+        if (!before && k !== '−') return;
+        const op = endOp(before);
+        if (k === '−') {
+          if (op === '−') return;
+        } else {
+          for (let o = op; o; o = endOp(before)) before = before.slice(0, before.length - o.length);
+        }
+      }
+      before += k;
+    }
+    write(before + after, false, s.fromAns, before.length);
+  };
+
+  /** Text the field took in itself (a paste, a hardware keyboard): the keypad's own signs, on one line. */
+  const typed = (text: string) => {
+    setEvalError(null);
+    write(text.replace(/[\r\n]/g, '').replace(/\*/g, '×').replace(/\//g, '÷').replace(/-/g, '−'), false, live.current.fromAns, null);
+  };
+
   const fail = (why: string) => {
     setEvalError(why);
     if (errTimer.current) clearTimeout(errTimer.current);
@@ -371,6 +435,8 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     s.ansText = r.text;
     s.ansAscii = r.ascii;
     pushCalc(sum, r.text);
+    // the answer comes in a fresh field, untapped: the next key goes on from the end
+    focusedRef.current = false;
     write(r.text, true, false);
     setAnswers((n) => n + 1);
   };
@@ -386,15 +452,11 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     toast('Copied ' + out);
   }, []);
 
-  const setAngle = (k: string) => {
-    kept.deg = k === 'deg';
-    setDeg(kept.deg);
-  };
+  const setAngle = (k: string) => setSetting('calcAngle', k === 'rad' ? 'rad' : 'deg');
 
   const toggleNotation = () => {
     const next = !sciNotation;
-    kept.sciNotation = next;
-    setSciNotation(next);
+    setSetting('calcSci', next);
     // an answer on screen takes the new notation at once, worked from the answer itself rather than its shown digits
     const s = live.current;
     if (s.justEvaluated && s.ans != null) {
@@ -412,13 +474,12 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // counts the flips made while dipped, so the keypad comes back up once the flip has rendered
   const [flips, setFlips] = useState(0);
   const setFns = useCallback((on: boolean) => {
-    kept.sci = on;
-    setSci(on);
+    setSetting('calcFunctions', on);
     setFlips((n) => n + 1);
-  }, []);
+  }, [setSetting]);
   const toggleFns = () => {
     if (dipping.current) return;
-    if (level === 'none') { kept.sci = !sci; setSci(!sci); return; }
+    if (level === 'none') { setSetting('calcFunctions', !sci); return; }
     dipping.current = true;
     const next = !sci;
     padFade.value = withTiming(0, { duration: 110, easing: EASE_EXIT }, () => { runOnJS(setFns)(next); });
@@ -474,8 +535,9 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const dispScroll = useRef<ScrollView>(null);
   const onDisplaySize = (_w: number, h: number) => {
     if (exprSize === baseSize && h > 0 && !(h >= lineH.current[lineFor])) lineH.current[lineFor] = h;
-    // what is being typed stays in sight: the display follows the end of a sum that has outgrown it
-    dispScroll.current?.scrollToEnd({ animated: false });
+    // what is being typed stays in sight: the display follows the end of a sum that has outgrown it, unless the caret
+    // stands further in, where the finger put it
+    if (!focusedRef.current || selRef.current.end >= live.current.expr.length) dispScroll.current?.scrollToEnd({ animated: false });
   };
 
   // the line under the sum, and what a screen reader says as it changes: the answer as it is worked out, or why not
@@ -490,15 +552,31 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
         style={{ maxHeight: split ? 140 : compact ? 78 : 90, minHeight: exprSize < baseSize ? lineH.current[lineFor] : undefined }}
         contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }}
         onContentSizeChange={onDisplaySize}
+        keyboardShouldPersistTaps="always"
       >
-        <Animated.Text
-          key={answers}
-          entering={answers > 0 && level !== 'none' ? answerIn(level === 'full') : undefined}
-          style={[st.expr, { fontSize: exprSize }]}
-          selectable
-        >
-          {expr || '0'}
-        </Animated.Text>
+        <Animated.View key={answers} entering={answers > 0 && level !== 'none' ? answerIn(level === 'full') : undefined}>
+          {/* tapped, the sum takes a caret; the system keyboard never opens, the keypad below types */}
+          <TextInput
+            value={expr}
+            selection={{ start: Math.min(sel.start, expr.length), end: Math.min(sel.end, expr.length) }}
+            onSelectionChange={(e) => { selRef.current = e.nativeEvent.selection; setSel(e.nativeEvent.selection); }}
+            onFocus={() => { focusedRef.current = true; }}
+            onBlur={() => { focusedRef.current = false; }}
+            onChangeText={typed}
+            showSoftInputOnFocus={false}
+            multiline
+            scrollEnabled={false}
+            placeholder="0"
+            placeholderTextColor={C.text}
+            underlineColorAndroid="transparent"
+            cursorColor={C.accent}
+            selectionColor={C.accent + '55'}
+            textAlign="right"
+            style={[st.expr, { fontSize: exprSize }]}
+            accessibilityLabel={'Sum, ' + spoken(expr || '0')}
+            accessibilityHint="Tap to place the cursor"
+          />
+        </Animated.View>
       </ScrollView>
       {/* what is wrong dips in over the preview and back out, instead of flashing */}
       <FadeSwap swapKey={evalError ? 'error ' + evalError : 'preview'}>
@@ -608,6 +686,8 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <ScrollView
           ref={padScroll} style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }}
           onContentSizeChange={() => padScroll.current?.scrollToEnd({ animated: false })}
+          // a key pressed here must not take the caret out of the display
+          keyboardShouldPersistTaps="always"
         >
           {keyRows}
         </ScrollView>
@@ -882,7 +962,11 @@ const Key = React.memo(function Key({ label, value, onKey, onLongPress, color, s
 });
 
 const st = StyleSheet.create({
-  expr: { color: C.text, fontSize: 34, letterSpacing: TRACK.display, fontFamily: F.semi, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  // Geist Regular: lighter and calmer than the keys around it (the calc-face pick). A field: no padding of its own
+  expr: {
+    color: C.text, fontSize: 34, letterSpacing: TRACK.display, fontFamily: F.reg, textAlign: 'right', fontVariant: ['tabular-nums'],
+    padding: 0, margin: 0,
+  },
   preview: { fontSize: 16, letterSpacing: TRACK.body, fontFamily: F.reg, textAlign: 'right', marginTop: 4, fontVariant: ['tabular-nums'] },
   key: {
     flex: 1, paddingVertical: 16, borderRadius: 16, alignItems: 'center', justifyContent: 'center',

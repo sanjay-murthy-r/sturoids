@@ -22,6 +22,7 @@ import { Image as CachedImage } from 'expo-image';
 import { WIDE_AT, columnWidth } from '../layout';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { DraftSheet, fetchTitle, removeVaultItem } from './VaultPlayerScreen';
+import { toastTrashed } from '../trashToast';
 
 const thumb = (videoId: string) => 'https://img.youtube.com/vi/' + videoId + '/mqdefault.jpg';
 
@@ -111,9 +112,13 @@ const LibraryRow = React.memo(function LibraryRow({ v, first, last, how, pageIn,
   );
 });
 
-/** The parts of a video's caption that say something: no "0 notes", no "0 marks". */
-function videoCaption(v: VaultVideo, folderName?: string) {
+/**
+ * The parts of a video's caption that say something: no "0 notes", no "0 marks". Recently watched leads with where it
+ * was left.
+ */
+function videoCaption(v: VaultVideo, folderName?: string, left?: boolean) {
   const parts: string[] = [];
+  if (left && v.resumeAt) parts.push('Left at ' + fmtMediaTime(v.resumeAt));
   if (folderName) parts.push(folderName);
   if (v.notes.length) parts.push(v.notes.length + (v.notes.length === 1 ? ' note' : ' notes'));
   if (v.bookmarks.length) parts.push(v.bookmarks.length + (v.bookmarks.length === 1 ? ' mark' : ' marks'));
@@ -122,13 +127,15 @@ function videoCaption(v: VaultVideo, folderName?: string) {
 }
 
 /** One video in a list, memoised: a search or a link being typed re-renders the rows whose video changed, not all of them. */
-const VideoRow = React.memo(function VideoRow({ v, folderName, onOpen, onMenu }: {
+const VideoRow = React.memo(function VideoRow({ v, folderName, left, onOpen, onMenu }: {
   v: VaultVideo;
   /** the folder's name, shown where videos from every folder mix (Recent) */
   folderName?: string;
+  /** says where it was left ("Left at 12:34"), on Recently watched */
+  left?: boolean;
   onOpen: (id: string) => void; onMenu: (v: VaultVideo) => void;
 }) {
-  const caption = videoCaption(v, folderName);
+  const caption = videoCaption(v, folderName, left);
   return (
     <ListRow onPress={() => onOpen(v.id)} onLongPress={() => onMenu(v)} style={{ paddingVertical: 10 }}>
       <Thumb videoId={v.videoId} />
@@ -265,7 +272,6 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const built = useBuilt();
   const videos = useStore((s) => s.vaultVideos);
   const folders = useStore((s) => s.vaultFolders);
-  const deleteVideo = useStore((s) => s.deleteVideo);
   const updateVideo = useStore((s) => s.updateVideo);
   const addVaultFolder = useStore((s) => s.addVaultFolder);
   const renameVaultFolder = useStore((s) => s.renameVaultFolder);
@@ -462,8 +468,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
           .sort((a, b) => a.name.localeCompare(b.name))),
     [ql, subFolders, folders, cwd, subtree]
   );
+  // Recently watched: the last opened first, then the ones never opened yet, newest added first
   const recentVideos = useMemo(
-    () => [...videos].filter(match).sort((a, b) => b.addedAt - a.addedAt),
+    () => [...videos].filter(match).sort((a, b) => (b.openedAt ?? 0) - (a.openedAt ?? 0) || b.addedAt - a.addedAt),
     [videos, ql]
   );
   const allNotes = useMemo(() => {
@@ -510,7 +517,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const recentCount = recentVideos.length;
   const renderRecent = useCallback(({ item, index }: { item: VaultVideo; index: number }) => (
     <ListSlice first={index === 0} last={index === recentCount - 1}>
-      <VideoRow v={item} folderName={item.folderId ? folderNames.get(item.folderId) : undefined} onOpen={openVideo} onMenu={setVideoMenu} />
+      <VideoRow v={item} folderName={item.folderId ? folderNames.get(item.folderId) : undefined} left onOpen={openVideo} onMenu={setVideoMenu} />
     </ListSlice>
   ), [recentCount, folderNames, openVideo]);
   const notesCount = allNotes.length;
@@ -560,7 +567,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const anyVideos = videos.length > 0;
   const recentEmpty = useMemo(() => (anyVideos
     ? <EmptyState key="match" icon="search-outline" title="No videos match" />
-    : <EmptyState key="none" icon="time-outline" title="Nothing added yet" body="Recently added videos land here, newest first." />
+    : <EmptyState key="none" icon="time-outline" title="Nothing added yet" body="The videos you watch land here, the last one first, with where you left off." />
   ), [anyVideos]);
   const notesEmpty = useMemo(() => (anyNotes
     ? <EmptyState key="match" icon="search-outline" title="No notes or bookmarks match" />
@@ -753,9 +760,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
           {
             label: 'Remove from Vault', icon: 'trash-outline', color: C.danger,
             onPress: () =>
-              Alert.alert('Remove video', 'Remove "' + heldVideoMenu.title + '" and its notes?', [
+              Alert.alert('Remove video', 'Remove "' + heldVideoMenu.title + '" and its notes? You can restore it from Recently deleted for 30 days.', [
                 { text: 'Cancel', style: 'cancel' },
-                { text: 'Remove', style: 'destructive', onPress: () => deleteVideo(heldVideoMenu.id) },
+                { text: 'Remove', style: 'destructive', onPress: () => { toastTrashed(useStore.getState().trashVideo(heldVideoMenu.id)); } },
               ]),
           },
         ] : []}

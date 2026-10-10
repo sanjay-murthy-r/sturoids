@@ -1,15 +1,16 @@
 import React from 'react';
 import { View, Text, StyleSheet, Alert, Pressable, TextInput } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { C, F, T, TRACK } from '../theme';
 import { useStore, exportSnapshot, hasAnyUserData } from '../store';
 import {
-  QUOTA_BYTES, changePassword, deleteAccount, deleteCloudCopy, initCloud, keepThisPhone, restoreFromCloud, setAuto,
-  signIn, signOut, signUp, syncNow, useCloud, describe,
+  QUOTA_BYTES, changePassword, deleteAccount, deleteCloudCopy, initCloud, keepThisPhone, mobileDataCost, resetPasswordWithCode,
+  restoreFromCloud, sendResetCode, setAuto, signIn, signOut, signUp, syncNow, useCloud, describe,
 } from '../cloud';
 import { eraseThisPhone } from '../wipe';
 import { pinStatus } from '../lock';
 import { fmtClockTime } from '../utils';
-import { Card, Field, Hairline, InfoDot, PillButton, Row, SectionTitle, Sheet, Toggle } from './UI';
+import { Card, Field, Hairline, InfoDot, PillButton, Row, SectionTitle, Sheet, Toggle, useTheme } from './UI';
 import Animated from 'react-native-reanimated';
 import { Appear, FadeSwap } from './Motion';
 import { useSwapIn } from './Swap';
@@ -38,8 +39,22 @@ const mb = (bytes: number) => (bytes < 1024 * 1024 ? 'under 1' : String(Math.rou
 /** ", with 14 attachments", or nothing for a copy that has none. */
 const withFiles = (n: number) => (n > 0 ? ', with ' + n + (n === 1 ? ' attachment' : ' attachments') : '');
 
-/** React 19 hands a ref given to Field on to its text input, which Field's props do not spell out. */
-const inputRef = (ref: React.RefObject<TextInput | null>) => ({ ref }) as object;
+const looksLikeEmail = (v: string) => /^\S+@\S+\.\S+$/.test(v.trim());
+
+/** how long a reset step may wait for the cloud before it is taken for no connection, so a button never hangs */
+const RESET_WAIT_MS = 20 * 1000;
+
+/** The cloud's answer, or 'offline' once the wait is over. */
+function inTime<R extends string>(work: Promise<R>): Promise<R | 'offline'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    work.catch(() => 'offline' as const),
+    new Promise<'offline'>((resolve) => { timer = setTimeout(() => resolve('offline'), RESET_WAIT_MS); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** said when a reset step could not reach the cloud */
+const RESET_OFFLINE = "You're offline, or the cloud did not answer. Connect to the internet, then try again.";
 
 /**
  * Anything locked (the journal, the Notes tool, a note) with a PIN set: then the PIN guards what could reveal or
@@ -57,8 +72,11 @@ export async function locksNeedPin() {
  * cloud holds a copy this phone has not seen. Deleting lives in DeleteSection, at the end of Settings.
  */
 export function CloudSection({ title = 'Account' }: { title?: string | null }) {
+  useTheme(); // the links and switches take the accent
   const c = useCloud();
   const hour24 = useStore((s) => s.settings.hour24);
+  const wifiOnly = useStore((s) => s.settings.attachmentsWifiOnly);
+  const setSetting = useStore((s) => s.setSetting);
   const [mode, setMode] = React.useState<'in' | 'up'>('in');
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
@@ -69,8 +87,12 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
   const busyRef = React.useRef(false);
   const [error, setError] = React.useState('');
   const [info, setInfo] = React.useState('');
-  const [pinFor, setPinFor] = React.useState<null | 'auth' | 'restore'>(null);
+  const [pinFor, setPinFor] = React.useState<null | 'auth' | 'restore' | 'reset'>(null);
   const [pwOpen, setPwOpen] = React.useState(false);
+  const [resetOpen, setResetOpen] = React.useState(false);
+  // from the tap on "Back up now" until the backup starts: the attachments waiting for Wi-Fi are being sized
+  const [sizing, setSizing] = React.useState(false);
+  const sizingRef = React.useRef(false);
   const [, tick] = React.useState(0);
   const passwordRef = React.useRef<TextInput>(null);
   const againRef = React.useRef<TextInput>(null);
@@ -183,14 +205,40 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
     );
   };
 
-  const backUpNow = () => {
-    if (c.status === 'syncing') return;
+  const backUpNow = async () => {
+    if (c.status === 'syncing' || sizingRef.current) return;
     if (c.status === 'choice') { toast('Choose which copy to keep first.'); return; }
-    syncNow().then(() => {
-      const st = useCloud.getState().status;
-      if (st === 'idle') toast('Backed up');
-      else if (st === 'choice') toast('Choose which copy to keep first.');
-    });
+    sizingRef.current = true;
+    setSizing(true);
+    // on mobile data with attachments kept for Wi-Fi, a backup asked for by hand asks once whether to send them now
+    const cost = await mobileDataCost().catch(() => null);
+    const go = (mobileData: boolean) => {
+      sizingRef.current = false;
+      setSizing(false);
+      syncNow(false, mobileData ? { mobileData: true } : {}).then(() => {
+        const st = useCloud.getState().status;
+        if (st === 'idle') toast('Backed up');
+        else if (st === 'choice') toast('Choose which copy to keep first.');
+      });
+    };
+    if (!cost) { go(false); return; }
+    Alert.alert(
+      'Send ' + mb(cost.bytes) + ' MB of attachments over mobile data?',
+      'Your data backs up either way. ' + (cost.files === 1 ? 'The attachment' : 'The ' + cost.files + ' attachments')
+        + ' can wait for Wi-Fi instead.',
+      [
+        { text: 'Wait for Wi-Fi', style: 'cancel', onPress: () => go(false) },
+        { text: 'Send now', onPress: () => go(true) },
+      ],
+      { cancelable: true, onDismiss: () => { sizingRef.current = false; setSizing(false); } },
+    );
+  };
+
+  /** A reset signs this phone in, which sends locked pages to the cloud: the PIN comes first, as it does for signing in. */
+  const forgot = async () => {
+    if (busyRef.current) return;
+    if (await locksNeedPin()) setPinFor('reset');
+    else setResetOpen(true);
   };
 
   const leave = () => {
@@ -264,9 +312,20 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
               <Toggle value={c.auto} onChange={(v) => { setAuto(v); }} color={C.accent} label="Back up automatically" />
             </Row>
             <Hairline />
+            <Row style={{ justifyContent: 'space-between', marginVertical: 12 }}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={[T.body, { fontFamily: F.med }]}>Attachments on Wi-Fi only</Text>
+                <Text style={[T.caption, { marginTop: 2 }]}>Your data backs up on any connection. Attachments wait for Wi-Fi.</Text>
+              </View>
+              <Toggle
+                value={wifiOnly} onChange={(v) => setSetting('attachmentsWifiOnly', v)} color={C.accent}
+                label="Attachments on Wi-Fi only"
+              />
+            </Row>
+            <Hairline />
 
             <PillButton
-              label={syncing ? 'Backing up' : 'Back up now'} icon="cloud-upload-outline"
+              label={syncing || sizing ? 'Backing up' : 'Back up now'} icon="cloud-upload-outline"
               onPress={backUpNow}
               style={{ marginTop: 16 }}
             />
@@ -308,7 +367,7 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
               onSubmitEditing={() => passwordRef.current?.focus()}
             />
             <Field
-              {...inputRef(passwordRef)}
+              ref={passwordRef}
               label="Password" value={password} onChangeText={(v) => { setPassword(v); if (error) setError(''); }}
               secureTextEntry autoCapitalize="none" autoCorrect={false}
               autoComplete={mode === 'up' ? 'new-password' : 'current-password'} textContentType={mode === 'up' ? 'newPassword' : 'password'}
@@ -318,7 +377,7 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
             />
             {mode === 'up' ? (
               <Field
-                {...inputRef(againRef)}
+                ref={againRef}
                 label="Password again" value={again} onChangeText={(v) => { setAgain(v); if (error) setError(''); }}
                 secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="new-password" textContentType="newPassword"
                 returnKeyType="go" onSubmitEditing={() => submit()}
@@ -333,6 +392,13 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
               icon={mode === 'up' ? 'person-add-outline' : 'log-in-outline'}
               onPress={() => { if (!busy) submit(); }} style={{ marginTop: 6 }}
             />
+            {mode === 'in' ? (
+              <View style={[st.links, { justifyContent: 'center' }]}>
+                <Pressable onPress={() => { if (!busy) forgot(); }} hitSlop={8} accessibilityRole="button" style={st.linkHit}>
+                  <Text style={[st.link, { color: C.accent }]}>Forgot password</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </Card>
         )}
       </Animated.View>
@@ -343,11 +409,186 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
           const step = pinFor;
           setPinFor(null);
           if (step === 'restore') restore(true);
+          // the PIN sheet says nothing when it has gone: the reset sheet waits out its leave (about 220 ms) before it rises
+          else if (step === 'reset') setTimeout(() => setResetOpen(true), 260);
           else submit(true);
         }}
       />
       <PasswordSheet visible={pwOpen} onClose={() => setPwOpen(false)} />
+      <ResetSheet visible={resetOpen} startEmail={email} onClose={() => setResetOpen(false)} />
     </>
+  );
+}
+
+/**
+ * Forgot password, by a code from the email: the address and Send code, then the 6-digit code with a new password
+ * (twice, since it is typed unseen), then done, with this phone signed in. What goes wrong is said in the sheet, in
+ * words that say what to do next. Closed halfway (to look up the code, say), it opens again where it was left.
+ */
+function ResetSheet({ visible, startEmail, onClose }: { visible: boolean; startEmail: string; onClose: () => void }) {
+  useTheme(); // the links and the done mark take the accent
+  const [step, setStep] = React.useState<'email' | 'code' | 'done'>('email');
+  const [email, setEmail] = React.useState('');
+  const [code, setCode] = React.useState('');
+  const [next, setNext] = React.useState('');
+  const [again, setAgain] = React.useState('');
+  const [error, setError] = React.useState('');
+  const [info, setInfo] = React.useState('');
+  const [busy, setBusy] = React.useState<null | 'send' | 'reset'>(null);
+  // set the moment a tap starts something, so a second tap before the screen catches up starts nothing
+  const busyRef = React.useRef(false);
+  const emailRef = React.useRef<TextInput>(null);
+  const codeRef = React.useRef<TextInput>(null);
+  const nextRef = React.useRef<TextInput>(null);
+  const againRef = React.useRef<TextInput>(null);
+  React.useEffect(() => {
+    if (!visible) return;
+    setError('');
+    // a reset that is over starts again from the address; one closed halfway keeps its place and its code
+    if (step === 'done') {
+      setStep('email');
+      setCode('');
+      setInfo('');
+    }
+    if (step === 'done' || (step === 'email' && !email.trim())) setEmail(startEmail.trim());
+  }, [visible]);
+
+  const send = async (resend = false) => {
+    if (busyRef.current) return;
+    const address = email.trim();
+    if (!looksLikeEmail(address)) { setError('That does not look like an email address.'); return; }
+    busyRef.current = true;
+    setBusy('send');
+    setError('');
+    setInfo('');
+    try {
+      const r = await inTime(sendResetCode(address));
+      if (r === 'sent') {
+        setStep('code');
+        setInfo((resend ? 'A new code is on its way to ' : 'We sent a 6-digit code to ') + address
+          + '. It can take a minute to arrive, so check spam too.');
+        setTimeout(() => codeRef.current?.focus(), 60);
+      } else {
+        setError(r === 'offline' ? RESET_OFFLINE : 'The code could not be sent. Wait a minute, then try again.');
+      }
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+    }
+  };
+
+  const reset = async () => {
+    if (busyRef.current) return;
+    if (!/^\d{6}$/.test(code.replace(/\s+/g, ''))) { setError('Enter the 6-digit code from the email.'); return; }
+    if (next.length < 6) { setError('Use a password of at least 6 characters.'); return; }
+    if (next !== again) { setError('The two passwords do not match.'); return; }
+    busyRef.current = true;
+    setBusy('reset');
+    setError('');
+    try {
+      const r = await inTime(resetPasswordWithCode(email, code, next));
+      if (r === 'ok') {
+        tap();
+        // the password is not kept a moment longer than it is needed
+        setNext('');
+        setAgain('');
+        setCode('');
+        setInfo('');
+        setStep('done');
+        return;
+      }
+      setError(
+        r === 'wrong-code' ? "That code didn't work. It may be mistyped or out of date: check the email, or send a new code."
+          : r === 'weak' ? 'The cloud turned that password down. Choose a longer one, of at least 6 characters.'
+            : r === 'offline' ? RESET_OFFLINE
+              : 'Something went wrong in the cloud. Wait a minute, then try again.',
+      );
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+    }
+  };
+
+  const clear = () => { if (error) setError(''); };
+
+  return (
+    <Sheet
+      visible={visible} onClose={onClose} title={step === 'done' ? 'Password changed' : 'Reset your password'}
+      // the first field takes the keyboard once the sheet is up, so the keyboard never rides the rise
+      onRisen={() => { if (step === 'email') emailRef.current?.focus(); else if (step === 'code') codeRef.current?.focus(); }}
+    >
+      {step === 'email' ? (
+        <>
+          <Text style={[T.caption, { marginBottom: 16 }]}>
+            Enter the email of your account. We send it a 6-digit code, and with it you choose a new password.
+          </Text>
+          <Field
+            ref={emailRef}
+            label="Email" value={email} onChangeText={(v) => { setEmail(v); clear(); }}
+            autoCapitalize="none" autoCorrect={false} keyboardType="email-address" autoComplete="email" textContentType="emailAddress"
+            placeholder="you@example.com" returnKeyType="send" onSubmitEditing={() => send()}
+          />
+        </>
+      ) : step === 'code' ? (
+        <>
+          <Text style={[T.caption, { marginBottom: 16 }]}>{info}</Text>
+          <Field
+            ref={codeRef}
+            label="Code from the email" value={code}
+            onChangeText={(v) => { setCode(v.replace(/[^\d]/g, '').slice(0, 6)); clear(); }}
+            keyboardType="number-pad" maxLength={6} autoComplete="one-time-code" textContentType="oneTimeCode"
+            placeholder="6 digits" returnKeyType="next" submitBehavior="submit" onSubmitEditing={() => nextRef.current?.focus()}
+          />
+          <Field
+            ref={nextRef}
+            label="New password" value={next} onChangeText={(v) => { setNext(v); clear(); }}
+            secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="new-password" textContentType="newPassword"
+            placeholder="At least 6 characters" returnKeyType="next" submitBehavior="submit"
+            onSubmitEditing={() => againRef.current?.focus()}
+          />
+          <Field
+            ref={againRef}
+            label="The new password again" value={again} onChangeText={(v) => { setAgain(v); clear(); }}
+            secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="new-password" textContentType="newPassword"
+            returnKeyType="done" onSubmitEditing={reset}
+          />
+        </>
+      ) : (
+        <View style={st.done}>
+          <Ionicons name="checkmark-circle-outline" size={40} color={C.green} />
+          <Text style={[T.body, { textAlign: 'center', marginTop: 10 }]}>
+            Your new password is set, and this phone is signed in to your account.
+          </Text>
+        </View>
+      )}
+      {error ? <Text style={st.problem} accessibilityLiveRegion="polite">{error}</Text> : null}
+      {step === 'email' ? (
+        <PillButton
+          label={busy === 'send' ? 'Sending code' : 'Send code'} icon="mail-outline"
+          onPress={() => { if (!busy) send(); }} style={{ marginTop: 6 }}
+        />
+      ) : step === 'code' ? (
+        <>
+          <PillButton
+            label={busy === 'reset' ? 'Changing password' : 'Change password'} icon="key-outline"
+            onPress={() => { if (!busy) reset(); }} style={{ marginTop: 6 }}
+          />
+          <View style={st.links}>
+            <Pressable onPress={() => { if (!busy) send(true); }} hitSlop={8} accessibilityRole="button" style={st.linkHit}>
+              <Text style={[st.link, { color: C.accent }]}>{busy === 'send' ? 'Sending' : 'Send a new code'}</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => { if (!busy) { setStep('email'); setError(''); setInfo(''); setCode(''); } }}
+              hitSlop={8} accessibilityRole="button" style={st.linkHit}
+            >
+              <Text style={[st.link, { color: C.textDim }]}>Use another email</Text>
+            </Pressable>
+          </View>
+        </>
+      ) : (
+        <PillButton label="Done" onPress={onClose} style={{ marginTop: 18 }} />
+      )}
+    </Sheet>
   );
 }
 
@@ -390,7 +631,7 @@ function PasswordSheet({ visible, onClose }: { visible: boolean; onClose: () => 
         onSubmitEditing={() => againRef.current?.focus()}
       />
       <Field
-        {...inputRef(againRef)}
+        ref={againRef}
         label="The new password again" value={again} onChangeText={(v) => { setAgain(v); if (error) setError(''); }}
         secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="new-password" textContentType="newPassword"
         returnKeyType="done" onSubmitEditing={save}
@@ -425,7 +666,7 @@ export function DeleteSection({ title = 'Delete', onErased }: {
     try {
       if (what === 'account') { await deleteAccount(); toast('Account deleted'); }
       else if (what === 'cloud') { await deleteCloudCopy(); toast('Cloud data deleted'); }
-      else { await eraseThisPhone(); toast('Everything on this phone was deleted'); erased = true; }
+      else { await eraseThisPhone(); toast('Everything on this phone was deleted.'); erased = true; }
       tap();
     } catch (e) {
       Alert.alert('Could not delete', describe(e));
@@ -515,4 +756,5 @@ const st = StyleSheet.create({
   linkHit: { minHeight: 44, justifyContent: 'center' },
   link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   danger: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 8, marginLeft: 4 },
+  done: { alignItems: 'center', paddingVertical: 8, paddingHorizontal: 8 },
 });

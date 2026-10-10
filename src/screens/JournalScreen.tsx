@@ -6,7 +6,8 @@ import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T, TRACK } from '../theme';
-import { useStore, JournalEntry, flushSaves } from '../store';
+import { useStore, JournalEntry, flushSaves, trashedEntryIds } from '../store';
+import { toastTrashed } from '../trashToast';
 import { fmtClockTime, todayKey, toMinutes } from '../utils';
 import {
   Chip, DotMenu, Field, GateHeader, Hairline, IconBtn, PillButton, ProgressBar, Row, ScreenBG, Sheet, Toggle, useTheme,
@@ -42,6 +43,10 @@ interface Draft {
 }
 
 const SAVE_DEBOUNCE_MS = 400;
+
+/** Whether an entry is in Recently deleted: its page is never saved again, which would bring it back. */
+const isTrashed = (id: string) => trashedEntryIds(useStore.getState().trash).includes(id);
+
 /** the reminder's wheel turns in quarter hours, round the clock */
 const REMIND_STEP = 15;
 const REMIND_STOPS = (24 * 60) / REMIND_STEP;
@@ -138,6 +143,9 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     const d = draft.current;
     if (!d.dirty) return;
     d.dirty = false;
+    // an entry moved to Recently deleted is never written again: a save would put it back in the journal, and a page
+    // cleared of its words would delete the text Recently deleted keeps for it
+    if (d.id && isTrashed(d.id)) return;
     saving.current = true;
     const empty = !d.title.trim() && !d.body.trim() && d.mood == null && d.rating == null && d.tags.length === 0;
     try {
@@ -153,6 +161,12 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         id: d.id ?? undefined, dateKey: d.dateKey, title: d.title, body: d.body, mood: d.mood, rating: d.rating,
         checkoutSkipped: d.checkoutSkipped, tags: d.tags, promptId: d.promptId,
       });
+      // moved to Recently deleted while its text was being written: the save put it back, so it leaves again (its
+      // file keeps the newer words for a restore)
+      if (isTrashed(id)) {
+        useStore.getState().removeJournalEntry(id);
+        return;
+      }
       if (draft.current === d && !d.id) {
         d.id = id;
         setEntryId(id);
@@ -276,7 +290,12 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     const e = journal.find((x) => x.id === entryId);
     const idleNow = !draft.current.dirty && !timer.current && !saving.current;
     if (!e) {
-      if (!draft.current.dirty) loadEntry(draft.current.dateKey, null);
+      // one moved to Recently deleted lets the page go even with typing waiting, which no save may write back
+      if (isTrashed(entryId)) {
+        if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+        draft.current.dirty = false;
+        loadEntry(draft.current.dateKey, null);
+      } else if (!draft.current.dirty) loadEntry(draft.current.dateKey, null);
     } else if (idleNow && e.updatedAt !== draft.current.seen) {
       loadEntry(e.dateKey, e.id);
     } else if (e.dateKey !== draft.current.dateKey) {
@@ -407,18 +426,28 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   };
   const confirmDelete = () => {
     if (!entryId) return;
-    Alert.alert('Delete this entry?', 'This cannot be undone.', [
+    Alert.alert('Delete this entry?', 'You can restore it from Recently deleted for 30 days.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
-          // join the save queue first: a save already under way finishes before the delete, never after it
+          // join the save queue first: a save already under way finishes before the move, never after it, and the
+          // entry goes with its latest words
           await flush();
+          if (timer.current) { clearTimeout(timer.current); timer.current = null; }
           const id = draft.current.id ?? entryId;
+          const key = draft.current.dateKey;
+          const trashId = useStore.getState().trashJournalEntry(id);
+          // Recently deleted could not take it: the entry stays, and so does its page
+          if (!trashId) { toastTrashed(null); return; }
           draft.current.dirty = false;
-          await deleteEntry(id);
-          const rest = useStore.getState().journal.filter((e) => e.dateKey === dateKey).sort((a, b) => a.createdAt - b.createdAt);
-          loadEntry(dateKey, rest[0]?.id ?? null);
+          // back from an Undo, it takes its page again if the page has nothing else on it
+          toastTrashed(trashId, () => {
+            const d = draft.current;
+            if (d.dateKey === key && !d.id && !d.dirty && !timer.current) loadEntry(key, id);
+          });
+          const rest = useStore.getState().journal.filter((e) => e.dateKey === key).sort((a, b) => a.createdAt - b.createdAt);
+          loadEntry(key, rest[0]?.id ?? null);
         },
       },
     ]);
@@ -645,7 +674,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
                 comes back with the page, instead of changing under it in one frame */}
             <Bouncy onPress={() => { tick(); setDateSheet(true); }} scaleTo={0.97} radius={14} style={st.dateBtn}>
               <FadeSwap swapKey={dateKey + '|' + sub} style={st.dateWords}>
-                <Text style={st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
+                {/* in a bar slot the serif is the tool's title just above, so the date is in the text face there */}
+                <Text style={tabMode ? st.dateSlot : st.date} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{parts.day}</Text>
                 <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
               </FadeSwap>
             </Bouncy>
@@ -936,6 +966,8 @@ const st = StyleSheet.create({
   // the date is the page's heading: it starts where the page's text does, and is only as wide as it is
   dateBtn: { alignSelf: 'flex-start', maxWidth: '100%', paddingVertical: 4, marginBottom: 6 },
   date: { color: C.text, fontFamily: F.head, fontSize: 21, lineHeight: 27, letterSpacing: TRACK.large },
+  /** the date in a bar slot: Geist SemiBold 20 */
+  dateSlot: { ...T.head },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title, paddingVertical: 8 },
   prompt: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, marginBottom: 2 },
   promptText: { flex: 1, color: C.textDim, fontFamily: F.reg, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 20 },

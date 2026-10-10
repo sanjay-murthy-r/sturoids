@@ -13,7 +13,7 @@ import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { C, F, MIN, S, T, TRACK, neuInset } from '../../src/theme';
 import { useStore, QuickItem, FocusSession, Habit, PlannerWeek } from '../../src/store';
-import { uid, fmtDate, todayKey, dayName, DAY_NAMES, toMinutes, fmtClockTime, daysUntil } from '../../src/utils';
+import { uid, fmtDate, todayKey, dayName, DAY_NAMES, toMinutes, fmtClockTime, daysUntil, blockOnNow } from '../../src/utils';
 import {
   ScreenBG, Card, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Hairline, Chip,
   ListCard, ListRow, ProgressBar, StrikeText, useTheme,
@@ -22,7 +22,7 @@ import {
   CHANGE, CountUp, EASE_OUT, Enter, Bouncy, FadeSwap, RISE_OUT, glide, rowOut, useAnimLevel, useFocusKey,
 } from '../../src/components/Motion';
 import { useSwapIn } from '../../src/components/Swap';
-import { QuickTaskSheet } from '../../src/components/QuickTaskSheet';
+import { QuickTaskSheet, shortClock } from '../../src/components/QuickTaskSheet';
 import { toast } from '../../src/components/Toast';
 import { tap } from '../../src/haptics';
 import { ROUTE_CATALOG, launchExternal, sameSite, siteHost, siteName, siteUrl } from '../../src/quickAccess';
@@ -30,8 +30,9 @@ import { ToolKey, colorOf, normaliseSlots, toolByKey } from '../../src/tools';
 import { openPage, openTool } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
 import { useIntro } from '../../src/intro';
-import { journalDayFor } from '../../src/journal';
+import { journalDayFor, shiftKey } from '../../src/journal';
 import { indexScores, upcoming, groupSummary, fmtPct, fromToday } from '../../src/scores';
+import { openScoreNode } from '../../src/scoresNav';
 import { useNow } from '../../src/hooks/useNow';
 import { TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth } from '../../src/layout';
 
@@ -60,12 +61,10 @@ function SeenCount(props: React.ComponentProps<typeof CountUp>) {
 /** A shortcut to an archived tool stays in the saved list but is not shown. */
 const hiddenTile = (q: QuickItem, archived: ReadonlySet<string>) => q.kind === 'tool' && archived.has(q.target);
 
-/**
- * Long-term tasks ticked on Today's list, by the day they were ticked. They stay on the list, struck through and
- * counted as done, until the day turns, so a tick never makes the row vanish and a mis-tap is undone in place. A task
- * keeps no day it was done on, so this lives as long as the app is open.
- */
-const tickedOnToday = new Map<string, string>();
+/** how far ahead the Coming up row looks, in days */
+const COMING_DAYS = 7;
+/** how far back a journal page still counts as the habit of writing, so the nudge to write today makes sense */
+const JOURNAL_RECENT_DAYS = 14;
 
 /** a 13 pt text link reaches a 44 dp target without moving anything around it */
 const LINK_SLOP = { top: 14, bottom: 14, left: 10, right: 10 };
@@ -109,6 +108,7 @@ export default function Today() {
   const dwAccumSec = useStore((s) => s.deepWork?.accumSec ?? 0);
   const dwStartedAt = useStore((s) => s.deepWork?.startedAt ?? 0);
   const dwCapSec = useStore((s) => (s.deepWork?.mode === 'countdown' ? s.deepWork.targetMin * 60 : Infinity));
+  const dwSubject = useStore((s) => s.deepWork?.subject ?? '');
 
   const [nameSheet, setNameSheet] = useState(false);
   const [qaEdit, setQaEdit] = useState(false);
@@ -140,27 +140,32 @@ export default function Today() {
     return () => sub.remove();
   }, [qaEdit]);
 
+  // A countdown block still running from before the app was last closed ends with its buzz (and chime) even while Deep
+  // Work has not been opened since: its notification keeps quiet with the app in front, and no Deep Work screen is
+  // there to hear the end. Deep Work's module watches it (it stands down while a Deep Work screen is open).
+  useEffect(() => {
+    if (!dwRunning || !dwStartTs || !Number.isFinite(dwCapSec)) return;
+    (require('../../src/screens/FocusScreen') as typeof import('../../src/screens/FocusScreen')).watchAwayEnd();
+  }, [dwRunning, dwStartTs, dwCapSec]);
+
   // an archived tool steps out of Today entirely: its sections, its glance and its shortcuts
   const archived = useMemo(() => new Set<string>(archivedTools), [archivedTools]);
   const hideTasks = archived.has('tasks');
   const hidePlanner = archived.has('planner');
   const hideFocus = archived.has('focus');
   const hideJournal = archived.has('journal');
+  const hideScores = archived.has('scores');
   const visibleQuick = useMemo(() => quickAccess.filter((q) => !hiddenTile(q, archived)), [quickAccess, archived]);
 
-  // A deadline falls due as the day turns, so today is part of the answer. A task ticked here today stays, struck
-  // through, and the late ones come first, the longest overdue at the top.
+  // A deadline falls due as the day turns, so today is part of the answer. A task due by today that was ticked today
+  // stays, struck through and counted as done, until the day turns, so a tick never makes the row vanish and a mis-tap
+  // is undone in place. The late ones come first, the longest overdue at the top.
   const dueMissions = useMemo(
     () => missions
-      .filter((m) => (m.done ? tickedOnToday.get(m.id) === today : daysUntil(m.deadline) <= 0))
+      .filter((m) => daysUntil(m.deadline) <= 0 && (!m.done || m.doneOn === today))
       .sort((a, b) => (a.deadline < b.deadline ? -1 : a.deadline > b.deadline ? 1 : 0)),
     [missions, today]
   );
-  const onToggleMission = useCallback((id: string) => {
-    const m = useStore.getState().missions.find((x) => x.id === id);
-    if (m && !m.done) tickedOnToday.set(id, todayKey());
-    toggleMission(id);
-  }, [toggleMission]);
   const tasksLeft = dailyTasks.filter((t) => t.doneOn !== today).length + dueMissions.filter((m) => !m.done).length;
   const habitsDone = habits.filter((h) => h.doneDates.includes(today)).length;
   // a session still going counts as it runs, from the day it began, as it will once it is logged
@@ -183,10 +188,7 @@ export default function Today() {
     const todays = sorted(dToday);
     // today's block comes first at any hour, so a late study block is never skipped for tomorrow's plan. Of two that
     // overlap (allowed, on purpose), the one on now is the one that ends first, as the Planner's header says.
-    let current: (typeof todays)[number] | undefined;
-    for (const b of todays) {
-      if (toMinutes(b.start) <= nowMin && nowMin < toMinutes(b.end) && (!current || toMinutes(b.end) < toMinutes(current.end))) current = b;
-    }
+    const current = blockOnNow(todays, nowMin);
     if (current) return { block: current, tag: 'NOW' };
     const next = todays.find((b) => toMinutes(b.start) > nowMin);
     if (next) return { block: next, tag: 'NEXT UP' };
@@ -211,11 +213,15 @@ export default function Today() {
   const maxMins = Math.max(30, ...weekBars.map((b) => b.mins));
   const weekTotal = weekBars.reduce((a, b) => a + b.mins, 0);
 
-  const todayList = useMemo(() => [
-    ...dailyTasks.map((t) => ({ kind: 'daily' as const, id: t.id, title: t.title, done: t.doneOn === today, overdue: false })),
-    ...dueMissions.map((m) => ({
-      kind: 'mission' as const, id: m.id, title: m.title, done: m.done, overdue: daysUntil(m.deadline) < 0,
+  const todayList = useMemo<TodayItem[]>(() => [
+    ...dailyTasks.map((t) => ({
+      kind: 'daily' as const, id: t.id, title: t.title, done: t.doneOn === today, overdue: false, time: t.time ?? '',
     })),
+    ...dueMissions.map((m) => {
+      const overdue = daysUntil(m.deadline) < 0;
+      // a task late by a day or more is simply overdue: the time it was due by that day says no more
+      return { kind: 'mission' as const, id: m.id, title: m.title, done: m.done, overdue, time: overdue ? '' : m.time ?? '' };
+    }),
   ], [dailyTasks, dueMissions, today]);
   const doneCount = todayList.filter((t) => t.done).length;
   // the first ToDo takes the place of the empty note, and the last one done away with gives it back
@@ -240,20 +246,62 @@ export default function Today() {
     for (const e of s.journal) if (e.dateKey === journalDay) n += e.wordCount || 0;
     return n;
   });
-  const journalNudge = !hideJournal && !journalLocked && journalWords === 0;
+  // the nudge is for someone who keeps the journal: a page written in the last two weeks. Someone who never writes is
+  // never asked to, every day
+  const recentFrom = shiftKey(today, -JOURNAL_RECENT_DAYS);
+  const recentFromMs = new Date(recentFrom + 'T00:00:00').getTime();
+  const writesLately = useStore((s) => s.journal.some((e) => (e.wordCount || 0) > 0 && (e.dateKey >= recentFrom || e.updatedAt >= recentFromMs)));
+  const journalNudge = !hideJournal && !journalLocked && journalWords === 0 && writesLately;
 
-  // the Scores tile's line walks every exam, so it is worked out only when the exams or the day change
+  // the next exam walks every exam, so it is worked out only when the exams or the day change
+  const scoresIx = useMemo(() => (hideScores ? null : indexScores(scores)), [hideScores, scores]);
+  const nextExam = useMemo(() => (scoresIx ? upcoming(scoresIx, null, today)[0] ?? null : null), [scoresIx, today]);
   const hasScoresTile = visibleQuick.some((q) => q.kind === 'tool' && q.target === 'scores');
   const scoresMeta = useMemo(() => {
-    if (!hasScoresTile) return null;
+    if (!hasScoresTile || !scoresIx) return null;
     // the next exam coming up says the most; failing that, how the latest one went
-    const ix = indexScores(scores);
-    const next = upcoming(ix, null, today)[0];
-    if (next) return (next.title || 'An exam') + ' ' + fromToday(next.date as string, today).toLowerCase();
-    const sum = groupSummary(ix, null);
+    if (nextExam) return (nextExam.title || 'An exam') + ' ' + fromToday(nextExam.date as string, today).toLowerCase();
+    const sum = groupSummary(scoresIx, null);
     return sum ? 'Latest ' + fmtPct(sum.latest.pct) : 'No exams yet';
-  }, [hasScoresTile, scores, today]);
+  }, [hasScoresTile, scoresIx, nextExam, today]);
   const blocksToday = (planner[dayName(now)] || []).length;
+
+  // Coming up: the nearest dated exam and the nearest long-term deadline still open, each only within a week. A task
+  // due today or late is on the list below already, so the deadline here is one still to come.
+  const comingExam = nextExam && daysUntil(nextExam.date as string) <= COMING_DAYS ? nextExam : null;
+  const comingTask = useMemo(() => {
+    if (hideTasks) return null;
+    let next: (typeof missions)[number] | null = null;
+    for (const m of missions) {
+      if (m.done) continue;
+      const d = daysUntil(m.deadline);
+      if (d >= 1 && d <= COMING_DAYS && (!next || m.deadline < next.deadline)) next = m;
+    }
+    return next;
+  }, [hideTasks, missions, today]);
+  const examPart = comingExam
+    ? (comingExam.title.trim() || 'An exam') + ' ' + fromToday(comingExam.date as string, today).toLowerCase()
+    : '';
+  const taskPart = comingTask ? comingTask.title + ' due ' + fromToday(comingTask.deadline, today).toLowerCase() : '';
+  const comingExamId = comingExam?.id ?? '';
+  const openExam = useCallback(() => {
+    if (!comingExamId) return;
+    // Scores opens the exam's page once it is in front, as it does for the exam form
+    openScoreNode(comingExamId);
+    openTool('scores');
+  }, [comingExamId]);
+  const openLongTerm = useCallback(() => openTool('tasks', { list: 'missions' }), []);
+
+  // the week's plan apart from today: a day with nothing planned asks to be planned only by someone who plans
+  const weekHasOtherBlocks = useMemo(() => {
+    const todayName = dayName(now);
+    return DAY_NAMES.some((d) => d !== todayName && (planner[d] || []).length > 0);
+  }, [planner, today]);
+
+  // the Deep Work session in flight, to the minute, for its line under the plan
+  const sessionMin = dwOn
+    ? Math.floor(Math.min(dwCapSec, dwAccumSec + (dwRunning && dwStartTs ? Math.max(0, now.getTime() - dwStartTs) / 1000 : 0)) / 60)
+    : 0;
 
   // what a shortcut's wide tile says: a live fact about its tool. A shortcut with nothing to say stays a small tile,
   // and every tool always says the same kind of thing, so live changes never reshuffle the grid.
@@ -405,7 +453,23 @@ export default function Today() {
   );
 
   const noBlocksToday = !nextBlock && !blocksToday;
-  const planBlock = hidePlanner || (!nextBlock && !noBlocksToday) ? null : (
+  const planNudge = !hidePlanner && noBlocksToday && weekHasOtherBlocks;
+  // while a Deep Work session runs, one quiet line under the plan says what and for how long, and opens it; it changes
+  // on the minute and carries no dot
+  const sessionSaid = sessionMin > 0 ? sessionMin + ' min' : 'just started';
+  const sessionRow = dwOn && !hideFocus ? (
+    <Enter index={1}>
+      <FlatLine
+        icon="hourglass-outline" onPress={() => openTool('focus')} hint="Opens the session"
+        label={'Deep Work' + (dwSubject ? ', ' + dwSubject : '') + ', '
+          + (sessionMin > 0 ? spokenMinutes(sessionMin) : 'just started') + (dwRunning ? '' : ', paused')}
+      >
+        <Text style={st.flatEm}>Deep Work</Text>
+        {(dwSubject ? ' · ' + dwSubject : '') + ' · ' + sessionSaid + (dwRunning ? '' : ' · paused')}
+      </FlatLine>
+    </Enter>
+  ) : null;
+  const planBlock = (hidePlanner || (!nextBlock && !planNudge)) && !sessionRow ? null : (
       <>
         {nextBlock && !hidePlanner && (
           <Enter index={1}>
@@ -418,7 +482,8 @@ export default function Today() {
                   <View style={{ flex: 1 }}>
                     <Text style={T.head} numberOfLines={1}>{nextBlock.block.subject}</Text>
                     <Text style={[T.caption, { marginTop: 2, fontVariant: ['tabular-nums'] }]}>
-                      {fmtClockTime(toMinutes(nextBlock.block.start), hour24)} – {fmtClockTime(toMinutes(nextBlock.block.end), hour24)}
+                      {/* a block that runs to the end of the day ends at midnight, as the Planner says */}
+                      {fmtClockTime(toMinutes(nextBlock.block.start), hour24)} – {toMinutes(nextBlock.block.end) >= 1440 ? 'midnight' : fmtClockTime(toMinutes(nextBlock.block.end), hour24)}
                     </Text>
                   </View>
                 </Row>
@@ -430,7 +495,7 @@ export default function Today() {
             </Card>
           </Enter>
         )}
-        {!hidePlanner && noBlocksToday ? (
+        {planNudge ? (
           <Enter index={1}>
             <Pressable
               onPress={() => openTool('planner')}
@@ -446,6 +511,7 @@ export default function Today() {
             </Pressable>
           </Enter>
         ) : null}
+        {sessionRow}
       </>
   );
 
@@ -483,6 +549,32 @@ export default function Today() {
             </Card>
           </Enter>
   );
+
+  // one quiet line under the glance; each part opens its own tool, and the line is gone with nothing in the week ahead
+  const comingBlock = examPart || taskPart ? (
+    <Enter index={2}>
+      <View style={st.flatRow}>
+        <Ionicons name="calendar-clear-outline" size={16} color={C.textFaint} style={st.flatIcon} />
+        {examPart ? (
+          <Pressable
+            onPress={openExam} hitSlop={LINK_SLOP} style={st.comingPart}
+            accessibilityRole="button" accessibilityLabel={examPart} accessibilityHint="Opens the exam in Scores"
+          >
+            <Text style={st.flatText} numberOfLines={1}>{examPart}</Text>
+          </Pressable>
+        ) : null}
+        {examPart && taskPart ? <Text style={st.flatText}>{' · '}</Text> : null}
+        {taskPart ? (
+          <Pressable
+            onPress={openLongTerm} hitSlop={LINK_SLOP} style={st.comingPart}
+            accessibilityRole="button" accessibilityLabel={taskPart} accessibilityHint="Opens your long-term tasks"
+          >
+            <Text style={st.flatText} numberOfLines={1}>{taskPart}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </Enter>
+  ) : null;
 
   const quickBlock = (
       <>
@@ -564,7 +656,7 @@ export default function Today() {
                     />
                   </Card>
                 ) : (
-                  <TodayList items={todayList} onToggleDaily={toggleDaily} onToggleMission={onToggleMission} />
+                  <TodayList items={todayList} hour24={hour24} onToggleDaily={toggleDaily} onToggleMission={toggleMission} />
                 )}
               </Animated.View>
             </Enter>
@@ -640,12 +732,18 @@ export default function Today() {
         {greetingBlock}
         {twoCol ? (
           <>
-            {planBlock && glanceBlock ? (
+            {planBlock && (glanceBlock || comingBlock) ? (
               <View style={st.pair}>
                 <View style={st.col}>{planBlock}</View>
-                <View style={st.col}>{glanceBlock}</View>
+                <View style={st.col}>{glanceBlock}{comingBlock}</View>
               </View>
-            ) : planBlock || glanceBlock}
+            ) : (
+              <>
+                {planBlock}
+                {glanceBlock}
+                {comingBlock}
+              </>
+            )}
             <View style={st.pair}>
               <View style={st.col}>{listBlock}</View>
               <View style={st.col}>{quickBlock}{journalBlock}{habitsBlock}{weekBlock}</View>
@@ -655,6 +753,7 @@ export default function Today() {
           <>
             {planBlock}
             {glanceBlock}
+            {comingBlock}
             {quickBlock}
             {journalBlock}
             {listBlock}
@@ -1048,17 +1147,81 @@ function QuickTile({ q, meta, index, last, rect, wide, rects, isDragging, onDrag
   );
 }
 
-type TodayItem = { kind: 'daily' | 'mission'; id: string; title: string; done: boolean; overdue: boolean };
-
-/** Today's list. Its own component, so the minute changing on Today leaves the rows alone. */
-const TodayList = React.memo(function TodayList({ items, onToggleDaily, onToggleMission }: {
-  items: TodayItem[]; onToggleDaily: (id: string) => void; onToggleMission: (id: string) => void;
+/**
+ * One quiet line on Today, with no surface of its own: an icon, a line of words that opens something, and a chevron.
+ * The words run to one line.
+ */
+function FlatLine({ icon, onPress, label, hint, children }: {
+  icon: React.ComponentProps<typeof Ionicons>['name']; onPress: () => void; label: string; hint?: string; children: React.ReactNode;
 }) {
   return (
+    <Pressable
+      onPress={onPress} style={({ pressed }) => [st.flatRow, pressed && { opacity: 0.6 }]}
+      accessibilityRole="button" accessibilityLabel={label} accessibilityHint={hint}
+    >
+      <Ionicons name={icon} size={16} color={C.textFaint} style={st.flatIcon} />
+      <Text style={[st.flatText, { flex: 1 }]} numberOfLines={1}>{children}</Text>
+      <Ionicons name="chevron-forward" size={15} color={C.textFaint} />
+    </Pressable>
+  );
+}
+
+type TodayItem = {
+  kind: 'daily' | 'mission'; id: string; title: string; done: boolean; overdue: boolean;
+  /** 'HH:MM' it is due by, or '' */
+  time: string;
+};
+
+/** about how long a tick's strike takes to draw (StrikeText): the row waits for it before it sinks */
+const SINK_AFTER = 600;
+const itemKey = (t: TodayItem) => t.kind + t.id;
+
+/**
+ * Today's list. Its own component, so the minute changing on Today leaves the rows alone. A row ticked off stays where
+ * it is while its strike draws, then glides to the end of the list (the card's own eased glide), so what is left to do
+ * stays on top; unticked, it comes straight back up to its place. Rows already done when the list is built start at
+ * the end.
+ */
+const TodayList = React.memo(function TodayList({ items, hour24, onToggleDaily, onToggleMission }: {
+  items: TodayItem[]; hour24: boolean; onToggleDaily: (id: string) => void; onToggleMission: (id: string) => void;
+}) {
+  const [sunk, setSunk] = useState<ReadonlySet<string>>(() => new Set(items.filter((t) => t.done).map(itemKey)));
+  const sunkRef = React.useRef(sunk);
+  sunkRef.current = sunk;
+  // one wait per row on its way down, called off if it is unticked before it sinks
+  const waits = React.useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const done = new Set(items.filter((t) => t.done).map(itemKey));
+    // unticked (or gone from the list): back up at once, and no longer waiting to sink
+    for (const [k, timer] of waits.current) {
+      if (!done.has(k)) { clearTimeout(timer); waits.current.delete(k); }
+    }
+    setSunk((cur) => {
+      let same = true;
+      for (const k of cur) if (!done.has(k)) { same = false; break; }
+      return same ? cur : new Set([...cur].filter((k) => done.has(k)));
+    });
+    for (const k of done) {
+      if (sunkRef.current.has(k) || waits.current.has(k)) continue;
+      waits.current.set(k, setTimeout(() => {
+        waits.current.delete(k);
+        setSunk((cur) => (cur.has(k) ? cur : new Set(cur).add(k)));
+      }, SINK_AFTER));
+    }
+  }, [items]);
+  useEffect(() => () => {
+    for (const timer of waits.current.values()) clearTimeout(timer);
+    waits.current.clear();
+  }, []);
+  const ordered = useMemo(
+    () => [...items.filter((t) => !sunk.has(itemKey(t))), ...items.filter((t) => sunk.has(itemKey(t)))],
+    [items, sunk],
+  );
+  return (
     <ListCard>
-      {items.map((t) => (
+      {ordered.map((t) => (
         <TodayRow
-          key={t.kind + t.id} kind={t.kind} id={t.id} title={t.title} done={t.done} overdue={t.overdue}
+          key={itemKey(t)} kind={t.kind} id={t.id} title={t.title} done={t.done} overdue={t.overdue} time={t.time} hour24={hour24}
           onToggleDaily={onToggleDaily} onToggleMission={onToggleMission}
         />
       ))}
@@ -1067,18 +1230,21 @@ const TodayList = React.memo(function TodayList({ items, onToggleDaily, onToggle
 });
 
 /** One of today's rows. Memoised on plain values, so ticking one re-renders that row alone. */
-const TodayRow = React.memo(function TodayRow({ kind, id, title, done, overdue, onToggleDaily, onToggleMission }: TodayItem & {
-  onToggleDaily: (id: string) => void; onToggleMission: (id: string) => void;
+const TodayRow = React.memo(function TodayRow({ kind, id, title, done, overdue, time, hour24, onToggleDaily, onToggleMission }: TodayItem & {
+  hour24: boolean; onToggleDaily: (id: string) => void; onToggleMission: (id: string) => void;
 }) {
+  const by = time ? 'by ' + shortClock(time, hour24) : '';
   return (
     <ListRow>
       <CheckCircle
         done={done}
         color={kind === 'mission' ? C.amber : C.green}
         onPress={() => (kind === 'daily' ? onToggleDaily(id) : onToggleMission(id))}
-        label={title}
+        label={title + (by ? ', ' + by : '')}
       />
       <StrikeText done={done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{title}</StrikeText>
+      {/* the time it is due by, quiet at the end of the row, as Tasks says it */}
+      {by ? <Text style={st.byText} numberOfLines={1}>{by}</Text> : null}
       {/* a task past its deadline says so, as Tasks does, rather than looking like one due today */}
       {kind === 'mission' && (
         <View style={[st.missionPill, overdue && { backgroundColor: C.danger + '1C', borderColor: C.danger + '55' }]}>
@@ -1266,6 +1432,14 @@ const st = StyleSheet.create({
     borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8,
   },
   missionPillText: { color: C.amber, fontFamily: F.bold, fontSize: 11, letterSpacing: TRACK.caps },
+  byText: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 8, fontVariant: ['tabular-nums'] },
+  // a quiet line with no surface (Coming up, the session in flight): under a card, nearer it than the next section
+  flatRow: { flexDirection: 'row', alignItems: 'center', marginTop: -4, marginBottom: S.gap - 4, paddingVertical: 8, paddingHorizontal: 4 },
+  flatIcon: { marginRight: 10 },
+  flatText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
+  flatEm: { color: C.text, fontFamily: F.semi },
+  // each part of Coming up gives way to the other on a narrow phone, cut short with an ellipsis
+  comingPart: { flexShrink: 1 },
   barValue: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginBottom: 4, fontVariant: ['tabular-nums'] },
   barLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 7 },
   barTrough: {

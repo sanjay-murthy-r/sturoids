@@ -17,7 +17,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { C, F, MIN, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU } from '../theme';
 import { columnWidth } from '../layout';
 import { useStore, Attachment, Note, flushSaves } from '../store';
-import { fmtClockTime, indexAfterNeighbours, todayKey, uid, yesterdayKey } from '../utils';
+import { fmtClockTime, todayKey, uid, yesterdayKey } from '../utils';
 import {
   ScreenBG, Sheet, Chip, Row, IconBtn, NeuIconBtn, PillButton, DotMenu, EmptyState, GateHeader, useTheme, useToolHeader,
 } from '../components/UI';
@@ -27,7 +27,8 @@ import { expectAway, markOpen, noteScope, pinStatus } from '../lock';
 import { Bouncy, EASE_OUT, Enter, glide, rowIn, rowOut, useAnimLevel, useBuilt } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ATT_DIR, deleteAttachmentFiles, deleteAttachmentLater } from '../attachments';
+import { ATT_DIR } from '../attachments';
+import { toastTrashed } from '../trashToast';
 import { useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { FolderNameSheet, takeFreshNote } from './NotesListScreen';
@@ -177,12 +178,10 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   if (stored) lastNote.current = stored;
   const note = stored ?? (leaving.current ? lastNote.current : undefined);
   const updateNote = useStore((s) => s.updateNote);
-  const deleteNote = useStore((s) => s.deleteNote);
   const folders = useStore((s) => s.noteFolders);
   const addDaily = useStore((s) => s.addDaily);
   const addMission = useStore((s) => s.addMission);
   const addAttachment = useStore((s) => s.addAttachment);
-  const removeAttachment = useStore((s) => s.removeAttachment);
 
   const [lineSheet, setLineSheet] = useState(false);
   const [folderSheet, setFolderSheet] = useState(false);
@@ -239,29 +238,47 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const [title, setTitle] = useState(stored?.title ?? '');
   const [body, setBodyText] = useState(stored?.body ?? '');
   const draft = useRef({ title: stored?.title ?? '', body: stored?.body ?? '' });
+  // the words the store and the draft last agreed on: a stored note whose words differ from these was changed under the
+  // page (a restored backup, a newer copy the cloud brought quietly, a revision sheet written again from the Vault)
+  const synced = useRef<{ title: string; body: string } | null>(stored ? { title: stored.title, body: stored.body } : null);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The page takes the stored words: what was typed and not yet committed is dropped, never written over them. */
+  const adopt = React.useCallback((n: Note) => {
+    if (commitTimer.current) { clearTimeout(commitTimer.current); commitTimer.current = null; }
+    const changedUnder = synced.current != null;
+    synced.current = { title: n.title, body: n.body };
+    draft.current = { title: n.title, body: n.body };
+    // an undo would bring back words from before the change, so its steps start again from here
+    if (changedUnder) { undoStack.current = []; redoStack.current = []; }
+    setTitle(n.title);
+    setBodyText(n.body);
+  }, []);
   const commit = React.useCallback(() => {
     if (commitTimer.current) { clearTimeout(commitTimer.current); commitTimer.current = null; }
     const s = useStore.getState();
     const n = s.notes.find((x) => x.id === id);
     if (!n) return;
+    const was = synced.current;
+    // changed under the page since the two last agreed: the stored words win
+    if (was && (n.title !== was.title || n.body !== was.body)) { adopt(n); return; }
     const d = draft.current;
+    synced.current = { title: d.title, body: d.body };
     if (n.title !== d.title || n.body !== d.body) s.updateNote(n.id, { title: d.title, body: d.body });
-  }, [id]);
+  }, [id, adopt]);
   const scheduleCommit = React.useCallback(() => {
     if (commitTimer.current) clearTimeout(commitTimer.current);
     commitTimer.current = setTimeout(commit, COMMIT_PAUSE_MS);
   }, [commit]);
-  // the draft follows the stored note whenever nothing typed is waiting to be committed: a note that turns up after
-  // the page was built (the store still loading), and a note changed from outside while it sits open (a restored
-  // backup), so a later keystroke never writes the old text back over it
+  // the draft follows the stored note: one that turns up after the page was built (the store still loading), and one
+  // changed from outside while it sits open (a restored backup, a quiet follow of the cloud), even with typing still
+  // waiting, so the waiting words are never committed over the newer ones. The page's own commits are no change from
+  // outside: they leave the stored words as `synced` already says
   React.useEffect(() => {
-    if (!stored || commitTimer.current) return;
-    if (draft.current.title === stored.title && draft.current.body === stored.body) return;
-    draft.current = { title: stored.title, body: stored.body };
-    setTitle(stored.title);
-    setBodyText(stored.body);
-  }, [stored?.id, stored?.title, stored?.body]);
+    if (!stored) return;
+    const was = synced.current;
+    if (was && was.title === stored.title && was.body === stored.body) return;
+    adopt(stored);
+  }, [stored?.id, stored?.title, stored?.body, adopt]);
   // closing the note writes what is waiting, and so does leaving the app, straight through to storage
   React.useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
@@ -296,27 +313,11 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const words = useMemo(() => countWords(body), [body]);
 
   const noteId = note?.id ?? '';
-  // A removed attachment leaves the note at once, and its file waits out the Undo before it is deleted. Undo puts the
-  // same attachment back where it stood
+  // A removed attachment goes to Recently deleted, and its file stays on the phone until it is deleted for good there.
+  // Undo puts the same attachment back where it stood
   const removeOne = React.useCallback((attId: string) => {
-    const before = useStore.getState().notes.find((n) => n.id === noteId)?.attachments ?? [];
-    const at = before.findIndex((a) => a.id === attId);
-    const gone = removeAttachment(noteId, attId);
-    if (!gone) return;
-    const later = deleteAttachmentLater(gone);
-    toast('Attachment removed.', {
-      label: 'Undo',
-      onPress: () => {
-        const n = useStore.getState().notes.find((x) => x.id === noteId);
-        // a note deleted meanwhile took its other files with it; this one goes when its wait is over
-        if (!n || n.attachments.some((a) => a.id === gone.id)) return;
-        later.cancel();
-        const list = [...n.attachments];
-        list.splice(indexAfterNeighbours(before.slice(0, at).map((a) => a.id), list.map((a) => a.id)), 0, gone);
-        useStore.getState().updateNote(noteId, { attachments: list });
-      },
-    });
-  }, [noteId, removeAttachment]);
+    toastTrashed(useStore.getState().trashAttachment(noteId, attId));
+  }, [noteId]);
   const viewPhoto = React.useCallback((uri: string) => { Keyboard.dismiss(); setViewing(uri); }, []);
 
   const toggleLock = async () => {
@@ -324,12 +325,12 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     Keyboard.dismiss();
     // the note is open, so its PIN has been given (or it was never locked): the lock comes off without asking again
     if (note.locked) {
-      updateNote(note.id, { locked: false });
+      updateNote(note.id, { locked: false }, { touch: false });
       toast('The note is no longer locked.');
       return;
     }
     if ((await pinStatus()) === 'set') {
-      updateNote(note.id, { locked: true });
+      updateNote(note.id, { locked: true }, { touch: false });
       markOpen(noteScope(note.id));
       toast('Note locked. Your PIN opens it.');
       return;
@@ -340,11 +341,13 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
 
   const deleteThis = () => {
     if (!note) return;
-    // the page keeps showing the note while it leaves; what was typed is dropped with it
+    // what was typed goes with it, so the note comes back from Recently deleted as it was last seen
+    commit();
+    // Recently deleted could not take it: the note stays, and so does its page
+    if (!toastTrashed(useStore.getState().trashNote(note.id))) return;
+    // the page keeps showing the note while it leaves
     leaving.current = true;
-    if (commitTimer.current) { clearTimeout(commitTimer.current); commitTimer.current = null; }
     router.back();
-    deleteAttachmentFiles(deleteNote(note.id));
   };
 
   // The header: the folder is the bar's title, and the line under it says when the note was last written to. That line
@@ -367,7 +370,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       },
       {
         icon: note.pinned ? 'pin' : 'pin-outline', label: note.pinned ? 'Unpin note' : 'Pin note',
-        onPress: () => updateNote(note.id, { pinned: !note.pinned }),
+        onPress: () => updateNote(note.id, { pinned: !note.pinned }, { touch: false }),
       },
       { icon: 'folder-outline', label: 'Move to folder', onPress: () => setFolderSheet(true) },
       ...(note.locked ? [] : [{
@@ -377,7 +380,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       }]),
       {
         icon: 'trash-outline', label: 'Delete note', color: C.danger,
-        onPress: () => Alert.alert('Delete note', 'This cannot be undone.', [
+        onPress: () => Alert.alert('Delete note', 'You can restore it from Recently deleted for 30 days.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Delete', style: 'destructive', onPress: deleteThis },
         ]),
@@ -733,7 +736,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         <Row style={{ flexWrap: 'wrap' }}>
           {folders.map((f) => (
             <Chip key={f} label={f} active={note.folder === f}
-              onPress={() => { updateNote(note.id, { folder: f }); setFolderSheet(false); }} />
+              onPress={() => { updateNote(note.id, { folder: f }, { touch: false }); setFolderSheet(false); }} />
           ))}
           <Chip icon="add" label="New folder" onPress={() => { newFolderNext.current = true; setFolderSheet(false); }} />
         </Row>
@@ -747,7 +750,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         check={(name) => (!name ? 'Give the folder a name.' : folders.includes(name) ? 'There is already a folder with that name.' : '')}
         onSave={(name) => {
           useStore.getState().addNoteFolder(name);
-          updateNote(note.id, { folder: name });
+          updateNote(note.id, { folder: name }, { touch: false });
           setNewFolder(false);
         }}
       />
@@ -761,7 +764,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         onClose={() => setLockPin(false)}
         onDone={() => {
           setLockPin(false);
-          updateNote(note.id, { locked: true });
+          updateNote(note.id, { locked: true }, { touch: false });
           markOpen(noteScope(note.id));
           toast('Note locked. Your PIN opens it.');
         }}

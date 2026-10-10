@@ -411,6 +411,30 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return learnings.filter((l) => inside.has(l.nodeId));
   }, [here, ix, learnings]);
 
+  // Before an exam: an upcoming one (dated, not marked yet) brings back what the earlier exams of its category taught,
+  // newest first, so they are read when they are most use. Nothing in its category, no card
+  const beforeExam = useMemo(() => {
+    if (!here || here.kind !== 'exam' || !here.date || here.date < today || resultOf(here, ix)) return null;
+    const root = rootExamOf(ix, here.id);
+    const cat = categoryOf(root, scoreTags);
+    if (!root || !cat) return null;
+    const when = here.date;
+    const items = filterLearnings(learnings, [], 'any', alive).filter((l) => {
+      const from = rootExamOf(ix, l.nodeId);
+      return !!from && from.id !== root.id && categoryOf(from, scoreTags)?.id === cat.id && whenOf(from) <= when;
+    });
+    return items.length ? { category: cat, items: items.slice(0, 5) } : null;
+  }, [here, ix, learnings, scoreTags, today, alive]);
+  // its "See all": the notebook, showing that category alone
+  const seeBefore = () => {
+    if (!beforeExam) return;
+    tick();
+    setPicked([beforeExam.category.id]);
+    setMatch('any');
+    setFind('');
+    openNotebook();
+  };
+
   // The header's line: the one fact each page is opened for. A figure that is zero is not said, and a page with nothing
   // true to say has no line at all.
   const context = useMemo(() => {
@@ -568,6 +592,8 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 learnings={examLearnings}
                 onAddLearning={() => setLearn({ mode: 'new', nodeId: here.id })}
                 onLearningMenu={openLearning}
+                before={beforeExam?.items ?? null}
+                onSeeBefore={seeBefore}
               />
             ) : (
               <GroupView
@@ -849,7 +875,8 @@ function GroupView({ hero, groupId, ix, table, today, sort, onSort, onOpen, onMe
     <>
       <Enter index={enter++}>
         {hero}
-        <AnalyticsTeaser onPress={onAnalytics} />
+        {/* Analytics speaks for every exam, so it is offered at the top only, never inside a group it would not describe */}
+        {groupId == null ? <AnalyticsTeaser onPress={onAnalytics} /> : null}
       </Enter>
 
       {soon.length ? (
@@ -1008,7 +1035,8 @@ function shareOf(ix: ScoreIndex, n: ScoreNode, parent: ScoreNode | undefined): s
 }
 
 function ExamView({
-  hero, exam, ix, today, delta, onOpen, onMenu, onEdit, onAddPart, learnings, onAddLearning, onLearningMenu,
+  hero, exam, ix, today, delta, onOpen, onMenu, onEdit, onAddPart, learnings, onAddLearning, onLearningMenu, before,
+  onSeeBefore,
 }: {
   /** the header's first block, carried in the page's first entrance */
   hero: React.ReactNode;
@@ -1018,6 +1046,10 @@ function ExamView({
   onEdit: () => void; onAddPart: () => void;
   /** its own learnings and its subjects' */
   learnings: Learning[]; onAddLearning: () => void; onLearningMenu: (l: Learning) => void;
+  /** before the exam: the learnings of the earlier exams in its category (at most five), or null for no card */
+  before: Learning[] | null;
+  /** opens the notebook on that category */
+  onSeeBefore: () => void;
 }) {
   const r = resultOf(exam, ix);
   const parts = (ix.children.get(exam.id) || []).filter((k) => k.kind === 'exam').sort((a, b) => a.createdAt - b.createdAt);
@@ -1089,6 +1121,29 @@ function ExamView({
           ) : null}
         </Card>
       </Enter>
+
+      {before ? (
+        <Enter index={1}>
+          <SectionTitle>Before the exam</SectionTitle>
+          <ListCard>
+            {before.map((l) => (
+              <ListRow
+                key={l.id} onPress={() => onOpen(l.nodeId)} style={{ paddingVertical: 12 }}
+                accessibilityHint="Opens the exam it came from"
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={T.body}>{l.text}</Text>
+                  {/* cut at its start, so the exam it came from, at the end, stays in view */}
+                  <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1} ellipsizeMode="head">{learningPath(ix, l)}</Text>
+                </View>
+              </ListRow>
+            ))}
+          </ListCard>
+          <Pressable onPress={onSeeBefore} hitSlop={LINK_SLOP} accessibilityRole="button" style={st.seeAll}>
+            <Text style={[st.link, { color: C.accent }]}>See all in the notebook</Text>
+          </Pressable>
+        </Enter>
+      ) : null}
 
       {mismatch ? (
         <Enter index={1}>
@@ -1341,6 +1396,8 @@ const st = StyleSheet.create({
   delta: { fontFamily: F.semi, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, fontVariant: ['tabular-nums'] },
   deltaRow: { flexDirection: 'row', alignItems: 'center' },
   link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
+  /** the way from the before-exam card into the notebook, under the card */
+  seeAll: { alignSelf: 'flex-start', paddingHorizontal: 4, paddingTop: 2 },
   barTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
   barFill: { height: 6, borderRadius: 3 },
   hintRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 4, marginBottom: 6 },

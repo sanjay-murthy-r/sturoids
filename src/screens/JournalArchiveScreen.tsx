@@ -16,7 +16,7 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
-  MOODS, PROMPTS, clearJournalOpenRequest, deleteEntry, entryMatches, formatJournalDate, journalDayFor, journalStats, keyToDate,
+  MOODS, PROMPTS, clearJournalOpenRequest, entryMatches, formatJournalDate, journalDayFor, journalStats, keyToDate,
   loadBodies, onThisDay, readBody, requestJournalOpen, searchTokens, shiftKey,
 } from '../journal';
 import { openTool } from '../toolNav';
@@ -24,6 +24,7 @@ import { expectAway } from '../lock';
 import { tick } from '../haptics';
 import { Appear, Bouncy, CountUp, EASE_OUT, useAnimLevel } from '../components/Motion';
 import { swapIn } from '../components/Swap';
+import { toastTrashed } from '../trashToast';
 
 type Sort = 'newest' | 'oldest' | 'longest' | 'best';
 const SORT_LABEL: Record<Sort, string> = { newest: 'Newest', oldest: 'Oldest', longest: 'Longest', best: 'Best days' };
@@ -264,9 +265,9 @@ function Archive({ tabMode }: { tabMode: boolean }) {
       .catch(() => {});
   };
   const confirmDelete = (e: JournalEntry) => {
-    Alert.alert('Delete this entry?', 'This cannot be undone.', [
+    Alert.alert('Delete this entry?', 'You can restore it from Recently deleted for 30 days.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => { deleteEntry(e.id); } },
+      { text: 'Delete', style: 'destructive', onPress: () => { toastTrashed(useStore.getState().trashJournalEntry(e.id)); } },
     ]);
   };
 
