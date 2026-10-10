@@ -488,6 +488,13 @@ const scenarios = {
     assert.equal(app.state().settings.name, 'Sam', 'a copy undone is never followed again');
     assert.equal(app.cloudState().status, 'choice');
     assert.equal(app.world.log.filter((l) => l === 'upsert').length, 1, 'and nothing went over it');
+    // the tablet writes again while the choice still waits: the choice is never made for the user by a quiet follow
+    const again = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    app.world.rows.set(USER, { ...app.world.rows.get(USER), snapshot: backupOf({ ...SAM, settings: { name: 'Tablet again' } }), updated_at: again });
+    await app.cloud.check(false);
+    assert.equal(app.state().settings.name, 'Sam', 'a later copy waits for the choice too');
+    assert.equal(app.cloudState().status, 'choice');
+    assert.equal(app.cloudState().remote.updatedAt, again, 'and the choice is about the newest copy');
   },
 
   async 'when both phones changed, the choice stays and nothing is replaced'() {

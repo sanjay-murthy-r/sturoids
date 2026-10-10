@@ -30,6 +30,11 @@ const GAP_SIG = 34;
 /** hero signature: width as a fraction of the screen width, centre as a fraction of its height */
 const HERO_W = 0.78;
 const HERO_Y = 0.46;
+/**
+ * The tallest a signature's slot may be for its width. The creator's (0.82) is well inside it; a recorded signature
+ * taller than this is set narrower instead, so the column keeps about the height it was designed for.
+ */
+const SLOT_MAX_ASPECT = 1;
 const CAPTION_OPACITY = 0.8;
 /**
  * A wide window lays the intro out on a phone's width and scales the whole of it up, never past this, and never past
@@ -483,7 +488,7 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
 
   // a phone lays the intro out on its own width, as it always has; a wide window on a phone's, then scales it by k
   const wide = W >= WIDE_AT;
-  const sigW = SIG_SIZE * (wide ? DESIGN_W : W);
+  const sigW = SIG_SIZE * (wide ? DESIGN_W : W) * Math.min(1, model.vw / (SLOT_MAX_ASPECT * model.vh));
   const sigH = (sigW * model.vh) / model.vw;
   const columnH = PLATE + GAP_WORD + WORD_H + GAP_CAPTION + CAPTION_H + GAP_SIG + sigH;
   const k = wide ? Math.min(K_MAX, (FIT_H * H) / columnH) : 1;

@@ -886,7 +886,9 @@ function filesNote(skipped: number, waiting: number): string | null {
  * `mobileData` says the user agreed to send them now (see mobileDataCost).
  */
 export function syncNow(force = false, opts: { mobileData?: boolean } = {}): Promise<void> {
-  if (running) return running;
+  // the user's own ask (keep this phone's data, send the attachments over mobile data) runs once the run under way ends,
+  // rather than being folded into it and lost
+  if (running) return force || opts.mobileData ? running.catch(() => {}).then(() => syncNow(force, opts)) : running;
   running = (async () => {
     const st = useCloud.getState();
     if (st.status === 'choice' && !force) return;
@@ -1175,6 +1177,8 @@ async function meetNewer(s: Session, remote: RemoteCopy): Promise<void> {
  */
 async function follow(s: Session, remote: RemoteCopy): Promise<boolean> {
   if (localDataState() !== 'ok' || meta.rescue) return false;
+  // a choice still waiting (a follow the user undid) is never made for them by following a later copy quietly
+  if (useCloud.getState().status === 'choice') return false;
   // a Deep Work session under way here is in no copy, and a replace ends it: the user chooses
   if (useStore.getState().deepWork) return false;
   const facts = (localHash: string | null): NewerCopyFacts => ({

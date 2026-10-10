@@ -233,10 +233,13 @@ export default function SignaturePage() {
                 label="The original" active={!yours} onPress={() => pick('creator')}
                 accessibilityRole="radio" accessibilityState={{ checked: !yours }}
               />
-              <Chip
-                label="Yours" active={yours} onPress={own ? () => pick('own') : undefined}
-                accessibilityRole="radio" accessibilityState={{ checked: yours, disabled: !own }}
-              />
+              {/* dimmed until there is one of yours to choose */}
+              <View style={!own && st.unavailable}>
+                <Chip
+                  label="Yours" active={yours} onPress={own ? () => pick('own') : undefined}
+                  accessibilityRole="radio" accessibilityState={{ checked: yours, disabled: !own }}
+                />
+              </View>
             </View>
             <Text style={[T.caption, { marginTop: 12 }]}>
               {own ? 'Yours was recorded on ' + recordedOn(own.recordedAt) + '.' : 'Record yours below and save it to choose it.'}
@@ -823,6 +826,7 @@ function StepKey({ icon, onPress }: { icon: 'add' | 'remove'; onPress?: () => vo
 
 const st = StyleSheet.create({
   choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  unavailable: { opacity: 0.4 },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: S.gap, marginBottom: 12 },
   padBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

@@ -626,6 +626,36 @@ const scenarios = {
     }
   },
 
+  async 'a move into or out of Recently deleted is never saved on one side only'() {
+    const first = boot();
+    await settled(first);
+    const keep = first.state().addNote({ title: 'Keep me' });
+    const gone = first.state().addNote({ title: 'Deleted' });
+    const tid = first.state().trashNote(gone);
+    await flush(first);
+    // Recently deleted cannot be read: a delete moves nothing, so the note is not saved away into a row that is not saved
+    const blockedTrash = new Map(first.storage);
+    blockedTrash.set(ROW('trash'), '{broken');
+    const a = boot({}, { storage: blockedTrash });
+    await settled(a);
+    assert.equal(a.state().trashNote(keep), null, 'nothing is moved');
+    await flush(a);
+    assert.ok(JSON.parse(blockedTrash.get(ROW('notes'))).some((n) => n.id === keep), 'the note stays saved');
+    assert.equal(blockedTrash.get(ROW('trash')), '{broken', 'and the trash row is never written over');
+    // Notes cannot be read: a restore brings the note back and it stays in Recently deleted, which is saved
+    const blockedNotes = new Map(first.storage);
+    blockedNotes.set(ROW('notes'), '{broken');
+    const b = boot({}, { storage: blockedNotes });
+    await settled(b);
+    assert.equal(b.state().restoreFromTrash(tid), 'ok');
+    assert.ok(b.state().notes.some((n) => n.id === gone), 'it is back for this launch');
+    await flush(b);
+    assert.ok(JSON.parse(blockedNotes.get(ROW('trash'))).some((t) => t.id === tid), 'and still kept where it is saved');
+    assert.equal(b.state().restoreFromTrash(tid), 'ok');
+    await flush(b);
+    assert.ok(JSON.parse(blockedNotes.get(ROW('trash'))).some((t) => t.id === tid), 'a second tap loses nothing either');
+  },
+
   async 'a save writes only the rows that changed, and the meta row last'() {
     const app = boot();
     await settled(app);
@@ -717,6 +747,10 @@ const scenarios = {
     next.state().updateDaily(id, { time: null });
     const t = next.state().dailyTasks.find((x) => x.id === id);
     assert.ok(!('time' in t) && !('remind' in t) && !('repeat' in t), 'a new ToDo is a one-off; its reminder goes with its time');
+    // a backup brought in after this launch settled its day is settled too, so yesterday's ticks never come back open
+    const snap = { ...next.store.exportSnapshot(), dailyTasks: [{ id: 'old-tick', title: 'F', doneOn: yesterday, createdAt: 1 }] };
+    assert.equal(next.store.importSnapshot(JSON.stringify(snap)), true);
+    assert.ok(!next.state().dailyTasks.some((x) => x.id === 'old-tick'), 'settled on the way in');
   },
 
   async 'long-term tasks remember the day they were ticked, and deletes can be undone'() {

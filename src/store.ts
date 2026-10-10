@@ -559,8 +559,8 @@ export interface AppState {
   /** keeps the Desmos graph; false (and the old graph kept) when it is too large to keep */
   setDesmosState: (json: string) => boolean;
 
-  // Recently deleted. Each returns the trash item's id (null when there was nothing to move), so an Undo can call
-  // restoreFromTrash with it
+  // Recently deleted. Each returns the trash item's id (null when there was nothing to move, or Recently deleted did not
+  // load this launch and could not keep it: then the thing stays where it is), so an Undo can call restoreFromTrash
   trashNote: (id: string) => string | null;
   /** the entry's text stays in its file */
   trashJournalEntry: (id: string) => string | null;
@@ -569,7 +569,10 @@ export interface AppState {
   trashBookmark: (videoId: string, id: string) => string | null;
   /** the file stays where it is */
   trashAttachment: (noteId: string, attId: string) => string | null;
-  /** 'parent-missing' when the note or video a part belongs to is not here (restore that first) */
+  /**
+   * 'parent-missing' when the note or video a part belongs to is not here (restore that first). Into a collection that
+   * did not load this launch (and is not saved), the item comes back and stays in Recently deleted too, so it is never lost
+   */
   restoreFromTrash: (trashId: string) => 'ok' | 'parent-missing';
   /** gone for good, with its files */
   deleteFromTrash: (trashId: string) => void;
@@ -962,7 +965,8 @@ function cleanTrash(raw: any, settings?: Partial<Settings>): TrashItem[] {
     if (it.kind === 'journal' && typeof it.data.dateKey !== 'string') continue;
     if (it.kind === 'attachment' && typeof it.data.uri !== 'string') continue;
     seen.add(it.id);
-    const data = it.kind === 'note' && !Array.isArray(it.data.attachments) ? { ...it.data, attachments: [] }
+    // a note's attachments are records only, so relinking or restoring them never reads a field of null
+    const data = it.kind === 'note' ? { ...it.data, attachments: listOf(it.data.attachments).filter(isRecord) }
       : it.kind === 'video' ? { ...it.data, notes: listOf(it.data.notes).filter(isRecord), bookmarks: listOf(it.data.bookmarks).filter(isRecord) }
         : it.data;
     const item: TrashItem = {
@@ -1371,6 +1375,15 @@ function migratePersisted(persisted: any, version: number): any {
 const firstLine = (text: unknown) => (typeof text === 'string' ? text.trim().split('\n')[0].trim().slice(0, 80) : '');
 const noteTitle = (n: Note) => firstLine(n.title) || firstLine(n.body) || 'Untitled note';
 const entryTitle = (e: JournalEntry) => firstLine(e.title) || 'Entry for ' + fmtShortDate(e.dateKey);
+
+/**
+ * Recently deleted did not load this launch, so it is not saved: a delete moving something into it would be saved on
+ * one side only and lose it, so nothing is moved.
+ */
+const trashUnsaved = () => blockedRows.has('trash');
+
+/** The collection a trash item goes back into. */
+const homeOf = (kind: TrashKind): DataKey => (kind === 'note' || kind === 'attachment' ? 'notes' : kind === 'journal' ? 'journal' : 'vaultVideos');
 
 function trashItemOf(kind: TrashKind, data: any, title: string, settings: Settings, extra: Partial<TrashItem> = {}): TrashItem {
   const item: TrashItem = { id: uid(), kind, deletedAt: Date.now(), title, locked: false, data, ...extra };
@@ -2122,6 +2135,7 @@ export const useStore = create<AppState>()(
       },
 
       trashNote: (id) => {
+        if (trashUnsaved()) return null;
         const s = get();
         const index = s.notes.findIndex((n) => n.id === id);
         if (index < 0) return null;
@@ -2131,6 +2145,7 @@ export const useStore = create<AppState>()(
         return item.id;
       },
       trashJournalEntry: (id) => {
+        if (trashUnsaved()) return null;
         const s = get();
         const index = s.journal.findIndex((e) => e.id === id);
         if (index < 0) return null;
@@ -2140,6 +2155,7 @@ export const useStore = create<AppState>()(
         return item.id;
       },
       trashVideo: (id) => {
+        if (trashUnsaved()) return null;
         const s = get();
         const index = s.vaultVideos.findIndex((v) => v.id === id);
         if (index < 0) return null;
@@ -2149,6 +2165,7 @@ export const useStore = create<AppState>()(
         return item.id;
       },
       trashTimedNote: (videoId, id) => {
+        if (trashUnsaved()) return null;
         const s = get();
         const v = s.vaultVideos.find((x) => x.id === videoId);
         const index = v ? v.notes.findIndex((n) => n.id === id) : -1;
@@ -2163,6 +2180,7 @@ export const useStore = create<AppState>()(
         return item.id;
       },
       trashBookmark: (videoId, id) => {
+        if (trashUnsaved()) return null;
         const s = get();
         const v = s.vaultVideos.find((x) => x.id === videoId);
         const index = v ? v.bookmarks.findIndex((b) => b.id === id) : -1;
@@ -2177,6 +2195,7 @@ export const useStore = create<AppState>()(
         return item.id;
       },
       trashAttachment: (noteId, attId) => {
+        if (trashUnsaved()) return null;
         const s = get();
         const n = s.notes.find((x) => x.id === noteId);
         const index = n ? n.attachments.findIndex((a) => a.id === attId) : -1;
@@ -2197,7 +2216,8 @@ export const useStore = create<AppState>()(
         const item = s.trash.find((t) => t.id === trashId);
         // already back (an Undo tapped twice), or gone for good
         if (!item) return 'ok';
-        const trash = s.trash.filter((t) => t.id !== trashId);
+        // a collection that did not load this launch is not saved: the item stays here too, so it is never lost on the way
+        const trash = blockedRows.has(homeOf(item.kind)) ? s.trash : s.trash.filter((t) => t.id !== trashId);
         const d = item.data;
         if (item.kind === 'note') {
           if (s.notes.some((n) => n.id === d.id)) set({ trash });
@@ -2634,6 +2654,9 @@ export function applySnapshot(read: ReadSnapshot): void {
   resumePersistence();
   blockedRows.clear();
   useStore.getState().replaceAll({ ...read.data, settings });
+  // one-off ToDos ticked on an earlier day go, as they would at a launch: this launch has settled its day already, and
+  // they would otherwise come back as open until tomorrow
+  useStore.getState().settleDay();
   replacedThisLaunch = true;
 }
 
