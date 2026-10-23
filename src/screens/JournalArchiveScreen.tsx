@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { C, F, MIN, NEU, S, T, TRACK, bgFor } from '../theme';
-import { useStore, JournalEntry } from '../store';
+import { useStore, JournalEntry, FocusSession } from '../store';
 import { todayKey } from '../utils';
 import {
   Card, Chip, DotMenu, EmptyState, Field, GateHeader, Hairline, ListRow, ListSlice, PillButton, Row, ScreenBG, Sheet, useTheme,
@@ -16,8 +16,8 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
-  MOODS, PROMPTS, clearJournalOpenRequest, entryMatches, formatJournalDate, journalDayFor, journalStats, keyToDate,
-  loadBodies, onThisDay, readBody, requestJournalOpen, searchTokens, shiftKey,
+  MOODS, PROMPTS, clearJournalOpenRequest, dayFacts, dayRecord, entryMatches, formatJournalDate, journalDayFor,
+  journalStats, keyToDate, loadBodies, onThisDay, readBody, requestJournalOpen, searchTokens, shiftKey,
 } from '../journal';
 import { openTool } from '../toolNav';
 import { expectAway } from '../lock';
@@ -45,12 +45,15 @@ export function JournalArchiveScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-function Highlighted({ text, tokens, style, lines }: { text: string; tokens: string[]; style: any; lines?: number }) {
+/** `em`: the face a match is set in, the semibold of the text's own family */
+function Highlighted({ text, tokens, style, lines, em = F.semi }: {
+  text: string; tokens: string[]; style: any; lines?: number; em?: string;
+}) {
   if (!tokens.length) return <Text style={style} numberOfLines={lines}>{text}</Text>;
   const parts = text.split(new RegExp('(' + tokens.map(escapeRe).join('|') + ')', 'ig'));
   return (
     <Text style={style} numberOfLines={lines}>
-      {parts.map((p, i) => (i % 2 ? <Text key={i} style={{ color: C.accent, fontFamily: F.semi }}>{p}</Text> : p))}
+      {parts.map((p, i) => (i % 2 ? <Text key={i} style={{ color: C.accent, fontFamily: em }}>{p}</Text> : p))}
     </Text>
   );
 }
@@ -76,10 +79,13 @@ function untitledLead(e: JournalEntry): { title: string; used: string } {
   return { title: sentence.trim(), used: skipped + sentence };
 }
 
-/** One entry in the archive, memoised: a filter or a pin re-renders the rows that changed, not every row. */
-const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, snippet, well, dip, onOpen, onMenu }: {
-  e: JournalEntry; first: boolean; last: boolean; enter: boolean; tokens: string[]; snippet: string; well: object;
-  dip: SharedValue<number>; onOpen: (dateKey: string, id?: string) => void; onMenu: (e: JournalEntry) => void;
+/**
+ * One entry in the archive, memoised: a filter or a pin re-renders the rows that changed, not every row. Its meta line
+ * says the words and tags, then what the day held (`day`: "3 done · 2/3 habits · 45 min"), each part only when there is one.
+ */
+const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, snippet, day, well, dip, onOpen, onMenu }: {
+  e: JournalEntry; first: boolean; last: boolean; enter: boolean; tokens: string[]; snippet: string; day: string;
+  well: object; dip: SharedValue<number>; onOpen: (dateKey: string, id?: string) => void; onMenu: (e: JournalEntry) => void;
 }) {
   useTheme(); // a memo row: its search matches follow a new accent, which its props never carry
   const d = keyToDate(e.dateKey);
@@ -88,9 +94,12 @@ const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, s
   const shown = lead && snippet.startsWith(lead.used) ? snippet.slice(lead.used.length).trimStart() : snippet;
   // the words and the tags; an entry with neither (a mood alone) states no count of nothing
   const caption = [
-    e.wordCount ? e.wordCount + (e.wordCount === 1 ? ' word' : ' words') : '',
-    e.tags.map((t) => '#' + t).join(' '),
-  ].filter(Boolean).join(', ');
+    [
+      e.wordCount ? e.wordCount + (e.wordCount === 1 ? ' word' : ' words') : '',
+      e.tags.map((t) => '#' + t).join(' '),
+    ].filter(Boolean).join(', '),
+    day,
+  ].filter(Boolean).join(' · ');
   const dipStyle = useAnimatedStyle(() => ({ opacity: dip.value }));
   // settled as the row mounts: a row of the first screenful rises with the page, and the parent's later renders (which
   // pass false once the page is built) never take that back before it has played
@@ -115,8 +124,8 @@ const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, s
                 </View>
               ) : null}
             </Row>
-            {shown ? <Highlighted text={shown} tokens={tokens} style={st.excerpt} lines={2} /> : null}
-            {caption ? <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={1}>{caption}</Text> : null}
+            {shown ? <Highlighted text={shown} tokens={tokens} style={st.excerpt} lines={2} em={F.smSemi} /> : null}
+            {caption ? <Text style={[T.caption, { marginTop: 6 }]} numberOfLines={2}>{caption}</Text> : null}
           </View>
         </ListRow>
       </Animated.View>
@@ -133,6 +142,29 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   const journalTags = useStore((s) => s.journalTags);
   const cutoff = useStore((s) => s.settings.journalCutoffHour);
   const patchJournalEntry = useStore((s) => s.patchJournalEntry);
+  // what each entry's day held, for its meta line; an archived tool says nothing, as on Today
+  const archivedTools = useStore((s) => s.settings.archivedTools);
+  const doneLog = useStore((s) => s.doneLog);
+  const habits = useStore((s) => s.habits);
+  const sessions = useStore((s) => s.sessions);
+  const dayLines = React.useMemo(() => {
+    const off = new Set<string>(archivedTools || []);
+    const byDay = new Map<string, FocusSession[]>();
+    if (!off.has('focus')) {
+      for (const x of sessions) {
+        const list = byDay.get(x.dateKey);
+        if (list) list.push(x);
+        else byDay.set(x.dateKey, [x]);
+      }
+    }
+    const out = new Map<string, string>();
+    for (const key of new Set(journal.map((e) => e.dateKey))) {
+      const r = dayRecord(key, off.has('tasks') ? undefined : doneLog[key], off.has('planner') ? [] : habits, byDay.get(key) || []);
+      const line = dayFacts(r, true).map((f) => f.text).join(' · ');
+      if (line) out.set(key, line);
+    }
+    return out;
+  }, [journal, doneLog, habits, sessions, archivedTools]);
 
   const [q, setQ] = React.useState('');
   const [bodies, setBodies] = React.useState<Map<string, string> | null>(null);
@@ -417,7 +449,8 @@ function Archive({ tabMode }: { tabMode: boolean }) {
         renderItem={({ item: e, index, section }) => (
           <EntryRow
             e={e} first={index === 0} last={index === section.data.length - 1} enter={firstPaint.current}
-            tokens={tokens} snippet={snippet(e)} well={well} dip={dip} onOpen={open} onMenu={openMenu}
+            tokens={tokens} snippet={snippet(e)} day={dayLines.get(e.dateKey) || ''} well={well} dip={dip}
+            onOpen={open} onMenu={openMenu}
           />
         )}
       />
@@ -522,15 +555,15 @@ const st = StyleSheet.create({
   },
   entry: { alignItems: 'flex-start', paddingVertical: 14 },
   dayWell: { width: 46, paddingVertical: 7, borderRadius: 14, alignItems: 'center' },
-  dayName: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.fine },
+  dayName: { color: C.textFaint, fontFamily: F.smSemi, fontSize: 11, letterSpacing: TRACK.fine },
   dayNum: { color: C.text, fontFamily: F.bold, fontSize: 18, letterSpacing: TRACK.title, fontVariant: ['tabular-nums'], marginTop: 1 },
-  excerpt: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 19, marginTop: 4 },
+  excerpt: { color: C.textDim, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 19, marginTop: 4 },
   vDivider: { width: StyleSheet.hairlineWidth, backgroundColor: C.hairline, alignSelf: 'stretch' },
   glanceValue: { ...T.numStat, color: C.gold },
-  glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: TRACK.fine },
+  glanceLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 11, marginTop: 3, letterSpacing: TRACK.fine },
   heat: { flexDirection: 'row', gap: 3, justifyContent: 'center', marginTop: 16 },
   heatCell: { width: 12, height: 12, borderRadius: 3 },
-  echo: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small },
+  echo: { color: C.textDim, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small },
   echoRow: { minHeight: 44, justifyContent: 'center' },
   sheetLabel: { ...T.label, marginTop: 10, marginBottom: 8 },
 });

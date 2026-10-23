@@ -1,12 +1,12 @@
 import React from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { Image as CachedImage } from 'expo-image';
 import { useShareIntent } from 'expo-share-intent';
 import { C, F, T, TRACK } from './theme';
 import { useStore } from './store';
 import { parseYouTubeId } from './utils';
 import { Chip, PillButton, Row, Sheet } from './components/UI';
-import { Appear } from './components/Motion';
+import { Appear, Sheen } from './components/Motion';
 import { toast } from './components/Toast';
 import { useIntro } from './intro';
 import { useHydrated } from './hooks/useHydrated';
@@ -142,7 +142,10 @@ export function ShareIntake() {
       {title != null ? (
         <Appear><Text style={[T.title, { marginTop: 12 }]} numberOfLines={3}>{title}</Text></Appear>
       ) : (
-        <Text style={[T.caption, { marginTop: 12 }]}>Fetching title…</Text>
+        // where the title will be while it is fetched: a faint line with the loading sheen, instead of a blank
+        <View style={st.titleWait} accessible accessibilityLabel="Fetching the title">
+          <Sheen radius={8} />
+        </View>
       )}
       <Text style={st.label}>Folder</Text>
       <Row style={{ flexWrap: 'wrap' }}>
@@ -165,5 +168,7 @@ export function ShareIntake() {
 
 const st = StyleSheet.create({
   thumb: { width: '100%', aspectRatio: 16 / 9, borderRadius: 16 },
-  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 18, marginBottom: 10, marginLeft: 2 },
+  // a title-sized line: about the height of T.title's line, so the title takes its place without a jump
+  titleWait: { width: '72%', height: 20, marginTop: 13, marginBottom: 1, borderRadius: 8, backgroundColor: C.inset },
+  label: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 18, marginBottom: 10, marginLeft: 2 },
 });

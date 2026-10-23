@@ -289,7 +289,7 @@ const DuePicker = React.memo(function DuePicker({ due, calendar, onDue, onCalend
 });
 
 const st = StyleSheet.create({
-  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
+  label: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
   // the switch sits under the title's field, with a field's 14 below it
   switchRow: { marginTop: 2, marginBottom: 16, paddingLeft: 2 },
   timeLink: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, paddingLeft: 2, marginBottom: 18 },

@@ -760,7 +760,7 @@ function CheckInRows({ list, hour24, onRemove }: { list: TodoReminder[]; hour24:
 }
 
 const st = StyleSheet.create({
-  triageTitle: { color: C.amber, fontFamily: F.semi, fontSize: 13, marginBottom: 10, letterSpacing: TRACK.small },
+  triageTitle: { color: C.amber, fontFamily: F.smSemi, fontSize: 13, marginBottom: 10, letterSpacing: TRACK.small },
   taskWrap: { flex: 1, marginLeft: 12 },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21, letterSpacing: TRACK.body },
   // a ToDo that comes back every day: a small glyph between its words and its delete
@@ -770,7 +770,7 @@ const st = StyleSheet.create({
   stepWrap: { flex: 1, marginLeft: 10 },
   stepText: { color: C.textDim, fontFamily: F.reg, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 20 },
   pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginHorizontal: 6 },
-  pillText: { fontSize: 11, fontFamily: F.semi, letterSpacing: TRACK.caps },
+  pillText: { fontSize: 11, fontFamily: F.smSemi, letterSpacing: TRACK.caps },
   // under a list card (which keeps S.gap below it), nearer the list it speaks of
   listHint: { ...T.caption, marginTop: -4, marginBottom: 14, paddingHorizontal: 4 },
   doneRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, paddingVertical: 10, paddingHorizontal: 4 },
@@ -782,7 +782,7 @@ const st = StyleSheet.create({
   fabWrap: { position: 'absolute', right: 20, bottom: 24 },
   fab: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center' },
   sheetSection: {
-    color: C.textFaint, fontSize: 11, fontFamily: F.semi,
+    color: C.textFaint, fontSize: 11, fontFamily: F.smSemi,
     textTransform: 'uppercase', letterSpacing: TRACK.caps, marginTop: 18, marginBottom: 8,
   },
 });

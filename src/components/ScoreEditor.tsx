@@ -274,9 +274,9 @@ export function ScoreEditor({ target, onClose }: { target: ScoreEditTarget | nul
 }
 
 const st = StyleSheet.create({
-  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
-  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6, marginBottom: 14 },
-  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6, marginBottom: 14 },
+  label: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
+  hint: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6, marginBottom: 14 },
+  problem: { color: C.danger, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6, marginBottom: 14 },
   moreRow: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', paddingVertical: 4, marginBottom: 12 },
   moreText: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
 });

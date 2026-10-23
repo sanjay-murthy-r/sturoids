@@ -12,7 +12,7 @@ import {
 } from '../components/UI';
 import { toast } from '../components/Toast';
 import { toastTrashed } from '../trashToast';
-import { glide, rowIn, rowOut, useAnimLevel, useBuilt, useEntrance } from '../components/Motion';
+import { Sheen, glide, rowIn, rowOut, useAnimLevel, useBuilt, useEntrance } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { READ_MAX, TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth, frame } from '../layout';
 import { useToolNav } from '../toolNav';
@@ -218,13 +218,18 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // name given meanwhile wins
   const dbId = video?.id;
   const ytId = video?.videoId;
+  // while the title is being asked for, its line is a placeholder with the loading sheen instead of the stand-in name
+  const [askingTitle, setAskingTitle] = useState(false);
   React.useEffect(() => {
-    if (!dbId || !ytId) return;
-    if (useStore.getState().vaultVideos.find((v) => v.id === dbId)?.title !== placeholderTitle(ytId)) return;
+    if (!dbId || !ytId) return undefined;
+    if (useStore.getState().vaultVideos.find((v) => v.id === dbId)?.title !== placeholderTitle(ytId)) return undefined;
+    let live = true;
+    setAskingTitle(true);
     fetchTitle(ytId).then(({ title, found }) => {
       const now = useStore.getState().vaultVideos.find((v) => v.id === dbId);
       if (found && now && now.title === placeholderTitle(ytId)) useStore.getState().updateVideo(dbId, { title });
-    });
+    }).finally(() => { if (live) setAskingTitle(false); });
+    return () => { live = false; setAskingTitle(false); };
   }, [dbId, ytId]);
 
   // ---- Recently watched: when it was opened, and where it was left ----
@@ -458,9 +463,17 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     });
   };
 
+  // a name given while the title was on its way shows at once
+  const titleLoading = askingTitle && video.title === placeholderTitle(video.videoId);
   const info = (
     <>
-      <Text style={T.title}>{video.title}</Text>
+      {titleLoading ? (
+        <View style={st.titleWait} accessible accessibilityLabel="Getting the video's title">
+          <Sheen radius={8} />
+        </View>
+      ) : (
+        <Text style={T.title}>{video.title}</Text>
+      )}
 
       {/* a tag added fades in and one removed fades out, while the chips after it glide along the row */}
       <Row style={{ flexWrap: 'wrap', marginTop: 10 }}>
@@ -635,4 +648,6 @@ const st = StyleSheet.create({
   main: { flex: 3, minWidth: 0 },
   /** the side column's first title lines up with the top of the video instead of a section's gap below it */
   side: { flex: 2, minWidth: 0, marginTop: -S.section },
+  // where the title will be while it is asked for: a faint carved line about as tall as the title's own
+  titleWait: { width: '68%', height: 20, marginVertical: 1, borderRadius: 8, backgroundColor: C.inset },
 });

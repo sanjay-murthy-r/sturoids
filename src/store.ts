@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState as AppLifecycle } from 'react-native';
 import { create } from 'zustand';
 import { persist, PersistStorage, StorageValue } from 'zustand/middleware';
-import { uid, todayKey, toMinutes, fmtShortDate, fmtMediaTime, DayName, DAY_NAMES } from './utils';
+import { uid, todayKey, toMinutes, fmtShortDate, fmtMediaTime, cleanDays, DayName, DAY_NAMES } from './utils';
 import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
 import { ToolKey, DEFAULT_SLOTS, DEFAULT_ARCHIVED, ROUTE_TO_TOOL, TOOLS, normaliseSlots, normaliseArchived, toolByKey } from './tools';
 import {
@@ -34,7 +34,22 @@ export interface Mission {
 }
 export interface FocusSession { id: string; dateKey: string; endedAt: number; netSeconds: number; taskTitles: string[]; subject?: string }
 export interface PlannerBlock { id: string; subject: string; start: string; end: string; color: string }
-export interface Habit { id: string; title: string; doneDates: string[]; remindTime?: string }
+export interface Habit {
+  id: string; title: string; doneDates: string[]; remindTime?: string;
+  /**
+   * the weekdays it is due on, 0 Monday to 6 Sunday (the order of DAY_NAMES): sorted, unique, never empty and never all
+   * seven. Absent, it is due every day
+   */
+  days?: number[];
+}
+
+/** A ToDo or a long-term task as it was when it was ticked: its id and its title then. */
+export interface DoneItem { id: string; title: string }
+/** What was ticked on one calendar day: the ToDos and the long-term tasks. Habits keep their own days (doneDates). */
+export interface DayDone { todos?: DoneItem[]; tasks?: DoneItem[] }
+
+/** How long the day's record keeps a day, in days. */
+export const DONE_LOG_KEEP_DAYS = 400;
 
 export interface Attachment { id: string; kind: 'image' | 'video' | 'file'; uri: string; name: string }
 export interface Note {
@@ -164,6 +179,8 @@ export interface OwnSignature {
   date?: {
     size: number; gap: number; tilt: number; when: 'signature' | 'outro';
     groups: { dd: { x: number; y: number }; mm: { x: number; y: number }; yy: { x: number; y: number } };
+    /** which parts of the date are written, in this order; absent, all three. Never empty */
+    parts?: ('dd' | 'mm' | 'yy')[];
   };
 }
 
@@ -242,6 +259,8 @@ export interface Settings {
   /** the length and mode Deep Work last started with */
   focusLastMin: number;
   focusLastMode: 'countdown' | 'stopwatch';
+  /** the face for what is written in Notes and the Journal (writingFace in theme.ts) */
+  writingFont: 'sans' | 'serif';
 }
 
 export type PlannerWeek = Record<DayName, PlannerBlock[]>;
@@ -340,6 +359,7 @@ export const DEFAULT_SETTINGS: Settings = {
   calcSci: false,
   focusLastMin: 50,
   focusLastMode: 'countdown',
+  writingFont: 'sans',
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -370,6 +390,8 @@ export function initialData() {
     trash: [] as TrashItem[],
     /** the Desmos graph as Calc.getState() gives it, as JSON ('' for none) */
     desmosState: '',
+    /** what was ticked, day by day ('YYYY-MM-DD'), for the journal's day line */
+    doneLog: {} as Record<string, DayDone>,
   };
 }
 type DataKey = keyof ReturnType<typeof initialData>;
@@ -423,6 +445,8 @@ export interface AppState {
   learnings: Learning[];
   trash: TrashItem[];
   desmosState: string;
+  /** what was ticked on each calendar day: kept as it was then, so a rename or a delete later never rewrites the past */
+  doneLog: Record<string, DayDone>;
 
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** puts tools in the three slots; a tool placed in a slot is restored if it was archived */
@@ -482,7 +506,10 @@ export interface AppState {
   applyTemplate: (name: string) => void;
   deleteTemplate: (name: string) => void;
 
-  addHabit: (title: string, remindTime?: string) => void;
+  /** days: the weekdays it is due on (see Habit.days); none, or all seven, is every day */
+  addHabit: (title: string, remindTime?: string, days?: number[]) => void;
+  /** the weekdays a habit is due on; none, or all seven, is every day */
+  setHabitDays: (id: string, days?: number[]) => void;
   toggleHabitToday: (id: string) => void;
   /** ticks or unticks a day: today or one of the six before it, never a day to come */
   toggleHabitDay: (id: string, dateKey: string) => void;
@@ -674,7 +701,8 @@ export function hasAnyUserData(p: any): boolean {
   const nonEmpty = (a: any) => Array.isArray(a) && a.length > 0;
   return !!(p?.settings?.name) || nonEmpty(p?.dailyTasks) || nonEmpty(p?.missions) || nonEmpty(p?.sessions)
     || nonEmpty(p?.notes) || nonEmpty(p?.habits) || nonEmpty(p?.vaultVideos) || nonEmpty(p?.journal)
-    || nonEmpty(p?.scores) || nonEmpty(p?.trash);
+    || nonEmpty(p?.scores) || nonEmpty(p?.trash)
+    || (!!p?.doneLog && typeof p.doneLog === 'object' && Object.keys(p.doneLog).length > 0);
 }
 
 function normaliseQuick(items: any): QuickItem[] {
@@ -816,6 +844,8 @@ const ACCENT_REMAP: Record<string, string> = { '#8B7CF8': '#9588F9', '#D97757': 
 const SIG_MAX_POINTS = 2000;
 const DIGIT_MAX_POINTS = 400;
 const DIGIT_KEYS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+/** the parts of a written date, in the order they are written */
+const DATE_PARTS = ['dd', 'mm', 'yy'] as const;
 
 /** the largest Desmos graph kept, in characters; a larger one would bloat every save of its row */
 export const DESMOS_MAX_CHARS = 300000;
@@ -886,7 +916,13 @@ function cleanDatePlace(raw: any): OwnSignature['date'] | null {
   const mm = at(g.mm);
   const yy = at(g.yy);
   if (!dd || !mm || !yy) return null;
-  return { size: raw.size, gap: raw.gap, tilt: raw.tilt, when: raw.when, groups: { dd, mm, yy } };
+  const out: NonNullable<OwnSignature['date']> = { size: raw.size, gap: raw.gap, tilt: raw.tilt, when: raw.when, groups: { dd, mm, yy } };
+  // the parts written keep their fixed order; with none valid, all three are written
+  if (Array.isArray(raw.parts)) {
+    const parts = DATE_PARTS.filter((k) => raw.parts.includes(k));
+    if (parts.length) out.parts = parts;
+  }
+  return out;
 }
 
 /**
@@ -1003,7 +1039,69 @@ function cleanSettingsV6(s: any): Settings {
   st.calcAngle = st.calcAngle === 'rad' ? 'rad' : 'deg';
   if (!(Number.isInteger(st.focusLastMin) && st.focusLastMin >= 1 && st.focusLastMin <= 600)) st.focusLastMin = DEFAULT_SETTINGS.focusLastMin;
   st.focusLastMode = st.focusLastMode === 'stopwatch' ? 'stopwatch' : 'countdown';
+  st.writingFont = st.writingFont === 'serif' ? 'serif' : 'sans';
   return st;
+}
+
+/** A habit as kept: its ticks a list of day keys, its weekdays sorted and unique (or none, every day). */
+function cleanHabit(h: any): Habit {
+  const out = { ...h, doneDates: listOf(h.doneDates).filter((d) => typeof d === 'string') };
+  const days = cleanDays(out.days);
+  if (days) out.days = days;
+  else delete out.days;
+  return out;
+}
+
+/** One day's ticked ToDos or tasks, checked: an item needs an id, once each; its title is text. Undefined when empty. */
+function cleanDoneItems(raw: any): DoneItem[] | undefined {
+  const out: DoneItem[] = [];
+  const seen = new Set<string>();
+  for (const it of listOf(raw)) {
+    if (!isRecord(it) || typeof it.id !== 'string' || !it.id || seen.has(it.id)) continue;
+    seen.add(it.id);
+    out.push({ id: it.id, title: typeof it.title === 'string' ? it.title : it.title == null ? '' : String(it.title) });
+  }
+  return out.length ? out : undefined;
+}
+
+/** The day's record as saved: a day whose key is not a date, or that holds nothing, is dropped. */
+export function cleanDoneLog(raw: any): Record<string, DayDone> {
+  const out: Record<string, DayDone> = {};
+  if (!isRecord(raw)) return out;
+  for (const key of Object.keys(raw)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !isRecord(raw[key])) continue;
+    const todos = cleanDoneItems(raw[key].todos);
+    const tasks = cleanDoneItems(raw[key].tasks);
+    if (!todos && !tasks) continue;
+    const day: DayDone = {};
+    if (todos) day.todos = todos;
+    if (tasks) day.tasks = tasks;
+    out[key] = day;
+  }
+  return out;
+}
+
+/** The record with an item added to a day's list, once (the same record when it is already there). */
+function logDone(log: Record<string, DayDone>, day: string, kind: keyof DayDone, item: DoneItem): Record<string, DayDone> {
+  const was = log[day] || {};
+  const list = was[kind] || [];
+  if (list.some((x) => x.id === item.id)) return log;
+  return { ...log, [day]: { ...was, [kind]: [...list, item] } };
+}
+
+/** The record with an item taken off a day's list; a day left with nothing goes (the same record when it was not there). */
+function unlogDone(log: Record<string, DayDone>, day: string, kind: keyof DayDone, id: string): Record<string, DayDone> {
+  const was = log[day];
+  const list = was?.[kind];
+  if (!was || !list || !list.some((x) => x.id === id)) return log;
+  const rest = list.filter((x) => x.id !== id);
+  const next: DayDone = { ...was };
+  if (rest.length) next[kind] = rest;
+  else delete next[kind];
+  const out = { ...log };
+  if (next.todos || next.tasks) out[day] = next;
+  else delete out[day];
+  return out;
 }
 
 /**
@@ -1015,6 +1113,8 @@ export function sanitizeV6(p: any): any {
   if ('dailyTasks' in out) out.dailyTasks = listOf(out.dailyTasks).filter(isRecord).map(cleanDaily);
   if ('missions' in out) out.missions = listOf(out.missions).filter(isRecord).map(cleanMission);
   if ('vaultVideos' in out) out.vaultVideos = listOf(out.vaultVideos).filter(isRecord).map(cleanVideo);
+  if ('habits' in out) out.habits = listOf(out.habits).filter(isRecord).map(cleanHabit);
+  if ('doneLog' in out) out.doneLog = cleanDoneLog(out.doneLog);
   if (isRecord(out.settings)) out.settings = cleanSettingsV6(out.settings);
   if ('trash' in out) out.trash = cleanTrash(out.trash, isRecord(out.settings) ? out.settings : undefined);
   if ('desmosState' in out) {
@@ -1110,7 +1210,7 @@ const COLLECTION_NAMES: Record<string, string> = {
   planner: 'Planner', weekTemplates: 'Week templates', habits: 'Habits', notes: 'Notes', noteFolders: 'Note folders',
   vaultVideos: 'YT Vault', vaultFolders: 'YT Vault folders', calcHistory: 'Calculator history', deepWork: 'Deep Work',
   journal: 'Journal', journalTags: 'Journal tags', scores: 'Scores', scoreTags: 'Score tags', learnings: 'Learnings',
-  trash: 'Recently deleted', desmosState: 'Desmos',
+  trash: 'Recently deleted', desmosState: 'Desmos', doneLog: 'Done history',
 };
 
 /** The collections that could not be loaded this launch, by name ("Notes"); empty when everything loaded. */
@@ -1508,11 +1608,19 @@ export const useStore = create<AppState>()(
         return id;
       },
       toggleDaily: (id) =>
-        set((s) => ({
-          dailyTasks: s.dailyTasks.map((t) =>
-            t.id === id ? { ...t, doneOn: t.doneOn === todayKey() ? null : todayKey() } : t
-          ),
-        })),
+        set((s) => {
+          const today = todayKey();
+          const task = s.dailyTasks.find((t) => t.id === id);
+          if (!task) return {};
+          const ticking = task.doneOn !== today;
+          return {
+            dailyTasks: s.dailyTasks.map((t) => (t.id === id ? { ...t, doneOn: ticking ? today : null } : t)),
+            // the day's record keeps the tick, with the title it had then; an untick takes it off today's list
+            doneLog: ticking
+              ? logDone(s.doneLog, today, 'todos', { id, title: task.title })
+              : unlogDone(s.doneLog, today, 'todos', id),
+          };
+        }),
       updateDaily: (id, patch) =>
         set((s) => {
           const at = s.dailyTasks.findIndex((t) => t.id === id);
@@ -1537,8 +1645,19 @@ export const useStore = create<AppState>()(
       settleDay: () => {
         const today = todayKey();
         const s = get();
+        const patch: Partial<AppState> = {};
         const keep = s.dailyTasks.filter((t) => t.repeat === 'daily' || !t.doneOn || t.doneOn >= today);
-        if (keep.length !== s.dailyTasks.length) set({ dailyTasks: keep });
+        if (keep.length !== s.dailyTasks.length) patch.dailyTasks = keep;
+        // the day's record keeps the last 400 days
+        const now = new Date();
+        const from = todayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - DONE_LOG_KEEP_DAYS));
+        const old = Object.keys(s.doneLog).filter((k) => k < from);
+        if (old.length) {
+          const log = { ...s.doneLog };
+          for (const k of old) delete log[k];
+          patch.doneLog = log;
+        }
+        if (patch.dailyTasks || patch.doneLog) set(patch);
       },
 
       addMission: (title, deadline) => {
@@ -1547,16 +1666,23 @@ export const useStore = create<AppState>()(
         return id;
       },
       toggleMission: (id) =>
-        set((s) => ({
-          missions: s.missions.map((m) => {
-            if (m.id !== id) return m;
-            if (m.done) {
-              const { doneOn: _gone, ...rest } = m;
-              return { ...rest, done: false };
-            }
-            return { ...m, done: true, doneOn: todayKey() };
-          }),
-        })),
+        set((s) => {
+          const m = s.missions.find((x) => x.id === id);
+          if (!m) return {};
+          if (m.done) {
+            const { doneOn, ...rest } = m;
+            return {
+              missions: s.missions.map((x) => (x.id === id ? { ...rest, done: false } : x)),
+              // undone, it comes off the day it was ticked on
+              doneLog: doneOn ? unlogDone(s.doneLog, doneOn, 'tasks', id) : s.doneLog,
+            };
+          }
+          const today = todayKey();
+          return {
+            missions: s.missions.map((x) => (x.id === id ? { ...m, done: true, doneOn: today } : x)),
+            doneLog: logDone(s.doneLog, today, 'tasks', { id, title: m.title }),
+          };
+        }),
       updateMission: (id, patch) =>
         set((s) => {
           const at = s.missions.findIndex((m) => m.id === id);
@@ -1675,8 +1801,24 @@ export const useStore = create<AppState>()(
           return { weekTemplates: t };
         }),
 
-      addHabit: (title, remindTime) =>
-        set((s) => ({ habits: [...s.habits, { id: uid(), title, doneDates: [], remindTime }] })),
+      addHabit: (title, remindTime, days) =>
+        set((s) => {
+          const due = cleanDays(days);
+          return { habits: [...s.habits, { id: uid(), title, doneDates: [], remindTime, ...(due ? { days: due } : {}) }] };
+        }),
+      setHabitDays: (id, days) =>
+        set((s) => {
+          const due = cleanDays(days);
+          const key = (due || []).join();
+          if (!s.habits.some((h) => h.id === id && (h.days || []).join() !== key)) return {};
+          return {
+            habits: s.habits.map((h) => {
+              if (h.id !== id) return h;
+              const { days: _was, ...rest } = h;
+              return due ? { ...rest, days: due } : rest;
+            }),
+          };
+        }),
       toggleHabitToday: (id) =>
         set((s) => ({
           habits: s.habits.map((h) => {
@@ -2624,6 +2766,7 @@ export function exportSnapshot() {
     learnings: s.learnings,
     trash: s.trash,
     desmosState: s.desmosState,
+    doneLog: s.doneLog,
   };
 }
 

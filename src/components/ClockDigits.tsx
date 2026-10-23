@@ -83,5 +83,6 @@ export const ClockDigits = React.memo(function ClockDigits({ text, size, lineHei
 
 const st = StyleSheet.create({
   row: { flexDirection: 'row' },
-  glyph: { position: 'absolute', left: 0, right: 0, textAlign: 'center', fontFamily: F.num },
+  // Inter Tight Light with its tabular figures, centred in a cell as wide as the widest figure (NUM_DIGIT_W)
+  glyph: { position: 'absolute', left: 0, right: 0, textAlign: 'center', fontFamily: F.num, fontVariant: ['tabular-nums'] },
 });

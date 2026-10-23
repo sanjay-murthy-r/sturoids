@@ -167,8 +167,8 @@ const st = StyleSheet.create({
   mood: { flex: 1, alignItems: 'center', paddingVertical: 8, marginHorizontal: 2, borderRadius: 14 },
   /** the picked mood's tint, a layer that fades in under its icon */
   moodTint: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 14 },
-  moodLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 5, textAlign: 'center' },
-  moodOn: { fontFamily: F.semi },
+  moodLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 5, textAlign: 'center' },
+  moodOn: { fontFamily: F.smSemi },
   /** a second ink laid exactly over the first, for colours that cross over */
   ink: { position: 'absolute', top: 0, left: 0, right: 0 },
   // each star carries 10 above and below, so its target reaches 44 dp: they stand for the row's own top padding, and
@@ -177,7 +177,7 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: -10,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,
   },
-  rateLabel: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
+  rateLabel: { color: C.textDim, fontFamily: F.smMed, fontSize: 13, letterSpacing: TRACK.small },
   stars: { flexDirection: 'row' },
   star: { paddingHorizontal: 3, paddingVertical: 10 },
   starLit: { position: 'absolute', top: 10, left: 3 },

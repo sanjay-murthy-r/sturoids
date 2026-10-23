@@ -550,9 +550,9 @@ const cs = StyleSheet.create({
   ring: { position: 'absolute', left: 0, top: 0, width: RING * 2, height: RING * 2, borderRadius: RING, borderWidth: 1.5 },
   keyRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 6 },
   keyItem: { flexDirection: 'row', alignItems: 'center' },
-  keyText: { fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 6 },
+  keyText: { fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 6 },
   // a column's label has only the cell's width, so it takes the smaller value
-  colLabel: { fontFamily: F.reg, fontSize: 11, letterSpacing: TRACK.small, textAlign: 'center' },
+  colLabel: { fontFamily: F.sm, fontSize: 11, letterSpacing: TRACK.fine, textAlign: 'center' },
   rowName: { fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
   cell: { height: CELL_H, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   cellText: { fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, fontVariant: ['tabular-nums'] },

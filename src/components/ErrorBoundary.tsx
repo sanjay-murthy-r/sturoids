@@ -49,5 +49,5 @@ const st = StyleSheet.create({
   wrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
   well: { width: 76, height: 76, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title, marginTop: 18 },
-  body: { color: C.textFaint, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 19, marginTop: 6, textAlign: 'center' },
+  body: { color: C.textFaint, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 19, marginTop: 6, textAlign: 'center' },
 });

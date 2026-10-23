@@ -256,7 +256,119 @@ const checks = {
     assert.equal(M.dateDigits(new Date(2026, 9, 9)), '091026');
     assert.equal(M.dateDigits(new Date(2031, 0, 31)), '310131');
   },
+  'the parts a date writes are cleaned to a choice in order, never none'() {
+    const all = ['dd', 'mm', 'yy'];
+    assert.deepEqual(M.datePartsOf(undefined), all);
+    assert.deepEqual(M.datePartsOf(null), all);
+    assert.deepEqual(M.datePartsOf([]), all, 'none is all three');
+    assert.deepEqual(M.datePartsOf(['x', 3, null]), all, 'junk is all three');
+    assert.deepEqual(M.datePartsOf(['yy', 'dd', 'dd']), ['dd', 'yy'], 'in order, once each');
+    assert.deepEqual(M.datePartsOf(['mm']), ['mm']);
+    // a placement stores parts only when they are a real choice
+    assert.equal('parts' in M.withParts(DATE_PLACE, all), false);
+    assert.equal('parts' in M.withParts(DATE_PLACE, undefined), false);
+    assert.deepEqual(M.withParts(DATE_PLACE, ['yy', 'mm']).parts, ['mm', 'yy']);
+    assert.deepEqual(M.clampPlace({ ...DATE_PLACE, parts: ['yy', 'dd'] }).parts, ['dd', 'yy'], 'clampPlace keeps a choice');
+    assert.equal('parts' in M.clampPlace({ ...DATE_PLACE, parts: ['dd', 'mm', 'yy'] }), false, 'and leaves all three out');
+    assert.equal('parts' in M.clampPlace({ ...DATE_PLACE, parts: ['nope'] }), false, 'and junk');
+    // in words, as the intro writes it
+    assert.equal(M.dateText('231026'), '23 · 10 · 26');
+    assert.equal(M.dateText('231026', ['dd', 'mm']), '23 · 10');
+    assert.equal(M.dateText('231026', ['yy']), '26');
+    assert.equal(M.dateText('231026', ['dd', 'yy']), '23 · 26');
+  },
+  'a one-part and a two-part date lay out, time and fit only their parts, as if the others never existed'() {
+    const full = M.layoutDate('231026', BUILT_IN);
+    assert.equal(full.digits.length, 6);
+    // one part: the year alone, at its own anchor, its pen starting at once
+    const yy = M.layoutDate('231026', { ...BUILT_IN, place: { ...DATE_PLACE, parts: ['yy'] } });
+    assert.deepEqual(yy.digits.map((d) => d.key), ['yy0', 'yy1']);
+    assert.deepEqual(yy.digits.map((d) => d.ch), ['2', '6']);
+    const fullYy = full.digits.filter((d) => d.key.startsWith('yy'));
+    assert.deepEqual(yy.digits.map((d) => d.transform), fullYy.map((d) => d.transform), 'the same place as in the full date');
+    assert.equal(yy.digits[0].t0, 0, 'no wait for the parts left out');
+    assert.equal(yy.total, DIGITS['2'].total + 90 + DIGITS['6'].total);
+    // two parts: day and year, one lift between them
+    const dy = M.layoutDate('231026', { ...BUILT_IN, place: { ...DATE_PLACE, parts: ['dd', 'yy'] } });
+    assert.deepEqual(dy.digits.map((d) => d.key), ['dd0', 'dd1', 'yy0', 'yy1']);
+    const dd = DIGITS['2'].total + 90 + DIGITS['3'].total;
+    assert.equal(dy.digits[2].t0, dd + 200, 'the year follows the day after one lift');
+    assert.equal(dy.total, dd + 200 + DIGITS['2'].total + 90 + DIGITS['6'].total);
+    assert.ok(dy.total < full.total, 'shorter than the whole date');
+    // fitted: only the parts written, exactly as the full fit fits them
+    const some = M.fitDate(SIG, DIGITS, { ...DATE_PLACE, parts: ['mm'] });
+    assert.deepEqual(some, { dd: {}, mm: DATE_FIT.mm, yy: {} });
+    const two = M.fitDate(SIG, DIGITS, { ...DATE_PLACE, parts: ['dd', 'mm'] }, '220226');
+    assert.deepEqual(two, { dd: { 22: DATE_FIT.dd['22'] }, mm: { '02': DATE_FIT.mm['02'] }, yy: {} });
+    // the box a frame leaves room for covers the parts written only
+    const boxAll = M.dateBox(BUILT_IN);
+    const boxDd = M.dateBox({ ...BUILT_IN, place: { ...DATE_PLACE, parts: ['dd'] } });
+    assert.ok(boxDd[2] < boxAll[2], 'without the month and year it ends sooner');
+  },
+  'a default placement for fewer parts sets them in a row, spaced as if the others never existed'() {
+    const digits = M.buildDigits(rawHand.digits);
+    const all = M.defaultPlace(SIG, digits);
+    const step = all.groups.mm.x - all.groups.dd.x;
+    assert.ok(step > 0);
+    const two = M.defaultPlace(SIG, digits, ['mm', 'yy']);
+    assert.deepEqual(two.parts, ['mm', 'yy']);
+    assert.ok(Math.abs(two.groups.yy.x - two.groups.mm.x - step) <= 1, 'the same spacing');
+    assert.equal(two.groups.yy.x, all.groups.yy.x, 'still ending under the right edge');
+    assert.equal(two.groups.mm.y, all.groups.mm.y);
+    const one = M.defaultPlace(SIG, digits, ['dd']);
+    assert.ok(Math.abs(one.groups.dd.x - all.groups.yy.x) <= 1, 'one part sits where the last would');
+    for (const p of [two, one]) {
+      assert.deepEqual(M.fitDate(SIG, digits, p), { dd: {}, mm: {}, yy: {} }, 'nothing runs into the signature');
+      for (const g of ['dd', 'mm', 'yy']) assert.ok(Number.isInteger(p.groups[g].x) && Number.isInteger(p.groups[g].y));
+    }
+    // a row set again from its start keeps the start and the spacing
+    const row = M.rowPlace({ ...all, tilt: 0 }, digits, ['dd', 'yy'], all.groups.dd);
+    assert.deepEqual(row.groups.dd, all.groups.dd);
+    assert.ok(Math.abs(row.groups.yy.x - all.groups.mm.x) <= 1, 'the year closes up to where the month was');
+    // along a tilt the row climbs with it
+    const up = M.rowPlace({ ...all, tilt: -20 }, digits, undefined, { x: 0, y: 0 });
+    assert.ok(up.groups.mm.y < 0 && up.groups.yy.y < up.groups.mm.y);
+  },
+  'quick spots set the date against the ink, and below at the right is the default'() {
+    const digits = M.buildDigits(rawHand.digits);
+    const sig = M.buildSigModel({ strokes: [line(0.1, 0.5, 0.9, 0.45, 20), line(0.2, 0.3, 0.3, 0.6, 12, 400)] });
+    const place = M.defaultPlace(sig, digits);
+    const [bx0, by0, bx1, by1] = sig.bbox;
+    assert.ok(M.samePlace(M.spotPlace(sig, digits, place, 'belowRight'), place), 'below, right is where it starts');
+    const left = M.spotPlace(sig, digits, place, 'belowLeft');
+    assert.ok(Math.abs(left.groups.dd.x - bx0) <= 1 && left.groups.dd.y === place.groups.dd.y);
+    const above = M.spotPlace(sig, digits, place, 'above');
+    assert.ok(M.placeBox(above, digits)[3] < by0, 'above the highest ink');
+    const after = M.spotPlace(sig, digits, place, 'after');
+    assert.ok(M.placeBox(after, digits)[0] > bx1, 'past the right edge');
+    assert.equal(after.groups.dd.y, Math.round(M.sigBaseline(sig)), 'on the baseline');
+    for (const p of [left, above, after]) {
+      assert.ok(['dd', 'mm', 'yy'].every((g) => Number.isInteger(p.groups[g].x) && Number.isInteger(p.groups[g].y)));
+    }
+    assert.ok(M.placeBox(M.spotPlace(sig, digits, place, 'belowRight'), digits)[1] > by1, 'below the lowest ink');
+    // a spot keeps the parts, the size and the tilt
+    const two = M.spotPlace(sig, digits, { ...place, parts: ['dd', 'mm'], size: 80, tilt: -10 }, 'above');
+    assert.deepEqual([two.parts, two.size, two.tilt], [['dd', 'mm'], 80, -10]);
+    assert.ok(!M.samePlace(two, { ...two, parts: undefined }), 'different parts are a different place');
+  },
+  'the baseline sits on the bottoms of the letters, not on a tail below them'() {
+    // three humps whose bottoms sit on y 0.5, then one long tail down to 0.8
+    const hump = (x, t) => ({
+      pts: Array.from({ length: 13 }, (_, i) => [x + i * 0.01, 0.5 - 0.15 * Math.sin((i / 12) * Math.PI), t + i * 16]),
+    });
+    const sig = M.buildSigModel({
+      strokes: [hump(0.1, 0), hump(0.25, 300), hump(0.4, 600), hump(0.55, 900), line(0.7, 0.4, 0.75, 0.8, 10, 1200)],
+    });
+    const base = M.sigBaseline(sig);
+    const k = 760 / (0.75 - 0.1);
+    const humpBottom = (0.5 - 0.35) * k + (sig.vh - (0.8 - 0.35) * k) / 2;
+    assert.ok(Math.abs(base - humpBottom) < 6, `baseline ${base} vs ${humpBottom}`);
+    assert.ok(base < sig.bbox[3] - 50, 'well above the tail');
+    const creator = M.sigBaseline(SIG);
+    assert.ok(creator > SIG.bbox[1] && creator < SIG.bbox[3], 'inside the creator signature');
+  },
 };
+const BUILT_IN = { digits: DIGITS, place: DATE_PLACE, fit: DATE_FIT };
 
 let failed = 0;
 for (const [name, run] of Object.entries(checks)) {

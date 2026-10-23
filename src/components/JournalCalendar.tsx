@@ -140,7 +140,7 @@ const st = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   row: { flexDirection: 'row' },
   cellBox: { width: `${100 / 7}%`, alignItems: 'center', justifyContent: 'center', paddingVertical: 4 },
-  weekday: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.fine },
+  weekday: { color: C.textFaint, fontFamily: F.smSemi, fontSize: 11, letterSpacing: TRACK.fine },
   cell: {
     width: CELL, height: CELL, borderRadius: CELL / 2, borderWidth: 1.5, borderColor: 'transparent',
     alignItems: 'center', justifyContent: 'center',

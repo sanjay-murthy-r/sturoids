@@ -9,7 +9,9 @@ import Constants from 'expo-constants';
 import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, bgFor, neuInset, neuRaised, shadowsSupported } from '../src/theme';
+import {
+  C, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, WritingFont, bgFor, neuInset, neuRaised, shadowsSupported, writingFace,
+} from '../src/theme';
 import {
   useStore, exportSnapshot, importSnapshot, readSnapshot, applySnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves,
   savedSize, savesFailing, subscribeSaveProblems, SAVE_WARN_CHARS, ReadSnapshot, TrashItem, TrashKind, trashDaysLeft,
@@ -20,10 +22,10 @@ import { useToday } from '../src/hooks/useNow';
 import { SignatureStill } from '../src/components/Signature';
 import {
   ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu,
-  EdgeScroll, EmptyState, useTheme,
+  EdgeScroll, EmptyState, RowIcon, useTheme,
 } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
-import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt, useEntrance } from '../src/components/Motion';
+import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt, useEntrance, useLoop } from '../src/components/Motion';
 import { tap, tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
 import { PinSheet } from '../src/components/LockGate';
@@ -266,6 +268,28 @@ const AccentCard = React.memo(function AccentCard() {
   );
 });
 
+const WRITING_FONTS: { key: WritingFont; label: string }[] = [{ key: 'sans', label: 'Sans' }, { key: 'serif', label: 'Serif' }];
+
+/**
+ * The face what you write is set in (a note's body, a journal page), like a chat app's font setting: Sans or Serif,
+ * with a line set in the chosen face under the choice, which dips and comes back in the new one.
+ */
+const WritingFontCard = React.memo(function WritingFontCard() {
+  const font = useStore((s) => s.settings.writingFont);
+  const setSetting = useStore((s) => s.setSetting);
+  const pick = useCallback((k: WritingFont) => setSetting('writingFont', k), [setSetting]);
+  const kind: WritingFont = font === 'serif' ? 'serif' : 'sans';
+  return (
+    <Card>
+      <SegmentedControl stretch value={kind} onChange={pick} options={WRITING_FONTS} />
+      <FadeSwap swapKey={kind} style={st.writingSample}>
+        <Text style={[writingFace(kind), { color: C.text }]}>The quick notes you keep, set the way you read them.</Text>
+      </FadeSwap>
+      <Text style={st.hint}>For what you write in Notes and the Journal.</Text>
+    </Card>
+  );
+});
+
 /**
  * A photo from the gallery, cropped square and made small (256 px, a JPEG of a few dozen KB) so it can live in the
  * settings and travel with backups and the cloud. Null when nothing was picked.
@@ -388,6 +412,9 @@ const ProfileHeader = React.memo(function ProfileHeader({ onOpen }: { onOpen: ()
   // the line dips and comes back when what it says changes, not each time "12 min ago" moves on
   const statusKey = checking ? 'checking' : !signedIn ? (lost ? 'lost' : 'out')
     : cloudStatus + ':' + (reason || '') + ':' + (cloudStatus === 'idle' ? String(lastSyncedAt) : '');
+  // while a backup runs, the cloud's mark pulses (full to half strength over 1.2 s); still otherwise
+  const syncPulse = useLoop(signedIn && cloudStatus === 'syncing', 1200);
+  const pulseStyle = useAnimatedStyle(() => ({ opacity: 1 - 0.5 * syncPulse.value }));
   return (
     <Card hero onPress={onOpen} pad={18}>
       <Row style={{ alignItems: 'center' }}>
@@ -396,7 +423,7 @@ const ProfileHeader = React.memo(function ProfileHeader({ onOpen }: { onOpen: ()
           <Text style={T.head} numberOfLines={1}>{name.trim() || 'Your profile'}</Text>
           <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{signedIn || checking ? email : 'Not signed in'}</Text>
           <Row style={{ alignItems: 'center', marginTop: 6 }}>
-            <View style={[st.statusDot, { backgroundColor: tone }]} />
+            <Animated.View style={[st.statusDot, { backgroundColor: tone }, pulseStyle]} />
             <FadeSwap swapKey={statusKey}>
               <Text style={[T.caption, { color: C.textDim }]} numberOfLines={1}>{status}</Text>
             </FadeSwap>
@@ -413,15 +440,15 @@ function CategoryRow({ icon, title, summary, onPress, danger }: {
   icon: any; title: string; summary: string; onPress: () => void; danger?: boolean;
 }) {
   return (
-    <ListRow onPress={() => { tick(); onPress(); }} style={st.catRow}>
-      <Ionicons name={icon} size={21} color={danger ? C.danger : C.textDim} />
+    <ListRow onPress={() => { tick(); onPress(); }} style={[st.catRow, st.twoLineRow]}>
+      <RowIcon name={icon} size={21} color={danger ? C.danger : C.textDim} />
       <View style={{ flex: 1, marginLeft: 14 }}>
         <Text style={[T.body, { fontFamily: F.med }, danger && { color: C.danger }]}>{title}</Text>
         <FadeSwap swapKey={summary}>
           <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{summary}</Text>
         </FadeSwap>
       </View>
-      <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
+      <Ionicons name="chevron-forward" size={17} color={C.textFaint} style={st.rowEnd} />
     </ListRow>
   );
 }
@@ -546,10 +573,10 @@ const PickRow = React.memo(function PickRow({ tool, first, active, elsewhere, ar
     <View>
       {first ? null : <Hairline />}
       <Bouncy
-        onPress={() => onPick(tool.key)} scaleTo={0.98} radius={S.radiusSm} style={st.pickRow}
+        onPress={() => onPick(tool.key)} scaleTo={0.98} radius={S.radiusSm} style={[st.pickRow, st.twoLineRow]}
         accessibilityRole="button" accessibilityLabel={tool.label} accessibilityState={{ selected: active }}
       >
-        <Ionicons name={tool.icon as any} size={20} color={colorOf(tool.colorKey)} />
+        <RowIcon name={tool.icon as any} size={20} color={colorOf(tool.colorKey)} />
         <View style={{ flex: 1, marginLeft: 12 }}>
           <Text style={[T.body, { fontFamily: active ? F.semi : F.med }]}>{tool.label}</Text>
           <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>
@@ -732,15 +759,15 @@ const TrashRow = React.memo(function TrashRow({ item, onOpen }: {
   const caption = item.locked ? days : kind.label + ' · ' + days;
   return (
     <ListRow
-      onPress={() => { tick(); onOpen(item.id); }} style={st.trashRow}
+      onPress={() => { tick(); onOpen(item.id); }} style={[st.trashRow, st.twoLineRow]}
       accessibilityLabel={title + ', ' + (item.locked ? '' : kind.label + ', ') + days} accessibilityHint="Restore it, or delete it now"
     >
-      <Ionicons name={kind.icon as any} size={20} color={C.textDim} />
+      <RowIcon name={kind.icon as any} size={20} color={C.textDim} />
       <View style={{ flex: 1, marginLeft: 14 }}>
         <Text style={[T.body, { fontFamily: F.med }]} numberOfLines={1}>{title}</Text>
         <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{caption}</Text>
       </View>
-      <Ionicons name="ellipsis-horizontal" size={17} color={C.textFaint} />
+      <Ionicons name="ellipsis-horizontal" size={17} color={C.textFaint} style={st.rowEnd} />
     </ListRow>
   );
 });
@@ -1345,6 +1372,8 @@ export default function Settings() {
             </Card>
             <SectionTitle>Accent colour</SectionTitle>
             <AccentCard />
+            <SectionTitle>Writing font</SectionTitle>
+            <WritingFontCard />
           </>
         );
       case 'tools':
@@ -1700,7 +1729,7 @@ const st = StyleSheet.create({
   colophon: { alignItems: 'center', marginTop: S.section * 1.5, paddingBottom: 8 },
   colophonName: { color: C.text, fontFamily: F.brand, fontSize: 26, lineHeight: 32, letterSpacing: 0.4 },
   colophonSign: { marginTop: 12 },
-  colophonBy: { color: C.textFaint, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, marginTop: 12 },
+  colophonBy: { color: C.textFaint, fontFamily: F.smMed, fontSize: 13, letterSpacing: TRACK.small, marginTop: 12 },
   colophonVersion: { ...T.caption, fontSize: 11, marginTop: 4 },
   link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   recovery: {
@@ -1711,15 +1740,20 @@ const st = StyleSheet.create({
   recoveryBody: { ...T.caption, marginTop: 4 },
   slotRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 10 },
   // at least 58 wide, wider rather than wrapping at a large font size
-  slotIndex: { minWidth: 58, color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine },
+  slotIndex: { minWidth: 58, color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine },
   /** a slot's tool (its icon and its name), which dips and comes back as a new tool takes the slot */
   slotTool: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   archivedLine: { flex: 1, marginLeft: 10 },
   trashRow: { paddingVertical: 12 },
   trashNote: { marginTop: 18, marginHorizontal: 4 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 4 },
-  label: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, marginBottom: 8 },
-  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 10, lineHeight: 17 },
+  label: { color: C.textDim, fontFamily: F.smMed, fontSize: 13, letterSpacing: TRACK.small, marginBottom: 8 },
+  hint: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 10, lineHeight: 17 },
+  // the writing font's sample: two lines' room, so the card keeps its height as the face changes on a phone
+  writingSample: { marginTop: 16, minHeight: 54 },
+  // a row of a title over a line: the icon sits on the title's line and the end mark in the row's middle
+  twoLineRow: { alignItems: 'flex-start' },
+  rowEnd: { alignSelf: 'center' },
   optRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 6 },
   // the dot is raised inside a carved well, so the well clips its light and shadow at the rim
   radioWell: {

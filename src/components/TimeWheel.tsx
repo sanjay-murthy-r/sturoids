@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { C, CHROME_FONT_MAX, F, MIN, TRACK, ThemeMode, shownTheme } from '../theme';
+import { C, CHROME_FONT_MAX, F, MIN, TRACK, ThemeMode, oneLine, shownTheme } from '../theme';
 import { useStore } from '../store';
 import { fmtClockTime } from '../utils';
 import { Wheel, WheelLabel } from './Wheel';
@@ -210,11 +210,11 @@ const st = StyleSheet.create({
   },
   half: { color: C.textDim, fontFamily: F.med, fontSize: 16, letterSpacing: TRACK.body },
   // the wheels' figures, set as the Planner's day wheel is
-  num: { fontFamily: F.semi, fontSize: 22, lineHeight: 28, letterSpacing: TRACK.large, fontVariant: ['tabular-nums'] },
+  num: { fontFamily: F.semi, fontSize: 22, lineHeight: 28, letterSpacing: TRACK.large, fontVariant: ['tabular-nums'], includeFontPadding: false },
   chip: {
     alignSelf: 'center', marginTop: 14, paddingVertical: 5, paddingHorizontal: 11, borderRadius: 999, overflow: 'hidden',
   },
   chipEdge: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999, borderWidth: 1 },
-  chipText: { color: C.textDim, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine },
+  chipText: { ...oneLine(12), color: C.textDim, fontFamily: F.smMed, letterSpacing: TRACK.fine },
   ink: { position: 'absolute', top: 0, left: 0, right: 0 },
 });

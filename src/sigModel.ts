@@ -23,10 +23,19 @@ export type DigitRecordings = Readonly<Record<string, { readonly strokes: readon
 
 export type DigitMap = Readonly<Record<string, HandDigit>>;
 export interface DateFits { readonly dd: HandFits; readonly mm: HandFits; readonly yy: HandFits }
+/** The parts of a date, in the order they are written: the day, the month, the two-digit year. */
+export type DatePart = 'dd' | 'mm' | 'yy';
+/**
+ * Where the date goes, and which of its parts are written: absent, all three. A placement made here leaves `parts`
+ * out when all three are written, so the creator's placement, and every one saved before parts existed, reads the same.
+ */
+export interface DatePlace extends HandDatePlace {
+  readonly parts?: readonly DatePart[];
+}
 /** Everything the intro needs to write a date after a signature: the digits, where they go, and the room they make. */
 export interface Hand {
   readonly digits: DigitMap;
-  readonly place: HandDatePlace;
+  readonly place: DatePlace;
   readonly fit: DateFits;
 }
 
@@ -55,7 +64,9 @@ const DIGIT_MAX_POINTS = 400;
 
 export const DIGIT_KEYS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] as const;
 const GROUPS = ['dd', 'mm', 'yy'] as const;
-type Group = (typeof GROUPS)[number];
+type Group = DatePart;
+/** every part of a date, in the order it is written */
+export const DATE_PARTS: readonly DatePart[] = GROUPS;
 const pad2 = (n: number) => String(n).padStart(2, '0');
 /** every pair a group can show */
 const VALUES: Record<Group, string[]> = {
@@ -78,6 +89,35 @@ const round = (v: number, digits: number) => {
   return Object.is(n, -0) ? 0 : n;
 };
 const finite = (n: number) => typeof n === 'number' && isFinite(n);
+
+/* ---------------------------------------------------------------- which parts of the date are written */
+
+/** The parts written, in their fixed order: whichever valid ones are listed, else all three. Never none. */
+export function datePartsOf(parts?: readonly unknown[] | null): DatePart[] {
+  if (!Array.isArray(parts)) return [...GROUPS];
+  const out = GROUPS.filter((g) => parts.includes(g));
+  return out.length ? out : [...GROUPS];
+}
+
+/** A placement with these parts written: `parts` set only when not all three are, so a full date stores as before. */
+export function withParts(place: HandDatePlace, parts?: readonly unknown[] | null): DatePlace {
+  const chosen = datePartsOf(parts);
+  const rest: DatePlace = { when: place.when, size: place.size, gap: place.gap, tilt: place.tilt, groups: place.groups };
+  return chosen.length < GROUPS.length ? { ...rest, parts: chosen } : rest;
+}
+
+/** The pairs of a date (ddmmyy) that are written, in order, each with its part. */
+export function datePairs(date: string, parts?: readonly unknown[] | null): { group: DatePart; pair: string }[] {
+  return datePartsOf(parts).map((group) => {
+    const at = GROUPS.indexOf(group) * 2;
+    return { group, pair: date.slice(at, at + 2) };
+  });
+}
+
+/** A date in words, as the intro writes it: only its chosen parts, in order, a middle dot between them ("23 · 10"). */
+export function dateText(date: string, parts?: readonly unknown[] | null): string {
+  return datePairs(date, parts).map((p) => p.pair).join(' · ');
+}
 
 type Pt = [number, number, number];
 
@@ -447,9 +487,10 @@ function pairsFor(dates?: string | readonly string[]): Record<Group, string[]> {
  * Where each pair would run into the signature, the tighter gap (and, if needed, the smaller size) that clears it, as
  * build-handwriting.js works out DATE_FIT: the space inside the pair tightens down to half the chosen gap, then the
  * pair is written a little smaller, down to 80%; the anchors never move. `dates` (ddmmyy, one or a list) limits the
- * work to the pairs those dates show, which is all the intro needs at launch; without it every pair is fitted.
+ * work to the pairs those dates show, which is all the intro needs at launch; without it every pair is fitted. Only the
+ * parts the placement writes are fitted.
  */
-export function fitDate(sig: SigModel, digits: DigitMap, place: HandDatePlace, dates?: string | readonly string[]): DateFits {
+export function fitDate(sig: SigModel, digits: DigitMap, place: DatePlace, dates?: string | readonly string[]): DateFits {
   const fits: Record<Group, Record<string, HandFit>> = { dd: {}, mm: {}, yy: {} };
   const field = signatureField(sig);
   if (!field) return fits;
@@ -502,7 +543,8 @@ export function fitDate(sig: SigModel, digits: DigitMap, place: HandDatePlace, d
     return first && digitClearance(group, pair[1], advance(pair[0]) + gap * DIGIT_H, scale, FIT_CLEAR) >= FIT_CLEAR;
   };
   const values = pairsFor(dates);
-  for (const group of GROUPS) {
+  // only the parts the date writes are fitted: the others are never on the page
+  for (const group of datePartsOf(place.parts)) {
     for (const pair of values[group]) {
       if (clears(group, pair, place.gap, 1)) continue;
       // the generator's tries, in its order: the gap tightens a hundredth at a time, then the size comes down
@@ -544,17 +586,28 @@ const DEFAULT_TILT = 0;
  * between them run together, so a placement made here starts with a little air inside each pair.
  */
 const DEFAULT_GAP = 0.25;
+/** the room between two groups set in a row, as a share of the size */
+const ROW_SPACE = 0.45;
+/** how far a group can reach above its baseline (a tall digit's top) and below it (a tail), as a share of the size */
+export const DATE_TOP = 1.15;
+export const DATE_FOOT = 0.2;
 
-/** A placement read from storage, clamped to what the lab allows (and the anchors rounded), as the generator reads one. */
-export function clampPlace(p: HandDatePlace): HandDatePlace {
+export type Box = readonly [number, number, number, number];
+type Anchor = { x: number; y: number };
+
+/**
+ * A placement read from storage, clamped to what the lab allows (and the anchors rounded), as the generator reads one.
+ * The parts written are kept when they are a real choice (fewer than all three), in their order.
+ */
+export function clampPlace(p: DatePlace): DatePlace {
   const at = (q: { x: number; y: number }) => ({ x: Math.round(+q.x || 0), y: Math.round(+q.y || 0) });
-  return {
+  return withParts({
     when: p.when === 'outro' ? 'outro' : 'signature',
     size: clamp(+p.size || DEFAULT_SIZE, DATE_LIMITS.size.min, DATE_LIMITS.size.max),
     gap: clamp(+p.gap || 0, DATE_LIMITS.gap.min, DATE_LIMITS.gap.max),
     tilt: clamp(+p.tilt || 0, DATE_LIMITS.tilt.min, DATE_LIMITS.tilt.max),
     groups: { dd: at(p.groups.dd), mm: at(p.groups.mm), yy: at(p.groups.yy) },
-  };
+  }, p.parts);
 }
 
 /** How wide a group of two digits is written, signature units: as layoutDate sets them, on the widest digits. */
@@ -565,30 +618,202 @@ export function groupWidth(digits: DigitMap | null | undefined, size: number, ga
 }
 
 /**
- * Where a new signature's date goes when nobody has placed it: day, month and year in a row, upright, ending under the
+ * How far one group of the date can reach from its anchor, signature units, turned with the tilt: [left, top, right,
+ * bottom] from the anchor, on the widest digits, from a tall digit's top to a tail below the baseline.
+ */
+export function groupReach(digits: DigitMap | null | undefined, size: number, gap: number, tilt: number): Box {
+  const w = groupWidth(digits, size, gap);
+  const rad = (tilt * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of [[0, -DATE_TOP * size], [w, -DATE_TOP * size], [0, DATE_FOOT * size], [w, DATE_FOOT * size]]) {
+    const X = x * c - y * s;
+    const Y = x * s + y * c;
+    x0 = Math.min(x0, X); y0 = Math.min(y0, Y); x1 = Math.max(x1, X); y1 = Math.max(y1, Y);
+  }
+  return [x0, y0, x1, y1];
+}
+
+/** Where the written parts of a placement could reach, signature units [x0, y0, x1, y1]: what a frame must leave room for. */
+export function placeBox(place: DatePlace, digits: DigitMap | null | undefined): Box {
+  const r = groupReach(digits, place.size, place.gap, place.tilt);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const g of datePartsOf(place.parts)) {
+    const P = place.groups[g];
+    x0 = Math.min(x0, P.x + r[0]); y0 = Math.min(y0, P.y + r[1]);
+    x1 = Math.max(x1, P.x + r[2]); y1 = Math.max(y1, P.y + r[3]);
+  }
+  return [x0, y0, x1, y1];
+}
+
+/**
+ * The written parts set in a row along the tilt, the first one's anchor at `origin`, one group's width and a little
+ * air apart: spaced as if the parts left out never existed. A part left out goes on after the row, where it is never
+ * seen; turning it back on sets the row again.
+ */
+export function rowPlace(
+  place: HandDatePlace, digits: DigitMap | null | undefined, parts: readonly unknown[] | null | undefined, origin: Anchor,
+): DatePlace {
+  const chosen = datePartsOf(parts);
+  const step = groupWidth(digits, place.size, place.gap) + ROW_SPACE * place.size;
+  const rad = (place.tilt * Math.PI) / 180;
+  const ux = Math.cos(rad);
+  const uy = Math.sin(rad);
+  const at = (i: number): Anchor => ({ x: Math.round(origin.x + i * step * ux), y: Math.round(origin.y + i * step * uy) });
+  const order = [...chosen, ...GROUPS.filter((g) => !chosen.includes(g))];
+  const slot = (g: DatePart) => at(order.indexOf(g));
+  return withParts({ ...place, groups: { dd: slot('dd'), mm: slot('mm'), yy: slot('yy') } }, chosen);
+}
+
+/**
+ * Where a new signature's date goes when nobody has placed it: its parts in a row, upright, ending under the
  * signature's right edge and just below its lowest ink, so it never runs into the signature and needs no room made.
  */
-export function defaultPlace(sig: SigModel, digits?: DigitMap | null): HandDatePlace {
+export function defaultPlace(sig: SigModel, digits?: DigitMap | null, parts?: readonly unknown[] | null): DatePlace {
   const size = DEFAULT_SIZE;
   const gap = DEFAULT_GAP;
+  const n = datePartsOf(parts).length;
   const w = groupWidth(digits, size, gap);
-  const space = 0.45 * size;
-  const row = 3 * w + 2 * space;
+  const row = n * w + (n - 1) * ROW_SPACE * size;
   const [bx0, , bx1, by1] = sig.bbox;
-  const x = Math.max(bx0, bx1 - row);
   // the cap line a quarter of a digit under the signature
-  const y = by1 + 1.25 * size;
-  return {
-    when: 'signature',
-    size,
-    gap,
-    tilt: DEFAULT_TILT,
-    groups: {
-      dd: { x: Math.round(x), y: Math.round(y) },
-      mm: { x: Math.round(x + w + space), y: Math.round(y) },
-      yy: { x: Math.round(x + 2 * (w + space)), y: Math.round(y) },
-    },
-  };
+  const origin = { x: Math.max(bx0, bx1 - row), y: by1 + 1.25 * size };
+  const base: HandDatePlace = { when: 'signature', size, gap, tilt: DEFAULT_TILT, groups: { dd: origin, mm: origin, yy: origin } };
+  return rowPlace(base, digits, parts, origin);
+}
+
+/* ---------------------------------------------------------------- quick spots */
+
+/** The quick spots the recorder offers for the date, relative to the signature's ink. */
+export type DateSpot = 'after' | 'belowRight' | 'belowLeft' | 'above';
+export const DATE_SPOTS: readonly DateSpot[] = ['after', 'belowRight', 'belowLeft', 'above'];
+
+/**
+ * The date moved to a quick spot, as defaultPlace places one: its written parts in a row at its own size, spacing and
+ * tilt, set against the signature's ink. After it: just past the ink's right edge, on the signature's baseline. Below:
+ * a sliver under the lowest ink, at the right or the left edge. Above: a sliver over the highest ink, at the right.
+ */
+export function spotPlace(
+  sig: SigModel, digits: DigitMap | null | undefined, place: DatePlace, spot: DateSpot, baseline?: number,
+): DatePlace {
+  const size = place.size;
+  const row = rowPlace(place, digits, place.parts, { x: 0, y: 0 });
+  const b = placeBox(row, digits);
+  const [bx0, by0, bx1, by1] = sig.bbox;
+  const air = 0.1 * size;
+  let x: number;
+  let y: number;
+  if (spot === 'after') {
+    x = bx1 + 0.3 * size - b[0];
+    y = baseline ?? sigBaseline(sig);
+  } else if (spot === 'above') {
+    x = bx1 - b[2];
+    y = by0 - air - b[3];
+  } else {
+    x = spot === 'belowLeft' ? bx0 - b[0] : bx1 - b[2];
+    y = by1 + air - b[1];
+  }
+  return rowPlace(place, digits, place.parts, { x, y });
+}
+
+/** Whether two placements write the same parts in the same places, at the same size, spacing and tilt. */
+export function samePlace(a: DatePlace | null | undefined, b: DatePlace | null | undefined): boolean {
+  if (!a || !b) return a === b;
+  if (a.size !== b.size || a.gap !== b.gap || a.tilt !== b.tilt || a.when !== b.when) return false;
+  if (datePartsOf(a.parts).join() !== datePartsOf(b.parts).join()) return false;
+  return GROUPS.every((g) => a.groups[g].x === b.groups[g].x && a.groups[g].y === b.groups[g].y);
+}
+
+/**
+ * Where the signature sits, viewBox y: the middle of the low points its strokes turn up from (the bottoms of its
+ * letters), so a descender or a flourish below does not pull it down. The bottom of its box when it has no line.
+ */
+export function sigBaseline(sig: SigModel): number {
+  const bottoms: number[] = [];
+  // a low point is the lowest sample this many samples either side (a cubic is CUBIC_SEGMENTS samples)
+  const W = 8;
+  for (const st of sig.strokes) {
+    if (st.type !== 'line') continue;
+    const pts = samplePath(st.d);
+    for (let i = 0; i < pts.length; i++) {
+      const y = pts[i][1];
+      // the first sample of a flat run counts once
+      if (i > 0 && pts[i - 1][1] === y) continue;
+      let low = true;
+      for (let j = Math.max(0, i - W); j <= Math.min(pts.length - 1, i + W) && low; j++) {
+        if (pts[j][1] > y) low = false;
+      }
+      if (low) bottoms.push(y);
+    }
+  }
+  if (!bottoms.length) return sig.bbox[3];
+  bottoms.sort((a, b) => a - b);
+  return bottoms[Math.floor(bottoms.length / 2)];
+}
+
+/* ---------------------------------------------------------------- the date on the signature */
+
+/** pen lifts inside the date, model ms: between two digits of a group, and between two groups written */
+const DIGIT_GAP_MS = 90;
+const GROUP_GAP_MS = 200;
+
+export interface PlacedDigit {
+  key: string;
+  ch: string;
+  /** from the digit's own units into the signature's */
+  transform: string;
+  /** the digit's scale into the signature's units, so its ink keeps the same weight at any size */
+  scale: number;
+  /** model ms, from the date's first pen-down, when this digit begins */
+  t0: number;
+}
+
+/**
+ * The date's digits placed on the signature as the Handwriting Lab placed them: each group anchored at the left end of
+ * its baseline, scaled and turned about that anchor, its two digits side by side. Only the parts the placement writes
+ * are laid out, and the pen goes from one to the next as if the others were never there. `date` is ddmmyy.
+ */
+export function layoutDate(date: string, hand: Hand): { digits: PlacedDigit[]; total: number } {
+  const { place } = hand;
+  const digits: PlacedDigit[] = [];
+  let t = 0;
+  datePairs(date, place.parts).forEach(({ group, pair }, gi) => {
+    const P = place.groups[group];
+    if (gi) t += GROUP_GAP_MS;
+    // a pair that would run into the signature makes room: tighter, and smaller only when it has to be
+    const fit = hand.fit[group][pair];
+    const scale = (place.size / DIGIT_H) * (fit?.scale ?? 1);
+    const gap = fit?.gap ?? place.gap;
+    let x = 0;
+    for (let i = 0; i < 2; i++) {
+      const ch = pair[i];
+      const m = ch === undefined ? undefined : hand.digits[ch];
+      if (!m) continue;
+      if (i) t += DIGIT_GAP_MS;
+      digits.push({
+        key: group + i,
+        ch,
+        transform: `translate(${P.x} ${P.y}) rotate(${place.tilt}) scale(${scale.toFixed(4)}) `
+          + `translate(${(x - m.x0).toFixed(2)} ${-DIGIT_H})`,
+        scale,
+        t0: t,
+      });
+      t += m.total;
+      x += Math.max(14, m.x1 - m.x0) + (i === 0 ? gap * DIGIT_H : 0);
+    }
+  });
+  return { digits, total: t };
+}
+
+const DATE_BOXES = new WeakMap<Hand, Box>();
+/** Where any date could reach, signature units, so a canvas never clips a wide digit: the written parts only. */
+export function dateBox(hand: Hand): Box {
+  const known = DATE_BOXES.get(hand);
+  if (known) return known;
+  const box = placeBox(hand.place, hand.digits);
+  DATE_BOXES.set(hand, box);
+  return box;
 }
 
 /** A day as the intro writes it: day, month and two-digit year. */

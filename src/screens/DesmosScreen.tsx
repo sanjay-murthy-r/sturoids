@@ -7,7 +7,7 @@ import Animated, { Easing, FadeOut } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, MIN, bgFor, neuRaised } from '../theme';
 import { NeuHeader, ScreenBG, useTheme, EmptyState } from '../components/UI';
-import { Bouncy, useAnimLevel } from '../components/Motion';
+import { Bouncy, Sheen, useAnimLevel } from '../components/Motion';
 import { toast } from '../components/Toast';
 import { useStore } from '../store';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -311,6 +311,8 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
                         : { backgroundColor: C.card, ...neuRaised('mid') },
                     ]}
                   >
+                    {/* a soft band of light sweeps the plate while Desmos loads (plain with less motion) */}
+                    <Sheen radius={24} />
                     <ActivityIndicator size="large" color={C.accent} />
                   </View>
                 )}

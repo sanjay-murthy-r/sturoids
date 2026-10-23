@@ -14,6 +14,8 @@
  *   - 1.7's migration (daily ToDos, the moved accents, the new settings), and one-off ToDos leaving on a new day
  *   - Recently deleted: every kind goes and comes back in its place, locks follow the tools, and the purge after
  *     30 days deletes the files too
+ *   - 1.8: habit weekdays (streaks that pass rest days, the same count as before for every day), the day's record of
+ *     ticks (logged, unlogged, pruned at 400 days, cleaned), the writing font and the parts of a written date
  * Usage: node scripts/test-store.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -903,6 +905,224 @@ const scenarios = {
     assert.equal(st().trash[0].data.title, 'Gone');
     assert.equal(st().desmosState, '{"x":1}');
     assert.equal(app.store.hasAnyUserData(JSON.parse(snap)), true, 'something deleted is still data');
+  },
+  // ---------- 1.8: habit days and the day's record ----------
+
+  async 'a habit kept on some weekdays: rest days neither count nor break, and every day matches the old count'() {
+    const app = boot();
+    await settled(app);
+    const u = app.utils;
+    const key = (n) => dayKey(u, n);
+    const wd = (n) => u.weekdayIndex(new Date(key(n) + 'T00:00:00'));
+    // the count as it was before weekdays came in, kept here to hold the every-day case to it
+    const before = (doneDates) => {
+      if (!doneDates || doneDates.length === 0) return { current: 0, best: 0 };
+      const set = new Set(doneDates);
+      const sorted = [...set].sort();
+      let best = 1, run = 1;
+      const dayNo = (k) => { const [y, m, d] = k.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
+      for (let i = 1; i < sorted.length; i++) {
+        run = dayNo(sorted[i]) - dayNo(sorted[i - 1]) === 1 ? run + 1 : 1;
+        if (run > best) best = run;
+      }
+      let current = 0;
+      const cursor = new Date();
+      if (!set.has(u.todayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+      while (set.has(u.todayKey(cursor))) { current++; cursor.setDate(cursor.getDate() - 1); }
+      return { current, best };
+    };
+    let seed = 7;
+    const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    for (let i = 0; i < 300; i++) {
+      const dates = [];
+      for (let d = -60; d <= 2; d++) if (rand() < (i % 3 === 0 ? 0.85 : 0.4)) dates.push(key(d));
+      const want = before(dates);
+      assert.deepEqual(u.streaks(dates), want, 'no days: as before');
+      assert.deepEqual(u.streaks(dates, undefined), want);
+      assert.deepEqual(u.streaks(dates, []), want, 'none chosen is every day');
+      assert.deepEqual(u.streaks(dates, [0, 1, 2, 3, 4, 5, 6]), want, 'all seven is every day');
+      assert.deepEqual(u.streaks(dates, [6, 5, 4, 3, 2, 1, 0, 0]), want, 'in any order');
+    }
+    // due on today's weekday only: the six days between are rest days
+    assert.deepEqual(u.streaks([key(0), key(-7), key(-14)], [wd(0)]), { current: 3, best: 3 });
+    assert.deepEqual(u.streaks([key(-7), key(-14)], [wd(0)]), { current: 2, best: 2 }, 'today not done yet never breaks it');
+    assert.deepEqual(u.streaks([key(-14)], [wd(0)]), { current: 0, best: 1 }, 'a due day missed ends it');
+    // a rest day done still counts
+    assert.deepEqual(u.streaks([key(0), key(-1)], [wd(0)]), { current: 2, best: 2 });
+    // a due day not done ends the run, even with a rest day done before it
+    assert.deepEqual(u.streaks([key(0), key(-2)], [wd(0), wd(-1)]), { current: 1, best: 1 });
+    // best runs forward over rest days: every weekday but one, done for eleven days around it
+    const skip = wd(-25);
+    const days = [0, 1, 2, 3, 4, 5, 6].filter((d) => d !== skip);
+    const run = [];
+    for (let d = -30; d <= -20; d++) if (d !== -25) run.push(key(d));
+    assert.deepEqual(u.streaks(run, days), { current: 0, best: 10 });
+    // due checks and words
+    assert.equal(u.habitDueOn({}, key(0)), true);
+    assert.equal(u.habitDueOn({ days: [wd(0)] }, key(0)), true);
+    assert.equal(u.habitDueOn({ days: [wd(-1)] }, new Date(key(0) + 'T12:00:00')), false);
+    assert.equal(u.daysLabel(undefined), 'Every day');
+    assert.equal(u.daysLabel([0, 1, 2, 3, 4]), 'Weekdays');
+    assert.equal(u.daysLabel([6, 5]), 'Weekends');
+    assert.equal(u.daysLabel([4, 0, 2]), 'Mon, Wed, Fri');
+    assert.equal(u.weekdayIndex(new Date(2026, 9, 26)), 0, 'Monday is 0');
+    assert.equal(u.weekdayIndex(new Date(2026, 10, 1)), 6, 'Sunday is 6');
+  },
+
+  async 'habit days are kept sorted and unique, set and cleared, and cleaned on load and import'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    st().addHabit('Gym', undefined, [4, 0, 2, 2]);
+    st().addHabit('Read', '21:00', [0, 1, 2, 3, 4, 5, 6]);
+    const [gym, read] = st().habits;
+    assert.deepEqual(gym.days, [0, 2, 4]);
+    assert.ok(!('days' in read), 'all seven is every day, kept as none');
+    st().setHabitDays(read.id, [5, 6]);
+    assert.deepEqual(st().habits[1].days, [5, 6]);
+    const same = st().habits;
+    st().setHabitDays(read.id, [6, 5]);
+    assert.equal(st().habits, same, 'the same days change nothing');
+    st().setHabitDays(read.id, []);
+    assert.ok(!('days' in st().habits[1]), 'none chosen is every day');
+    // an Undo of a deleted habit brings its days back
+    const h = st().habits[0];
+    st().removeHabit(h.id);
+    st().restoreHabit(h, 0);
+    assert.deepEqual(st().habits[0].days, [0, 2, 4]);
+    // what a save or a backup holds is cleaned
+    const saved = {
+      ...V4,
+      habits: [
+        { id: 'a', title: 'A', doneDates: ['2026-10-01', 7], days: [3, 1, 1, 9, -1, 2.5, 'x'] },
+        { id: 'b', title: 'B', doneDates: 'bad', days: [0, 1, 2, 3, 4, 5, 6] },
+        { id: 'c', title: 'C', doneDates: [], days: 'Mon' },
+        { id: 'd', title: 'D', doneDates: [], days: [] },
+      ],
+    };
+    const next = boot({ [KEY]: JSON.stringify({ state: saved, version: 6 }) });
+    await settled(next);
+    const hs = next.state().habits;
+    assert.deepEqual(hs[0].days, [1, 3]);
+    assert.deepEqual(hs[0].doneDates, ['2026-10-01']);
+    assert.deepEqual(hs[1].doneDates, []);
+    assert.ok(hs.slice(1).every((x) => !('days' in x)), 'all seven, junk and none are every day');
+    const read2 = app.store.readSnapshot(JSON.stringify({ _app: 'student-hub', _v: 4, habits: saved.habits }));
+    assert.deepEqual(read2.data.habits.map((x) => x.days), [[1, 3], undefined, undefined, undefined]);
+    // a backup keeps them
+    const snap = app.store.exportSnapshot();
+    assert.equal(app.store.importSnapshot(JSON.stringify(snap)), true);
+    assert.deepEqual(app.state().habits[0].days, [0, 2, 4]);
+  },
+
+  async "the day's record keeps each tick as it was, and a rename, a delete or an Undo never rewrites it"() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    const today = dayKey(app.utils, 0);
+    const yest = dayKey(app.utils, -1);
+    const a = st().addDaily('Read');
+    const b = st().addDaily('Write', { repeat: 'daily' });
+    st().toggleDaily(a);
+    assert.deepEqual(st().doneLog[today], { todos: [{ id: a, title: 'Read' }] });
+    st().toggleDaily(a);
+    assert.equal(st().doneLog[today], undefined, 'an untick takes it off, and a day left empty goes');
+    st().toggleDaily(a);
+    st().toggleDaily(b);
+    st().updateDaily(a, { title: 'Read chapter 3' });
+    assert.deepEqual(st().doneLog[today].todos.map((t) => t.title), ['Read', 'Write'], 'a rename later never rewrites the day');
+    const task = st().dailyTasks.find((t) => t.id === a);
+    st().removeDaily(a);
+    assert.equal(st().doneLog[today].todos.length, 2, 'a ToDo deleted after it was done keeps its line');
+    st().restoreDaily(task, 0);
+    st().restoreDaily(task, 0);
+    assert.equal(st().doneLog[today].todos.length, 2, 'an Undo never adds it twice');
+    // long-term tasks
+    const m = st().addMission('Project', today);
+    st().toggleMission(m);
+    assert.deepEqual(st().doneLog[today].tasks, [{ id: m, title: 'Project' }]);
+    st().toggleMission(m);
+    assert.ok(!('tasks' in st().doneLog[today]), 'undone, it comes off');
+    // one ticked yesterday and undone today comes off yesterday
+    app.store.useStore.setState({
+      missions: st().missions.map((x) => (x.id === m ? { ...x, done: true, doneOn: yest } : x)),
+      doneLog: { ...st().doneLog, [yest]: { tasks: [{ id: m, title: 'Project' }] } },
+    });
+    st().toggleMission(m);
+    assert.equal(st().doneLog[yest], undefined);
+    st().toggleMission(m);
+    const removed = st().removeMission(m);
+    st().restoreMission(removed.mission, removed.index);
+    st().restoreMission(removed.mission, removed.index);
+    assert.equal(st().doneLog[today].tasks.length, 1, 'a delete and its Undo leave one line');
+    // it travels in a backup and in the rows
+    const snap = JSON.stringify(app.store.exportSnapshot());
+    app.store.useStore.setState({ doneLog: {} });
+    assert.equal(app.store.importSnapshot(snap), true);
+    assert.equal(st().doneLog[today].todos.length, 2);
+    await flush(app);
+    assert.ok(app.meta().keys.includes('doneLog'), 'a row of its own');
+    const next = boot({}, { storage: app.storage });
+    await settled(next);
+    assert.deepEqual(next.state().doneLog, st().doneLog);
+    assert.equal(app.store.hasAnyUserData({ doneLog: { [today]: { todos: [{ id: 'x', title: 'X' }] } } }), true);
+    assert.equal(app.store.hasAnyUserData({ doneLog: {} }), false);
+  },
+
+  async "the day's record keeps 400 days, and junk in it is cleaned on load and import"() {
+    const app = boot();
+    await settled(app);
+    const k = (n) => dayKey(app.utils, n);
+    app.store.useStore.setState({
+      doneLog: {
+        [k(-401)]: { todos: [{ id: 'a', title: 'Old' }] },
+        [k(-400)]: { todos: [{ id: 'b', title: 'Kept' }] },
+        [k(-3)]: { tasks: [{ id: 'c', title: 'Recent' }] },
+      },
+    });
+    app.state().settleDay();
+    assert.deepEqual(Object.keys(app.state().doneLog).sort(), [k(-400), k(-3)]);
+    const junk = {
+      [k(-1)]: { todos: [{ id: 'x', title: 5 }, { id: 'x', title: 'twice' }, { title: 'no id' }, null], tasks: 'bad' },
+      'not-a-day': { todos: [{ id: 'y', title: 'Y' }] },
+      [k(-2)]: { todos: [] },
+      [k(-3)]: 'bad',
+    };
+    const cleaned = app.store.cleanDoneLog(junk);
+    assert.deepEqual(cleaned, { [k(-1)]: { todos: [{ id: 'x', title: '5' }] } });
+    assert.deepEqual(app.store.cleanDoneLog('oops'), {});
+    const saved = { ...V4, doneLog: junk };
+    const next = boot({ [KEY]: JSON.stringify({ state: saved, version: 6 }) });
+    await settled(next);
+    assert.deepEqual(next.state().doneLog, cleaned, 'cleaned on load');
+    const read = app.store.readSnapshot(JSON.stringify({ _app: 'student-hub', _v: 4, doneLog: junk }));
+    assert.deepEqual(read.data.doneLog, cleaned, 'and on import');
+    const old = app.store.readSnapshot(JSON.stringify({ _app: 'student-hub', _v: 4, notes: [] }));
+    app.store.applySnapshot(old);
+    assert.deepEqual(app.state().doneLog, {}, 'a backup from before has none');
+  },
+
+  async 'the writing font and the parts of a written date are cleaned on load and import'() {
+    const app = boot();
+    await settled(app);
+    assert.equal(app.state().settings.writingFont, 'sans', 'Sans by default');
+    const { sanitizeSignature, migrateV6 } = app.store;
+    assert.equal(migrateV6({ settings: { writingFont: 'serif' } }, false).settings.writingFont, 'serif');
+    assert.equal(migrateV6({ settings: { writingFont: 'comic' } }, false).settings.writingFont, 'sans');
+    const next = boot({ [KEY]: JSON.stringify({ state: { ...V4, settings: { ...V4.settings, writingFont: 7 } }, version: 6 }) });
+    await settled(next);
+    assert.equal(next.state().settings.writingFont, 'sans');
+    const stroke = (n) => ({ pts: Array.from({ length: n }, (_, i) => [i / n, 0.5, i * 10]) });
+    const digits = Object.fromEntries('0123456789'.split('').map((d) => [d, { strokes: [stroke(5)] }]));
+    const place = { size: 0.2, gap: 0.05, tilt: -3, when: 'outro', groups: { dd: { x: 0.1, y: 0.8 }, mm: { x: 0.4, y: 0.8 }, yy: { x: 0.7, y: 0.8 } } };
+    const sig = (parts) => sanitizeSignature({ v: 1, recordedAt: 5, strokes: [stroke(3)], digits, date: { ...place, parts } });
+    assert.deepEqual(sig(['yy', 'dd', 'dd']).date.parts, ['dd', 'yy'], 'in the fixed order, once each');
+    assert.deepEqual(sig(['mm', 'zz']).date.parts, ['mm']);
+    assert.ok(!('parts' in sig([]).date), 'none is all three');
+    assert.ok(!('parts' in sig('dd').date));
+    assert.ok(!('parts' in sig(undefined).date));
+    assert.deepEqual(sig(['dd', 'mm', 'yy']).date.parts, ['dd', 'mm', 'yy']);
+    assert.deepEqual(sanitizeSignature(sig(['mm'])), sig(['mm']), 'a second pass changes nothing');
   },
 };
 

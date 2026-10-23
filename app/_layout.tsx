@@ -8,17 +8,22 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { Ionicons } from '@expo/vector-icons';
-// each face from its own file: a package's index would carry every one of its files into the app. Geist speaks,
-// Newsreader titles the big screens, Rubik Light counts, and the intro keeps Rubik (the Font Lab v2 pick)
+// each face from its own file: a package's index would carry every one of its files into the app. Inter Tight speaks
+// and counts, Schibsted Grotesk sets the small words, Source Serif 4 titles the big screens and the writing, and the
+// intro keeps Rubik (the 1.8 pick)
 import { useFonts } from '@expo-google-fonts/rubik/useFonts';
-import { Rubik_300Light } from '@expo-google-fonts/rubik/300Light';
 import { Rubik_500Medium } from '@expo-google-fonts/rubik/500Medium';
 import { Rubik_600SemiBold } from '@expo-google-fonts/rubik/600SemiBold';
-import { Geist_400Regular } from '@expo-google-fonts/geist/400Regular';
-import { Geist_500Medium } from '@expo-google-fonts/geist/500Medium';
-import { Geist_600SemiBold } from '@expo-google-fonts/geist/600SemiBold';
-import { Geist_700Bold } from '@expo-google-fonts/geist/700Bold';
-import { Newsreader_500Medium } from '@expo-google-fonts/newsreader/500Medium';
+import { InterTight_300Light } from '@expo-google-fonts/inter-tight/300Light';
+import { InterTight_400Regular } from '@expo-google-fonts/inter-tight/400Regular';
+import { InterTight_500Medium } from '@expo-google-fonts/inter-tight/500Medium';
+import { InterTight_600SemiBold } from '@expo-google-fonts/inter-tight/600SemiBold';
+import { InterTight_700Bold } from '@expo-google-fonts/inter-tight/700Bold';
+import { SchibstedGrotesk_400Regular } from '@expo-google-fonts/schibsted-grotesk/400Regular';
+import { SchibstedGrotesk_500Medium } from '@expo-google-fonts/schibsted-grotesk/500Medium';
+import { SchibstedGrotesk_600SemiBold } from '@expo-google-fonts/schibsted-grotesk/600SemiBold';
+import { SourceSerif4_400Regular } from '@expo-google-fonts/source-serif-4/400Regular';
+import { SourceSerif4_500Medium } from '@expo-google-fonts/source-serif-4/500Medium';
 import { bgFor } from '../src/theme';
 import {
   useStore, subscribeLoadNotices, subscribeSaveProblems, savesFailing, savedRowUnreadable,
@@ -167,7 +172,9 @@ export default function RootLayout() {
   // the icons' font loads with the app's faces, so no icon draws an empty box for a frame and then pops in
   const [appLoaded, appError] = useFonts({
     ...Ionicons.font,
-    Rubik_300Light, Geist_400Regular, Geist_500Medium, Geist_600SemiBold, Geist_700Bold, Newsreader_500Medium,
+    InterTight_300Light, InterTight_400Regular, InterTight_500Medium, InterTight_600SemiBold, InterTight_700Bold,
+    SchibstedGrotesk_400Regular, SchibstedGrotesk_500Medium, SchibstedGrotesk_600SemiBold,
+    SourceSerif4_400Regular, SourceSerif4_500Medium,
   });
   const introFonts = introLoaded || !!introError;
   const appFonts = appLoaded || !!appError;

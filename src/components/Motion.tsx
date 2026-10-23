@@ -1,5 +1,8 @@
 import React from 'react';
-import { AccessibilityInfo, AccessibilityRole, AccessibilityState, AppState, Pressable, PressableProps, Text, ViewStyle } from 'react-native';
+import {
+  AccessibilityInfo, AccessibilityRole, AccessibilityState, AppState, Pressable, PressableProps, StyleSheet, Text, View, ViewStyle,
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   FadeIn, FadeOut, LinearTransition, cancelAnimation, runOnJS,
   useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withSpring, withTiming, Easing,
@@ -178,6 +181,108 @@ export function useBreath(on = true, period = 2800) {
     return () => cancelAnimation(breath);
   }, [run, period]);
   return breath;
+}
+
+/**
+ * Whether the screen a part sits on is in view. Unlike useIsFocused it also works outside a navigator (a sheet the root
+ * layout draws over every screen), where it is always true.
+ */
+function useScreenInView() {
+  const nav = React.useContext(NavigationContext);
+  const [focused, setFocused] = React.useState(() => (nav ? nav.isFocused() : true));
+  React.useEffect(() => {
+    if (!nav) return undefined;
+    setFocused(nav.isFocused());
+    const offFocus = nav.addListener('focus', () => setFocused(true));
+    const offBlur = nav.addListener('blur', () => setFocused(false));
+    return () => { offFocus(); offBlur(); };
+  }, [nav]);
+  return focused;
+}
+
+/** Whether a loop may run: it is wanted, every animation is on, its screen is in view and the app is in front. */
+function useLoopRuns(on: boolean) {
+  const level = useAnimLevel();
+  const inView = useScreenInView();
+  const inFront = useAppActive();
+  return on && level === 'full' && inView && inFront;
+}
+
+/**
+ * A loop with a purpose (a paused clock, a breath, a streak at risk, a sync), as a shared value that rises 0 to 1 and
+ * falls back to 0 over `periodMs`, eased in and out, for an animated style to read. It runs only while `on`, with every
+ * animation on, while its screen is in view and the app is in front. Otherwise it eases back to 0 (at once with motion
+ * off) and nothing is scheduled: so 0 is the part at rest, and a style maps the value away from that (opacity
+ * 1 - 0.45 * v, say). The loop is cancelled when its condition ends, on blur, when the app leaves and on unmount.
+ */
+export function useLoop(on: boolean, periodMs: number) {
+  const level = useAnimLevel();
+  const run = useLoopRuns(on);
+  const v = useSharedValue(0);
+  React.useEffect(() => {
+    if (!run) {
+      cancelAnimation(v);
+      if (level === 'none') v.value = 0;
+      else if (v.value !== 0) v.value = withTiming(0, { duration: 240, easing: EASE_OUT });
+      return undefined;
+    }
+    const half = { duration: periodMs / 2, easing: BREATH_EASE };
+    v.value = withRepeat(withSequence(withTiming(1, half), withTiming(0, half)), -1);
+    return () => cancelAnimation(v);
+  }, [run, periodMs]);
+  return v;
+}
+
+/** the sheen's band: transparent at its edges, a faint light at its middle (7 percent white) */
+const SHEEN_STOPS = ['rgba(255,255,255,0)', 'rgba(255,255,255,0.07)', 'rgba(255,255,255,0)'] as const;
+/** one pass of the band and the rest after it: a pass every 1.6 s */
+const SHEEN_PASS = 1100;
+const SHEEN_REST = 500;
+
+/**
+ * Something still loading: a soft diagonal band of light sweeps across the parent every 1.6 s, clipped to `radius` (the
+ * parent's own). It fills its parent, which is the plain placeholder (a carved or faint shape where the thing will
+ * be); with less than every animation on, or out of view, the placeholder simply stays plain. Takes no touches.
+ */
+export function Sheen({ radius = 0, on = true }: { radius?: number; on?: boolean }) {
+  const run = useLoopRuns(on);
+  const [w, setW] = React.useState(0);
+  const p = useSharedValue(0);
+  React.useEffect(() => {
+    if (!run || w <= 0) {
+      cancelAnimation(p);
+      p.value = 0;
+      return undefined;
+    }
+    p.value = 0;
+    p.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: SHEEN_PASS, easing: Easing.inOut(Easing.quad) }),
+        withDelay(SHEEN_REST, withTiming(0, { duration: 0 })),
+      ),
+      -1,
+    );
+    return () => cancelAnimation(p);
+  }, [run, w]);
+  const band = Math.max(60, Math.round(w * 0.45));
+  const aStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: -band * 1.5 + p.value * (w + band * 2) }, { rotate: '18deg' }] as const,
+  }));
+  return (
+    <View
+      pointerEvents="none"
+      style={[StyleSheet.absoluteFill, { borderRadius: radius, overflow: 'hidden' }]}
+      onLayout={(e) => setW(Math.round(e.nativeEvent.layout.width))}
+      importantForAccessibility="no-hide-descendants"
+      accessibilityElementsHidden
+    >
+      {run && w > 0 ? (
+        <Animated.View style={[{ position: 'absolute', top: '-60%', bottom: '-60%', left: 0, width: band }, aStyle]}>
+          <LinearGradient colors={SHEEN_STOPS} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} />
+        </Animated.View>
+      ) : null}
+    </View>
+  );
 }
 
 /**

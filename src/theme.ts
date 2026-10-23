@@ -193,47 +193,61 @@ export const S = {
   radiusSm: 14,
 };
 
-// ---- faces (the Font Lab v2 pick, 2026-09-26): Geist for nearly everything, Newsreader only for the big screen titles
-// and the writing surfaces' headings, Rubik Light for counting numbers. Where fontFamily is set, fontWeight must NOT be:
-// Android fake-bolds any family+weight combo. ----
+/// ---- faces (the 1.8 pick, 2026-10-23): Inter Tight speaks in the usual case (titles, body, rows, buttons, fields),
+// Schibsted Grotesk sets the small and secondary words (captions, sub-lines, labels, kickers, chips, the tab bar's
+// names), Source Serif 4 titles the big screens and the writing surfaces, and Rubik stays only for the intro's wordmark
+// and the colophon. Where fontFamily is set, fontWeight must NOT be: Android fake-bolds any family+weight combo. ----
 export const F = {
-  reg: 'Geist_400Regular',
-  med: 'Geist_500Medium',
-  semi: 'Geist_600SemiBold',
-  bold: 'Geist_700Bold',
-  /** the serif, kept for a big screen title (T.display) and a writing surface's heading: a note's title, the journal's date */
-  head: 'Newsreader_500Medium',
-  /** counting numbers: timers, clocks and big figures (Rubik Light, the Focus Lab pick) */
-  num: 'Rubik_300Light',
-  /** the intro's wordmark and caption keep Rubik, the face its timing and shine were set to */
+  reg: 'InterTight_400Regular',
+  med: 'InterTight_500Medium',
+  semi: 'InterTight_600SemiBold',
+  bold: 'InterTight_700Bold',
+  /**
+   * small and secondary text (Schibsted Grotesk): captions, sub-lines, labels, kickers, chip and pill text, helper
+   * lines, the tab bar's names. Never with tabular figures (its tabular digits are wide and spaced): anything with
+   * aligned or counting digits is set in Inter Tight instead.
+   */
+  sm: 'SchibstedGrotesk_400Regular',
+  smMed: 'SchibstedGrotesk_500Medium',
+  smSemi: 'SchibstedGrotesk_600SemiBold',
+  /** the serif: a big screen title (T.display) and a writing surface's heading, a note's title and the journal's date */
+  head: 'SourceSerif4_500Medium',
+  /** the serif for long writing, when the Writing font is Serif (see writingFace) */
+  serif: 'SourceSerif4_400Regular',
+  /** counting numbers: timers, clocks and big figures, always with tabular figures (Inter Tight Light) */
+  num: 'InterTight_300Light',
+  /** the intro's wordmark and caption keep Rubik, the face its timing and shine were set to, and so does the colophon */
   brand: 'Rubik_600SemiBold',
   brandMed: 'Rubik_500Medium',
 };
 
 /**
- * Rubik Light's widest figure and its colon, as shares of the font size: the cells a rolling clock sets each digit in,
- * so a count never shifts sideways (measured from the font file).
+ * Inter Tight Light's figure cell and its colon, as shares of the font size: the cells a rolling clock sets each digit
+ * in, so a count never shifts sideways. Measured from InterTight_300Light.ttf with fontTools (2048 units to the em):
+ * the proportional figures run 0.359 ('1') to 0.598 ('3'), and the GSUB 'tnum' lookup maps every figure to a glyph
+ * 1222 units wide (0.597). The cell takes the larger of the two, 0.598, so a digit fits whether or not the tabular
+ * feature is applied. The colon is 0.249 proportional and 0.237 tabular; the cell takes 0.249.
  */
-export const NUM_DIGIT_W = 0.618;
-export const NUM_COLON_W = 0.241;
+export const NUM_DIGIT_W = 0.598;
+export const NUM_COLON_W = 0.249;
 
-// ---- tracking: Geist is set tight as it grows and a touch open as it shrinks, so every size reads evenly. Styles take
-// their value from here instead of a bare number. Rubik numerals keep their own. ----
+// ---- tracking: Inter Tight is narrow and tight by design, so it opens a little at reading sizes and closes a little as
+// it grows; Schibsted takes the small sizes and the caps. Styles take their value from here instead of a bare number. ----
 export const TRACK = {
-  /** Newsreader display titles, 30 px */
-  display: -0.5,
-  /** Geist semibold, 20 to 22 px */
-  large: -0.35,
-  /** Geist semibold, 16 to 18 px */
-  title: -0.2,
+  /** Source Serif display titles, 30 px */
+  display: -0.4,
+  /** Inter Tight semibold, 20 to 22 px */
+  large: -0.3,
+  /** Inter Tight semibold, 16 to 18 px */
+  title: -0.1,
   /** 15 px and the 16 px reading size */
-  body: 0.1,
-  /** 13 to 14 px */
-  small: 0.15,
-  /** 11 to 12 px in mixed case */
-  fine: 0.25,
-  /** small UPPERCASE labels: kickers, section caps, pills */
-  caps: 1.3,
+  body: 0.15,
+  /** 13 to 14 px (Schibsted) */
+  small: 0.1,
+  /** 11 to 12 px in mixed case (Schibsted) */
+  fine: 0.2,
+  /** small UPPERCASE labels in Schibsted: kickers, section caps, pills */
+  caps: 1.1,
 };
 
 /**
@@ -242,6 +256,18 @@ export const TRACK = {
  */
 export const CHROME_FONT_MAX = 1.3;
 
+/**
+ * A single-line label in a control of fixed height (a chip, a pill, a segment, a key, a wheel's number): Android's font
+ * padding is dropped and the line box set to 1.2 times the size, so the face centres truly in its control. For a
+ * StyleSheet (it builds a new object).
+ */
+export const oneLine = (size: number) => ({
+  fontSize: size,
+  lineHeight: Math.round(size * 1.2),
+  includeFontPadding: false,
+  textAlignVertical: 'center' as const,
+});
+
 // type scale (~1.25 ratio)
 export type TName =
   | 'display' | 'h1' | 'head' | 'title' | 'body' | 'bodyLong' | 'label' | 'caption' | 'kicker'
@@ -249,32 +275,52 @@ export type TName =
 
 // faces carry the weight, so no token can hold a fontWeight (scripts/lint-type.js guards the call sites too)
 export const T: Record<TName, Omit<TextStyle, 'fontWeight'>> = {
-  /** a big screen title: Today's greeting, More, Planner, Tasks, the Deep Work title (the one serif left in the chrome) */
-  display: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 36, letterSpacing: TRACK.display },
+  /**
+   * a big screen title: Today's greeting, More, Planner, Tasks, the Deep Work title (the one serif in the chrome). Source
+   * Serif's line box is tall (1.036 / -0.335 em), so the line is 38 and an ascender never clips on Android
+   */
+  display: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 38, letterSpacing: TRACK.display },
   h1: { color: C.text, fontFamily: F.semi, fontSize: 22, lineHeight: 28, letterSpacing: TRACK.large },
   /** a page's name in its header, and a hero line such as the next planned block */
   head: { color: C.text, fontFamily: F.semi, fontSize: 20, lineHeight: 26, letterSpacing: TRACK.large },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title },
   body: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21, letterSpacing: TRACK.body },
-  /** long-form writing: the journal page */
+  /** long-form writing in the sans (a writing surface's body follows the Writing font: see writingFace) */
   bodyLong: { color: C.text, fontFamily: F.reg, fontSize: 16, lineHeight: 26, letterSpacing: TRACK.body },
-  label: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
-  caption: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, lineHeight: 17, letterSpacing: TRACK.fine },
+  /** a small label or a row's sub-line (Schibsted Medium) */
+  label: { color: C.textDim, fontFamily: F.smMed, fontSize: 13, letterSpacing: TRACK.small },
+  /** helper text, captions and footers (Schibsted) */
+  caption: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, lineHeight: 17, letterSpacing: TRACK.fine },
   kicker: {
-    color: C.textFaint, fontFamily: F.semi, fontSize: 11,
+    color: C.textFaint, fontFamily: F.smSemi, fontSize: 11,
     letterSpacing: TRACK.caps, textTransform: 'uppercase',
   },
-  // counting numbers: large figures in Rubik Light; small ones in the text face, Geist Medium (the Font Lab v2 pick)
+  // counting numbers: large figures in Inter Tight Light, small ones in Inter Tight Medium, always with tabular figures
   /** the Deep Work clock */
-  numHero: { color: C.text, fontFamily: F.num, fontSize: 48 },
+  numHero: { color: C.text, fontFamily: F.num, fontSize: 48, fontVariant: ['tabular-nums'] },
   /** the Deep Work minutes wheel */
-  numWheel: { color: C.text, fontFamily: F.num, fontSize: 52, lineHeight: 64 },
+  numWheel: { color: C.text, fontFamily: F.num, fontSize: 52, lineHeight: 64, fontVariant: ['tabular-nums'] },
   /** the ambient clock */
-  numAmbient: { color: C.text, fontFamily: F.num, fontSize: 68 },
+  numAmbient: { color: C.text, fontFamily: F.num, fontSize: 68, fontVariant: ['tabular-nums'] },
   /** big figures: an exam's result */
   numDisplay: { color: C.text, fontFamily: F.num, fontSize: 44, fontVariant: ['tabular-nums'] },
   /** glance figures: Today, the journal's stats, marks */
-  numStat: { color: C.text, fontFamily: F.med, fontSize: 22, letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
+  numStat: { color: C.text, fontFamily: F.med, fontSize: 22, letterSpacing: TRACK.large, fontVariant: ['tabular-nums'] },
 };
+
+/** The face a writing surface's body is set in (Settings, Appearance, Writing font). */
+export type WritingFont = 'sans' | 'serif';
+
+const WRITING: Record<WritingFont, TextStyle> = {
+  sans: Object.freeze({ fontFamily: F.reg, fontSize: 16, lineHeight: 26, letterSpacing: TRACK.body }) as TextStyle,
+  serif: Object.freeze({ fontFamily: F.serif, fontSize: 17, lineHeight: 27, letterSpacing: 0 }) as TextStyle,
+};
+
+/**
+ * The body style for long writing (a note's body, a journal page) in the Writing font picked in Settings, Appearance:
+ * Inter Tight, or Source Serif 4 a size up and a line taller. Titles keep their own faces. Anything but 'serif' is the
+ * sans. Frozen: safe to spread in render.
+ */
+export const writingFace = (kind: WritingFont | undefined | null): TextStyle => WRITING[kind === 'serif' ? 'serif' : 'sans'];
 
 export const BLOCK_COLORS = ['#9DBCE3', '#9AD6B0', '#E3C08D', '#E39EAC', '#745FF2', '#83DBD6', '#C2D392', '#D5C68E'];

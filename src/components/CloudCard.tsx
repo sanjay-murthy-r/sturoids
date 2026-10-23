@@ -11,8 +11,8 @@ import { eraseThisPhone } from '../wipe';
 import { pinStatus } from '../lock';
 import { fmtClockTime } from '../utils';
 import { Card, Field, Hairline, InfoDot, PillButton, Row, SectionTitle, Sheet, Toggle, useTheme } from './UI';
-import Animated from 'react-native-reanimated';
-import { Appear, FadeSwap } from './Motion';
+import Animated, { useAnimatedStyle } from 'react-native-reanimated';
+import { Appear, FadeSwap, useLoop } from './Motion';
 import { useSwapIn } from './Swap';
 import { SegmentedControl } from './SegmentedControl';
 import { PinSheet } from './LockGate';
@@ -249,11 +249,16 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
   };
 
   const syncing = c.status === 'syncing';
+  // a percentage that counts up is set in the text face's tabular figures, so it does not shift as it counts
+  const counting = syncing && c.progress != null && c.progress < 1;
   const statusLine = syncing
-    ? c.progress != null && c.progress < 1 ? 'Sending attachments, ' + Math.round(c.progress * 100) + '%' : 'Backing up'
+    ? counting ? 'Sending attachments, ' + Math.round((c.progress as number) * 100) + '%' : 'Backing up'
     : c.status === 'error' ? c.error || 'Something went wrong.'
       : c.lastSyncedAt ? 'Backed up ' + ago(c.lastSyncedAt, hour24) + (c.pending && !c.auto ? '. Changes waiting.' : '')
         : 'Not backed up yet';
+  // while a backup runs, the status line pulses (full to half strength over 1.2 s); still otherwise
+  const syncPulse = useLoop(signedIn && syncing, 1200);
+  const pulseStyle = useAnimatedStyle(() => ({ opacity: 1 - 0.5 * syncPulse.value }));
   const remote = c.remote;
   // the cloud's own time has microseconds and an offset, which not every engine's Date reads: read by hand, as cloud.ts does
   const remoteAt = remote ? isoTime(remote.updatedAt) : NaN;
@@ -298,7 +303,11 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
             <Text style={T.caption}>Signed in as</Text>
             <Text style={[st.title, { marginTop: 2 }]} numberOfLines={1}>{c.email}</Text>
             <FadeSwap swapKey={c.status + ':' + (c.error || '') + ':' + (syncing ? '' : String(c.lastSyncedAt))}>
-              <Text style={[T.caption, { marginTop: 6 }, c.status === 'error' && { color: C.danger }]}>{statusLine}</Text>
+              <Animated.Text
+                style={[T.caption, { marginTop: 6 }, counting && st.counting, c.status === 'error' && { color: C.danger }, pulseStyle]}
+              >
+                {statusLine}
+              </Animated.Text>
             </FadeSwap>
             {c.note ? <Text style={[T.caption, { marginTop: 3 }]}>{c.note}</Text> : null}
             {c.usedBytes != null && c.usedBytes > 0 ? (
@@ -791,13 +800,14 @@ export function DeleteSection({ title = 'Delete', onErased }: {
 
 const st = StyleSheet.create({
   title: { color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
-  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -4, marginBottom: 12 },
-  info: { color: C.textDim, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -4, marginBottom: 12 },
+  problem: { color: C.danger, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -4, marginBottom: 12 },
+  info: { color: C.textDim, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: -4, marginBottom: 12 },
+  counting: { fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   // the links sit where they always did; their touch area reaches 44 above and below the words. At a large font size
   // the second goes under the first rather than off the edge of a narrow phone
   links: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, justifyContent: 'space-between', marginTop: 5, marginBottom: -13, paddingHorizontal: 4 },
   linkHit: { minHeight: 44, justifyContent: 'center' },
   link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
-  danger: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 8, marginLeft: 4 },
+  danger: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 8, marginLeft: 4 },
   done: { alignItems: 'center', paddingVertical: 8, paddingHorizontal: 8 },
 });

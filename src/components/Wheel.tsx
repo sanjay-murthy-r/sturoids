@@ -222,9 +222,9 @@ function WheelItem({ k, pos, lab, spacing, minScale, colorOn, colorOff, textStyl
   return (
     <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, st.centre, box]}>
       <View style={st.stack}>
-        <Animated.Text numberOfLines={1} maxFontSizeMultiplier={MAX_FONT_SCALE} style={[textStyle, fullStyle]}>{lab.full}</Animated.Text>
+        <Animated.Text numberOfLines={1} maxFontSizeMultiplier={MAX_FONT_SCALE} style={[st.label, textStyle, fullStyle]}>{lab.full}</Animated.Text>
         {hasShort ? (
-          <Animated.Text numberOfLines={1} maxFontSizeMultiplier={MAX_FONT_SCALE} style={[textStyle, st.short, shortStyle]}>{lab.short}</Animated.Text>
+          <Animated.Text numberOfLines={1} maxFontSizeMultiplier={MAX_FONT_SCALE} style={[st.label, textStyle, st.short, shortStyle]}>{lab.short}</Animated.Text>
         ) : null}
       </View>
     </Animated.View>
@@ -234,5 +234,7 @@ function WheelItem({ k, pos, lab, spacing, minScale, colorOn, colorOff, textStyl
 const st = StyleSheet.create({
   centre: { alignItems: 'center', justifyContent: 'center' },
   stack: { alignItems: 'center' },
+  // a label in a wheel of fixed height: no font padding, centred in its line (the caller's style sets the line)
+  label: { includeFontPadding: false, textAlignVertical: 'center' },
   short: { position: 'absolute', left: 0, right: 0, textAlign: 'center' },
 });

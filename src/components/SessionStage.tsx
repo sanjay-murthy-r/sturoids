@@ -1,11 +1,13 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import Animated, { FadeIn, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
+import Animated, {
+  FadeIn, LayoutAnimationConfig, useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming,
+} from 'react-native-reanimated';
+import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, neuRaised, oneLine } from '../theme';
 import { fmtClockTime } from '../utils';
 import { TimerState, displayOf, shownSecondsOf, spokenTimeOf, useSessionTick } from '../deepWork';
 import { WIDE_AT } from '../layout';
-import { Appear, Bouncy, CHANGE, EASE_OUT, FadeSwap, useAnimLevel, useBuilt } from './Motion';
+import { Appear, Bouncy, CHANGE, EASE_OUT, FadeSwap, useAnimLevel, useBuilt, useLoop } from './Motion';
 import { ClockDigits, clockWidth } from './ClockDigits';
 import { CheckCircle, Chip, NeuIconBtn, PillButton, ProgressBar, useTheme } from './UI';
 
@@ -23,6 +25,8 @@ const SEC_GAP = 2 / BIG;
 /** how far below the top of the minutes' line the seconds' line starts */
 const SEC_TOP = 12 / BIG;
 const PAD_X = 22;
+/** the breath caption's line (oneLine(13)) */
+const BREATH_LINE = 16;
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const clockAt = (ms: number, hour24: boolean) => {
@@ -50,6 +54,9 @@ function SlabClock({ timer, base, availW, startedAt, finishAt, hour24, clockStyl
 }) {
   useSessionTick(timer, hold);
   const level = useAnimLevel();
+  // paused, the digits ease between full strength and 55 percent (the universal "paused" signal); running, they are still
+  const pausedLoop = useLoop(!timer.running && !hold, 2400);
+  const pausedStyle = useAnimatedStyle(() => ({ opacity: 1 - 0.45 * pausedLoop.value }));
   const [big, sec] = splitClock(shownSecondsOf(timer));
   const size = fitSize(big, sec, base, availW);
   // when the hours arrive and the clock has to step down, the smaller clock fades in instead of every digit snapping
@@ -81,13 +88,15 @@ function SlabClock({ timer, base, availW, startedAt, finishAt, hour24, clockStyl
         accessible
         accessibilityLabel={spokenTimeOf(timer)}
       >
-        <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} />
-        <ClockDigits
-          text={sec}
-          size={size * SEC}
-          color={C.textDim}
-          style={{ marginTop: Math.round(size * SEC_TOP), marginLeft: size * SEC_GAP }}
-        />
+        <Animated.View style={[st.timeRow, pausedStyle]}>
+          <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} />
+          <ClockDigits
+            text={sec}
+            size={size * SEC}
+            color={C.textDim}
+            style={{ marginTop: Math.round(size * SEC_TOP), marginLeft: size * SEC_GAP }}
+          />
+        </Animated.View>
       </Animated.View>
       {progress != null ? (
         <View style={st.rule}>
@@ -258,17 +267,21 @@ function BreakClock({ endAt, min, base, availW, hour24, hold }: {
   const [big, sec] = splitClock(secs);
   const size = fitSize(big, sec, base, availW);
   const progress = min > 0 ? 1 - displayOf(timer) / (min * 60) : 1;
+  const h = Math.round(size * LINE);
   return (
     <>
-      <View style={st.time} accessible accessibilityLabel={breakSpoken(secs)}>
-        <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} roll={false} />
-        <ClockDigits
-          text={sec}
-          size={size * SEC}
-          color={C.textFaint}
-          roll={false}
-          style={{ marginTop: Math.round(size * SEC_TOP), marginLeft: size * SEC_GAP }}
-        />
+      <View style={st.time}>
+        <BreathGuide ring={Math.round(h * 1.2)} centerX={clockWidth(big, size) / 2} centerY={h / 2} on={!hold} />
+        <View style={st.timeRow} accessible accessibilityLabel={breakSpoken(secs)}>
+          <ClockDigits text={big} size={size} lineHeight={h} roll={false} />
+          <ClockDigits
+            text={sec}
+            size={size * SEC}
+            color={C.textFaint}
+            roll={false}
+            style={{ marginTop: Math.round(size * SEC_TOP), marginLeft: size * SEC_GAP }}
+          />
+        </View>
       </View>
       <View style={st.rule}>
         <ProgressBar value={Math.min(1, Math.max(0, progress))} height={6} color={C.textDim} />
@@ -276,6 +289,78 @@ function BreakClock({ endAt, min, base, availW, hour24, hold }: {
       <View style={st.meta}>
         <Text style={st.metaText} numberOfLines={1}>{min + ' min break'}</Text>
         <Text style={[st.metaText, st.metaRight]} numberOfLines={1}>{'Ends ' + clockAt(endAt, hour24)}</Text>
+      </View>
+    </>
+  );
+}
+
+/** one breath: in over 4 s, out over 4 s */
+const BREATH_MS = 8000;
+
+/**
+ * A breathing guide behind a break's minutes: a soft ring that grows over 4 s and shrinks over 4 s, with a caption at the
+ * row's end that crossfades "Breathe in" and "Breathe out" on the same beat. With less than every animation on, the
+ * ring stays still at its middle size and the caption does not change. A screen reader hears none of it.
+ */
+function BreathGuide({ ring, centerX, centerY, on }: { ring: number; centerX: number; centerY: number; on: boolean }) {
+  const level = useAnimLevel();
+  const moving = level === 'full';
+  const v = useLoop(on, BREATH_MS);
+  // which way the breath goes: 1 breathing in (the ring growing), 0 breathing out. The caption crossfades on each turn
+  const inhale = useSharedValue(1);
+  const goingUp = useSharedValue(1);
+  useAnimatedReaction(
+    () => v.value,
+    (now, before) => {
+      if (before == null || now === before) return;
+      const up = now > before ? 1 : 0;
+      if (up === goingUp.value) return;
+      goingUp.value = up;
+      inhale.value = withTiming(up, { duration: 600, easing: EASE_OUT });
+    },
+  );
+  React.useEffect(() => {
+    if (moving) return;
+    goingUp.value = 1;
+    inhale.value = 1;
+  }, [moving]);
+  const ringStyle = useAnimatedStyle(() => {
+    const k = moving ? v.value : 0.5;
+    return { opacity: 0.55 + 0.45 * k, transform: [{ scale: 0.72 + 0.28 * k }] };
+  });
+  const inStyle = useAnimatedStyle(() => ({ opacity: inhale.value }));
+  const outStyle = useAnimatedStyle(() => ({ opacity: 1 - inhale.value }));
+  return (
+    <>
+      <Animated.View
+        pointerEvents="none"
+        importantForAccessibility="no-hide-descendants"
+        accessibilityElementsHidden
+        style={[
+          st.breathRing,
+          { width: ring, height: ring, borderRadius: ring / 2, left: centerX - ring / 2, top: centerY - ring / 2 },
+          ringStyle,
+        ]}
+      />
+      <View
+        pointerEvents="none"
+        importantForAccessibility="no-hide-descendants"
+        accessibilityElementsHidden
+        style={[st.breathCaption, { top: Math.round(centerY - BREATH_LINE / 2) }]}
+      >
+        {moving ? (
+          <>
+            {/* the longer words hold the place, the shorter lie over them at the same right edge */}
+            <Animated.Text style={[st.breathText, outStyle]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>
+              Breathe out
+            </Animated.Text>
+            <Animated.Text style={[st.breathText, st.breathOver, inStyle]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>
+              Breathe in
+            </Animated.Text>
+          </>
+        ) : (
+          <Text style={st.breathText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>Breathe slowly</Text>
+        )}
       </View>
     </>
   );
@@ -395,12 +480,22 @@ const st = StyleSheet.create({
   plate: { borderRadius: 26, paddingTop: 20, paddingHorizontal: PAD_X, paddingBottom: 22 },
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   subject: { flexShrink: 1, paddingVertical: 2 },
-  block: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 12 },
+  block: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 12 },
   time: { flexDirection: 'row', alignItems: 'flex-start', marginTop: 10 },
+  timeRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  // the breath's ring: a soft outline with a faint fill, behind the minutes
+  breathRing: {
+    position: 'absolute', borderWidth: 1.5, borderColor: C.textDim + '38', backgroundColor: C.textDim + '0D',
+  },
+  // the breath's words sit at the row's end, level with the middle of the minutes
+  breathCaption: { position: 'absolute', right: 0, alignItems: 'flex-end' },
+  breathText: { ...oneLine(13), color: C.textFaint, fontFamily: F.sm, letterSpacing: TRACK.small, textAlign: 'right' },
+  breathOver: { position: 'absolute', right: 0, top: 0 },
   rule: { marginTop: 18, marginBottom: 9 },
   noRule: { height: 12 },
   meta: { flexDirection: 'row', justifyContent: 'space-between' },
-  // at a large font size the two times share the line instead of running off the plate
+  // at a large font size the two times share the line instead of running off the plate. The times keep the text
+  // face's tabular figures, like the clock above them
   metaText: { flexShrink: 1, color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, fontVariant: ['tabular-nums'] },
   metaRight: { textAlign: 'right', marginLeft: 12 },
   dock: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 20 },
@@ -413,7 +508,7 @@ const st = StyleSheet.create({
     paddingVertical: 12, paddingLeft: 14, paddingRight: 10, borderRadius: 16, borderWidth: 1,
   },
   currentText: { flex: 1, minWidth: 0 },
-  currentKick: { color: C.textFaint, fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.caps, textTransform: 'uppercase' },
+  currentKick: { color: C.textFaint, fontFamily: F.smSemi, fontSize: 11, letterSpacing: TRACK.caps, textTransform: 'uppercase' },
   currentTitle: { color: C.text, fontFamily: F.med, fontSize: 15, letterSpacing: TRACK.body, marginTop: 3 },
   betweenTitle: { ...T.title, marginTop: 10 },
   // a chip carries its own right and bottom margins for a row of chips: the row gives the bottom one back
@@ -424,7 +519,7 @@ const st = StyleSheet.create({
     paddingVertical: 11, paddingHorizontal: 20, borderRadius: 999, overflow: 'hidden',
   },
   nextTitle: { fontFamily: F.semi, fontSize: 15, letterSpacing: TRACK.body },
-  nextDetail: { color: C.textDim, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 2 },
+  nextDetail: { color: C.textDim, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 2 },
   notNow: { alignSelf: 'center', paddingVertical: 12, paddingHorizontal: 18, marginTop: 6, marginBottom: -10 },
   notNowText: { color: C.textDim, fontFamily: F.med, fontSize: 14, letterSpacing: TRACK.small },
 });

@@ -14,7 +14,7 @@ import { SIG_SIZE, SIG_SPEED } from '../signature';
 import { dateDigits } from '../sigModel';
 import { useAnimLevel } from './Motion';
 import { WIDE_AT } from '../layout';
-import { DATE_SPEED, SHINE_SKEW, Signature, SignatureStill, layoutDate, useIntroSignature } from './Signature';
+import { DATE_SPEED, SHINE_SKEW, Signature, SignatureStill, inkExtent, layoutDate, useIntroSignature } from './Signature';
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
@@ -44,6 +44,8 @@ const DESIGN_W = 440;
 const K_MAX = 1.33;
 /** the share of a wide window's height the settled column may take */
 const FIT_H = 0.86;
+/** the closest the signature and its date come to the screen's edge, px */
+const EDGE = 12;
 
 // The icon's two seam grooves (viewBox = plate), a dark carve over a light lip, as in
 // assets/icon.png. They fade and settle in; they are never stroke-drawn.
@@ -217,7 +219,8 @@ function PlateSheen({ glint }: { glint: SharedValue<number> }) {
  * runs over midnight still writes the new day.
  *
  * The signature is the one chosen in Settings (useIntroSignature): the creator's, or one recorded on
- * this phone, with its own digits and placement or with no date at all, which skips the date beat.
+ * this phone, with its own digits and placement or with no date at all, which skips the date beat. A
+ * recorded one writes only the parts of the date chosen for it (layoutDate leaves the others out).
  *
  * Contract with app/_layout.tsx: onReveal() builds the app beneath the opaque overlay; onDone()
  * unmounts the overlay. The app's own entrance follows the intro phase (src/intro.ts). Real ms at
@@ -488,16 +491,30 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
 
   // a phone lays the intro out on its own width, as it always has; a wide window on a phone's, then scales it by k
   const wide = W >= WIDE_AT;
-  const sigW = SIG_SIZE * (wide ? DESIGN_W : W) * Math.min(1, model.vw / (SLOT_MAX_ASPECT * model.vh));
+  // a date placed beside or below the signature hangs out of its slot: how far the ink reaches from the slot's centre,
+  // signature units, so the slot narrows when the date would run off the screen's side at rest
+  const ext = inkExtent(model, hand);
+  const reachX = Math.max(model.vw / 2 - ext[0], ext[2] - model.vw / 2);
+  const sigW = Math.min(
+    SIG_SIZE * (wide ? DESIGN_W : W) * Math.min(1, model.vw / (SLOT_MAX_ASPECT * model.vh)),
+    (((wide ? DESIGN_W : W) / 2 - EDGE) * model.vw) / reachX,
+  );
   const sigH = (sigW * model.vh) / model.vw;
   const columnH = PLATE + GAP_WORD + WORD_H + GAP_CAPTION + CAPTION_H + GAP_SIG + sigH;
   const k = wide ? Math.min(K_MAX, (FIT_H * H) / columnH) : 1;
   // the column is centred and scaled about its centre, so the slot's centre sits k * (columnH - sigH) / 2 below the
   // screen's, and an offset inside it moves k times as far on screen
   const heroY = (HERO_Y * H - H / 2) / k - (columnH - sigH) / 2;
-  // on a short window the hero never grows past 70% of the height. Logo first never writes large, so its ink is laid
-  // out at its own size instead of the hero's.
-  const heroScale = logoFirst ? 1 : Math.max(1, Math.min(HERO_W / SIG_SIZE, (0.7 * H) / (k * sigH)));
+  // on a short window the hero never grows past 70% of the height, and the signature and its date written large stay
+  // on the screen. Logo first never writes large, so its ink is laid out at its own size instead of the hero's.
+  const unit = (k * sigW) / model.vw;
+  const heroScale = logoFirst ? 1 : Math.max(1, Math.min(
+    HERO_W / SIG_SIZE,
+    (0.7 * H) / (k * sigH),
+    (W / 2 - EDGE) / (reachX * unit),
+    (HERO_Y * H - EDGE) / ((model.vh / 2 - ext[1]) * unit),
+    ((1 - HERO_Y) * H - EDGE) / ((ext[3] - model.vh / 2) * unit),
+  ));
 
   return (
     <Animated.View

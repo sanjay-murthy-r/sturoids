@@ -665,13 +665,13 @@ export function ExamFormScreen() {
 
 const st = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
-  label: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
-  hint: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6 },
-  problem: { color: C.danger, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6 },
+  label: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
+  hint: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6 },
+  problem: { color: C.danger, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17, marginTop: 6 },
   link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   templateRow: { flexDirection: 'row', alignItems: 'center', marginTop: -4, marginBottom: 12, paddingHorizontal: 2 },
   headRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
-  colHead: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine },
+  colHead: { color: C.textFaint, fontFamily: F.smMed, fontSize: 11, letterSpacing: TRACK.fine },
   numCol: { width: 56, textAlign: 'center' },
   slash: { width: 16 },
   removeCol: { width: 33 },

@@ -14,7 +14,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { C, F, MIN, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU } from '../theme';
+import { C, F, MIN, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU, writingFace } from '../theme';
 import { columnWidth } from '../layout';
 import { useStore, Attachment, Note, flushSaves } from '../store';
 import { fmtClockTime, todayKey, uid, yesterdayKey } from '../utils';
@@ -33,7 +33,8 @@ import { useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { FolderNameSheet, isBlankNote, takeFreshNote } from './NotesListScreen';
 
-const LINE_H = 24;
+/** a line of the body: the Writing font sets it (26 in the sans, 27 in the serif); the room kept while dictating counts in it */
+const LINE_H = 26;
 const FREE_LINES = 9; // keep ~8-10 lines of breathing room while dictating
 /**
  * The title and the words live in the editor while they are typed, and reach the store after this pause. A keystroke
@@ -364,6 +365,10 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   // reads at rest: with the keyboard up the note is being typed in, and a time ticking over under the title would only
   // draw the eye. The lock stays in the bar, where its state shows; the rest are in the menu beside it.
   const hour24 = useStore((s) => s.settings.hour24);
+  // the body is set in the Writing font (Settings, Appearance); the title keeps its serif
+  const writingFont = useStore((s) => s.settings.writingFont);
+  const bodyStyle = React.useMemo(() => [st.body, writingFace(writingFont)], [writingFont]);
+  const liveStyle = React.useMemo(() => [st.liveInline, writingFace(writingFont)], [writingFont]);
   const today = useToday();
   const keyboardOpen = useKeyboardOpen();
   const edited = note ? editedLine(note.updatedAt, today, hour24) : '';
@@ -650,7 +655,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
           />
           {/* the date is the header's now; the count keeps its line when there are no words, so the first one typed
               does not push the page down */}
-          <Text style={[T.caption, { marginBottom: 12 }]}>
+          <Text style={[T.caption, st.words]}>
             {words ? words + (words === 1 ? ' word' : ' words') : ' '}
           </Text>
 
@@ -671,10 +676,10 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
             selectionColor={C.accent}
             multiline
             textAlignVertical="top"
-            style={st.body}
+            style={bodyStyle}
           />
           {listening && (
-            <Text style={st.liveInline}>
+            <Text style={liveStyle}>
               {liveText || '…'}
             </Text>
           )}
@@ -1027,10 +1032,14 @@ function InlineVideo({ uri, width }: { uri: string; width: number }) {
 }
 
 const st = StyleSheet.create({
-  title: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 36, letterSpacing: TRACK.display, paddingVertical: 6 },
+  // Source Serif's line box is tall (1.036 / -0.335 em): a 38 line keeps its ascenders clear on Android
+  title: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 38, letterSpacing: TRACK.display, paddingVertical: 6 },
+  // the face, size, line and tracking come from the Writing font (writingFace); these stand until it applies
   body: { color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body, lineHeight: LINE_H, minHeight: 300, paddingTop: 4 },
-  // only the upright Geist ships, so Android would synthesise a slant: live text reads as faint instead
+  // only the upright faces ship, so Android would synthesise a slant: live text reads as faint instead
   liveInline: { color: C.textFaint, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body, lineHeight: LINE_H },
+  // the count moves as the note is written, so its figures are the text face's tabular ones
+  words: { marginBottom: 12, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   toolbar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center',
@@ -1052,7 +1061,7 @@ const st = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 9,
   },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.danger, marginRight: 10 },
-  liveBarText: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, flex: 1 },
+  liveBarText: { color: C.textDim, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small, flex: 1 },
   pulseRing: {
     position: 'absolute', width: 44, height: 44, borderRadius: 22,
     borderWidth: 2, borderColor: C.danger,

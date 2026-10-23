@@ -8,10 +8,12 @@ import Svg, { Circle, Defs, G, LinearGradient, Mask, Path, Rect, Stop } from 're
 import { C, darkSh, liteSh } from '../theme';
 import { SIG } from '../signature';
 import type { SigDot, SigLine, SigModel } from '../signature';
-import { DATE_FIT, DATE_PLACE, DIGITS, DIGIT_H } from '../handDate';
+import { DATE_FIT, DATE_PLACE, DIGITS } from '../handDate';
 import type { HandDot, HandLine } from '../handDate';
-import { buildDigits, buildSigModel, clampPlace, dateDigits, defaultPlace, fitDate } from '../sigModel';
-import type { Hand } from '../sigModel';
+import {
+  buildDigits, buildSigModel, clampPlace, dateBox, dateDigits, defaultPlace, fitDate, layoutDate as layDate,
+} from '../sigModel';
+import type { Box, Hand, PlacedDigit } from '../sigModel';
 import { useStore } from '../store';
 import type { OwnSignature } from '../store';
 
@@ -69,85 +71,15 @@ const CARVE_DARK = darkSh(0.85);
 
 /* ------------------------------------------------------------------ the handwritten date */
 
-/** pen lifts inside the date, model ms: between two digits of a group, and between day, month and year */
-const DIGIT_GAP_MS = 90;
-const GROUP_GAP_MS = 200;
 /** the date is written a little quicker than the signature: its recorded timings run at 1 / DATE_SPEED */
 export const DATE_SPEED = 1.45;
-const GROUPS = ['dd', 'mm', 'yy'] as const;
-
-interface PlacedDigit {
-  key: string;
-  ch: string;
-  /** from the digit's own units into the signature's */
-  transform: string;
-  /** the digit's scale into the signature's units, so its ink keeps the same weight at any size */
-  scale: number;
-  /** model ms, from the date's first pen-down, when this digit begins */
-  t0: number;
-}
 
 /**
- * The date's six digits placed on the signature as the Handwriting Lab placed them: each group anchored at the left
- * end of its baseline, scaled and turned about that anchor, its two digits side by side. `date` is ddmmyy; `hand` is
- * whose digits and placement (the creator's by default).
+ * The date's digits placed on the signature (src/sigModel.ts layoutDate): only the parts the placement writes, each
+ * group at its own anchor. `date` is ddmmyy; `hand` is whose digits and placement (the creator's by default).
  */
 export function layoutDate(date: string, hand: Hand = BUILT_IN_HAND): { digits: PlacedDigit[]; total: number } {
-  const { place } = hand;
-  const digits: PlacedDigit[] = [];
-  let t = 0;
-  GROUPS.forEach((group, gi) => {
-    const P = place.groups[group];
-    if (gi) t += GROUP_GAP_MS;
-    // a pair that would run into the signature makes room: tighter, and smaller only when it has to be
-    const fit = hand.fit[group][date.slice(gi * 2, gi * 2 + 2)];
-    const scale = (place.size / DIGIT_H) * (fit?.scale ?? 1);
-    const gap = fit?.gap ?? place.gap;
-    let x = 0;
-    for (let i = 0; i < 2; i++) {
-      const ch = date[gi * 2 + i];
-      const m = hand.digits[ch];
-      if (!m) continue;
-      if (i) t += DIGIT_GAP_MS;
-      digits.push({
-        key: group + i,
-        ch,
-        transform: `translate(${P.x} ${P.y}) rotate(${place.tilt}) scale(${scale.toFixed(4)}) `
-          + `translate(${(x - m.x0).toFixed(2)} ${-DIGIT_H})`,
-        scale,
-        t0: t,
-      });
-      t += m.total;
-      x += Math.max(14, m.x1 - m.x0) + (i === 0 ? gap * DIGIT_H : 0);
-    }
-  });
-  return { digits, total: t };
-}
-
-type Box = readonly [number, number, number, number];
-const DATE_BOXES = new WeakMap<Hand, Box>();
-/** Where any date could reach, signature units, so the canvas never clips a wide digit. */
-function dateBox(hand: Hand): Box {
-  const known = DATE_BOXES.get(hand);
-  if (known) return known;
-  const { place } = hand;
-  const rad = (place.tilt * Math.PI) / 180;
-  const widest = Math.max(...Object.values(hand.digits).map((d) => Math.max(14, d.x1 - d.x0)));
-  const w = (2 * widest + place.gap * DIGIT_H) * (place.size / DIGIT_H);
-  const top = -1.15 * place.size;
-  const foot = 0.2 * place.size;
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  GROUPS.forEach((g) => {
-    const P = place.groups[g];
-    [[0, top], [w, top], [0, foot], [w, foot]].forEach(([x, y]) => {
-      const X = P.x + x * Math.cos(rad) - y * Math.sin(rad);
-      const Y = P.y + x * Math.sin(rad) + y * Math.cos(rad);
-      x0 = Math.min(x0, X); y0 = Math.min(y0, Y); x1 = Math.max(x1, X); y1 = Math.max(y1, Y);
-    });
-  });
-  const box = [x0, y0, x1, y1] as const;
-  DATE_BOXES.set(hand, box);
-  return box;
+  return layDate(date, hand);
 }
 
 /**

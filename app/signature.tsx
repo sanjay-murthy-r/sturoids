@@ -1,25 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, BackHandler, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, {
-  Easing, cancelAnimation, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withTiming,
+  Easing, cancelAnimation, runOnJS, useAnimatedProps, useAnimatedStyle, useSharedValue, withDelay, withTiming,
 } from 'react-native-reanimated';
-import Svg, { Circle, G, Path } from 'react-native-svg';
+import type { SharedValue } from 'react-native-reanimated';
+import Svg, { Circle, G, Line, Path } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, TRACK, neuRaised } from '../src/theme';
+import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, liteSh, neuInset, neuRaised } from '../src/theme';
 import { useStore } from '../src/store';
 import type { OwnSignature } from '../src/store';
 import { SIG_SPEED } from '../src/signature';
 import type { SigModel } from '../src/signature';
-import type { HandDatePlace } from '../src/handDate';
 import {
-  DIGIT_H, DIGIT_KEYS, buildDigits, buildSigModel, clampPlace, dateDigits, defaultPlace, fitDate, signatureProblem,
+  DATE_FOOT, DATE_PARTS, DATE_SPOTS, DATE_TOP, DIGIT_H, DIGIT_KEYS, buildDigits, buildSigModel, clampPlace, dateDigits, datePartsOf, dateText,
+  defaultPlace, fitDate, groupReach, groupWidth, rowPlace, samePlace, sigBaseline, signatureProblem, spotPlace, withParts,
 } from '../src/sigModel';
-import type { DigitMap, Hand } from '../src/sigModel';
-import { Card, Chip, ListCard, ListRow, ScreenBG, SectionTitle, useTheme, useToolHeader } from '../src/components/UI';
-import { Appear, Bouncy, Enter, useAnimLevel } from '../src/components/Motion';
+import type { DatePart, DatePlace, DateSpot, DigitMap, Hand } from '../src/sigModel';
+import { Card, Chip, ListCard, ListRow, ScreenBG, SectionTitle, Toggle, useTheme, useToolHeader } from '../src/components/UI';
+import { ARRIVE, Appear, Bouncy, Enter, useAnimLevel } from '../src/components/Motion';
 import { SignaturePad } from '../src/components/SignaturePad';
 import type { PadStroke } from '../src/components/SignaturePad';
 import { DATE_SPEED, Signature, inkExtent, layoutDate } from '../src/components/Signature';
@@ -61,7 +62,18 @@ const PROBLEMS = {
 } as const;
 
 type DigitDraft = Record<string, { strokes: PadStroke[] }>;
-const GROUPS = ['dd', 'mm', 'yy'] as const;
+const GROUPS = DATE_PARTS;
+const PART_NAMES: Record<DatePart, string> = { dd: 'Day', mm: 'Month', yy: 'Year' };
+
+/** A placement as the store keeps it: plain numbers, and the parts written only when they are a real choice. */
+function storedPlace(p: DatePlace): NonNullable<OwnSignature['date']> {
+  const at = (q: { x: number; y: number }) => ({ x: q.x, y: q.y });
+  const out: NonNullable<OwnSignature['date']> = {
+    size: p.size, gap: p.gap, tilt: p.tilt, when: p.when, groups: { dd: at(p.groups.dd), mm: at(p.groups.mm), yy: at(p.groups.yy) },
+  };
+  if (p.parts && p.parts.length < DATE_PARTS.length) out.parts = [...p.parts];
+  return out;
+}
 
 const recordedOn = (at: number) => fmtShortDate(todayKey(new Date(at)));
 const filled = (d: DigitDraft) => DIGIT_KEYS.filter((k) => (d[k]?.strokes.length ?? 0) > 0).length;
@@ -100,7 +112,9 @@ export default function SignaturePage() {
   const [strokes, setStrokes] = useState<PadStroke[]>([]);
   const [digits, setDigits] = useState<DigitDraft>(() => (own?.digits ? { ...own.digits } : {}));
   /** null: the date goes where it is placed automatically */
-  const [place, setPlace] = useState<HandDatePlace | null>(() => (own?.digits && own.date ? clampPlace(own.date) : null));
+  const [place, setPlace] = useState<DatePlace | null>(() => (own?.digits && own.date ? clampPlace(own.date) : null));
+  /** which parts of the date are written: kept apart from the placement, so an automatic one follows them too */
+  const [parts, setParts] = useState<DatePart[]>(() => datePartsOf(own?.digits ? own.date?.parts : undefined));
   /** digits or the placement changed since the last save */
   const [edited, setEdited] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -113,8 +127,10 @@ export default function SignaturePage() {
   const model = useMemo(() => (working ? buildSigModel({ strokes: working }) : null), [working]);
   const complete = filled(digits) === DIGIT_KEYS.length;
   const digitModel = useMemo(() => (complete ? buildDigits(digits) : null), [digits, complete]);
-  const autoPlace = useMemo(() => (model && digitModel ? defaultPlace(model, digitModel) : null), [model, digitModel]);
-  const activePlace = place ?? autoPlace;
+  const autoPlace = useMemo(
+    () => (model && digitModel ? defaultPlace(model, digitModel, parts) : null), [model, digitModel, parts],
+  );
+  const activePlace = useMemo(() => (place ? withParts(place, parts) : autoPlace), [place, parts, autoPlace]);
   const stageShown = !!model && (played > 0 || (!strokes.length && !!own));
   const today = dateDigits();
   // the room the date makes is worked out only while something shows it
@@ -156,7 +172,9 @@ export default function SignaturePage() {
     };
     if (complete) {
       value.digits = digits;
-      if (place) value.date = place;
+      // a date placed automatically is saved only when it writes fewer than all its parts, which it has to remember
+      const date = place ? withParts(place, parts) : parts.length < DATE_PARTS.length ? autoPlace : null;
+      if (date) value.date = storedPlace(date);
     }
     setSetting('ownSignature', value);
     setSetting('signatureSource', 'own');
@@ -178,6 +196,7 @@ export default function SignaturePage() {
           setStrokes([]);
           setDigits({});
           setPlace(null);
+          setParts([...DATE_PARTS]);
           setEdited(false);
           setPlayed(0);
           toast('Signature removed');
@@ -193,7 +212,22 @@ export default function SignaturePage() {
   };
 
   const onDigits = useCallback((next: (d: DigitDraft) => DigitDraft) => { setDigits(next); setEdited(true); }, []);
-  const onPlace = useCallback((next: HandDatePlace | null) => { setPlace(next); setEdited(true); }, []);
+  const onPlace = useCallback((next: DatePlace | null) => { setPlace(next); setEdited(true); }, []);
+  const partsRef = useRef(parts);
+  partsRef.current = parts;
+  const digitModelRef = useRef(digitModel);
+  digitModelRef.current = digitModel;
+  /**
+   * Another choice of parts. A date placed by hand is set in a row again from where it starts, closing up or making
+   * room, at its own size and tilt; one placed automatically simply follows.
+   */
+  const onParts = useCallback((next: DatePart[]) => {
+    const start = partsRef.current[0];
+    const hand = digitModelRef.current;
+    setParts(next);
+    setEdited(true);
+    setPlace((cur) => (cur && hand ? rowPlace(cur, hand, next, cur.groups[start]) : cur));
+  }, []);
 
   const leaveRef = useRef(() => {});
   leaveRef.current = () => {
@@ -275,7 +309,7 @@ export default function SignaturePage() {
         <Enter index={2} style={{ marginTop: S.section }}>
           <DateSection
             model={model} digits={digits} onDigits={onDigits} digitModel={digitModel} hand={hand} explicit={place != null}
-            onPlace={onPlace} open={dateOpen} onOpen={setDateOpen} width={contentW}
+            onPlace={onPlace} parts={parts} onParts={onParts} open={dateOpen} onOpen={setDateOpen} width={contentW}
           />
         </Enter>
 
@@ -406,10 +440,11 @@ const PreviewStage = React.memo(function PreviewStage({ model, hand, play, width
 /* ------------------------------------------------------------------ today's date: digits and placement */
 
 const DateSection = React.memo(function DateSection({
-  model, digits, onDigits, digitModel, hand, explicit, onPlace, open, onOpen, width,
+  model, digits, onDigits, digitModel, hand, explicit, onPlace, parts, onParts, open, onOpen, width,
 }: {
   model: SigModel | null; digits: DigitDraft; onDigits: (next: (d: DigitDraft) => DigitDraft) => void; digitModel: DigitMap | null;
-  hand: Hand | null; explicit: boolean; onPlace: (p: HandDatePlace | null) => void;
+  hand: Hand | null; explicit: boolean; onPlace: (p: DatePlace | null) => void;
+  parts: DatePart[]; onParts: (next: DatePart[]) => void;
   open: boolean; onOpen: (open: boolean) => void; width: number;
 }) {
   const count = filled(digits);
@@ -420,6 +455,13 @@ const DateSection = React.memo(function DateSection({
   const nextMissing = current ? firstMissing(digits, DIGIT_KEYS.indexOf(current as typeof DIGIT_KEYS[number])) : null;
   const summary = count === DIGIT_KEYS.length ? (digitModel ? 'On, in your own digits' : 'Your digits need writing again')
     : count ? count + ' of 10 digits written' : 'Optional';
+  const today = useMemo(() => dateDigits(), []);
+  /** the date moves as one piece unless its parts are placed separately */
+  const [apart, setApart] = useState(false);
+  /** the last part written was tapped: it stays, and the caption says why */
+  const [lastOne, setLastOne] = useState(false);
+  /** each Preview counts up and plays the signature and date again, under the placer */
+  const [previewed, setPreviewed] = useState(0);
 
   const addStroke = useCallback((s: PadStroke) => {
     if (!current) return;
@@ -437,9 +479,22 @@ const DateSection = React.memo(function DateSection({
   const removeDate = () => {
     Alert.alert('Remove the date?', 'Your digits are cleared, and the start screen writes no date after your signature.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: () => { onDigits(() => ({})); onPlace(null); setCurrent('0'); } },
+      {
+        text: 'Remove', style: 'destructive',
+        onPress: () => { onDigits(() => ({})); onPlace(null); onParts([...DATE_PARTS]); setLastOne(false); setCurrent('0'); },
+      },
     ]);
   };
+  const togglePart = (g: DatePart) => {
+    tick();
+    const on = parts.includes(g);
+    // at least one part stays: the date always writes something
+    if (on && parts.length === 1) { setLastOne(true); return; }
+    setLastOne(false);
+    onParts(on ? parts.filter((p) => p !== g) : DATE_PARTS.filter((p) => p === g || parts.includes(p)));
+  };
+  const several = parts.length > 1;
+  const together = !apart || !several;
 
   const digitPadW = Math.min(width, DIGIT_PAD_W);
   return (
@@ -494,14 +549,44 @@ const DateSection = React.memo(function DateSection({
             <Text style={T.caption}>All ten are written. Tap a digit to write it again.</Text>
           )}
 
+          {count === DIGIT_KEYS.length ? (
+            <View style={st.writeBlock}>
+              <View style={st.writeRow}>
+                <Text style={[T.body, st.writeLabel]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Write</Text>
+                {DATE_PARTS.map((g) => (
+                  <Chip
+                    key={g} label={PART_NAMES[g]} active={parts.includes(g)} onPress={() => togglePart(g)} style={st.partChip}
+                    accessibilityRole="checkbox" accessibilityState={{ checked: parts.includes(g) }}
+                  />
+                ))}
+              </View>
+              <Text style={[T.caption, { marginTop: 10 }]} accessibilityLiveRegion="polite">
+                {lastOne ? 'At least one stays on' : 'Shown as ' + dateText(today, parts)}
+              </Text>
+            </View>
+          ) : null}
+
           {model && digitModel && hand ? (
             <>
               <SectionTitle>Place the date</SectionTitle>
               <Text style={[T.caption, { marginBottom: 14 }]}>
-                Drag the day, the month or the year. Today is shown as the start screen will write it.
+                {together
+                  ? 'Drag the date to move it. Pinch to size it, or turn two fingers to tilt it.'
+                  : 'Drag each part on its own. Pinch to size the date, or turn two fingers to tilt it.'}
               </Text>
-              <DatePlacer model={model} hand={hand} width={width} onPlace={onPlace} />
-              <PlaceSteppers hand={hand} model={model} onPlace={onPlace} />
+              <DatePlacer model={model} hand={hand} width={width} together={together} onPlace={onPlace} />
+              <View style={st.controls}>
+                <PadButton icon="play" label="Preview" onPress={() => { tick(); setPreviewed((n) => n + 1); }} />
+              </View>
+              {previewed ? <PreviewStage model={model} hand={hand} play={previewed} width={width} /> : null}
+              <PlaceSteppers hand={hand} model={model} onPlace={onPlace}>
+                {several ? (
+                  <View style={st.stepRow}>
+                    <Text style={[T.body, { flex: 1 }]}>Place parts separately</Text>
+                    <Toggle value={apart} onChange={setApart} label="Place parts separately" />
+                  </View>
+                ) : null}
+              </PlaceSteppers>
               {explicit ? (
                 <Bouncy onPress={() => { tick(); onPlace(null); }} style={st.link} radius={999}>
                   <Text style={st.linkText}>Place it for me</Text>
@@ -545,10 +630,36 @@ function DigitCell({ digit, done, current, onPress }: { digit: string; done: boo
 const PLACER_MAX_H = 300;
 /** how far past a group's ink a touch still picks it up, px */
 const GRAB_SLOP = 14;
+/**
+ * While it is dragged, a part (or the whole date) snaps its baseline to the signature's, or to another part's, within
+ * this many signature units of it, or this many px on the screen when that is more: at the placer's scale six units
+ * are only about two px, too fine for a finger.
+ */
+const SNAP_UNITS = 6;
+const SNAP_PX = 8;
+/** how far a digit may reach over its cap line, as a share of the size: the room each group is drawn in */
+const DRAW_TOP = 1.4;
+/** the faint line the signature sits on, as the pad's guide */
+const GUIDE = liteSh(0.13);
 const ZERO = { x: 0, y: 0 };
+const SPOT_LABELS: Record<DateSpot, string> = {
+  after: 'After it', belowRight: 'Below, right', belowLeft: 'Below, left', above: 'Above',
+};
+const SPOT_SPOKEN: Record<DateSpot, string> = {
+  after: 'Put the date after the signature', belowRight: 'Put the date below it, at the right',
+  belowLeft: 'Put the date below it, at the left', above: 'Put the date above it',
+};
+
+type Region = readonly [number, number, number, number];
+type Touch = { id: number; x: number; y: number };
+
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+
+const anchorsOf = (p: DatePlace) => [p.groups.dd.x, p.groups.dd.y, p.groups.mm.x, p.groups.mm.y, p.groups.yy.x, p.groups.yy.y];
 
 /** How wide a group is written today, signature units: its two digits with the room it makes. */
-function groupWidthToday(hand: Hand, group: (typeof GROUPS)[number], pair: string): number {
+function groupWidthToday(hand: Hand, group: DatePart, pair: string): number {
   const { place } = hand;
   const fit = hand.fit[group][pair];
   const scale = (place.size / DIGIT_H) * (fit?.scale ?? 1);
@@ -559,8 +670,8 @@ function groupWidthToday(hand: Hand, group: (typeof GROUPS)[number], pair: strin
   return (Math.max(14, a.x1 - a.x0) + gap * DIGIT_H + Math.max(14, b.x1 - b.x0)) * scale;
 }
 
-/** The room the date may be dragged in, signature units: around the signature, with space below it. */
-function placeRegion(model: SigModel, hand: Hand): [number, number, number, number] {
+/** The room the date may be dragged in, signature units: around the signature, with space below it, and wherever the date reaches. */
+function placeRegion(model: SigModel, hand: Hand): Region {
   const ext = inkExtent(model, hand);
   return [
     Math.min(-0.1 * model.vw, ext[0] - 20),
@@ -571,122 +682,376 @@ function placeRegion(model: SigModel, hand: Hand): [number, number, number, numb
 }
 
 /**
- * The signature with today's date on it, its day, month and year each draggable. A group moves on the UI thread as it
- * is dragged; the new place is handed over once, when it is let go. A touch that lands on no group is left to the page,
- * so the page still scrolls from here.
+ * The signature in a well with today's date on it, on the line the signature sits on. The date moves as one piece, or
+ * (`together` off) each part on its own; it snaps to the signature's baseline and to the other parts', a pinch sizes
+ * it and two fingers turn it, and the quick spots under it set it against the ink. Everything moves on the UI thread
+ * while a finger is down; the new place is handed over once, when the last finger lifts. A touch that lands on no part
+ * is left to the page, so the page still scrolls from here.
  */
-const DatePlacer = React.memo(function DatePlacer({ model, hand, width, onPlace }: {
-  model: SigModel; hand: Hand; width: number; onPlace: (p: HandDatePlace) => void;
+const DatePlacer = React.memo(function DatePlacer({ model, hand, width, together, onPlace }: {
+  model: SigModel; hand: Hand; width: number; together: boolean; onPlace: (p: DatePlace) => void;
 }) {
+  const theme = useTheme();
+  const level = useAnimLevel();
   const today = useMemo(() => dateDigits(), []);
   const { place } = hand;
-  // worked out for this signature, so the frame never shifts under a drag
-  const region = useMemo(() => placeRegion(model, hand), [model]);
-  const [rx0, ry0, rx1, ry1] = region;
-  const k = Math.min(width / (rx1 - rx0), PLACER_MAX_H / (ry1 - ry0));
-  const cw = (rx1 - rx0) * k;
-  const ch = (ry1 - ry0) * k;
-  const widths = GROUPS.map((g, gi) => groupWidthToday(hand, g, today.slice(gi * 2, gi * 2 + 2)));
-  const top = 1.15 * place.size;
-  const foot = 0.25 * place.size;
-  // each group is drawn in a square of its own centred on its anchor, big enough to turn in
-  const half = Math.hypot(Math.max(...widths, place.size), top + foot) + GRAB_SLOP / k;
-  const side = 2 * half * k;
-  const local: Hand = useMemo(() => ({ ...hand, place: { ...hand.place, groups: { dd: ZERO, mm: ZERO, yy: ZERO } } }), [hand]);
-  const laid = useMemo(() => layoutDate(today, local), [local, today]);
+  const parts = datePartsOf(place.parts);
+  const written = GROUPS.map((g) => parts.includes(g));
+  const baseline = useMemo(() => sigBaseline(model), [model]);
+
+  // the room grows to take in wherever the date goes (a quick spot, a bigger size) and never shrinks under one
+  // signature, so the frame does not jump after a drop; a new signature starts it again
+  const grown = useRef<{ model: SigModel; r: Region } | null>(null);
+  const want = placeRegion(model, hand);
+  const prev = grown.current && grown.current.model === model ? grown.current.r : null;
+  const region: Region = prev
+    ? [Math.min(prev[0], want[0]), Math.min(prev[1], want[1]), Math.max(prev[2], want[2]), Math.max(prev[3], want[3])]
+    : want;
+  grown.current = { model, r: region };
+  // the canvas takes the content's full width and up to PLACER_MAX_H: the room widens to fill it
+  const rw = region[2] - region[0];
+  const rh = region[3] - region[1];
+  const k = Math.min(width / rw, PLACER_MAX_H / rh);
+  const padX = Math.max(0, width / k - rw) / 2;
+  const rx0 = region[0] - padX;
+  const rx1 = region[2] + padX;
+  const ry0 = region[1];
+  const ry1 = region[3];
+  const cw = width;
+  const ch = rh * k;
   const lineW = 1.7 / k;
 
-  const anchors = useSharedValue([place.groups.dd.x, place.groups.dd.y, place.groups.mm.x, place.groups.mm.y, place.groups.yy.x, place.groups.yy.y]);
+  const widths = GROUPS.map((g, gi) => groupWidthToday(hand, g, today.slice(gi * 2, gi * 2 + 2)));
+  // each part is drawn upright at the largest size the placer allows and scaled and turned to its own on the UI
+  // thread, so a pinch never shows a blurred digit and nothing is drawn again when it ends
+  const drawSize = Math.max(SIZE.max, place.size);
+  const drawHand: Hand = useMemo(() => ({
+    ...hand, place: { ...hand.place, size: drawSize, tilt: 0, groups: { dd: ZERO, mm: ZERO, yy: ZERO } },
+  }), [hand, drawSize]);
+  const laid = useMemo(() => layoutDate(today, drawHand), [drawHand, today]);
+  const half = (Math.hypot(groupWidth(hand.digits, drawSize, place.gap), DRAW_TOP * drawSize) + 2 * lineW) * k;
+
+  const anchors = useSharedValue(anchorsOf(place));
+  /** a quick spot glides there: the anchors shown are from + (anchors - from) * spot */
+  const from = useSharedValue(anchorsOf(place));
+  const spot = useSharedValue(1);
+  /** the anchors while a finger is down, and where they were when it (or the second finger) came down */
+  const live = useSharedValue(anchorsOf(place));
+  const base = useSharedValue(anchorsOf(place));
+  /** -1 at rest; the part held (0 to 2), or 3 for the whole date */
   const active = useSharedValue(-1);
-  const pointer = useSharedValue(-1);
-  const sx = useSharedValue(0);
-  const sy = useSharedValue(0);
-  const dx = useSharedValue(0);
-  const dy = useSharedValue(0);
+  const grab = useSharedValue(-1);
+  const pA = useSharedValue(-1);
+  const pB = useSharedValue(-1);
+  const start = useSharedValue([0, 0]);
+  /** a pinch, from when the second finger came down: [distance, angle, size, tilt, pivot x, pivot y, mid x, mid y] */
+  const pin = useSharedValue<number[] | null>(null);
+  const liveSize = useSharedValue(place.size);
+  const liveTilt = useSharedValue(place.tilt);
+  /** what the date snaps to: -1 nothing, 0 to 2 another part, 3 the signature's baseline; the guide as [x, y, angle] */
+  const snap = useSharedValue(-1);
+  const guide = useSharedValue([0, 0, 0]);
+
+  /** the next placement handed in is a quick spot: it glides there instead of jumping */
+  const glideNext = useRef(false);
+  useEffect(() => {
+    const next = anchorsOf(place);
+    const glide = glideNext.current && level === 'full';
+    glideNext.current = false;
+    if (active.value !== -1) return;
+    if (glide) {
+      const f = from.value;
+      const a = anchors.value;
+      const t = spot.value;
+      from.value = a.map((v, i) => f[i] + (v - f[i]) * t);
+      anchors.value = next;
+      spot.value = 0;
+      spot.value = withTiming(1, ARRIVE);
+    } else {
+      cancelAnimation(spot);
+      spot.value = 1;
+      from.value = next;
+      anchors.value = next;
+    }
+  }, [place]);
   useEffect(() => {
     if (active.value !== -1) return;
-    anchors.value = [place.groups.dd.x, place.groups.dd.y, place.groups.mm.x, place.groups.mm.y, place.groups.yy.x, place.groups.yy.y];
-  }, [place]);
+    liveSize.value = place.size;
+    liveTilt.value = place.tilt;
+  }, [place.size, place.tilt]);
 
   const onPlaceRef = useRef(onPlace);
   onPlaceRef.current = onPlace;
   const placeRef = useRef(place);
   placeRef.current = place;
-  const dropped = (gi: number, x: number, y: number) => {
+  const dropped = (a: number[], size: number, tilt: number) => {
     const p = placeRef.current;
-    const g = GROUPS[gi];
-    onPlaceRef.current({ ...p, groups: { ...p.groups, [g]: { x, y } } });
+    const next: DatePlace = {
+      ...p, size, tilt, groups: { dd: { x: a[0], y: a[1] }, mm: { x: a[2], y: a[3] }, yy: { x: a[4], y: a[5] } },
+    };
+    if (!samePlace(next, p)) onPlaceRef.current(next);
   };
 
   const gesture = useMemo(() => {
-    const rad = (place.tilt * Math.PI) / 180;
+    const tiltDeg = place.tilt;
+    const rad = (tiltDeg * Math.PI) / 180;
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
+    const tan = Math.tan(rad);
     const slop = GRAB_SLOP / k;
     const ws = widths.slice();
+    const on = written.slice();
+    const top = 1.15 * place.size;
+    const foot = 0.25 * place.size;
+    const reach = groupReach(hand.digits, place.size, place.gap, place.tilt).slice();
+    /** a group's width at size 1: its reach at whatever size a pinch ends on */
+    const unitW = groupWidth(hand.digits, 1, place.gap);
+    const snapU = Math.max(SNAP_UNITS, SNAP_PX / k);
+    const whole = together;
+    const mid = (rx0 + rx1) / 2;
+    // a size or tilt from elsewhere outside the steppers' range is kept, not snapped in, as a pinch begins
+    const sizeLo = Math.min(SIZE.min, place.size);
+    const sizeHi = Math.max(SIZE.max, place.size);
+    const tiltLo = Math.min(TILT.min, place.tilt);
+    const tiltHi = Math.max(TILT.max, place.tilt);
+
+    /** where the anchors show now: on their way to a quick spot, or at rest */
+    const shown = (): number[] => {
+      'worklet';
+      const f = from.value;
+      const a = anchors.value;
+      const t = spot.value;
+      const out: number[] = [];
+      for (let i = 0; i < 6; i++) out.push(f[i] + (a[i] - f[i]) * t);
+      return out;
+    };
+    const inside = (v: number, lo: number, hi: number) => {
+      'worklet';
+      return lo > hi ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v));
+    };
+    /** one finger: the part held, or the whole date, follows it, kept in the frame and snapped to a baseline near it */
+    const drag = (t: Touch) => {
+      'worklet';
+      const b = base.value;
+      const g = grab.value;
+      let ux = (t.x - start.value[0]) / k;
+      let uy = (t.y - start.value[1]) / k;
+      let lx = -1e9;
+      let hx = 1e9;
+      let ly = -1e9;
+      let hy = 1e9;
+      for (let i = 0; i < 3; i++) {
+        if (!on[i] || !(whole || i === g)) continue;
+        lx = Math.max(lx, rx0 - reach[0] - b[i * 2]);
+        hx = Math.min(hx, rx1 - reach[2] - b[i * 2]);
+        ly = Math.max(ly, ry0 - reach[1] - b[i * 2 + 1]);
+        hy = Math.min(hy, ry1 - reach[3] - b[i * 2 + 1]);
+      }
+      ux = inside(ux, lx, hx);
+      uy = inside(uy, ly, hy);
+      // the nearest baseline in reach: the signature's, or (a part on its own) another part's, along the tilt
+      let best = 0;
+      let kind = -1;
+      let gx = 0;
+      let gy = 0;
+      let ga = 0;
+      for (let i = 0; i < 3; i++) {
+        if (!on[i] || !(whole || i === g)) continue;
+        const x = b[i * 2] + ux;
+        const y = b[i * 2 + 1] + uy;
+        const toSig = baseline - y;
+        if (Math.abs(toSig) <= snapU && (kind === -1 || Math.abs(toSig) < Math.abs(best))) {
+          best = toSig; kind = 3; gx = mid; gy = baseline; ga = 0;
+        }
+        if (whole) continue;
+        for (let j = 0; j < 3; j++) {
+          if (j === i || !on[j]) continue;
+          const d = b[j * 2 + 1] + (x - b[j * 2]) * tan - y;
+          if (Math.abs(d) <= snapU && (kind === -1 || Math.abs(d) < Math.abs(best))) {
+            best = d; kind = j; gx = b[j * 2]; gy = b[j * 2 + 1]; ga = tiltDeg;
+          }
+        }
+      }
+      if (kind !== -1) {
+        if (uy + best >= ly && uy + best <= hy) uy += best;
+        else kind = -1;
+      }
+      if (kind !== snap.value) {
+        if (kind !== -1) {
+          guide.value = [gx, gy, ga];
+          runOnJS(tick)();
+        }
+        snap.value = kind;
+      }
+      const l = b.slice();
+      for (let i = 0; i < 3; i++) {
+        if (!(whole || i === g)) continue;
+        l[i * 2] += ux;
+        l[i * 2 + 1] += uy;
+      }
+      live.value = l;
+    };
+    /** a second finger: the pinch starts from where everything is now */
+    const pinchFrom = (a: Touch, t: Touch) => {
+      'worklet';
+      const mx = (a.x + t.x) / 2;
+      const my = (a.y + t.y) / 2;
+      base.value = live.value.slice();
+      pin.value = [
+        Math.max(1, Math.hypot(t.x - a.x, t.y - a.y)), Math.atan2(t.y - a.y, t.x - a.x), liveSize.value, liveTilt.value,
+        rx0 + mx / k, ry0 + my / k, mx, my,
+      ];
+      snap.value = -1;
+    };
+    /**
+     * Two fingers: the spread sizes the date and the turn tilts it, the steppers' ranges kept. The whole date turns and
+     * grows about the point between the fingers and moves with them; a part on its own moves with them while every
+     * part takes the new size and tilt about its own anchor (size and tilt are the date's, not a part's).
+     */
+    const pinchTo = (a: Touch, t: Touch) => {
+      'worklet';
+      const p = pin.value;
+      if (!p) return;
+      const size = Math.min(sizeHi, Math.max(sizeLo, (p[2] * Math.hypot(t.x - a.x, t.y - a.y)) / p[0]));
+      let turn = Math.atan2(t.y - a.y, t.x - a.x) - p[1];
+      while (turn > Math.PI) turn -= 2 * Math.PI;
+      while (turn < -Math.PI) turn += 2 * Math.PI;
+      const tilt = Math.min(tiltHi, Math.max(tiltLo, p[3] + (turn * 180) / Math.PI));
+      const s = size / p[2];
+      const r = ((tilt - p[3]) * Math.PI) / 180;
+      const c = Math.cos(r);
+      const sn = Math.sin(r);
+      const mx = ((a.x + t.x) / 2 - p[6]) / k;
+      const my = ((a.y + t.y) / 2 - p[7]) / k;
+      const b = base.value;
+      const l = b.slice();
+      for (let i = 0; i < 3; i++) {
+        if (whole) {
+          const ox = b[i * 2] - p[4];
+          const oy = b[i * 2 + 1] - p[5];
+          l[i * 2] = p[4] + (ox * c - oy * sn) * s + mx;
+          l[i * 2 + 1] = p[5] + (ox * sn + oy * c) * s + my;
+        } else if (i === grab.value) {
+          l[i * 2] = b[i * 2] + mx;
+          l[i * 2 + 1] = b[i * 2 + 1] + my;
+        }
+      }
+      liveSize.value = size;
+      liveTilt.value = tilt;
+      live.value = l;
+    };
+    /** the last finger lifts: every part is brought inside the frame at the size and tilt it ends on, and handed over */
     const drop = () => {
       'worklet';
-      const gi = active.value;
-      const a = anchors.value.slice();
-      a[gi * 2] = Math.round(a[gi * 2] + dx.value / k);
-      a[gi * 2 + 1] = Math.round(a[gi * 2 + 1] + dy.value / k);
-      anchors.value = a;
-      dx.value = 0;
-      dy.value = 0;
+      const size = Math.round(liveSize.value);
+      const tilt = Math.round(liveTilt.value);
+      const rr = (tilt * Math.PI) / 180;
+      const c = Math.cos(rr);
+      const sn = Math.sin(rr);
+      const w = unitW * size;
+      let r0 = 1e9;
+      let r1 = 1e9;
+      let r2 = -1e9;
+      let r3 = -1e9;
+      const ys = [-DATE_TOP * size, DATE_FOOT * size];
+      for (let xi = 0; xi < 2; xi++) {
+        for (let yi = 0; yi < 2; yi++) {
+          const x = xi * w;
+          const y = ys[yi];
+          const X = x * c - y * sn;
+          const Y = x * sn + y * c;
+          r0 = Math.min(r0, X); r1 = Math.min(r1, Y); r2 = Math.max(r2, X); r3 = Math.max(r3, Y);
+        }
+      }
+      const l = live.value.slice();
+      for (let i = 0; i < 3; i++) {
+        if (on[i]) {
+          l[i * 2] = inside(l[i * 2], rx0 - r0, rx1 - r2);
+          l[i * 2 + 1] = inside(l[i * 2 + 1], ry0 - r1, ry1 - r3);
+        }
+        l[i * 2] = Math.round(l[i * 2]);
+        l[i * 2 + 1] = Math.round(l[i * 2 + 1]);
+      }
+      anchors.value = l;
+      from.value = l;
+      spot.value = 1;
+      base.value = l;
+      liveSize.value = size;
+      liveTilt.value = tilt;
+      pin.value = null;
+      snap.value = -1;
+      pA.value = -1;
+      pB.value = -1;
+      grab.value = -1;
       active.value = -1;
-      pointer.value = -1;
-      runOnJS(dropped)(gi, a[gi * 2], a[gi * 2 + 1]);
+      runOnJS(dropped)(l, size, tilt);
     };
+
     return Gesture.Manual()
       .onTouchesDown((e, manager) => {
         'worklet';
-        if (pointer.value !== -1) return;
-        const t = e.changedTouches[0];
-        if (!t) return;
-        const px = t.x / k + rx0;
-        const py = t.y / k + ry0;
-        let hit = -1;
-        // the last drawn is on top
-        for (let gi = 2; gi >= 0 && hit < 0; gi--) {
-          const ox = px - anchors.value[gi * 2];
-          const oy = py - anchors.value[gi * 2 + 1];
-          const lx = ox * cos + oy * sin;
-          const ly = -ox * sin + oy * cos;
-          if (lx >= -slop && lx <= ws[gi] + slop && ly >= -top - slop && ly <= foot + slop) hit = gi;
+        for (const t of e.changedTouches) {
+          if (pA.value === -1) {
+            const s = shown();
+            const px = t.x / k + rx0;
+            const py = t.y / k + ry0;
+            let hit = -1;
+            // the last drawn is on top
+            for (let gi = 2; gi >= 0 && hit < 0; gi--) {
+              if (!on[gi]) continue;
+              const ox = px - s[gi * 2];
+              const oy = py - s[gi * 2 + 1];
+              const lx = ox * cos + oy * sin;
+              const ly = -ox * sin + oy * cos;
+              if (lx >= -slop && lx <= ws[gi] + slop && ly >= -top - slop && ly <= foot + slop) hit = gi;
+            }
+            if (hit < 0) {
+              manager.fail();
+              return;
+            }
+            // a date still gliding to a quick spot stops where it is
+            anchors.value = s;
+            from.value = s;
+            spot.value = 1;
+            base.value = s;
+            live.value = s;
+            pA.value = t.id;
+            grab.value = hit;
+            active.value = whole ? 3 : hit;
+            start.value = [t.x, t.y];
+            manager.activate();
+            runOnJS(tick)();
+          } else if (pB.value === -1 && t.id !== pA.value) {
+            let a: Touch | null = null;
+            for (const c of e.allTouches) {
+              if (c.id === pA.value) a = c;
+            }
+            if (!a) continue;
+            pB.value = t.id;
+            pinchFrom(a, t);
+          }
         }
-        if (hit < 0) {
-          manager.fail();
-          return;
-        }
-        pointer.value = t.id;
-        active.value = hit;
-        sx.value = t.x;
-        sy.value = t.y;
-        dx.value = 0;
-        dy.value = 0;
-        manager.activate();
-        runOnJS(tick)();
       })
       .onTouchesMove((e) => {
         'worklet';
-        if (pointer.value === -1) return;
+        if (pA.value === -1) return;
+        let a: Touch | null = null;
+        let b: Touch | null = null;
         for (const c of e.allTouches) {
-          if (c.id !== pointer.value) continue;
-          const gi = active.value;
-          const ax = anchors.value[gi * 2];
-          const ay = anchors.value[gi * 2 + 1];
-          // the group stays inside the frame
-          const nx = Math.min(rx1 - ws[gi], Math.max(rx0, ax + (c.x - sx.value) / k));
-          const ny = Math.min(ry1 - foot, Math.max(ry0 + top, ay + (c.y - sy.value) / k));
-          dx.value = (nx - ax) * k;
-          dy.value = (ny - ay) * k;
+          if (c.id === pA.value) a = c;
+          else if (c.id === pB.value) b = c;
         }
+        if (pin.value) {
+          if (a && b) pinchTo(a, b);
+          return;
+        }
+        if (a) drag(a);
       })
       .onTouchesUp((e, manager) => {
         'worklet';
         let mine = false;
         for (const c of e.changedTouches) {
-          if (c.id === pointer.value) mine = true;
+          if (c.id === pA.value || c.id === pB.value) mine = true;
         }
         if (!mine) return;
         drop();
@@ -694,78 +1059,157 @@ const DatePlacer = React.memo(function DatePlacer({ model, hand, width, onPlace 
       })
       .onTouchesCancelled((_e, manager) => {
         'worklet';
-        if (pointer.value !== -1) drop();
+        if (pA.value !== -1) drop();
         manager.end();
       })
       .onFinalize(() => {
         'worklet';
-        if (pointer.value !== -1) drop();
+        if (pA.value !== -1) drop();
       });
-  }, [k, rx0, ry0, rx1, ry1, place.tilt, top, foot, widths.join(',')]);
+  }, [k, rx0, ry0, rx1, ry1, place.size, place.tilt, place.gap, widths.join(','), written.join(','), together, baseline, hand.digits]);
+
+  const span = Math.ceil(2 * Math.hypot(cw, ch));
+  const guideStyle = useAnimatedStyle(() => {
+    const g = guide.value;
+    return {
+      opacity: snap.value === -1 ? 0 : 1,
+      transform: [
+        { translateX: (g[0] - rx0) * k - span / 2 },
+        { translateY: (g[1] - ry0) * k - 0.5 },
+        { rotate: g[2] + 'deg' },
+      ] as const,
+    };
+  });
+
+  const spots = useMemo(
+    () => DATE_SPOTS.map((s) => ({ s, p: spotPlace(model, hand.digits, place, s, baseline) })),
+    [model, hand.digits, place, baseline],
+  );
+  const goSpot = (p: DatePlace) => {
+    tick();
+    if (samePlace(p, placeRef.current)) return;
+    glideNext.current = true;
+    onPlace(p);
+  };
 
   return (
-    <View style={[st.placer, { width: cw, height: ch }]} accessible accessibilityLabel="Where today's date goes. Drag the day, the month or the year.">
-      <Svg width={cw} height={ch} viewBox={`${rx0} ${ry0} ${rx1 - rx0} ${ry1 - ry0}`} style={StyleSheet.absoluteFill}>
-        {model.strokes.map((s, i) => (s.type === 'line' ? (
-          <Path key={i} d={s.d} fill="none" stroke={C.textDim} strokeWidth={lineW} strokeLinecap="round" strokeLinejoin="round" />
-        ) : (
-          <Circle key={i} cx={s.cx} cy={s.cy} r={lineW} fill={C.textDim} />
-        )))}
-      </Svg>
-      {GROUPS.map((g, gi) => (
-        <PlacedGroup
-          key={g} index={gi} hand={hand} laid={laid.digits.filter((p) => p.key.startsWith(g))} side={side} k={k}
-          lineW={lineW} rx0={rx0} ry0={ry0} anchors={anchors} active={active} dx={dx} dy={dy}
-        />
-      ))}
-      <GestureDetector gesture={gesture}>
-        <View style={StyleSheet.absoluteFill} collapsable={false} />
-      </GestureDetector>
-    </View>
+    <>
+      <View
+        style={[
+          st.placer, { width: cw, height: ch },
+          theme === 'minimal'
+            ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
+            : { backgroundColor: C.inset, ...neuInset('mid') },
+        ]}
+        accessible
+        accessibilityLabel={together
+          ? 'Where today\'s date goes. Drag the date, or use the spots below.'
+          : 'Where today\'s date goes. Drag each part, or use the spots below.'}
+      >
+        <Svg width={cw} height={ch} viewBox={`${rx0} ${ry0} ${rx1 - rx0} ${ry1 - ry0}`} style={StyleSheet.absoluteFill}>
+          <Line x1={rx0} x2={rx1} y1={baseline} y2={baseline} stroke={GUIDE} strokeWidth={1 / k} />
+          {model.strokes.map((s, i) => (s.type === 'line' ? (
+            <Path key={i} d={s.d} fill="none" stroke={C.textDim} strokeWidth={lineW} strokeLinecap="round" strokeLinejoin="round" />
+          ) : (
+            <Circle key={i} cx={s.cx} cy={s.cy} r={lineW} fill={C.textDim} />
+          )))}
+        </Svg>
+        <Animated.View pointerEvents="none" style={[st.snapLine, { width: span, backgroundColor: C.accent }, guideStyle]} />
+        {GROUPS.map((g, gi) => (written[gi] ? (
+          <PlacedGroup
+            key={g} index={gi} hand={hand} laid={laid.digits.filter((p) => p.key.startsWith(g))} half={half} k={k}
+            lineW={lineW} drawSize={drawSize} rx0={rx0} ry0={ry0} anchors={anchors} from={from} spot={spot} live={live}
+            active={active} liveSize={liveSize} liveTilt={liveTilt}
+          />
+        ) : null))}
+        <GestureDetector gesture={gesture}>
+          <View style={StyleSheet.absoluteFill} collapsable={false} />
+        </GestureDetector>
+      </View>
+      <View style={st.spots}>
+        {spots.map(({ s, p }) => (
+          <Chip
+            key={s} small label={SPOT_LABELS[s]} active={samePlace(p, place)} onPress={() => goSpot(p)}
+            accessibilityLabel={SPOT_SPOKEN[s]}
+          />
+        ))}
+      </View>
+    </>
   );
 });
 
 type Laid = ReturnType<typeof layoutDate>['digits'];
 
-/** One group of the date in its own square, centred on its anchor and moved there by transform. */
-function PlacedGroup({ index, hand, laid, side, k, lineW, rx0, ry0, anchors, active, dx, dy }: {
-  index: number; hand: Hand; laid: Laid; side: number; k: number; lineW: number; rx0: number; ry0: number;
-  anchors: { value: number[] }; active: { value: number }; dx: { value: number }; dy: { value: number };
+/**
+ * One part of the date in its own square, centred on its anchor: drawn upright at `drawSize`, then moved, turned and
+ * scaled to the date's own on the UI thread.
+ */
+function PlacedGroup({
+  index, hand, laid, half, k, lineW, drawSize, rx0, ry0, anchors, from, spot, live, active, liveSize, liveTilt,
+}: {
+  index: number; hand: Hand; laid: Laid; half: number; k: number; lineW: number; drawSize: number; rx0: number; ry0: number;
+  anchors: SharedValue<number[]>; from: SharedValue<number[]>; spot: SharedValue<number>; live: SharedValue<number[]>;
+  active: SharedValue<number>; liveSize: SharedValue<number>; liveTilt: SharedValue<number>;
 }) {
-  const half = side / 2;
   const style = useAnimatedStyle(() => {
-    const on = active.value === index;
+    const i = index * 2;
+    let x: number;
+    let y: number;
+    if (active.value !== -1) {
+      x = live.value[i];
+      y = live.value[i + 1];
+    } else {
+      const t = spot.value;
+      const f = from.value;
+      const a = anchors.value;
+      x = f[i] + (a[i] - f[i]) * t;
+      y = f[i + 1] + (a[i + 1] - f[i + 1]) * t;
+    }
     return {
       transform: [
-        { translateX: (anchors.value[index * 2] - rx0) * k - half + (on ? dx.value : 0) },
-        { translateY: (anchors.value[index * 2 + 1] - ry0) * k - half + (on ? dy.value : 0) },
+        { translateX: (x - rx0) * k - half },
+        { translateY: (y - ry0) * k - half },
+        { rotate: liveTilt.value + 'deg' },
+        { scale: liveSize.value / drawSize },
       ] as const,
     };
   });
   const u = half / k;
   return (
-    <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0, width: side, height: side }, style]}>
-      <Svg width={side} height={side} viewBox={`${-u} ${-u} ${2 * u} ${2 * u}`}>
-        {laid.map((p) => (
-          <G key={p.key} transform={p.transform}>
-            {hand.digits[p.ch].strokes.map((s, i) => (s.type === 'line' ? (
-              <Path
-                key={i} d={s.d} fill="none" stroke={C.text} strokeWidth={lineW / p.scale} strokeLinecap="round" strokeLinejoin="round"
-              />
-            ) : (
-              <Circle key={i} cx={s.cx} cy={s.cy} r={lineW / p.scale} fill={C.text} />
-            )))}
-          </G>
-        ))}
+    <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0, width: 2 * half, height: 2 * half }, style]}>
+      <Svg width={2 * half} height={2 * half} viewBox={`${-u} ${-u} ${2 * u} ${2 * u}`}>
+        {laid.map((p) => {
+          // a digit unit's stroke times the size shown: the ink keeps the signature's weight at any size
+          const wk = (lineW * drawSize) / p.scale;
+          return (
+            <G key={p.key + p.ch} transform={p.transform}>
+              {hand.digits[p.ch].strokes.map((s, i) => (s.type === 'line'
+                ? <GroupLine key={i} d={s.d} wk={wk} size={liveSize} />
+                : <GroupDot key={i} cx={s.cx} cy={s.cy} wk={wk} size={liveSize} />))}
+            </G>
+          );
+        })}
       </Svg>
     </Animated.View>
   );
 }
 
-/** Size, spacing and tilt, a step at a time: no sliders to fumble. */
-function PlaceSteppers({ hand, model, onPlace }: { hand: Hand; model: SigModel; onPlace: (p: HandDatePlace) => void }) {
+function GroupLine({ d, wk, size }: { d: string; wk: number; size: SharedValue<number> }) {
+  const props = useAnimatedProps(() => ({ strokeWidth: wk / size.value }));
+  return <AnimatedPath d={d} fill="none" stroke={C.text} strokeLinecap="round" strokeLinejoin="round" animatedProps={props} />;
+}
+
+function GroupDot({ cx, cy, wk, size }: { cx: number; cy: number; wk: number; size: SharedValue<number> }) {
+  const props = useAnimatedProps(() => ({ r: wk / size.value }));
+  return <AnimatedCircle cx={cx} cy={cy} fill={C.text} animatedProps={props} />;
+}
+
+/** Size, spacing and tilt, a step at a time: no sliders to fumble. Anything given first goes at the top of the list. */
+function PlaceSteppers({ hand, model, onPlace, children }: {
+  hand: Hand; model: SigModel; onPlace: (p: DatePlace) => void; children?: React.ReactNode;
+}) {
   const { place } = hand;
-  const set = (patch: Partial<HandDatePlace>) => {
+  const set = (patch: Partial<DatePlace>) => {
     const next = { ...place, ...patch };
     // a bigger date keeps its anchors, but never past the room it may be dragged in
     const [rx0, ry0, rx1, ry1] = placeRegion(model, hand);
@@ -777,6 +1221,7 @@ function PlaceSteppers({ hand, model, onPlace }: { hand: Hand; model: SigModel; 
   };
   return (
     <ListCard style={{ marginTop: S.gap }}>
+      {children}
       <Stepper
         label="Size" value={Math.round((place.size / BASE_SIZE) * 100) + '%'}
         onLess={place.size > SIZE.min ? () => set({ size: clampTo(stepped(place.size - SIZE.step, 1), SIZE) }) : undefined}
@@ -838,11 +1283,23 @@ const st = StyleSheet.create({
   foldRow: { paddingVertical: 13 },
   cells: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10, marginTop: S.gap, marginBottom: 18 },
   cell: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  cellText: { fontFamily: F.semi, fontSize: 13 },
-  placer: { alignSelf: 'center', overflow: 'hidden' },
+  // a digit's place is a small flat choice, like a chip: Schibsted
+  cellText: { fontFamily: F.smSemi, fontSize: 13 },
+  writeBlock: { marginTop: S.section },
+  writeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', rowGap: 10 },
+  writeLabel: { marginRight: 14 },
+  partChip: { marginRight: 8, marginBottom: 0 },
+  // the placer is a well like the pad: the signature and the date inside it are clipped by its rim
+  placer: { alignSelf: 'center', overflow: 'hidden', borderRadius: S.radiusSm },
+  snapLine: { position: 'absolute', left: 0, top: 0, height: 1 },
+  spots: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12 },
   stepRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 4, gap: 10 },
   stepKey: { width: 32, height: 32, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  stepValue: { ...T.label, color: C.text, minWidth: 48, textAlign: 'center', fontVariant: ['tabular-nums'] },
+  // figures that step and line up: Inter Tight with tabular figures, never Schibsted
+  stepValue: {
+    fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, color: C.text, minWidth: 48, textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
   link: { alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 2, marginTop: 10 },
   linkText: { fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, color: C.accent },
   remove: { alignSelf: 'center', paddingVertical: 10, paddingHorizontal: 16, marginTop: S.section },

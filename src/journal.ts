@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system';
 import { useStore, JournalEntry, trashedEntryIds } from './store';
-import { streaks, todayKey, uid } from './utils';
+import type { DayDone, DoneItem, FocusSession, Habit } from './store';
+import { habitDueOn, streaks, todayKey, uid } from './utils';
 
 // The Journal's data layer. The store keeps a small index per entry; the text of every entry lives in its
 // own file. The journal's index is one AsyncStorage row, and Android cannot read a row over about 2 MB,
@@ -166,6 +167,99 @@ export function relativeDay(key: string, now = new Date()): string {
 /** True between midnight and the cutoff hour, while the journal's day is still the calendar's yesterday. */
 export function journalDayIsYesterday(now: Date, cutoffHour: number): boolean {
   return journalDayFor(now, cutoffHour) !== todayKey(now);
+}
+
+// ---------- the day's record, beside the page ----------
+
+/** the earliest a habit's id can date it from: ids the app made start with the time, in base 36 */
+const HABIT_IDS_FROM = Date.UTC(2020, 0, 1);
+
+/**
+ * The day a habit was made, read from its id where the app made it (the first eight letters are the time in base 36),
+ * or '' when the id says nothing: a day before a habit existed never counts it as due.
+ */
+function habitSince(h: Habit): string {
+  const m = /^[0-9a-z]{8}/.exec(h.id || '');
+  if (!m) return '';
+  const ms = parseInt(m[0], 36);
+  if (!(ms >= HABIT_IDS_FROM && ms <= Date.now() + 86400000)) return '';
+  return todayKey(new Date(ms));
+}
+
+/** Each habit's ticks as a set, made once per list of ticks (the store makes a new list on every change). */
+const doneSets = new WeakMap<string[], Set<string>>();
+function doneSetOf(dates: string[]): Set<string> {
+  let set = doneSets.get(dates);
+  if (!set) {
+    set = new Set(dates);
+    doneSets.set(dates, set);
+  }
+  return set;
+}
+
+/** One ToDo or long-term task ticked that day, as it was called then. */
+export interface DoneLine extends DoneItem { long: boolean }
+export interface DayHabit { habit: Habit; due: boolean; done: boolean }
+
+/** What a calendar day holds outside the page: what was ticked, the habits, and the time focused. */
+export interface DayRecord {
+  done: DoneLine[];
+  /** the habits due that day, ticked or not, then the ones ticked on a day they were not due */
+  habits: DayHabit[];
+  habitsDue: number;
+  /** ticked that day: the due ones, and any ticked on a rest day */
+  habitsDone: number;
+  sessions: FocusSession[];
+  focusMin: number;
+}
+
+/** The record of one day ('YYYY-MM-DD'), from the store's record of ticks, its habits and its sessions. */
+export function dayRecord(key: string, log: DayDone | undefined, habits: Habit[], sessions: FocusSession[]): DayRecord {
+  const done: DoneLine[] = [
+    ...(log?.todos || []).map((i) => ({ ...i, long: false })),
+    ...(log?.tasks || []).map((i) => ({ ...i, long: true })),
+  ];
+  const due: DayHabit[] = [];
+  const extra: DayHabit[] = [];
+  for (const h of habits) {
+    const ticked = Array.isArray(h.doneDates) && doneSetOf(h.doneDates).has(key);
+    const since = habitSince(h);
+    const isDue = habitDueOn(h, key) && !(since && key < since);
+    if (isDue) due.push({ habit: h, due: true, done: ticked });
+    else if (ticked) extra.push({ habit: h, due: false, done: true });
+  }
+  const day = sessions.filter((x) => x.dateKey === key);
+  const secs = day.reduce((a, x) => a + (Number(x.netSeconds) || 0), 0);
+  return {
+    done,
+    habits: [...due, ...extra],
+    habitsDue: due.length,
+    habitsDone: due.filter((x) => x.done).length + extra.length,
+    sessions: day,
+    focusMin: Math.round(secs / 60),
+  };
+}
+
+export interface DayFact { kind: 'done' | 'habits' | 'focus'; text: string }
+
+/**
+ * The day's facts in words, each only when there is something to say: "3 ToDos done", "2 of 3 habits", "45 min
+ * focused". `compact` is the archive's row ("3 done", "2/3 habits", "45 min"), which leaves out habits none of which
+ * were done. More ticked than were due (a rest day ticked too), or ticks on a day none were due, read as a count alone.
+ */
+export function dayFacts(r: DayRecord, compact = false): DayFact[] {
+  const out: DayFact[] = [];
+  const n = r.done.length;
+  if (n) out.push({ kind: 'done', text: compact ? n + ' done' : n + (n === 1 ? ' ToDo done' : ' ToDos done') });
+  const { habitsDue: due, habitsDone: got } = r;
+  if (got > 0 || (due > 0 && !compact)) {
+    const text = due > 0 && got <= due
+      ? (compact ? got + '/' + due + ' habits' : got + ' of ' + due + (due === 1 ? ' habit' : ' habits'))
+      : got + (got === 1 ? ' habit' : ' habits');
+    out.push({ kind: 'habits', text });
+  }
+  if (r.focusMin > 0) out.push({ kind: 'focus', text: compact ? r.focusMin + ' min' : r.focusMin + ' min focused' });
+  return out;
 }
 
 // ---------- prompts, moods ----------

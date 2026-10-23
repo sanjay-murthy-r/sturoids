@@ -5,8 +5,8 @@ import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
-import { C, F, S, T, TRACK } from '../theme';
-import { useStore, JournalEntry, flushSaves, trashedEntryIds } from '../store';
+import { C, F, S, T, TRACK, writingFace } from '../theme';
+import { useStore, JournalEntry, FocusSession, Habit, flushSaves, trashedEntryIds } from '../store';
 import { toastTrashed } from '../trashToast';
 import { fmtClockTime, todayKey, toMinutes } from '../utils';
 import {
@@ -21,9 +21,11 @@ import { Bouncy, EASE_OUT, Enter, FadeSwap, shiftIn, useAnimLevel } from '../com
 import { PinSheet, ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
-  MOODS, countWords, deleteEntry, formatJournalDate, journalDateParts, journalDayFor, journalDayIsYesterday, journalStreak,
-  promptFor, readBody, relativeDay, saveEntry, shiftKey, takeJournalOpenRequest, onBodiesRestored,
+  MOODS, countWords, dayFacts, dayRecord, deleteEntry, formatJournalDate, journalDateParts, journalDayFor,
+  journalDayIsYesterday, journalStreak, promptFor, readBody, relativeDay, saveEntry, shiftKey, takeJournalOpenRequest,
+  onBodiesRestored,
 } from '../journal';
+import type { DayFact, DayHabit, DayRecord } from '../journal';
 import { useToolNav } from '../toolNav';
 import { tap, tick } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
@@ -46,6 +48,16 @@ const SAVE_DEBOUNCE_MS = 400;
 
 /** Whether an entry is in Recently deleted: its page is never saved again, which would bring it back. */
 const isTrashed = (id: string) => trashedEntryIds(useStore.getState().trash).includes(id);
+
+/** each fact of the day line, with its icon */
+const FACT_ICONS: Record<DayFact['kind'], React.ComponentProps<typeof Ionicons>['name']> = {
+  done: 'checkmark-done-outline',
+  habits: 'repeat-outline',
+  focus: 'hourglass-outline',
+};
+/** nothing of an archived tool reaches the day line */
+const NO_HABITS: Habit[] = [];
+const NO_SESSIONS: FocusSession[] = [];
 
 /** the reminder's wheel turns in quarter hours, round the clock */
 const REMIND_STEP = 15;
@@ -371,6 +383,17 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const marked = React.useMemo(() => new Set(journal.map((e) => e.dateKey)), [journal]);
   const current = entryId ? journal.find((e) => e.id === entryId) : undefined;
   const tasksArchived = settings.archivedTools.includes('tasks');
+  const plannerArchived = settings.archivedTools.includes('planner');
+  const focusArchived = settings.archivedTools.includes('focus');
+
+  // ---- the day's record beside the page: what was ticked, the habits and the time focused that day. An archived tool
+  // says nothing here, as on Today ----
+  const dayLog = useStore((s) => (tasksArchived ? undefined : s.doneLog[dateKey]));
+  const allHabits = useStore((s) => (plannerArchived ? NO_HABITS : s.habits));
+  const sessions = useStore((s) => (focusArchived ? NO_SESSIONS : s.sessions));
+  const record = React.useMemo(() => dayRecord(dateKey, dayLog, allHabits, sessions), [dateKey, dayLog, allHabits, sessions]);
+  const facts = React.useMemo(() => dayFacts(record), [record]);
+  const [daySheet, setDaySheet] = React.useState(false);
 
   // The check-out offers itself only while every one of these holds, so it can never be spent where nobody sees it:
   // the setting is on, the keyboard is down, this page was written in on this visit and has a real page of words,
@@ -598,6 +621,17 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       initialTitle={taskTitle}
     />
   ), [taskSheet, taskTitle]);
+  // habits are ticked from the sheet only on today's own page; an earlier day's record reads as it was
+  const canTick = dateKey === today;
+  const daySheetEl = React.useMemo(() => (
+    <DaySheet
+      visible={daySheet} onClose={() => setDaySheet(false)} dateKey={dateKey} record={record} habits={allHabits}
+      canTick={canTick}
+    />
+  ), [daySheet, dateKey, record, allHabits, canTick]);
+  // the writing face picked in Settings: the body only, the title keeps its own
+  const bodyStyle = React.useMemo(() => [st.body, writingFace(settings.writingFont)], [settings.writingFont]);
+  const factsText = facts.map((f) => f.text).join(', ');
   const pinSheetEl = React.useMemo(() => (
     <PinSheet
       visible={pinFlow}
@@ -679,6 +713,25 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
                 <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{sub}</Text>
               </FadeSwap>
             </Bouncy>
+            {/* the day line: what else the day held, each fact only when there is one; it opens the day's record */}
+            {facts.length ? (
+              <Pressable
+                onPress={() => { tick(); setDaySheet(true); }}
+                hitSlop={DAY_LINE_SLOP}
+                style={({ pressed }) => [st.dayLine, pressed && { opacity: 0.6 }]}
+                accessibilityRole="button" accessibilityLabel={'Your day: ' + factsText} accessibilityHint="Opens what the day held"
+              >
+                <FadeSwap swapKey={factsText} style={st.dayFacts}>
+                  {facts.map((f) => (
+                    <View key={f.kind} style={st.dayFact}>
+                      <Ionicons name={FACT_ICONS[f.kind]} size={13} color={C.textFaint} style={st.dayFactIcon} />
+                      <Text style={st.dayFactText}>{f.text}</Text>
+                    </View>
+                  ))}
+                  <Ionicons name="chevron-forward" size={13} color={C.textFaint} />
+                </FadeSwap>
+              </Pressable>
+            ) : null}
             <TextInput
               value={title}
               onChangeText={onTitle}
@@ -712,7 +765,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
               multiline
               scrollEnabled={false}
               textAlignVertical="top"
-              style={st.body}
+              style={bodyStyle}
             />
           </Animated.View>
         </Animated.ScrollView>
@@ -790,7 +843,110 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       {prefsEl}
       {taskSheetEl}
       {pinSheetEl}
+      {daySheetEl}
     </ScreenBG>
+  );
+}
+
+/** the day line reaches a finger's height without moving the page */
+const DAY_LINE_SLOP = { top: 8, bottom: 8, left: 6, right: 6 };
+
+/**
+ * "Your day": what the page's day held besides the writing. Done (the ToDos and long-term tasks ticked that day, as they
+ * were called then), Habits (every one due that day, ticked or not, then any ticked on a rest day) and Focus (the
+ * sessions). An empty section is left out. On today's page a habit is ticked here, on the Planner's own record; an
+ * earlier day reads as it was. A habit shown since the sheet opened stays while it is open, so one unticked on a rest
+ * day never leaves under the finger.
+ */
+function DaySheet({ visible, onClose, dateKey, record, habits, canTick }: {
+  visible: boolean; onClose: () => void; dateKey: string; record: DayRecord; habits: Habit[]; canTick: boolean;
+}) {
+  const toggleHabitDay = useStore((s) => s.toggleHabitDay);
+  const shown = React.useRef(new Set<string>());
+  const wasVisible = React.useRef(false);
+  if (visible && !wasVisible.current) shown.current = new Set();
+  wasVisible.current = visible;
+  const list = React.useMemo<DayHabit[]>(() => {
+    const here = new Set(record.habits.map((x) => x.habit.id));
+    const kept = habits
+      .filter((h) => shown.current.has(h.id) && !here.has(h.id))
+      .map((h) => ({ habit: h, due: false, done: (h.doneDates || []).includes(dateKey) }));
+    const out = [...record.habits, ...kept];
+    out.forEach((x) => shown.current.add(x.habit.id));
+    return out;
+  }, [record, habits, dateKey, visible]);
+  const title = formatJournalDate(dateKey);
+  const sections: React.ReactNode[] = [];
+  if (record.done.length) {
+    sections.push(
+      <View key="done">
+        <Text style={st.daySection}>Done</Text>
+        {record.done.map((d) => (
+          <View
+            key={(d.long ? 'task:' : 'todo:') + d.id} style={st.dayRow}
+            accessible accessibilityLabel={(d.title || 'Untitled') + (d.long ? ', long-term task' : '') + ', done'}
+          >
+            <Ionicons name="checkmark-circle" size={18} color={d.long ? C.amber : C.green} />
+            <Text style={st.dayRowText} numberOfLines={2}>{d.title || 'Untitled'}</Text>
+            {d.long ? <Text style={st.dayRowNote}>Long-term</Text> : null}
+          </View>
+        ))}
+      </View>,
+    );
+  }
+  if (list.length) {
+    sections.push(
+      <View key="habits">
+        <Text style={st.daySection}>Habits</Text>
+        {list.map(({ habit, due, done }) => {
+          const body = (
+            <>
+              <Ionicons name={done ? 'checkmark-circle' : 'ellipse-outline'} size={18} color={done ? C.green : C.textFaint} />
+              <Text style={[st.dayRowText, !due && { color: C.textDim }]} numberOfLines={2}>{habit.title}</Text>
+              {!due ? <Text style={st.dayRowNote}>Rest day</Text> : null}
+            </>
+          );
+          const spoken = habit.title + (due ? '' : ', rest day');
+          return canTick ? (
+            <Pressable
+              key={habit.id}
+              onPress={() => { tick(); toggleHabitDay(habit.id, dateKey); }}
+              style={({ pressed }) => [st.dayRow, pressed && { opacity: 0.6 }]}
+              accessibilityRole="checkbox" accessibilityState={{ checked: done }} accessibilityLabel={spoken}
+            >
+              {body}
+            </Pressable>
+          ) : (
+            <View key={habit.id} style={st.dayRow} accessible accessibilityLabel={spoken + (done ? ', done' : ', not done')}>
+              {body}
+            </View>
+          );
+        })}
+      </View>,
+    );
+  }
+  if (record.sessions.length) {
+    sections.push(
+      <View key="focus">
+        <Text style={st.daySection}>Focus</Text>
+        {record.sessions.map((x) => {
+          const min = Math.max(1, Math.round((Number(x.netSeconds) || 0) / 60));
+          const what = x.subject || x.taskTitles?.[0] || 'Deep Work';
+          return (
+            <View key={x.id} style={st.dayRow} accessible accessibilityLabel={what + ', ' + min + (min === 1 ? ' minute' : ' minutes')}>
+              <Ionicons name="hourglass-outline" size={18} color={C.textFaint} />
+              <Text style={st.dayRowText} numberOfLines={1}>{what}</Text>
+              <Text style={st.dayMin}>{min} min</Text>
+            </View>
+          );
+        })}
+      </View>,
+    );
+  }
+  return (
+    <Sheet visible={visible} onClose={onClose} title={title}>
+      {sections.map((sec, i) => (i === 0 ? sec : <View key={'gap' + i} style={st.daySectionGap}>{sec}</View>))}
+    </Sheet>
   );
 }
 
@@ -965,13 +1121,29 @@ function JournalPrefs({ visible, onClose, onLock }: {
 const st = StyleSheet.create({
   // the date is the page's heading: it starts where the page's text does, and is only as wide as it is
   dateBtn: { alignSelf: 'flex-start', maxWidth: '100%', paddingVertical: 4, marginBottom: 6 },
-  date: { color: C.text, fontFamily: F.head, fontSize: 21, lineHeight: 27, letterSpacing: TRACK.large },
-  /** the date in a bar slot: Geist SemiBold 20 */
+  // Source Serif's line box is tall: 28 keeps an ascender clear on Android
+  date: { color: C.text, fontFamily: F.head, fontSize: 21, lineHeight: 28, letterSpacing: TRACK.large },
+  /** the date in a bar slot: Inter Tight SemiBold 20 */
   dateSlot: { ...T.head },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title, paddingVertical: 8 },
   prompt: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, marginBottom: 2 },
   promptText: { flex: 1, color: C.textDim, fontFamily: F.reg, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 20 },
-  body: { color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, lineHeight: 26, minHeight: 320, paddingTop: 6 },
+  // the face, size, line and tracking come from the Writing font (writingFace)
+  body: { color: C.text, minHeight: 320, paddingTop: 6 },
+  // the day line: under the date, quiet, its facts wrapping whole on a narrow phone
+  dayLine: { alignSelf: 'flex-start', maxWidth: '100%', paddingVertical: 4, marginTop: -2, marginBottom: 4 },
+  dayFacts: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 12, rowGap: 4 },
+  dayFact: { flexDirection: 'row', alignItems: 'center' },
+  dayFactIcon: { marginRight: 4 },
+  dayFactText: { color: C.textDim, fontFamily: F.sm, fontSize: 12, lineHeight: 17, letterSpacing: TRACK.fine },
+  // Your day: a kicker over each section, rows a finger's height
+  daySection: { ...T.kicker, marginBottom: 4 },
+  daySectionGap: { marginTop: 18 },
+  dayRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 44, paddingVertical: 6 },
+  dayRowText: { ...T.body, flex: 1 },
+  dayRowNote: { ...T.caption },
+  // a session's minutes line up down the list: tabular figures, so Inter Tight
+  dayMin: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, fontVariant: ['tabular-nums'] },
   foot: {
     paddingHorizontal: S.pad, paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline,

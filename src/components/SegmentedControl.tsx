@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, View, ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { C, CHROME_FONT_MAX, F, MIN, TRACK, neuInset, neuRaised } from '../theme';
+import { C, CHROME_FONT_MAX, F, MIN, TRACK, neuInset, neuRaised, oneLine } from '../theme';
 import { useTheme } from './UI';
 import { CHANGE, RISE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
@@ -16,7 +16,7 @@ const SEG_SLOP = { top: 6, bottom: 6 };
  * chosen one.
  */
 export function SegmentedControl<K extends string>({
-  options, value, onChange, onPressActive, color, size = 'md', stretch, style,
+  options, value, onChange, onPressActive, color, size = 'md', stretch, height, style,
 }: {
   options: { key: K; label: string; icon?: any }[];
   value: K;
@@ -27,6 +27,8 @@ export function SegmentedControl<K extends string>({
   size?: 'sm' | 'md';
   /** fill the row — each segment takes equal width */
   stretch?: boolean;
+  /** a fixed height, to line up with the controls beside it (the segments centre their names in it) */
+  height?: number;
   style?: ViewStyle | ViewStyle[];
 }) {
   const theme = useTheme();
@@ -67,6 +69,7 @@ export function SegmentedControl<K extends string>({
         {
           flexDirection: 'row', padding: 4, borderRadius: 999,
           alignSelf: stretch ? 'stretch' : 'flex-start',
+          height,
           // the thumb is raised inside the carved trough, so the trough clips its light and shadow at the rim
           overflow: 'hidden',
         },
@@ -104,7 +107,7 @@ export function SegmentedControl<K extends string>({
             style={{
               flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
               // equal stretched segments centre their label, so padding only eats the room a narrow screen needs
-              paddingVertical: padV, paddingHorizontal: stretch ? 4 : padH, borderRadius: 999,
+              paddingVertical: height ? 0 : padV, paddingHorizontal: stretch ? 4 : padH, borderRadius: 999,
               flex: stretch ? 1 : undefined,
             }}
           >
@@ -130,8 +133,9 @@ function SegLabel({ active, label, icon, color, size }: {
   }, [active, level]);
   const lit = useAnimatedStyle(() => ({ opacity: on.value }));
   const unlit = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
-  // the stretched segments are tight, so both sizes take the 13 to 14 px value
-  const text = { fontFamily: F.med, fontSize: size, letterSpacing: TRACK.small };
+  // the stretched segments are tight, so both sizes take the 13 to 14 px value. A segment's name is its control's
+  // primary label, in Inter Tight; the font padding is dropped and the line set, so it centres truly in the segment
+  const text = React.useMemo(() => ({ ...oneLine(size), fontFamily: F.med, letterSpacing: TRACK.small }), [size]);
   return (
     <>
       {icon ? (

@@ -14,7 +14,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import {
   AnimLevel, C, CHROME_FONT_MAX, F, MIN, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner,
-  shownTheme,
+  oneLine, shownTheme,
 } from '../theme';
 import { useStore } from '../store';
 import {
@@ -139,9 +139,9 @@ const PAGE_INDENT = BAR_SIDE + BACK_W + TITLE_GAP - S.pad;
 /** a tab's big title (the hero's first line) and the space above it inside the hero */
 const DISPLAY_LINE = T.display.lineHeight as number;
 const HERO_TOP = 4;
-/** the scroll offsets over which the compact title takes the big title's place (the big title leaves the bar's row by 36) */
+/** the scroll offsets over which the compact title takes the big title's place (the big title leaves the bar's row by its line) */
 const TITLE_FROM = 12;
-const TITLE_TO = 36;
+const TITLE_TO = DISPLAY_LINE;
 const SHADE = [darkSh(0.3), darkSh(0)] as const;
 
 /** How much of an edge shows at a scroll offset: none at the top, all of it once the content has moved 14; a step with no motion. */
@@ -491,7 +491,7 @@ const hdr = StyleSheet.create({
   row: { minHeight: BAR_ROW, flexDirection: 'row', alignItems: 'center' },
   back: { width: BACK_W, height: BACK_W, borderRadius: BACK_W / 2, alignItems: 'center', justifyContent: 'center' },
   titleBox: { flex: 1, minWidth: 0 },
-  title: { color: C.text, fontFamily: F.semi, fontSize: 18, lineHeight: 24, letterSpacing: -0.3 },
+  title: { color: C.text, fontFamily: F.semi, fontSize: 18, lineHeight: 24, letterSpacing: TRACK.title },
   // the carved pill the actions sit in; it clips each button's carve at its rim
   tray: {
     flexDirection: 'row', alignItems: 'center', padding: TRAY_PAD, gap: TRAY_GAP, borderRadius: 999, overflow: 'hidden', marginLeft: TRAY_LEAD,
@@ -506,7 +506,7 @@ const hdr = StyleSheet.create({
   heroTab: { paddingTop: HERO_TOP, paddingBottom: 18 },
   heroPage: { paddingBottom: 18, paddingLeft: PAGE_INDENT },
   ctxRow: { flexDirection: 'row', alignItems: 'center' },
-  ctx: { flexShrink: 1, color: C.textFaint, fontFamily: F.med, fontSize: CTX_SIZE, lineHeight: 17, letterSpacing: 0.2 },
+  ctx: { flexShrink: 1, color: C.textFaint, fontFamily: F.smMed, fontSize: CTX_SIZE, lineHeight: 17, letterSpacing: TRACK.fine },
   em: { color: C.textDim },
   dot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
 });
@@ -566,7 +566,7 @@ export function InfoDot({ text, size = 15, label = 'About this' }: {
                 : { backgroundColor: C.card, ...neuRaised('high') },
             ]}
           >
-            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17 }}>{text}</Text>
+            <Text style={{ color: C.textDim, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 17 }}>{text}</Text>
           </View>
         </Pressable>
       </Modal>
@@ -662,10 +662,17 @@ const CHIP_SLOP = 5;
  * says whether it is chosen; a chip with nothing to do is disabled.
  */
 export function Chip({
-  label, active, color, onPress, onLongPress, small, icon,
+  label, active, color, onPress, onLongPress, small, icon, textFace, style,
   accessibilityLabel, accessibilityHint, accessibilityRole, accessibilityState,
 }: {
   label: string; active?: boolean; color?: string; onPress?: () => void; onLongPress?: () => void; small?: boolean; icon?: any;
+  /**
+   * the label in the text face (Inter Tight) instead of Schibsted: for a label of figures or signs Schibsted lacks, such
+   * as the calculator's ×10ⁿ. An empty label leaves the icon alone in the chip.
+   */
+  textFace?: boolean;
+  /** for a chip that is not in a row of chips: its margins, or a fixed height to match the controls beside it */
+  style?: ViewStyle;
   /** replaces the chosen state a chip reports by default (`selected` when active), e.g. `checked` for a checkbox */
   accessibilityState?: AccessibilityState;
 } & A11yProps) {
@@ -679,7 +686,10 @@ export function Chip({
   }, [active, level]);
   const litStyle = useAnimatedStyle(() => ({ opacity: on.value }));
   const restStyle = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
-  const textStyle = [st.chipText, small && { fontSize: 12, letterSpacing: TRACK.fine }, active && { fontFamily: F.semi }];
+  const textStyle = [
+    st.chipText, small && st.chipTextSmall, active && st.chipTextOn,
+    textFace && (active ? st.chipTextFaceOn : st.chipTextFace),
+  ];
   const iconSize = small ? 13 : 15;
   const inert = !onPress && !onLongPress;
   return (
@@ -694,27 +704,29 @@ export function Chip({
       accessibilityHint={accessibilityHint}
       accessibilityRole={accessibilityRole ?? 'button'}
       accessibilityState={accessibilityState ?? { selected: !!active }}
-      style={[st.chip, small && st.chipSmall]}
+      style={[st.chip, small && st.chipSmall, style]}
     >
       <Animated.View pointerEvents="none" style={[st.chipEdge, { borderColor: theme === 'minimal' ? MIN.border : C.outline }, restStyle]} />
       <Animated.View pointerEvents="none" style={[st.chipEdge, { backgroundColor: c + '1F', borderColor: c + '66' }, litStyle]} />
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         {icon ? (
-          <View style={{ marginRight: 6 }}>
+          <View style={label ? { marginRight: 6 } : undefined}>
             <Animated.View style={restStyle}><Ionicons name={icon} size={iconSize} color={C.textFaint} /></Animated.View>
             <Animated.View style={[st.ink, litStyle]}><Ionicons name={icon} size={iconSize} color={c} /></Animated.View>
           </View>
         ) : null}
         {/* fixed chrome: chips sit in rows, so their words grow with the phone's font size only up to 1.3 */}
-        <View>
-          <Animated.Text style={[textStyle, restStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{label}</Animated.Text>
-          <Animated.Text
-            style={[textStyle, st.ink, { color: c }, litStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}
-            importantForAccessibility="no" accessibilityElementsHidden
-          >
-            {label}
-          </Animated.Text>
-        </View>
+        {label ? (
+          <View>
+            <Animated.Text style={[textStyle, restStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{label}</Animated.Text>
+            <Animated.Text
+              style={[textStyle, st.ink, { color: c }, litStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}
+              importantForAccessibility="no" accessibilityElementsHidden
+            >
+              {label}
+            </Animated.Text>
+          </View>
+        ) : null}
       </View>
     </Bouncy>
   );
@@ -745,7 +757,7 @@ export function PillButton({
       ]}
     >
       {icon ? <Ionicons name={icon} size={small ? 14 : 16} color={c} style={{ marginRight: 7 }} /> : null}
-      <Text style={{ color: c, fontFamily: F.semi, fontSize: small ? 13 : 15, letterSpacing: small ? TRACK.small : TRACK.body }}>{label}</Text>
+      <Text style={[small ? st.pillTextSmall : st.pillText, { color: c }]}>{label}</Text>
     </Bouncy>
   );
 }
@@ -1459,6 +1471,23 @@ export function ListSlice({ first, last, enter = false, children }: {
   );
 }
 
+/** the line a row's title is set on (T.body's), which a row's leading icon centres on */
+const ROW_TITLE_LINE = 21;
+
+/**
+ * A row's leading icon, centred on the title's first line rather than on the middle of a title and a line under it.
+ * The row takes alignItems 'flex-start'; a one-line row keeps its icon centred as it is, with no need of this.
+ */
+export function RowIcon({ name, size, color }: { name: any; size: number; color: string }) {
+  // the title's line grows with the phone's font size, and the icon's box with it
+  const { fontScale } = useWindowDimensions();
+  return (
+    <View style={{ height: Math.max(size, Math.round(ROW_TITLE_LINE * fontScale)), justifyContent: 'center' }}>
+      <Ionicons name={name} size={size} color={color} />
+    </View>
+  );
+}
+
 /** A pressable row inside a list card: it stays in place and carves in while pressed. */
 export function ListRow({
   children, onPress, onLongPress, style, accessibilityLabel, accessibilityHint, accessibilityRole,
@@ -1593,7 +1622,15 @@ const st = StyleSheet.create({
   chipSmall: { paddingVertical: 5, paddingHorizontal: 11 },
   /** the resting outline, or the chosen tint with its coloured edge: two layers that cross over */
   chipEdge: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999, borderWidth: 1 },
-  chipText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
+  // a chip's words: Schibsted, with the font padding dropped and the line set, so they centre truly in the chip
+  chipText: { ...oneLine(13), color: C.textDim, fontFamily: F.smMed, letterSpacing: TRACK.small },
+  chipTextSmall: { ...oneLine(12), letterSpacing: TRACK.fine },
+  chipTextOn: { fontFamily: F.smSemi },
+  chipTextFace: { fontFamily: F.med },
+  chipTextFaceOn: { fontFamily: F.semi },
+  // a pill's label is its control's primary words: Inter Tight, centred the same way
+  pillText: { ...oneLine(15), fontFamily: F.semi, letterSpacing: TRACK.body },
+  pillTextSmall: { ...oneLine(13), fontFamily: F.semi, letterSpacing: TRACK.small },
   /** a second ink laid exactly over the first, for colours that cross over */
   ink: { position: 'absolute', top: 0, left: 0, right: 0 },
   pill: {
@@ -1617,7 +1654,7 @@ const st = StyleSheet.create({
     ...neuRaised('low'),
   },
   knobFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: KNOB / 2 },
-  fieldLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 2 },
+  fieldLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 2 },
   fieldInner: {
     color: C.text, fontFamily: F.reg, paddingHorizontal: 2, paddingVertical: 10, fontSize: 15, letterSpacing: TRACK.body,
     marginBottom: 0,
@@ -1630,11 +1667,12 @@ const st = StyleSheet.create({
   timeRowPressed: { opacity: 0.6 },
   timeText: { flex: 1 },
   timeActions: { gap: 12, marginTop: 20 },
+  // the block in progress: a hairline along the row's foot, inside its corners, filling from the left
   emptyWrap: { alignItems: 'center', marginVertical: 24, paddingHorizontal: 16 },
   emptyWell: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   emptyTitle: { color: C.text, fontFamily: F.semi, fontSize: 15, letterSpacing: TRACK.body, textAlign: 'center' },
   emptyBody: {
-    color: C.textFaint, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 19, textAlign: 'center', marginTop: 4, maxWidth: 300,
+    color: C.textFaint, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 19, textAlign: 'center', marginTop: 4, maxWidth: 300,
   },
   sheetOverlay: { flex: 1, backgroundColor: C.scrim },
   /** the handle and title: a taller target for the pull that closes a sheet */

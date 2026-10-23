@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming,
 } from 'react-native-reanimated';
-import { AnimLevel, C, CHROME_FONT_MAX, F, MIN, NEU, S, T, TRACK } from '../theme';
+import { AnimLevel, C, CHROME_FONT_MAX, F, MIN, NEU, S, T, TRACK, oneLine } from '../theme';
 import { Field, PillButton, ScreenBG, Sheet, useTheme } from './UI';
 import { Bouncy, EASE_OUT, FadeSwap, useAnimLevel } from './Motion';
 import { useStore } from '../store';
@@ -292,7 +292,7 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
       <FadeSwap swapKey={waitS > 0 ? 'wait' : message}>
         <Text
           accessibilityLiveRegion="polite"
-          style={[T.caption, st.status, status ? { color: waitS > 0 ? C.textFaint : C.danger } : null]}
+          style={[T.caption, st.status, waitS > 0 && st.counting, status ? { color: waitS > 0 ? C.textFaint : C.danger } : null]}
         >
           {status || ' '}
         </Text>
@@ -622,10 +622,13 @@ const st = StyleSheet.create({
   dotWell: { width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   dot: { width: 10, height: 10, borderRadius: 5 },
   status: { textAlign: 'center', marginTop: 12, minHeight: 17 },
+  // a wait counts down each second: the text face's tabular figures keep it from shifting
+  counting: { fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   keypad: { marginTop: 14, gap: KEY_GAP_Y, paddingBottom: 6 },
   keyRow: { flexDirection: 'row', justifyContent: 'center', gap: KEY_GAP_X },
   key: { alignItems: 'center', justifyContent: 'center' },
-  keyText: { color: C.text, fontFamily: F.med, fontSize: 26, letterSpacing: TRACK.large, fontVariant: ['tabular-nums'] },
+  // a key's figure centres truly in its round key: no font padding, the line set to the size
+  keyText: { ...oneLine(26), color: C.text, fontFamily: F.med, letterSpacing: TRACK.large, fontVariant: ['tabular-nums'] },
   linkSlot: { minHeight: 38, marginTop: 6, alignItems: 'center', justifyContent: 'center' },
   link: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   linkText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },

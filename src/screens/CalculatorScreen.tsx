@@ -5,7 +5,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { create, all } from 'mathjs';
 import * as Clipboard from 'expo-clipboard';
-import { C, F, MIN, NEU, S, T, TRACK, neuPressedInner, neuRaised } from '../theme';
+import { C, F, MIN, NEU, S, T, TRACK, neuPressedInner, neuRaised, oneLine } from '../theme';
 import { useStore } from '../store';
 import { ScreenBG, Sheet, Row, PillButton, Inset, Chip, IconBtn, NeuHeader, useTheme } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -154,8 +154,8 @@ const KEY_MIN = 44;
 const KEY_MAX = 88;
 /** a phone too short for its keypad as it is fits the keys to the room, no lower than this; below it the keypad scrolls */
 const KEY_MIN_PHONE = 40;
-/** the text face's line is 1.3 of its size, and a little more on Android: a key's own height is its padding and one line */
-const LINE = 1.35;
+/** a key's label is set on a line 1.2 of its size with no font padding (see keyLabel): its own height is its padding and that line */
+const LINE = 1.2;
 /** how far a key's label follows a large system font: further and it would no longer fit a fitted key */
 const KEY_SCALE_MAX = 1.3;
 /** how long a key is held before its long press (⌫ clears, = copies): the same half second a press had before */
@@ -175,14 +175,21 @@ const BASIC: string[][] = [
   ['1', '2', '3', '−'],
   ['0', '.', '^', '+'],
 ];
-// ^ is on the number pad already, so the functions have % in its place (50% is 0.5, 100+20% is 120). Labels stay plain:
-// Geist has no superscript minus or x and y, so sin⁻¹ or xʸ would be drawn in another face
+// ^ is on the number pad already, so the functions have % in its place (50% is 0.5, 100+20% is 120)
 const SCI: string[][] = [
   ['sin(', 'cos(', 'tan(', '√('],
   ['asin(', 'acos(', 'atan(', '%'],
   ['ln(', 'log(', 'π', 'e'],
   ['!', '×10^', 'abs(', 'mod'],
 ];
+/**
+ * The function keys whose label is not what they type: Inter Tight draws the superscript minus and one and the small
+ * modifier x (U+207B, U+00B9, U+02E3, checked in its cmap), so the inverses read as a textbook writes them. What a key
+ * types is unchanged; the rest show what they type without the bracket.
+ */
+const SCI_LABEL: Record<string, string> = {
+  'asin(': 'sin⁻¹', 'acos(': 'cos⁻¹', 'atan(': 'tan⁻¹', '×10^': '×10ˣ', 'abs(': '|x|',
+};
 const OPS = ['÷', '×', '−', '+'];
 
 /** What a screen reader says for a key whose label is a sign; a digit says itself. */
@@ -203,7 +210,7 @@ function naturalPadH(sci: boolean, scale: number) {
   const gap = sci ? 6 : 8;
   const key = 2 * (sci ? 11 : 16) + 22 * line;
   const fn = 2 * 8 + 15 * line;
-  const equals = 2 * (sci ? 10 : 14) + 26 * line + 10;
+  const equals = 2 * (sci ? 10 : 14) + 26 * line;
   return BASIC.length * (key + gap) + (sci ? SCI.length * (fn + 6) : 0) + equals;
 }
 
@@ -537,9 +544,11 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const gaps = sci ? (SCI.length + BASIC.length) * 6 : BASIC.length * 8;
   const eqH = sci ? EQ_H_SCI : EQ_H;
   const fitted = pad.h > 0 && (wide || pad.h < naturalPadH(sci, scale));
+  // the controls row's room and its parts, measured in this window (see controls)
+  const [ctl, setCtl] = useState({ rowW: 0, segW: 0, notW: 0, fnW: 0, histW: 0 });
   const keyMin = wide ? KEY_MIN : KEY_MIN_PHONE;
   const keyH = fitted
-    ? Math.floor(Math.max(keyMin, Math.min(KEY_MAX, (pad.w - 24) / 4, (pad.h - gaps - eqH - 10) / rows)))
+    ? Math.floor(Math.max(keyMin, Math.min(KEY_MAX, (pad.w - 24) / 4, (pad.h - gaps - eqH) / rows)))
     : undefined;
 
   // every key goes through one stable handler, so a keypress re-renders the display and not the thirty keys
@@ -571,7 +580,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const display = (
     // display — carved into the material
-    <Inset pad={compact ? 12 : 16} style={{ borderRadius: S.radius, marginBottom: compact ? 8 : 12, overflow: 'visible' }}>
+    <Inset pad={compact ? 12 : 16} style={{ borderRadius: S.radius, marginBottom: 12, overflow: 'visible' }}>
       <ScrollView
         ref={dispScroll}
         style={{ maxHeight: split ? 140 : compact ? 78 : 90, minHeight: exprSize < baseSize ? lineH.current[lineFor] : undefined }}
@@ -615,28 +624,55 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     </Inset>
   );
 
+  // The controls are one row that never wraps, every part 32 high and centred on one line. Where the row would not fit
+  // (the narrowest phone at a large font size) the Functions chip keeps its icon and drops its word: the row's room and
+  // its parts are measured, with the chip's labelled width taken while it shows its word. A width taken at another font
+  // size corrects itself: the word comes back, is measured again, and goes again if it still does not fit.
+  const ctlGaps = CTL_GAP * (split ? 3 : 4); // a gap either side of the spacer too: three, or four with the history button
+  const fnFits = !(ctl.fnW > 0 && ctl.rowW > 0 && ctl.segW + ctl.notW + (split ? 0 : ctl.histW) + ctlGaps + ctl.fnW > ctl.rowW);
+  const measured = (part: keyof typeof ctl) => (e: { nativeEvent: { layout: { width: number } } }) => {
+    const w = Math.round(e.nativeEvent.layout.width);
+    // the Functions chip's width counts only while it shows its word: without it, it is not the width the word needs
+    if (part === 'fnW' && !fnFits) return;
+    setCtl((c) => (c[part] === w ? c : { ...c, [part]: w }));
+  };
   const controls = (
     // controls sit under the display, so the well holds only the sum and its answer
-    <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-      <Row style={{ flexShrink: 1, flexWrap: 'wrap' }}>
+    <View style={st.controls} onLayout={measured('rowW')}>
+      <View onLayout={measured('segW')}>
         <SegmentedControl
           size="sm"
+          height={CTL_H}
           options={[{ key: 'deg', label: 'DEG' }, { key: 'rad', label: 'RAD' }]}
           value={deg ? 'deg' : 'rad'}
           onChange={setAngle}
-          style={{ marginRight: 8, marginBottom: 8 }}
         />
-        {/* how answers are written, not which keys show: so it says so, in the one accent */}
-        <Chip small label="Sci notation" active={sciNotation} onPress={toggleNotation} />
-        <Chip small icon="grid-outline" label="Functions" active={sci} onPress={toggleFns} />
-      </Row>
-      {split ? null : <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} accessibilityLabel="History" />}
-    </Row>
+      </View>
+      <View onLayout={measured('fnW')}>
+        <Chip
+          small icon="grid-outline" label={fnFits ? 'Functions' : ''} active={sci} onPress={toggleFns}
+          accessibilityLabel="Functions" style={st.ctlChip}
+        />
+      </View>
+      {/* how answers are written, not which keys show: so it says so, in the one accent */}
+      <View onLayout={measured('notW')}>
+        <Chip
+          small textFace label="×10ⁿ" active={sciNotation} onPress={toggleNotation}
+          accessibilityLabel="Scientific notation" style={st.ctlChip}
+        />
+      </View>
+      <View style={st.ctlSpace} />
+      {split ? null : (
+        <View onLayout={measured('histW')}>
+          <IconBtn name="time-outline" size={20} pad={6} onPress={() => setHistSheet(true)} accessibilityLabel="History" />
+        </View>
+      )}
+    </View>
   );
 
   // a keypad fitted to its height that is too short for them even at the smallest keys scrolls instead of pushing over the
   // display; it rests at its foot, where the digits and the equals key are, and the functions are a scroll up
-  const cramped = fitted && (pad.h - gaps - eqH - 10) / rows < keyMin;
+  const cramped = fitted && (pad.h - gaps - eqH) / rows < keyMin;
   const padScroll = useRef<ScrollView>(null);
   // each key reaches half way into the gap above and below it, so a press that lands between two rows still counts
   const rowGap = sci ? 6 : 8;
@@ -650,7 +686,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
             <Row key={`s${i}`} style={{ gap: 8, marginBottom: 6 }}>
               {row.map((k) => (
                 <Key
-                  key={k} label={k.replace('(', '')} value={k} pad={8} small onKey={onKey} color={C.accent}
+                  key={k} label={SCI_LABEL[k] ?? k.replace('(', '')} value={k} pad={8} small onKey={onKey} color={C.accent}
                   height={keyH ? Math.round(keyH * SCI_SHARE) : undefined} slop={3}
                 />
               ))}
@@ -688,10 +724,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
             : { backgroundColor: C.accent, ...NEU.raisedMid },
         ]}
       >
-        <Text
-          maxFontSizeMultiplier={KEY_SCALE_MAX}
-          style={{ color: theme === 'minimal' ? C.accent : C.onAccent, fontSize: 26, letterSpacing: TRACK.large, fontFamily: F.semi }}
-        >
+        <Text maxFontSizeMultiplier={KEY_SCALE_MAX} style={[st.equalsText, { color: theme === 'minimal' ? C.accent : C.onAccent }]}>
           =
         </Text>
       </Press>
@@ -734,7 +767,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, [write]);
   const historyRows = <HistoryRows history={history} onPick={reuse} />;
   const historyEmpty = (
-    <Text style={{ color: C.textFaint, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small }}>Past calculations appear here. Tap one to reuse its result.</Text>
+    <Text style={{ color: C.textFaint, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small }}>Past calculations appear here. Tap one to reuse its result.</Text>
   );
 
   // Clearing the history can be taken back while its toast is up. From the sheet the toast waits for the sheet to have
@@ -838,10 +871,8 @@ const HistoryRows = React.memo(function HistoryRows({ history, onPick }: {
             accessibilityRole="button"
             accessibilityLabel={spoken(h.expr) + ' equals ' + spoken(h.result) + ', reuse result'}
           >
-            <Text style={{ color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small }} numberOfLines={1}>{h.expr}</Text>
-            <Text style={{ color: h.result === 'Error' ? C.danger : C.text, fontSize: 16, letterSpacing: TRACK.title, fontFamily: F.semi }} numberOfLines={1}>
-              = {h.result}
-            </Text>
+            <Text style={st.histSum} numberOfLines={1} ellipsizeMode="middle">{h.expr}</Text>
+            <Text style={[st.histResult, h.result === 'Error' && { color: C.danger }]}>= {h.result}</Text>
           </Bouncy>
         </Animated.View>
       ))}
@@ -949,7 +980,7 @@ const Key = React.memo(function Key({ label, value, onKey, onLongPress, color, s
   onKey: (k: string) => void; onLongPress?: () => void; color: string; small?: boolean; pad?: number;
   /** a wide window's key height, fitted to the room; a phone's key takes its height from its padding */
   height?: number;
-  /** drawn in place of the label: Geist has no ⌫, which would come from another face */
+  /** drawn in place of the label: an icon reads as a key where the ⌫ sign would read as text */
   icon?: React.ComponentProps<typeof Ionicons>['name'];
   slop: number;
 }) {
@@ -975,10 +1006,7 @@ const Key = React.memo(function Key({ label, value, onKey, onLongPress, color, s
       {icon ? (
         <Ionicons name={icon} size={size} color={color} maxFontSizeMultiplier={KEY_SCALE_MAX} />
       ) : (
-        <Text
-          maxFontSizeMultiplier={KEY_SCALE_MAX}
-          style={{ color, fontSize: size, fontFamily: F.med, letterSpacing: small ? TRACK.body : TRACK.large }}
-        >
+        <Text maxFontSizeMultiplier={KEY_SCALE_MAX} style={[small ? st.keyLabelSmall : st.keyLabel, { color }]}>
           {label}
         </Text>
       )}
@@ -986,21 +1014,42 @@ const Key = React.memo(function Key({ label, value, onKey, onLongPress, color, s
   );
 });
 
+/** the controls row: every part this high, this far apart */
+const CTL_H = 32;
+const CTL_GAP = 8;
+
 const st = StyleSheet.create({
-  // Geist Regular: lighter and calmer than the keys around it (the calc-face pick). A field: no padding of its own
+  // Inter Tight Regular with its tabular figures: lighter and calmer than the keys around it (the calc-face pick). A
+  // field: no padding of its own, so its right edge is the well's inner edge, as the preview's is
   expr: {
     color: C.text, fontSize: 34, letterSpacing: TRACK.display, fontFamily: F.reg, textAlign: 'right', fontVariant: ['tabular-nums'],
     padding: 0, margin: 0,
   },
+  // the answer as it is worked out: digits, so Inter Tight with its tabular figures too
   preview: { fontSize: 16, letterSpacing: TRACK.body, fontFamily: F.reg, textAlign: 'right', marginTop: 4, fontVariant: ['tabular-nums'] },
+  // one row under the display, 12 from it and 12 from the first keys, every part 32 high and centred on its line
+  controls: { flexDirection: 'row', alignItems: 'center', gap: CTL_GAP, marginBottom: 12 },
+  ctlChip: { height: CTL_H, paddingVertical: 0, marginRight: 0, marginBottom: 0, justifyContent: 'center' },
+  ctlSpace: { flex: 1 },
   key: {
     flex: 1, paddingVertical: 16, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
   },
+  // a key's label, the = included, drops Android's font padding and sits on a line 1.2 of its size, so the digits, the
+  // signs and the ⌫ icon share one optical centre
+  keyLabel: { ...oneLine(22), fontFamily: F.med, letterSpacing: TRACK.large },
+  keyLabelSmall: { ...oneLine(15), fontFamily: F.med, letterSpacing: TRACK.body },
+  equalsText: { ...oneLine(26), fontFamily: F.semi, letterSpacing: TRACK.large },
+  // the space above the = is the keys' row gap, and below it the body's own padding
   equals: {
-    paddingVertical: 14, borderRadius: 16, alignItems: 'center', marginBottom: 10,
+    paddingVertical: 14, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
   },
   carve: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   histRow: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border },
+  // the sum and its result share the row's left and right edges
+  histSum: { color: C.textDim, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small, alignSelf: 'stretch' },
+  histResult: {
+    color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title, fontVariant: ['tabular-nums'], alignSelf: 'stretch', marginTop: 2,
+  },
   split: { flex: 1, flexDirection: 'row', gap: 28 },
   splitSide: { flex: 1, minWidth: 0 },
   splitPad: { width: SPLIT_PAD_W },

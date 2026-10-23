@@ -1,7 +1,7 @@
 import { Alert, AppState, Linking, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { useStore } from './store';
-import { dayName, fmtClockTime, toMinutes, todayKey } from './utils';
+import { dayName, fmtClockTime, habitDueOn, toMinutes, todayKey } from './utils';
 import { COUNTDOWN_NOTIF_ID, FINISH_NOTIF_ID } from './deepWork';
 import { openTool } from './toolNav';
 import { ToolKey, toolByKey } from './tools';
@@ -197,7 +197,9 @@ function anyReminderSet(s: Data) {
 function reminderInputs(s: Data) {
   const today = todayKey();
   const st = s.settings;
-  const timed = s.habits.filter((h) => h.remindTime).map((h) => [h.id, h.title, h.remindTime, h.doneDates.includes(today) ? 1 : 0].join('|'));
+  // its weekdays too: a habit moved to other days rings on those
+  const timed = s.habits.filter((h) => h.remindTime)
+    .map((h) => [h.id, h.title, h.remindTime, h.doneDates.includes(today) ? 1 : 0, (h.days || []).join('.')].join('|'));
   // a check-in's count only matters while there are check-ins
   const open = s.todoReminders.length ? s.dailyTasks.filter((t) => t.doneOn !== today).length + '/' + s.dailyTasks.length : '';
   const tasks = timedTasks(s).map((t) => [t.id, t.title, t.time, t.remind, t.repeat || '', t.doneOn === today ? 1 : 0].join('|'));
@@ -449,6 +451,8 @@ async function layOutReminders() {
         if (at.getTime() > now.getTime() + 5000) list.push({ id, at, title, body, tool });
       };
       for (const h of habits) {
+        // a habit kept on some weekdays rings only on those
+        if (!habitDueOn(h, day)) continue;
         // ticked today, today's reminder has nothing left to ask
         if (d === 0 && h.doneDates.includes(today)) continue;
         add(`habit:${h.id}:${key}`, minutesOf(h.remindTime), 'Streak check-in', h.title, 'planner');

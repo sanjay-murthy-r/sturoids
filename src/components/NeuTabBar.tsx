@@ -259,8 +259,8 @@ const st = StyleSheet.create({
   glyph: { position: 'absolute', top: 0, left: 0 },
   // the height is set where it is drawn, from the font size (see LABEL_H); the line height here grows with it
   label: {
-    lineHeight: LABEL_H, marginTop: GAP, textAlign: 'center',
-    fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.fine,
+    lineHeight: LABEL_H, marginTop: GAP, textAlign: 'center', includeFontPadding: false, textAlignVertical: 'center',
+    fontFamily: F.smSemi, fontSize: 11, letterSpacing: TRACK.fine,
   },
   dotRoom: { width: DOT, height: DOT, marginTop: GAP },
   dotTrack: { position: 'absolute', left: BAR_PAD_X, height: DOT, alignItems: 'center' },

@@ -452,6 +452,6 @@ const st = StyleSheet.create({
   fab: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
   note: { alignItems: 'flex-start', paddingVertical: 14 },
   noteTitle: { flex: 1, color: C.text, fontFamily: F.semi, fontSize: 16, letterSpacing: TRACK.title },
-  noteBody: { color: C.textDim, fontFamily: F.reg, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 18, marginTop: 4 },
-  noteMeta: { color: C.textFaint, fontFamily: F.reg, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 6 },
+  noteBody: { color: C.textDim, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small, lineHeight: 18, marginTop: 4 },
+  noteMeta: { color: C.textFaint, fontFamily: F.sm, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 6 },
 });

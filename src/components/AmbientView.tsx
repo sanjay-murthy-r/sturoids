@@ -41,8 +41,8 @@ const SEC_TOP = 5 / 46;
 /** "min" beside whole minutes when the seconds are off */
 const UNIT = 6 / 46;
 const UNIT_GAP = 2 / 46;
-/** Geist Regular's "min" is about this many ems wide (1.70, measured from the font file) */
-const UNIT_EM = 1.7;
+/** Inter Tight Regular's "min" is about this many ems wide (1.553, measured from the font file with fontTools) */
+const UNIT_EM = 1.56;
 const LINE = 1.02;
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -368,7 +368,7 @@ const st = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.ambient },
   top: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
   // the kicker's colour is the accent, read at render: a sheet built at load would keep the first accent for good
-  kicker: { opacity: 0.8, fontFamily: F.semi, textTransform: 'uppercase', maxWidth: '84%' },
+  kicker: { opacity: 0.8, fontFamily: F.smSemi, textTransform: 'uppercase', maxWidth: '84%' },
   faint: { color: INK.faint, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   /** the words someone has to read on the dimmed screen (the task, how to leave) take the softer ink, not the faint one */
   soft: { color: INK.soft, fontFamily: F.reg },
@@ -379,5 +379,5 @@ const st = StyleSheet.create({
   foot: { position: 'absolute' },
   task: { textAlign: 'center' },
   rule: { backgroundColor: INK.track, overflow: 'hidden' },
-  hint: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: INK.soft, fontFamily: F.reg },
+  hint: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: INK.soft, fontFamily: F.sm },
 });

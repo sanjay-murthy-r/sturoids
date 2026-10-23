@@ -105,9 +105,59 @@ export function indexAfterNeighbours(beforeIds: readonly string[], currentIds: r
   return 0;
 }
 
-/** current + best streak from a set of YYYY-MM-DD keys */
-export function streaks(doneDates: string[]): { current: number; best: number } {
+/** A date's weekday, Monday 0 to Sunday 6: the order of DAY_NAMES. */
+export function weekdayIndex(d: Date): number {
+  return (d.getDay() + 6) % 7;
+}
+
+/**
+ * The weekdays a habit is due on, as kept: sorted, unique, whole numbers 0 (Monday) to 6 (Sunday). Undefined when every
+ * day is meant: nothing given, nothing valid, none chosen, or all seven.
+ */
+export function cleanDays(days: unknown): number[] | undefined {
+  if (!Array.isArray(days)) return undefined;
+  const out = [...new Set(days.filter((n): n is number => Number.isInteger(n) && n >= 0 && n <= 6))].sort((a, b) => a - b);
+  return out.length === 0 || out.length === 7 ? undefined : out;
+}
+
+/** A date key as the local calendar day it names. */
+const dateOfKey = (key: string) => {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+
+/** Whether a habit is due on a day (a date key or a date): every day unless it keeps its own weekdays. */
+export function habitDueOn(h: { days?: number[] }, day: string | Date): boolean {
+  const days = cleanDays(h.days);
+  if (!days) return true;
+  const d = typeof day === 'string' ? dateOfKey(day) : day;
+  if (isNaN(d.getTime())) return true;
+  return days.includes(weekdayIndex(d));
+}
+
+/** The weekdays a habit is due on, in words: "Every day", "Weekdays", "Weekends", or the short names ("Mon, Wed, Fri"). */
+export function daysLabel(days?: number[]): string {
+  const d = cleanDays(days);
+  if (!d) return 'Every day';
+  const key = d.join();
+  if (key === '0,1,2,3,4') return 'Weekdays';
+  if (key === '5,6') return 'Weekends';
+  return d.map((i) => DAY_NAMES[i]).join(', ');
+}
+
+/** how far back a streak is walked, in days, for a habit kept on some weekdays only */
+const STREAK_WALK_MAX = 3660;
+
+/**
+ * current + best streak from a set of YYYY-MM-DD keys. With `days` (the weekdays a habit is due on), a day it is not
+ * due on and was not done is passed over, neither counting nor breaking the run; a day done counts whether it was due
+ * or not; a due day not done ends it. Today never breaks a run: until it is done the count starts from yesterday.
+ * Without `days` (every day due) the answer is the plain run of days, exactly as before weekdays came in.
+ */
+export function streaks(doneDates: string[], days?: number[]): { current: number; best: number } {
   if (!doneDates || doneDates.length === 0) return { current: 0, best: 0 };
+  const due = cleanDays(days);
+  if (due) return streaksOnDays(doneDates, due);
   const set = new Set(doneDates);
   // best: walk sorted dates
   const sorted = [...set].sort();
@@ -130,6 +180,56 @@ export function streaks(doneDates: string[]): { current: number; best: number } 
     cursor.setDate(cursor.getDate() - 1);
   }
   return { current, best };
+}
+
+/** A calendar day as a whole number, counted in UTC so a day the clocks change on is still one day; NaN when unreadable. */
+function dayNumber(key: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!m) return NaN;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000;
+}
+
+/** The weekday (Monday 0) of a day number: day 0, 1 January 1970, was a Thursday. */
+const weekdayOfNumber = (n: number) => (((n + 3) % 7) + 7) % 7;
+
+/** streaks() for a habit due on some weekdays only (see there). */
+function streaksOnDays(doneDates: string[], due: number[]): { current: number; best: number } {
+  const done = new Set<number>();
+  for (const k of doneDates) {
+    const n = dayNumber(k);
+    if (Number.isFinite(n)) done.add(n);
+  }
+  if (done.size === 0) return { current: 0, best: 0 };
+  let first = Infinity;
+  let last = -Infinity;
+  for (const n of done) {
+    if (n < first) first = n;
+    if (n > last) last = n;
+  }
+  const isDue = (n: number) => due.includes(weekdayOfNumber(n));
+  const today = dayNumber(todayKey());
+
+  // current: back from today (from yesterday while today is not done), as far as the first day ever done
+  let current = 0;
+  let n = done.has(today) ? today : today - 1;
+  for (let i = 0; i < STREAK_WALK_MAX && n >= first; i++, n--) {
+    if (done.has(n)) current++;
+    else if (isDue(n)) break;
+  }
+
+  // best: the same rule forward, from the first day done to today (or a later day done, should one have been ticked)
+  const end = Math.max(today, last);
+  let best = 0;
+  let run = 0;
+  for (let d = Math.max(first, end - STREAK_WALK_MAX + 1); d <= end; d++) {
+    if (done.has(d)) {
+      run++;
+      if (run > best) best = run;
+    } else if (isDue(d)) {
+      run = 0;
+    }
+  }
+  return { current, best: Math.max(best, current) };
 }
 
 /** Extract a YouTube video id from most url shapes; null if not found. */

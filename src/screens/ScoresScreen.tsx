@@ -1382,7 +1382,7 @@ const st = StyleSheet.create({
   fab: {
     position: 'absolute', width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center',
   },
-  heroPct: { ...T.numDisplay, lineHeight: 52, letterSpacing: -1, marginTop: 6 },
+  heroPct: { ...T.numDisplay, lineHeight: 52, letterSpacing: TRACK.display, marginTop: 6 },
   heroMarks: { ...T.numStat, color: C.textDim, fontSize: 17, lineHeight: 22, letterSpacing: TRACK.title },
   unmarked: { color: C.textDim, fontFamily: F.semi, fontSize: 24, letterSpacing: TRACK.large, lineHeight: 30, marginTop: 10 },
   sideRow: { flexDirection: 'row', alignItems: 'center' },

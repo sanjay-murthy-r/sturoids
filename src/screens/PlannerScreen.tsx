@@ -3,10 +3,11 @@ import { View, Text, StyleSheet, Pressable, Alert, useWindowDimensions } from 'r
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useFocusEffect } from 'expo-router';
-import { C, CHROME_FONT_MAX, F, S, T, TRACK, BLOCK_COLORS } from '../theme';
+import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, BLOCK_COLORS, oneLine } from '../theme';
 import { useStore, PlannerBlock, PlannerWeek, Habit } from '../store';
 import {
-  DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours, blockOnNow,
+  DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours, blockOnNow, cleanDays,
+  daysLabel, habitDueOn,
 } from '../utils';
 import { useNow, useToday } from '../hooks/useNow';
 import {
@@ -17,7 +18,7 @@ import { defaultTime } from '../components/TimeWheel';
 import { Ionicons } from '@expo/vector-icons';
 import { Wheel } from '../components/Wheel';
 import {
-  Bouncy, CHANGE, Enter, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useBuilt, useFocusKey,
+  Bouncy, CHANGE, EASE_OUT, Enter, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useBuilt, useFocusKey, useLoop,
 } from '../components/Motion';
 import { slideIn, useSwapIn } from '../components/Swap';
 import { tick } from '../haptics';
@@ -280,7 +281,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </SectionTitle>
       <Animated.View key={habits.length === 0 ? 'none' : 'list'} entering={habitsIn}>
         {habits.length === 0 ? (
-          <EmptyState compact icon="repeat-outline" title="No habits yet" body="Daily habits, each with its streak." />
+          <EmptyState compact icon="repeat-outline" title="No habits yet" body="Habits for the days you choose, each with its streak." />
         ) : (
           <ListCard>
             {habits.map((h) => (
@@ -397,6 +398,7 @@ function DayBlocks({ day, blocks, hour24, nowMin, deepWork, onEdit, onDelete }: 
           <BlockRow
             key={b.id} b={b} hour24={hour24} deepWork={deepWork}
             isNow={nowMin >= 0 && toMinutes(b.start) <= nowMin && nowMin < toMinutes(b.end)}
+            progress={nowMin >= 0 ? blockProgress(b, nowMin) : 0}
             past={nowMin >= 0 && toMinutes(b.end) <= nowMin}
             onEdit={onEdit} onDelete={onDelete}
           />
@@ -408,9 +410,41 @@ function DayBlocks({ day, blocks, hour24, nowMin, deepWork, onEdit, onDelete }: 
   );
 }
 
-/** One block of the day. Memoised, so the minute turning re-renders only a block whose NOW badge changes. */
-const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, past, deepWork, onEdit, onDelete }: {
+/** How far a block has run at a minute of the day: 0 before it and after it, up to 1 at its end. */
+function blockProgress(b: PlannerBlock, nowMin: number): number {
+  const start = toMinutes(b.start);
+  const end = toMinutes(b.end);
+  if (!(end > start) || nowMin < start || nowMin >= end) return 0;
+  return (nowMin - start) / (end - start);
+}
+
+/**
+ * The block on now: a hairline along the foot of its row that fills as the block runs, a step each minute (the step
+ * eases over 0.6 s with every animation on). Not a loop, only a living gauge; it takes no touches. Moves by transform.
+ */
+function BlockProgress({ progress }: { progress: number }) {
+  const level = useAnimLevel();
+  const [w, setW] = React.useState(0);
+  const p = useSharedValue(progress);
+  React.useEffect(() => {
+    p.value = level === 'full' ? withTiming(progress, { duration: 600, easing: EASE_OUT }) : progress;
+  }, [progress, level]);
+  const fill = useAnimatedStyle(() => ({ transform: [{ translateX: (p.value - 1) * w }] }));
+  return (
+    <View
+      pointerEvents="none" style={st.blockGauge} onLayout={(e) => setW(e.nativeEvent.layout.width)}
+      importantForAccessibility="no-hide-descendants" accessibilityElementsHidden
+    >
+      <Animated.View style={[st.blockGaugeFill, { backgroundColor: C.accent + '99' }, fill]} />
+    </View>
+  );
+}
+
+/** One block of the day. Memoised, so the minute turning re-renders only the block on now (its NOW badge and its gauge). */
+const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, progress, past, deepWork, onEdit, onDelete }: {
   b: PlannerBlock; hour24: boolean; isNow: boolean;
+  /** how far the block on now has run, 0 to 1; 0 for any other */
+  progress: number;
   /** today's block that has ended: it steps back, so what is still to come stands out */
   past: boolean;
   deepWork: boolean;
@@ -423,7 +457,7 @@ const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, past, deepWork
       <View style={[st.colorBar, { backgroundColor: b.color }]} />
       <View style={{ flex: 1 }}>
         <Text style={[T.title, past && { color: C.textDim }]}>{b.subject}</Text>
-        <Text style={[T.caption, { marginTop: 2, fontVariant: ['tabular-nums'] }]}>{span}</Text>
+        <Text style={[T.caption, st.span]}>{span}</Text>
       </View>
       {isNow && (
         <View style={[st.nowPill, { borderColor: C.accent + '66', backgroundColor: C.accent + '1A' }]}>
@@ -432,6 +466,7 @@ const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, past, deepWork
       )}
       <IconBtn name="create-outline" size={18} onPress={() => onEdit(b)} accessibilityLabel={'Edit ' + b.subject} />
       <IconBtn name="trash-outline" size={18} onPress={() => onDelete(b)} accessibilityLabel={'Delete ' + b.subject} />
+      {isNow ? <BlockProgress progress={progress} /> : null}
     </>
   );
   if (!deepWork) return <ListRow style={{ paddingVertical: 12 }}>{body}</ListRow>;
@@ -455,8 +490,9 @@ const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, past, deepWork
 
 /**
  * One habit with its streak, and its last seven days beneath. Memoised, and its streak is worked out only when its
- * dates or the day change, so ticking one habit re-renders that habit alone. The streak line never states a zero: a
- * habit with no streak yet shows none. A long press opens it for editing.
+ * dates, its weekdays or the day change, so ticking one habit re-renders that habit alone. The streak line never states
+ * a zero: a habit with no streak yet shows none. A habit kept on some weekdays says which, and on a day it is not due it
+ * reads as a rest day (its tick still counts). A long press opens it for editing.
  */
 const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onToggleDay, onEdit, onRemind, onDelete }: {
   h: Habit; today: string; hour24: boolean;
@@ -464,9 +500,13 @@ const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onTo
   onEdit: (h: Habit) => void; onRemind: (h: Habit) => void; onDelete: (h: Habit) => void;
 }) {
   useTheme(); // a memo row: it follows a new accent itself, since its props do not change with one
-  // the current streak counts back from today, so a new day can end it with no tick at all
-  const { current, best } = useMemo(() => streaks(h.doneDates), [h.doneDates, today]);
+  // the current streak counts back from today, so a new day can end it with no tick at all; rest days pass by
+  const { current, best } = useMemo(() => streaks(h.doneDates, h.days), [h.doneDates, h.days, today]);
   const done = h.doneDates.includes(today);
+  const due = habitDueOn(h, today);
+  // a run of two or more that today could still end: its flame flickers until the tick lands
+  const atRisk = due && !done && current >= 2;
+  const daysText = h.days?.length ? daysLabel(h.days) : '';
   // a current streak that is also the best says so once
   const streakText = current > 0 && current === best
     ? current + ' current'
@@ -477,26 +517,34 @@ const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onTo
     // is the long press that edits it, and says so
     <ListRow style={st.habitRow} onLongPress={() => onEdit(h)} accessibilityHint="Double tap and hold to edit">
       <Row>
-        <CheckCircle done={done} onPress={() => onToggle(h.id)} label={h.title + ', today'} />
+        <CheckCircle done={done} onPress={() => onToggle(h.id)} label={h.title + ', today' + (due ? '' : ', rest day')} />
         <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={T.title}>{h.title}</Text>
-          {streakText || time ? (
-            // the streak's figures dip and come back as the tick lands, instead of jumping
-            <FadeSwap swapKey={streakText}>
-              <Row style={{ marginTop: 3 }}>
+          <Text style={[T.title, !due && { color: C.textDim }]}>{h.title}</Text>
+          {!due || streakText || time || daysText ? (
+            // the streak's figures dip and come back as the tick lands, instead of jumping. Each part keeps its icon with
+            // it, so a narrow phone wraps the line between parts
+            <FadeSwap swapKey={streakText + (due ? '' : '|rest')}>
+              <View style={st.subLine}>
+                {!due ? <Text style={T.caption}>Rest day</Text> : null}
                 {streakText ? (
-                  <>
-                    <Ionicons name="flame-outline" size={13} color={C.textFaint} style={{ marginRight: 4 }} />
+                  <View style={st.subPart}>
+                    <Flame atRisk={atRisk} />
                     <Text style={T.caption}>{streakText}</Text>
-                  </>
+                  </View>
                 ) : null}
                 {time ? (
-                  <>
-                    <Ionicons name="alarm-outline" size={13} color={C.textFaint} style={{ marginLeft: streakText ? 10 : 0 }} />
-                    <Text style={[T.caption, { marginLeft: 4 }]}>{time}</Text>
-                  </>
+                  <View style={st.subPart}>
+                    <Ionicons name="alarm-outline" size={13} color={C.textFaint} style={st.subIcon} />
+                    <Text style={T.caption}>{time}</Text>
+                  </View>
                 ) : null}
-              </Row>
+                {daysText ? (
+                  <View style={st.subPart}>
+                    <Ionicons name="calendar-outline" size={13} color={C.textFaint} style={st.subIcon} />
+                    <Text style={T.caption}>{daysText}</Text>
+                  </View>
+                ) : null}
+              </View>
             </FadeSwap>
           ) : null}
         </View>
@@ -508,21 +556,41 @@ const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onTo
         />
         <IconBtn name="trash-outline" size={18} onPress={() => onDelete(h)} accessibilityLabel={'Delete ' + h.title} />
       </Row>
-      <WeekStrip id={h.id} title={h.title} doneDates={h.doneDates} today={today} onToggleDay={onToggleDay} />
+      <WeekStrip id={h.id} title={h.title} doneDates={h.doneDates} days={h.days} today={today} onToggleDay={onToggleDay} />
     </ListRow>
   );
 });
+
+/**
+ * A streak's flame. With the streak at risk (due today, not ticked yet, a run of two or more) it flickers very gently,
+ * opacity and a hair of scale, until the tick lands; useLoop keeps it still with less motion, out of view or with the
+ * app in the background.
+ */
+function Flame({ atRisk }: { atRisk: boolean }) {
+  const flicker = useLoop(atRisk, 1800);
+  const style = useAnimatedStyle(() => ({
+    opacity: 1 - 0.4 * flicker.value,
+    transform: [{ scale: 1 - 0.04 * flicker.value }],
+  }));
+  return (
+    <Animated.View style={[st.subIcon, style]}>
+      <Ionicons name="flame-outline" size={13} color={C.textFaint} />
+    </Animated.View>
+  );
+}
 
 /** The weekday names for a screen reader, Sunday first, as Date counts them. */
 const SPOKEN_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 /**
  * A habit's last seven days, today last: small flat cells, each a weekday's initial over a dot that fills when the day
- * was done. Any of them ticks or unticks its day, so a day missed by a tap can be put right. Today's initial is in the
- * accent. Its own memoised part, so it re-renders only when the habit's days or the date change.
+ * was done. A day the habit is not due on is a fainter, smaller ring: a rest day, still tickable. Any of them ticks or
+ * unticks its day, so a day missed by a tap can be put right. Today's initial is in the accent. Its own memoised part,
+ * so it re-renders only when the habit's ticks, its weekdays or the date change.
  */
-const WeekStrip = React.memo(function WeekStrip({ id, title, doneDates, today, onToggleDay }: {
-  id: string; title: string; doneDates: string[]; today: string; onToggleDay: (id: string, dateKey: string) => void;
+const WeekStrip = React.memo(function WeekStrip({ id, title, doneDates, days: dueDays, today, onToggleDay }: {
+  id: string; title: string; doneDates: string[]; days?: number[]; today: string;
+  onToggleDay: (id: string, dateKey: string) => void;
 }) {
   useTheme(); // a memo part: today's initial is the accent, which its props do not change with
   const days = useMemo(() => {
@@ -533,10 +601,10 @@ const WeekStrip = React.memo(function WeekStrip({ id, title, doneDates, today, o
       const key = todayKey(date);
       return {
         key, initial: DAY_NAMES[(date.getDay() + 6) % 7][0], spoken: i === 5 ? 'yesterday' : SPOKEN_DAYS[date.getDay()],
-        done: done.has(key), isToday: i === 6,
+        done: done.has(key), isToday: i === 6, rest: !habitDueOn({ days: dueDays }, date),
       };
     });
-  }, [doneDates, today]);
+  }, [doneDates, dueDays, today]);
   return (
     <View style={st.strip}>
       {days.map((c) => (
@@ -546,9 +614,9 @@ const WeekStrip = React.memo(function WeekStrip({ id, title, doneDates, today, o
   );
 });
 
-/** One day of the strip: flat, its dot filling in green as the day is ticked. */
-function DayCell({ initial, spoken, done, isToday, habit, onPress }: {
-  initial: string; spoken: string; done: boolean; isToday: boolean; habit: string; onPress: () => void;
+/** One day of the strip: flat, its dot filling in green as the day is ticked; a rest day's ring is fainter and smaller. */
+function DayCell({ initial, spoken, done, isToday, rest, habit, onPress }: {
+  initial: string; spoken: string; done: boolean; isToday: boolean; rest: boolean; habit: string; onPress: () => void;
 }) {
   const level = useAnimLevel();
   const fill = useSharedValue(done ? 1 : 0);
@@ -564,10 +632,10 @@ function DayCell({ initial, spoken, done, isToday, habit, onPress }: {
     <Pressable
       onPress={onPress} hitSlop={{ top: 6, bottom: 6 }} style={({ pressed }) => [st.cell, pressed && { opacity: 0.6 }]}
       accessibilityRole="checkbox" accessibilityState={{ checked: done }}
-      accessibilityLabel={habit + ', ' + (isToday ? 'today' : spoken)}
+      accessibilityLabel={habit + ', ' + (isToday ? 'today' : spoken) + (rest ? ', rest day' : '')}
     >
-      <Text style={[st.cellDay, isToday && { color: C.accent, fontFamily: F.semi }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{initial}</Text>
-      <View style={[st.cellDot, { borderColor: C.outline }]}>
+      <Text style={[st.cellDay, isToday && { color: C.accent, fontFamily: F.smSemi }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{initial}</Text>
+      <View style={[st.cellDot, rest ? [st.cellRest, { borderColor: C.hairline }] : { borderColor: C.outline }]}>
         <Animated.View style={[st.cellFill, { backgroundColor: C.green }, dotStyle]} />
       </View>
     </Pressable>
@@ -815,13 +883,44 @@ function TemplateRows({ names, onApply }: { names: string[]; onApply: (name: str
   );
 }
 
-/** Saves a habit's new name and time in place: its id, its ticks and so its streak all stay. */
-function saveHabit(id: string, title: string, remindTime?: string) {
+/** Saves a habit's new name, time and weekdays in place: its id, its ticks and so its streak all stay. */
+function saveHabit(id: string, title: string, remindTime?: string, days?: number[]) {
   const s = useStore.getState();
   const h = s.habits.find((x) => x.id === id);
   if (!h) return;
   if (h.title !== title) s.renameHabit(id, title);
   if ((h.remindTime || undefined) !== remindTime) s.setHabitReminder(id, remindTime);
+  if ((h.days || []).join() !== (cleanDays(days) || []).join()) s.setHabitDays(id, days);
+}
+
+/** every weekday, Monday first: a habit due every day */
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+
+/**
+ * One weekday of a habit's Repeat row, like an alarm clock's: a flat circle, outlined at rest and tinted in the accent
+ * when the habit is due that day. 36 across, reaching 44 with its slop.
+ */
+function DayToggle({ index, on, onPress }: { index: number; on: boolean; onPress: () => void }) {
+  const theme = useTheme();
+  const level = useAnimLevel();
+  const lit = useSharedValue(on ? 1 : 0);
+  React.useEffect(() => {
+    lit.value = level === 'none' ? (on ? 1 : 0) : withTiming(on ? 1 : 0, CHANGE);
+  }, [on, level]);
+  const litStyle = useAnimatedStyle(() => ({ opacity: lit.value }));
+  const restStyle = useAnimatedStyle(() => ({ opacity: 1 - lit.value }));
+  return (
+    <Pressable
+      onPress={onPress} hitSlop={4} style={({ pressed }) => [st.dayToggle, pressed && { opacity: 0.6 }]}
+      accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={FULL_DAYS[index]}
+    >
+      <Animated.View pointerEvents="none" style={[st.dayToggleEdge, { borderColor: theme === 'minimal' ? MIN.border : C.outline }, restStyle]} />
+      <Animated.View pointerEvents="none" style={[st.dayToggleEdge, { backgroundColor: C.accent + '1F', borderColor: C.accent + '66' }, litStyle]} />
+      <Text style={[st.dayToggleText, on && { color: C.accent, fontFamily: F.smSemi }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>
+        {DAY_NAMES[index][0]}
+      </Text>
+    </Pressable>
+  );
 }
 
 /** A reminder's time from the wheel: a time of day, or nothing ('' is none). */
@@ -831,14 +930,17 @@ const readTime = (picked: string) => {
 };
 
 /**
- * A new habit, or an edit of one (its name and its reminder time). What is typed lives here, so a keystroke re-renders
- * the sheet alone.
+ * A new habit, or an edit of one (its name, its reminder time and the weekdays it repeats on). What is typed lives here,
+ * so a keystroke re-renders the sheet alone.
  */
 function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: Habit | null; onClose: () => void }) {
   const addHabit = useStore((s) => s.addHabit);
   const remindersEnabled = useStore((s) => s.settings.remindersEnabled);
   const [habitTitle, setHabitTitle] = useState('');
   const [habitTime, setHabitTime] = useState('');
+  // the weekdays it is due on; at least one always stays on, and a tap on the last one says so
+  const [days, setDays] = useState<number[]>(ALL_DAYS);
+  const [lastDay, setLastDay] = useState(false);
   // one save per opening: a second tap while the sheet leaves, or Return with the button, never adds the habit twice
   const done = React.useRef(false);
   // an edit says so once the sheet has gone
@@ -848,7 +950,22 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
     done.current = false;
     setHabitTitle(editing ? editing.title : '');
     setHabitTime(editing?.remindTime ?? '');
+    setDays(editing?.days?.length ? [...editing.days] : ALL_DAYS);
+    setLastDay(false);
   }, [visible]);
+  const toggleDay = (i: number) => {
+    tick();
+    if (days.includes(i)) {
+      if (days.length === 1) {
+        setLastDay(true);
+        return;
+      }
+      setDays(days.filter((d) => d !== i));
+    } else {
+      setDays([...days, i].sort((a, b) => a - b));
+    }
+    setLastDay(false);
+  };
   const submit = () => {
     if (done.current) return;
     const t = habitTitle.trim();
@@ -856,10 +973,10 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
     const time = readTime(habitTime);
     done.current = true;
     if (editing) {
-      saveHabit(editing.id, t, time);
+      saveHabit(editing.id, t, time, days);
       saved.current = true;
     } else {
-      addHabit(t, time);
+      addHabit(t, time, days);
     }
     onClose();
     // a time newly set turns reminders on, asking for permission; a rename alone leaves reminders as they were
@@ -879,6 +996,15 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
         value={habitTitle} onChangeText={setHabitTitle} placeholder="e.g. Revise formula sheet" autoFocus maxLength={80}
       />
       <TimeField label="Reminder" value={habitTime} onChange={setHabitTime} placeholder="No reminder" clearable />
+      <Text style={st.repeatLabel} importantForAccessibility="no">Repeat</Text>
+      <View style={st.repeatRow} accessibilityLabel="Repeat">
+        {ALL_DAYS.map((i) => (
+          <DayToggle key={i} index={i} on={days.includes(i)} onPress={() => toggleDay(i)} />
+        ))}
+      </View>
+      <Text style={[T.caption, st.repeatCaption]} accessibilityLiveRegion="polite">
+        {lastDay ? 'At least one day' : daysLabel(days)}
+      </Text>
       <PillButton label={editing ? 'Save' : 'Add habit'} onPress={submit} />
       {!remindersEnabled && (
         <Text style={[T.caption, { marginTop: 10 }]}>
@@ -959,7 +1085,12 @@ const st = StyleSheet.create({
   turnOff: { alignSelf: 'center', marginTop: 16, paddingHorizontal: 8, paddingVertical: 4 },
   colorBar: { width: 4, height: 36, borderRadius: 2, marginRight: 12 },
   nowPill: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 3, marginRight: 4 },
-  nowText: { fontFamily: F.semi, fontSize: 11, letterSpacing: TRACK.caps },
+  nowText: { fontFamily: F.smSemi, fontSize: 11, letterSpacing: TRACK.caps },
+  // the block on now: a 2 dp gauge along the foot of its row, inset from the corners, filled by sliding its bar in
+  blockGauge: { position: 'absolute', left: 14, right: 14, bottom: 0, height: 2, borderRadius: 1, overflow: 'hidden' },
+  blockGaugeFill: { width: '100%', height: 2, borderRadius: 1 },
+  // a block's times line up from row to row: tabular figures, so Inter Tight
+  span: { marginTop: 2, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   // flat: a ring in the block's own colour marks the chosen one
   swatchWell: {
     width: 40, height: 40, borderRadius: 20,
@@ -973,7 +1104,20 @@ const st = StyleSheet.create({
   strip: { flexDirection: 'row', marginTop: 10, marginLeft: 42, marginRight: 4 },
   // flat: no surface of its own, only a press that dims
   cell: { flex: 1, alignItems: 'center', paddingVertical: 4, borderRadius: 10 },
-  cellDay: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginBottom: 5 },
+  cellDay: { color: C.textFaint, fontFamily: F.smMed, fontSize: 11, letterSpacing: TRACK.fine, marginBottom: 5 },
   cellDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1, overflow: 'hidden' },
+  // a rest day: a fainter ring a little smaller, centred where a due day's dot sits
+  cellRest: { width: 8, height: 8, borderRadius: 4, marginVertical: 1 },
   cellFill: { position: 'absolute', top: -1, left: -1, right: -1, bottom: -1, borderRadius: 5 },
+  // a habit's sub-line: its parts wrap whole, each with its icon
+  subLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 10, rowGap: 2, marginTop: 3 },
+  subPart: { flexDirection: 'row', alignItems: 'center' },
+  subIcon: { marginRight: 4 },
+  // the habit sheet's Repeat row: seven circles spread across the sheet, the field label's look above them
+  repeatLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8, marginTop: 4 },
+  repeatRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  repeatCaption: { marginTop: 8, marginBottom: 18, marginLeft: 2 },
+  dayToggle: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  dayToggleEdge: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 18, borderWidth: 1 },
+  dayToggleText: { color: C.textDim, fontFamily: F.smMed, ...oneLine(13), letterSpacing: TRACK.small },
 });

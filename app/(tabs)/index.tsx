@@ -11,15 +11,17 @@ import Animated, {
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { C, F, MIN, S, T, TRACK, neuInset } from '../../src/theme';
+import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, neuInset, oneLine } from '../../src/theme';
 import { useStore, QuickItem, FocusSession, Habit, PlannerWeek } from '../../src/store';
-import { uid, fmtDate, todayKey, dayName, DAY_NAMES, toMinutes, fmtClockTime, daysUntil, blockOnNow } from '../../src/utils';
+import {
+  uid, fmtDate, todayKey, dayName, DAY_NAMES, toMinutes, fmtClockTime, daysUntil, blockOnNow, habitDueOn, streaks,
+} from '../../src/utils';
 import {
   ScreenBG, Card, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Hairline, Chip,
   ListCard, ListRow, ProgressBar, StrikeText, useTheme,
 } from '../../src/components/UI';
 import {
-  CHANGE, CountUp, EASE_OUT, Enter, Bouncy, FadeSwap, RISE_OUT, glide, rowOut, useAnimLevel, useFocusKey,
+  CHANGE, CountUp, EASE_OUT, Enter, Bouncy, FadeSwap, RISE_OUT, glide, rowOut, useAnimLevel, useFocusKey, useLoop,
 } from '../../src/components/Motion';
 import { useSwapIn } from '../../src/components/Swap';
 import { QuickTaskSheet, shortClock } from '../../src/components/QuickTaskSheet';
@@ -167,7 +169,19 @@ export default function Today() {
     [missions, today]
   );
   const tasksLeft = dailyTasks.filter((t) => t.doneOn !== today).length + dueMissions.filter((m) => !m.done).length;
-  const habitsDone = habits.filter((h) => h.doneDates.includes(today)).length;
+  // today's habits: those due today, and any ticked today on a rest day. A habit resting today stays out of the day
+  const todaysHabits = useMemo(
+    () => habits.filter((h) => habitDueOn(h, today) || h.doneDates.includes(today)),
+    [habits, today],
+  );
+  const habitsDone = todaysHabits.filter((h) => h.doneDates.includes(today)).length;
+  // a run of two or more on a day it is due: the chip carries its flame, which flickers until the tick lands (the flame
+  // stays while the tick's tint crosses over it, so it never swaps for the empty circle on the way out)
+  const habitsOnStreak = useMemo(() => new Set(
+    todaysHabits
+      .filter((h) => habitDueOn(h, today) && streaks(h.doneDates, h.days).current >= 2)
+      .map((h) => h.id),
+  ), [todaysHabits, today]);
   // a session still going counts as it runs, from the day it began, as it will once it is logged
   const liveMin = dwOn && todayKey(new Date(dwStartedAt)) === today
     ? Math.round(Math.min(dwCapSec, dwAccumSec + (dwRunning && dwStartTs ? Math.max(0, now.getTime() - dwStartTs) / 1000 : 0)) / 60)
@@ -481,7 +495,7 @@ export default function Today() {
                   <View style={[st.blockBar, { backgroundColor: nextBlock.block.color }]} />
                   <View style={{ flex: 1 }}>
                     <Text style={T.head} numberOfLines={1}>{nextBlock.block.subject}</Text>
-                    <Text style={[T.caption, { marginTop: 2, fontVariant: ['tabular-nums'] }]}>
+                    <Text style={[T.caption, st.blockSpan]}>
                       {/* a block that runs to the end of the day ends at midnight, as the Planner says */}
                       {fmtClockTime(toMinutes(nextBlock.block.start), hour24)} – {toMinutes(nextBlock.block.end) >= 1440 ? 'midnight' : fmtClockTime(toMinutes(nextBlock.block.end), hour24)}
                     </Text>
@@ -515,11 +529,11 @@ export default function Today() {
       </>
   );
 
-  const glanceBlock = hideTasks && (hidePlanner || !habits.length) && hideFocus ? null : (
+  const glanceBlock = hideTasks && (hidePlanner || !todaysHabits.length) && hideFocus ? null : (
           <Enter index={2}>
             <Card pad={0}>
               <Row>
-                {/* a student with no habits sees no figure for them: the glance has two cells */}
+                {/* with no habit due today (and none ticked), there is no figure for them: the glance has two cells */}
                 {[
                   hideTasks ? null : (
                     <Glance
@@ -527,10 +541,10 @@ export default function Today() {
                       spoken={tasksLeft + (tasksLeft === 1 ? ' task left' : ' tasks left')}
                     />
                   ),
-                  hidePlanner || !habits.length ? null : (
+                  hidePlanner || !todaysHabits.length ? null : (
                     <Glance
-                      key="habits" value={habitsDone} total={habits.length} label="habits" color={C.green}
-                      spoken={habitsDone + ' of ' + habits.length + ' habits done today'}
+                      key="habits" value={habitsDone} total={todaysHabits.length} label="habits" color={C.green}
+                      spoken={habitsDone + ' of ' + todaysHabits.length + ' habits done today'}
                     />
                   ),
                   hideFocus ? null : (
@@ -663,24 +677,16 @@ export default function Today() {
           </>
   );
 
-  const habitsBlock = habits.length > 0 && !hidePlanner && (
+  const habitsBlock = todaysHabits.length > 0 && !hidePlanner && (
           <Enter index={5}>
             <SectionTitle>Habits</SectionTitle>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {habits.map((h) => {
-                const done = h.doneDates.includes(today);
-                return (
-                  <Chip
-                    key={h.id}
-                    icon={done ? 'checkmark-circle' : 'ellipse-outline'}
-                    label={h.title}
-                    active={done}
-                    color={C.green}
-                    onPress={() => toggleHabitToday(h.id)}
-                    small
-                  />
-                );
-              })}
+              {todaysHabits.map((h) => (
+                <HabitChip
+                  key={h.id} id={h.id} title={h.title} done={h.doneDates.includes(today)} flame={habitsOnStreak.has(h.id)}
+                  onToggle={toggleHabitToday}
+                />
+              ))}
             </View>
           </Enter>
   );
@@ -707,7 +713,7 @@ export default function Today() {
                     <>
                       <Hairline />
                       <Text style={[T.caption, { textAlign: 'center', marginTop: 10 }]}>
-                        <SeenCount value={weekTotal} style={{ color: C.accent, fontFamily: F.semi }}> min</SeenCount> focused in the last 7 days
+                        <SeenCount value={weekTotal} style={st.weekCount}> min</SeenCount> focused in the last 7 days
                       </Text>
                     </>
                   ) : null}
@@ -880,6 +886,69 @@ function QuickAddSheet({ visible, onClose, archived, editing }: {
     </Sheet>
   );
 }
+
+/**
+ * One of today's habits: a flat chip, outlined until it is ticked and tinted green once it is. One on a streak of two or
+ * more carries its flame in place of the empty circle; while the streak is at risk (not ticked yet) the flame flickers
+ * very gently until the tick lands (useLoop: only with every animation on, Today in view and the app in front).
+ * Memoised, so the minute turning never re-renders the chips.
+ */
+const HabitChip = React.memo(function HabitChip({ id, title, done, flame, onToggle }: {
+  id: string; title: string; done: boolean; flame: boolean; onToggle: (id: string) => void;
+}) {
+  const atRisk = flame && !done;
+  const theme = useTheme();
+  const level = useAnimLevel();
+  // the resting edge and the green tint cross over, and so do the two inks, as a chip's do
+  const on = useSharedValue(done ? 1 : 0);
+  useEffect(() => {
+    on.value = level === 'none' ? (done ? 1 : 0) : withTiming(done ? 1 : 0, CHANGE);
+  }, [done, level]);
+  const litStyle = useAnimatedStyle(() => ({ opacity: on.value }));
+  const restStyle = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
+  const flicker = useLoop(atRisk, 1800);
+  const flameStyle = useAnimatedStyle(() => ({
+    opacity: 1 - 0.4 * flicker.value,
+    transform: [{ scale: 1 - 0.04 * flicker.value }],
+  }));
+  // both inks in one face, so the lit one lies exactly over the resting one
+  const textStyle = [st.habitChipText, done && { fontFamily: F.smSemi }];
+  return (
+    <Bouncy
+      onPress={() => onToggle(id)} scaleTo={0.94} radius={999} hitSlop={HABIT_CHIP_SLOP} style={st.habitChip}
+      accessibilityRole="checkbox" accessibilityState={{ checked: done }}
+      accessibilityLabel={title + (atRisk ? ', streak at risk' : '')}
+    >
+      <Animated.View pointerEvents="none" style={[st.habitChipEdge, { borderColor: theme === 'minimal' ? MIN.border : C.outline }, restStyle]} />
+      <Animated.View pointerEvents="none" style={[st.habitChipEdge, { backgroundColor: C.green + '1F', borderColor: C.green + '66' }, litStyle]} />
+      <View style={st.habitChipRow}>
+        <View style={st.habitChipIcon}>
+          <Animated.View style={restStyle}>
+            <Animated.View style={flameStyle}>
+              <Ionicons name={flame ? 'flame-outline' : 'ellipse-outline'} size={13} color={C.textFaint} />
+            </Animated.View>
+          </Animated.View>
+          <Animated.View style={[st.ink, litStyle]}>
+            <Ionicons name="checkmark-circle" size={13} color={C.green} />
+          </Animated.View>
+        </View>
+        {/* fixed chrome: chips sit in rows, so their words grow with the phone's font size only up to 1.3 */}
+        <View>
+          <Animated.Text style={[textStyle, restStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{title}</Animated.Text>
+          <Animated.Text
+            style={[textStyle, st.ink, { color: C.green }, litStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}
+            importantForAccessibility="no" accessibilityElementsHidden
+          >
+            {title}
+          </Animated.Text>
+        </View>
+      </View>
+    </Bouncy>
+  );
+});
+
+/** a habit chip reaches 44 dp tall with its slop */
+const HABIT_CHIP_SLOP = { top: 10, bottom: 10, left: 5, right: 5 };
 
 /** One figure of the glance. A screen reader hears it as one phrase (`spoken`), not a number and a word apart. */
 function Glance({ value, total, label, color, suffix, spoken }: {
@@ -1385,7 +1454,7 @@ function WeekBar({ label, mins: minsNow, maxMins: maxNow, isToday }: {
           ]}
         />
       </View>
-      <Text style={[st.barLabel, isToday && { color: C.accent, fontFamily: F.semi }]}>{label}</Text>
+      <Text style={[st.barLabel, isToday && { color: C.accent, fontFamily: F.smSemi }]}>{label}</Text>
     </View>
   );
 }
@@ -1400,18 +1469,20 @@ const st = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, marginLeft: 10,
   },
-  tagText: { fontFamily: F.bold, fontSize: 11, letterSpacing: TRACK.caps },
+  tagText: { fontFamily: F.smSemi, fontSize: 11, letterSpacing: TRACK.caps },
+  // the next block's times: tabular figures, so Inter Tight
+  blockSpan: { marginTop: 2, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   vDivider: { width: StyleSheet.hairlineWidth, backgroundColor: C.hairline, alignSelf: 'stretch', marginVertical: 12 },
   glanceValue: { ...T.numStat },
-  glanceLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, marginTop: 3, letterSpacing: TRACK.fine },
+  glanceLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 11, marginTop: 3, letterSpacing: TRACK.fine },
   qaTile: { position: 'absolute', left: 0, top: 0, height: QA_ROW_H },
   qaFill: { flex: 1 },
   qaFace: { flex: 1, borderRadius: 18 },
   qaWide: { padding: 12, justifyContent: 'space-between' },
   qaSmall: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
   qaLabel: { flex: 1, marginLeft: 8, color: C.text, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
-  qaSmallLabel: { maxWidth: '100%', marginTop: 6, color: C.textDim, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.small },
-  qaMeta: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 15 },
+  qaSmallLabel: { maxWidth: '100%', marginTop: 6, color: C.textDim, fontFamily: F.smMed, fontSize: 11, letterSpacing: TRACK.small },
+  qaMeta: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, lineHeight: 15 },
   qaX: { position: 'absolute', top: 1, right: 1 },
   qaAddWrap: { position: 'absolute', left: 0, right: 0, top: 0, height: QA_ADD_H },
   qaAdd: {
@@ -1431,23 +1502,37 @@ const st = StyleSheet.create({
     backgroundColor: C.amber + '1C', borderColor: C.amber + '55', borderWidth: 1,
     borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8,
   },
-  missionPillText: { color: C.amber, fontFamily: F.bold, fontSize: 11, letterSpacing: TRACK.caps },
-  byText: { color: C.textFaint, fontFamily: F.reg, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 8, fontVariant: ['tabular-nums'] },
+  missionPillText: { color: C.amber, fontFamily: F.smSemi, fontSize: 11, letterSpacing: TRACK.caps },
+  // a caption that only says a time ("by 5 pm"): Schibsted, its figures proportional
+  byText: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 8 },
   // a quiet line with no surface (Coming up, the session in flight): under a card, nearer it than the next section
   flatRow: { flexDirection: 'row', alignItems: 'center', marginTop: -4, marginBottom: S.gap - 4, paddingVertical: 8, paddingHorizontal: 4 },
   flatIcon: { marginRight: 10 },
-  flatText: { color: C.textDim, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small },
-  flatEm: { color: C.text, fontFamily: F.semi },
+  flatText: { color: C.textDim, fontFamily: F.smMed, fontSize: 13, letterSpacing: TRACK.small },
+  flatEm: { color: C.text, fontFamily: F.smSemi },
   // each part of Coming up gives way to the other on a narrow phone, cut short with an ellipsis
   comingPart: { flexShrink: 1 },
   barValue: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginBottom: 4, fontVariant: ['tabular-nums'] },
-  barLabel: { color: C.textFaint, fontFamily: F.med, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 7 },
+  barLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 11, letterSpacing: TRACK.fine, marginTop: 7 },
+  // the week's minutes in the caption under it: a count, so Inter Tight with tabular figures
+  weekCount: { color: C.accent, fontFamily: F.semi, fontVariant: ['tabular-nums'] },
+  // a habit chip, as a small chip is: flat, its hairline edge drawn by its two layers
+  habitChip: {
+    paddingVertical: 5, paddingHorizontal: 11, borderRadius: 999,
+    marginRight: 10, marginBottom: 10, overflow: 'hidden',
+  },
+  habitChipEdge: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999, borderWidth: 1 },
+  habitChipRow: { flexDirection: 'row', alignItems: 'center' },
+  habitChipIcon: { marginRight: 6 },
+  habitChipText: { color: C.textDim, fontFamily: F.smMed, ...oneLine(12), letterSpacing: TRACK.fine },
+  /** a second ink laid exactly over the first, for colours that cross over */
+  ink: { position: 'absolute', top: 0, left: 0, right: 0 },
   barTrough: {
     width: 16, height: 56, borderRadius: 8,
     overflow: 'hidden', justifyContent: 'flex-end',
   },
   sheetSection: {
-    color: C.textFaint, fontFamily: F.semi, fontSize: 11,
+    color: C.textFaint, fontFamily: F.smSemi, fontSize: 11,
     textTransform: 'uppercase', letterSpacing: TRACK.caps, marginTop: 14, marginBottom: 8,
   },
 });

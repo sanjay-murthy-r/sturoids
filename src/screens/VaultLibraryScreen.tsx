@@ -15,7 +15,7 @@ import {
 } from '../components/UI';
 import { toast } from '../components/Toast';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { Appear, EASE_OUT, Enter, glide, rowIn, shiftIn, useAnimLevel, useBuilt } from '../components/Motion';
+import { Appear, EASE_OUT, Enter, Sheen, glide, rowIn, shiftIn, useAnimLevel, useBuilt } from '../components/Motion';
 import { useToolNav } from '../toolNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as CachedImage } from 'expo-image';
@@ -44,22 +44,31 @@ const plural = (n: number, one: string) => n + ' ' + (n === 1 ? one : one + 's')
 type NoteHit = { video: VaultVideo; item: TimedNote | Bookmark; isBookmark: boolean };
 const hitText = (x: NoteHit) => (x.isBookmark ? (x.item as Bookmark).label : (x.item as TimedNote).text);
 
-/** A video's thumbnail, cached on the phone, with a carved play mark when it cannot load. */
-function Thumb({ videoId }: { videoId: string }) {
+/**
+ * A video's thumbnail, cached on the phone, with a carved play mark when it cannot load. While it loads, its carved
+ * place carries the loading sheen. `style` sizes it (a row's 92 x 52 unless given) and `radius` rounds it.
+ */
+function Thumb({ videoId, style, radius = 10 }: { videoId: string; style?: any; radius?: number }) {
   const [failed, setFailed] = React.useState(false);
+  const [loaded, setLoaded] = React.useState(false);
+  const box = [st.thumb, style, { borderRadius: radius }];
   if (failed) {
     return (
-      <View style={[st.thumb, { backgroundColor: C.inset, alignItems: 'center', justifyContent: 'center', ...NEU.insetLow }]}>
+      <View style={[box, { alignItems: 'center', justifyContent: 'center', ...NEU.insetLow }]}>
         <Ionicons name="play-outline" size={20} color={C.textFaint} />
       </View>
     );
   }
   return (
-    <CachedImage
-      source={{ uri: thumb(videoId) }} style={st.thumb} contentFit="cover" cachePolicy="memory-disk"
-      transition={220}
-      onError={() => setFailed(true)}
-    />
+    <View style={[box, { overflow: 'hidden' }]}>
+      <CachedImage
+        source={{ uri: thumb(videoId) }} style={[StyleSheet.absoluteFill, { borderRadius: radius }]} contentFit="cover"
+        cachePolicy="memory-disk" transition={220}
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
+      />
+      {loaded ? null : <Sheen radius={radius} />}
+    </View>
   );
 }
 
@@ -835,10 +844,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
       >
         {heldPreview && (
           <View>
-            <CachedImage
-              source={{ uri: thumb(heldPreview.video.videoId) }} contentFit="cover" cachePolicy="memory-disk"
-              transition={220}
-              style={{ width: '100%', aspectRatio: 16 / 9, borderRadius: 16, backgroundColor: C.inset }}
+            <Thumb
+              key={heldPreview.video.videoId} videoId={heldPreview.video.videoId} radius={16}
+              style={{ width: '100%', height: undefined, aspectRatio: 16 / 9 }}
             />
             <Text style={[T.title, { marginTop: 12 }]}>{heldPreview.video.title}</Text>
             <Text style={[T.caption, { marginTop: 4 }]}>

@@ -197,7 +197,7 @@ export function useGreeting(input: {
     let milestone: number | undefined;
     for (const h of habits) {
       if (!h.doneDates.includes(today)) continue;
-      const current = streaks(h.doneDates).current;
+      const current = streaks(h.doneDates, h.days).current;
       if (MILESTONES.includes(current) && (milestone == null || current > milestone)) milestone = current;
     }
 
