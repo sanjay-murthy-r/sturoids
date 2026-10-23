@@ -1667,7 +1667,6 @@ const st = StyleSheet.create({
   timeRowPressed: { opacity: 0.6 },
   timeText: { flex: 1 },
   timeActions: { gap: 12, marginTop: 20 },
-  // the block in progress: a hairline along the row's foot, inside its corners, filling from the left
   emptyWrap: { alignItems: 'center', marginVertical: 24, paddingHorizontal: 16 },
   emptyWell: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   emptyTitle: { color: C.text, fontFamily: F.semi, fontSize: 15, letterSpacing: TRACK.body, textAlign: 'center' },

@@ -722,13 +722,14 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
                 accessibilityRole="button" accessibilityLabel={'Your day: ' + factsText} accessibilityHint="Opens what the day held"
               >
                 <FadeSwap swapKey={factsText} style={st.dayFacts}>
-                  {facts.map((f) => (
+                  {facts.map((f, i) => (
                     <View key={f.kind} style={st.dayFact}>
                       <Ionicons name={FACT_ICONS[f.kind]} size={13} color={C.textFaint} style={st.dayFactIcon} />
                       <Text style={st.dayFactText}>{f.text}</Text>
+                      {/* the arrow rides with the last fact, so a narrow phone never leaves it alone on a line */}
+                      {i === facts.length - 1 ? <Ionicons name="chevron-forward" size={13} color={C.textFaint} style={st.dayChev} /> : null}
                     </View>
                   ))}
-                  <Ionicons name="chevron-forward" size={13} color={C.textFaint} />
                 </FadeSwap>
               </Pressable>
             ) : null}
@@ -1135,6 +1136,7 @@ const st = StyleSheet.create({
   dayFacts: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 12, rowGap: 4 },
   dayFact: { flexDirection: 'row', alignItems: 'center' },
   dayFactIcon: { marginRight: 4 },
+  dayChev: { marginLeft: 2 },
   dayFactText: { color: C.textDim, fontFamily: F.sm, fontSize: 12, lineHeight: 17, letterSpacing: TRACK.fine },
   // Your day: a kicker over each section, rows a finger's height
   daySection: { ...T.kicker, marginBottom: 4 },

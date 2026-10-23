@@ -541,7 +541,7 @@ const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onTo
                 {daysText ? (
                   <View style={st.subPart}>
                     <Ionicons name="calendar-outline" size={13} color={C.textFaint} style={st.subIcon} />
-                    <Text style={T.caption}>{daysText}</Text>
+                    <Text style={[T.caption, st.subText]}>{daysText}</Text>
                   </View>
                 ) : null}
               </View>
@@ -1111,7 +1111,9 @@ const st = StyleSheet.create({
   cellFill: { position: 'absolute', top: -1, left: -1, right: -1, bottom: -1, borderRadius: 5 },
   // a habit's sub-line: its parts wrap whole, each with its icon
   subLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 10, rowGap: 2, marginTop: 3 },
-  subPart: { flexDirection: 'row', alignItems: 'center' },
+  // a part is as wide as the line at most: a long list of days wraps inside its own part
+  subPart: { flexDirection: 'row', alignItems: 'center', flexShrink: 1 },
+  subText: { flexShrink: 1 },
   subIcon: { marginRight: 4 },
   // the habit sheet's Repeat row: seven circles spread across the sheet, the field label's look above them
   repeatLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8, marginTop: 4 },

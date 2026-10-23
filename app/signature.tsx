@@ -9,7 +9,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, liteSh, neuInset, neuRaised } from '../src/theme';
+import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, liteSh, neuInset, neuRaised, oneLine } from '../src/theme';
 import { useStore } from '../src/store';
 import type { OwnSignature } from '../src/store';
 import { SIG_SPEED } from '../src/signature';
@@ -54,6 +54,12 @@ const GAP = { min: 0, max: 0.6, step: 0.05 };
 const TILT = { min: -30, max: 30, step: 2 };
 /** the creator's digit size, which a size reads against */
 const BASE_SIZE = 54;
+/**
+ * Touch reach past a pad's control (38 dp, or a pill about 36 tall) to 44 dp and more, short of the 10 dp between two;
+ * and past a digit's 28 dp circle, 44 dp tall and as wide as the space between ten in a row allows.
+ */
+const PAD_SLOP = { top: 5, bottom: 5, left: 4, right: 4 };
+const CELL_SLOP = { top: 8, bottom: 8, left: 2, right: 2 };
 
 const PROBLEMS = {
   empty: 'Sign in the pad first.',
@@ -73,6 +79,25 @@ function storedPlace(p: DatePlace): NonNullable<OwnSignature['date']> {
   };
   if (p.parts && p.parts.length < DATE_PARTS.length) out.parts = [...p.parts];
   return out;
+}
+
+/**
+ * The placement the page opens with: the saved one, or null (placed automatically) when it is exactly the one the page
+ * would place for these parts anyway. Save keeps an automatic date with fewer than all its parts so the parts are
+ * remembered; read back, it stays automatic, so it still follows a signature recorded again.
+ */
+function savedPlace(own: OwnSignature | null | undefined): DatePlace | null {
+  if (!own?.digits || !own.date) return null;
+  const p = clampPlace(own.date);
+  if (!p.parts) return p;
+  try {
+    const model = buildSigModel(own);
+    const digits = buildDigits(own.digits);
+    if (model && digits && samePlace(p, defaultPlace(model, digits, p.parts))) return null;
+  } catch {
+    // a recording that does not build keeps its placement as saved
+  }
+  return p;
 }
 
 const recordedOn = (at: number) => fmtShortDate(todayKey(new Date(at)));
@@ -112,7 +137,7 @@ export default function SignaturePage() {
   const [strokes, setStrokes] = useState<PadStroke[]>([]);
   const [digits, setDigits] = useState<DigitDraft>(() => (own?.digits ? { ...own.digits } : {}));
   /** null: the date goes where it is placed automatically */
-  const [place, setPlace] = useState<DatePlace | null>(() => (own?.digits && own.date ? clampPlace(own.date) : null));
+  const [place, setPlace] = useState<DatePlace | null>(() => savedPlace(own));
   /** which parts of the date are written: kept apart from the placement, so an automatic one follows them too */
   const [parts, setParts] = useState<DatePart[]>(() => datePartsOf(own?.digits ? own.date?.parts : undefined));
   /** digits or the placement changed since the last save */
@@ -337,7 +362,7 @@ function PadButton({ label, icon, bare, onPress, disabled, primary }: {
   const c = primary ? C.accent : C.textDim;
   return (
     <Bouncy
-      onPress={onPress} disabled={disabled} scaleTo={0.96} radius={999} accessibilityLabel={label}
+      onPress={onPress} disabled={disabled} scaleTo={0.96} radius={999} accessibilityLabel={label} hitSlop={PAD_SLOP}
       style={[
         st.padBtn,
         theme === 'minimal' ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: primary ? c + '77' : MIN.border } : { backgroundColor: C.card, ...neuRaised('low') },
@@ -579,7 +604,7 @@ const DateSection = React.memo(function DateSection({
                 <PadButton icon="play" label="Preview" onPress={() => { tick(); setPreviewed((n) => n + 1); }} />
               </View>
               {previewed ? <PreviewStage model={model} hand={hand} play={previewed} width={width} /> : null}
-              <PlaceSteppers hand={hand} model={model} onPlace={onPlace}>
+              <PlaceSteppers hand={hand} model={model} together={together} onPlace={onPlace}>
                 {several ? (
                   <View style={st.stepRow}>
                     <Text style={[T.body, { flex: 1 }]}>Place parts separately</Text>
@@ -613,7 +638,7 @@ function DigitCell({ digit, done, current, onPress }: { digit: string; done: boo
   const c = C.accent;
   return (
     <Bouncy
-      onPress={onPress} scaleTo={0.9} radius={999} hitSlop={4}
+      onPress={onPress} scaleTo={0.9} radius={999} hitSlop={CELL_SLOP}
       accessibilityLabel={'Digit ' + digit + (done ? ', written' : '')} accessibilityState={{ selected: current }}
       style={[
         st.cell,
@@ -1204,20 +1229,38 @@ function GroupDot({ cx, cy, wk, size }: { cx: number; cy: number; wk: number; si
   return <AnimatedCircle cx={cx} cy={cy} fill={C.text} animatedProps={props} />;
 }
 
-/** Size, spacing and tilt, a step at a time: no sliders to fumble. Anything given first goes at the top of the list. */
-function PlaceSteppers({ hand, model, onPlace, children }: {
-  hand: Hand; model: SigModel; onPlace: (p: DatePlace) => void; children?: React.ReactNode;
+/**
+ * Size, spacing and tilt, a step at a time: no sliders to fumble. Anything given first goes at the top of the list.
+ * The date as one piece (`together`) grows and turns about its first part, as a pinch grows and turns it, so its parts
+ * keep their spacing; a date placed part by part keeps each part's anchor.
+ */
+function PlaceSteppers({ hand, model, together, onPlace, children }: {
+  hand: Hand; model: SigModel; together: boolean; onPlace: (p: DatePlace) => void; children?: React.ReactNode;
 }) {
   const { place } = hand;
   const set = (patch: Partial<DatePlace>) => {
     const next = { ...place, ...patch };
-    // a bigger date keeps its anchors, but never past the room it may be dragged in
+    let { groups } = next;
+    if (together && (next.size !== place.size || next.tilt !== place.tilt)) {
+      const pivot = place.groups[datePartsOf(place.parts)[0]];
+      const s = next.size / place.size;
+      const r = ((next.tilt - place.tilt) * Math.PI) / 180;
+      const c = Math.cos(r);
+      const sn = Math.sin(r);
+      const about = (q: { x: number; y: number }) => {
+        const ox = q.x - pivot.x;
+        const oy = q.y - pivot.y;
+        return { x: pivot.x + (ox * c - oy * sn) * s, y: pivot.y + (ox * sn + oy * c) * s };
+      };
+      groups = { dd: about(groups.dd), mm: about(groups.mm), yy: about(groups.yy) };
+    }
+    // never past the room it may be dragged in
     const [rx0, ry0, rx1, ry1] = placeRegion(model, hand);
     const at = (q: { x: number; y: number }) => ({
       x: Math.round(Math.min(rx1 - 20, Math.max(rx0, q.x))),
       y: Math.round(Math.min(ry1, Math.max(ry0 + 1.15 * next.size, q.y))),
     });
-    onPlace({ ...next, groups: { dd: at(next.groups.dd), mm: at(next.groups.mm), yy: at(next.groups.yy) } });
+    onPlace({ ...next, groups: { dd: at(groups.dd), mm: at(groups.mm), yy: at(groups.yy) } });
   };
   return (
     <ListCard style={{ marginTop: S.gap }}>
@@ -1284,7 +1327,7 @@ const st = StyleSheet.create({
   cells: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10, marginTop: S.gap, marginBottom: 18 },
   cell: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   // a digit's place is a small flat choice, like a chip: Schibsted
-  cellText: { fontFamily: F.smSemi, fontSize: 13 },
+  cellText: { ...oneLine(13), fontFamily: F.smSemi },
   writeBlock: { marginTop: S.section },
   writeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', rowGap: 10 },
   writeLabel: { marginRight: 14 },
@@ -1295,10 +1338,9 @@ const st = StyleSheet.create({
   spots: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12 },
   stepRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 4, gap: 10 },
   stepKey: { width: 32, height: 32, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  // figures that step and line up: Inter Tight with tabular figures, never Schibsted
+  // figures that step and line up: Inter Tight Medium with tabular figures, never Schibsted, centred on one line
   stepValue: {
-    fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, color: C.text, minWidth: 48, textAlign: 'center',
-    fontVariant: ['tabular-nums'],
+    ...oneLine(13), fontFamily: F.med, color: C.text, minWidth: 48, textAlign: 'center', fontVariant: ['tabular-nums'],
   },
   link: { alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 2, marginTop: 10 },
   linkText: { fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, color: C.accent },
