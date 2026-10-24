@@ -10,6 +10,7 @@ import {
   daysLabel, habitDueOn,
 } from '../utils';
 import { useNow, useToday } from '../hooks/useNow';
+import { habitSince } from '../journal';
 import {
   ScreenBG, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, CheckCircle, useTheme, useToolHeader,
   contextLine, ListCard, ListRow, TimeField, TimeWheel,
@@ -596,15 +597,17 @@ const WeekStrip = React.memo(function WeekStrip({ id, title, doneDates, days: du
   const days = useMemo(() => {
     const [y, m, d] = today.split('-').map(Number);
     const done = new Set(doneDates);
+    // a day before the habit existed was never due, as the journal counts it
+    const since = habitSince({ id });
     return Array.from({ length: 7 }, (_, i) => {
       const date = new Date(y, m - 1, d - 6 + i);
       const key = todayKey(date);
       return {
         key, initial: DAY_NAMES[(date.getDay() + 6) % 7][0], spoken: i === 5 ? 'yesterday' : SPOKEN_DAYS[date.getDay()],
-        done: done.has(key), isToday: i === 6, rest: !habitDueOn({ days: dueDays }, date),
+        done: done.has(key), isToday: i === 6, rest: !habitDueOn({ days: dueDays }, date) || (!!since && key < since),
       };
     });
-  }, [doneDates, dueDays, today]);
+  }, [id, doneDates, dueDays, today]);
   return (
     <View style={st.strip}>
       {days.map((c) => (

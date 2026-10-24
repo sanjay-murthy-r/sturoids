@@ -178,7 +178,7 @@ const HABIT_IDS_FROM = Date.UTC(2020, 0, 1);
  * The day a habit was made, read from its id where the app made it (the first eight letters are the time in base 36),
  * or '' when the id says nothing: a day before a habit existed never counts it as due.
  */
-function habitSince(h: Habit): string {
+export function habitSince(h: Pick<Habit, 'id'>): string {
   const m = /^[0-9a-z]{8}/.exec(h.id || '');
   if (!m) return '';
   const ms = parseInt(m[0], 36);
