@@ -10,10 +10,11 @@ import { AnimLevel, C, CHROME_FONT_MAX, F, MIN, NEU, S, T, TRACK, oneLine } from
 import { Field, PillButton, ScreenBG, Sheet, useTheme } from './UI';
 import { Bouncy, EASE_OUT, FadeSwap, useAnimLevel } from './Motion';
 import { useStore } from '../store';
+import { useProfiles } from '../profiles';
 import { tap, tick } from '../haptics';
 import {
   ALL_NOTES, LEGACY_MAX, LEGACY_MIN, PIN_LEN, deviceAuthAvailable, markOpen, noteScope, pinCooldownMs, pinStatus,
-  setPin, unlockWithScreenLock, useOpen, verifyPin,
+  profileHasPin, setPin, unlockWithScreenLock, useOpen, verifyPin, verifyProfilePin,
 } from '../lock';
 import type { LockScope } from '../lock';
 
@@ -65,8 +66,10 @@ const pageIn = (level: AnimLevel) => FadeIn.duration(level === 'full' ? 320 : 20
  * the owner choose a new PIN (the locks stay on, and backing out before the new PIN is confirmed changes nothing);
  * signed out, it says what the way out is.
  */
-export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
+export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other }: {
   mode: 'enter' | 'set'; tint: string; onDone: () => void; onScreenLock?: () => void; active?: boolean;
+  /** another profile whose PIN is asked for (before it is deleted from here): no forgot link, no screen lock */
+  other?: { id: string; name: string };
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
@@ -96,8 +99,14 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
     setResetting(false);
     setForgot(null);
     setStage(null);
-    pinStatus().then((st) => {
+    (other ? profileHasPin(other.id).then((has): 'set' | 'none' => (has ? 'set' : 'none')) : pinStatus()).then((st) => {
       if (!live) return;
+      // another profile with no PIN has nothing to check
+      if (other) {
+        if (st === 'none') onDone();
+        else setStage('enter');
+        return;
+      }
       setFresh(st === 'none');
       // with no PIN on this phone (a restored backup, say) there is nothing to check: a PIN is chosen instead
       setStage(st === 'legacy' ? 'legacy' : st === 'none' ? 'choose' : 'enter');
@@ -128,7 +137,7 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
     busy.current = true;
     try {
       if (stage === 'enter' || stage === 'legacy') {
-        const r = await verifyPin(code);
+        const r = other ? await verifyProfilePin(other.id, code) : await verifyPin(code);
         if (r === 'cooldown') {
           setDigits('');
           setMessage('');
@@ -163,7 +172,7 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
 
   // a wait after wrong PINs holds only the steps that check one; choosing a new PIN after the account's password is not
   // held by it (the new PIN ends the wait)
-  const checking = stage === 'enter' || stage === 'legacy';
+  const checking = !other && (stage === 'enter' || stage === 'legacy');
   const waitS = checking ? coolS : 0;
 
   const forgotPin = () => {
@@ -177,7 +186,9 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
     }
     Alert.alert(
       'Forgot your PIN?',
-      'Only a cloud account can reset the PIN. Without one, the way out is Settings, Delete, Delete everything on this phone.',
+      // the button is named for the profile when the phone holds several (CloudCard's DeleteSection)
+      'Only a cloud account can reset the PIN. Without one, the way out is Settings, Delete, '
+        + (useProfiles.getState().list.length > 1 ? 'Delete everything in this profile.' : 'Delete everything on this phone.'),
     );
   };
   // the password checked out and its sheet has gone: the new PIN is chosen as a first one would be
@@ -223,9 +234,9 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true }: {
     if (next.length === len) setTimeout(() => complete(next), 90);
   };
 
-  const screenKey = !!onScreenLock && mode === 'enter' && stage === 'enter';
+  const screenKey = !other && !!onScreenLock && mode === 'enter' && stage === 'enter';
   const prompt = !stage ? ' '
-    : stage === 'enter' ? (mode === 'set' ? 'Enter your current PIN' : 'Enter your PIN')
+    : stage === 'enter' ? (other ? 'Enter ' + (other.name || 'that profile') + "'s PIN" : mode === 'set' ? 'Enter your current PIN' : 'Enter your PIN')
       : stage === 'legacy' ? 'Enter your old PIN or passcode'
         : stage === 'choose' ? (fresh ? 'Choose a 4-digit PIN' : 'Choose a new 4-digit PIN')
           : 'Enter it again';
@@ -443,13 +454,13 @@ function ForgotSheet({ visible, email, onClose, onVerified }: {
 }
 
 /** The keypad in a sheet: choosing a PIN, or confirming the owner before a lock is weakened. */
-export function PinSheet({ visible, mode, tint = C.accent, onClose, onDone, onScreenLock }: {
+export function PinSheet({ visible, mode, tint = C.accent, onClose, onDone, onScreenLock, other }: {
   visible: boolean; mode: 'enter' | 'set'; tint?: string; onClose: () => void; onDone: () => void;
-  onScreenLock?: () => void;
+  onScreenLock?: () => void; other?: { id: string; name: string };
 }) {
   return (
     <Sheet visible={visible} onClose={onClose}>
-      <PinPad mode={mode} tint={tint} active={visible} onDone={onDone} onScreenLock={onScreenLock} />
+      <PinPad mode={mode} tint={tint} active={visible} onDone={onDone} onScreenLock={onScreenLock} other={other} />
     </Sheet>
   );
 }

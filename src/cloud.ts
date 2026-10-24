@@ -24,6 +24,7 @@ import { restoredPath } from './backup';
 import { ATT_DIR } from './attachments';
 import { toast } from './components/Toast';
 import { uid } from './utils';
+import { accountTakenBy, noteActiveEmail, pkey, sessionKey, takenMessage } from './profiles';
 
 // A copy of this phone's data is kept while it follows the cloud quietly, so the toast's Undo can bring it back. It
 // sits in the store's recovery row (Settings can share or restore it like a kept copy, and no file is cleared as
@@ -37,7 +38,13 @@ export const SUPABASE_URL = 'https://imvydxgapirnkuvayimn.supabase.co';
 export const SUPABASE_KEY = 'sb_publishable_uWD9djNFLKH9uQ0uBeqP5g_rbk8cYJO';
 
 const BUCKET = 'backups';
-const META_KEY = 'sturoids-cloud';
+/** this phone's record of the cloud: each profile keeps its own, as it keeps its own account (profiles.ts) */
+const META_KEY = pkey('sturoids-cloud');
+/**
+ * where a profile other than the first keeps its session; the first keeps Supabase's default key, so a session saved
+ * before profiles existed still opens
+ */
+const SESSION_KEY = sessionKey();
 /** each account's share of the free plan's 1 GB of files */
 export const QUOTA_BYTES = 120 * 1024 * 1024;
 /** the bucket takes files up to 20 MB (setup.sql) */
@@ -184,6 +191,12 @@ export const useCloud = create<CloudState>(() => ({
   note: null, usedBytes: null, remote: null, reason: null, hasCopy: null, pending: false, lost: false,
 }));
 
+// the profiles' registry learns which account this profile is signed in to, once the cloud has looked, so another
+// profile on the phone can refuse the same account
+useCloud.subscribe((s, prev) => {
+  if (s.ready && (!prev.ready || s.email !== prev.email)) noteActiveEmail(s.status === 'signed-out' ? null : s.email);
+});
+
 let meta: Meta = { deviceId: '', userId: null, auto: true, lastSyncedAt: null, lastRemoteAt: null, lastHash: null };
 let client: SupabaseClient | null = null;
 let started = false;
@@ -238,7 +251,10 @@ export function cloud(): SupabaseClient {
   // required here so the library stays off the startup path
   const { createClient } = require('@supabase/supabase-js') as typeof import('@supabase/supabase-js');
   client = createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: { storage: AsyncStorage, autoRefreshToken: true, persistSession: true, detectSessionInUrl: false },
+    auth: {
+      storage: AsyncStorage, autoRefreshToken: true, persistSession: true, detectSessionInUrl: false,
+      ...(SESSION_KEY ? { storageKey: SESSION_KEY } : {}),
+    },
   });
   return client;
 }
@@ -565,7 +581,14 @@ function scheduleRetry() {
 
 // ---------------------------------------------------------------- account
 
+/** One cloud account per profile: an account another profile on this phone holds is refused before signing in. */
+function refuseTaken(email: string) {
+  const other = accountTakenBy(email);
+  if (other) throw said(takenMessage(other));
+}
+
 export async function signUp(email: string, password: string): Promise<'signed-in' | 'confirm'> {
+  refuseTaken(email);
   const { data, error } = await cloud().auth.signUp({ email: email.trim(), password });
   if (error) throw error;
   if (!data.session) return 'confirm';
@@ -574,6 +597,7 @@ export async function signUp(email: string, password: string): Promise<'signed-i
 }
 
 export async function signIn(email: string, password: string) {
+  refuseTaken(email);
   const { data, error } = await cloud().auth.signInWithPassword({ email: email.trim(), password });
   if (error) throw error;
   await afterSignIn(data.session);
@@ -697,10 +721,13 @@ export async function resetPasswordWithCode(
   }
 }
 
-/** Whether a session was saved on this phone (an account signed in here), without loading the cloud library. */
+/**
+ * Whether a session was saved in this profile (an account signed in here), without loading the cloud library. Another
+ * profile's session never counts: theirs sit under their own key, which never ends in '-auth-token'.
+ */
 async function hasSavedSession(): Promise<boolean> {
   return AsyncStorage.getAllKeys()
-    .then((ks) => ks.some((k) => k.startsWith('sb-') && k.endsWith('-auth-token')))
+    .then((ks) => ks.some((k) => (SESSION_KEY ? k === SESSION_KEY : k.startsWith('sb-') && k.endsWith('-auth-token'))))
     .catch(() => false);
 }
 

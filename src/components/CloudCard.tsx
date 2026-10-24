@@ -10,6 +10,7 @@ import {
 import { eraseThisPhone } from '../wipe';
 import { pinStatus } from '../lock';
 import { fmtClockTime } from '../utils';
+import { accountTakenBy, takenMessage, useProfiles } from '../profiles';
 import { Card, Field, Hairline, InfoDot, PillButton, Row, SectionTitle, Sheet, Toggle, useTheme } from './UI';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import { Appear, FadeSwap, useLoop } from './Motion';
@@ -117,6 +118,9 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
       if (!/^\S+@\S+\.\S+$/.test(email.trim())) { setError('That does not look like an email address.'); return; }
       if (password.length < 6) { setError('Use a password of at least 6 characters.'); return; }
       if (mode === 'up' && password !== again) { setError('The two passwords do not match.'); return; }
+      // one cloud account per profile: an account another profile on this phone holds is that profile's to use
+      const other = accountTakenBy(email);
+      if (other) { setError(takenMessage(other)); return; }
       // signing in sends locked pages to the cloud, so it asks for the PIN when anything is locked, like an export
       if (!pinOk && (await locksNeedPin())) { setPinFor('auth'); return; }
       setBusy('auth');
@@ -147,7 +151,8 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
     const release = () => { busyRef.current = false; };
     Alert.alert(
       'Bring the cloud copy here?',
-      'It replaces everything on this phone with the copy in the cloud. Calculator history is cleared and a running Deep Work session ends.',
+      'It replaces everything ' + (useProfiles.getState().list.length > 1 ? 'in this profile' : 'on this phone')
+        + ' with the copy in the cloud. Calculator history is cleared and a running Deep Work session ends.',
       [
         { text: 'Cancel', style: 'cancel', onPress: release },
         {
@@ -476,6 +481,9 @@ function ResetSheet({ visible, startEmail, onClose }: { visible: boolean; startE
     if (busyRef.current) return;
     const address = email.trim();
     if (!looksLikeEmail(address)) { setError('That does not look like an email address.'); return; }
+    // the code signs this profile in, so an account another profile holds is refused here, before any email goes
+    const other = accountTakenBy(address);
+    if (other) { setError(takenMessage(other)); return; }
     busyRef.current = true;
     setBusy('send');
     setError('');
@@ -512,6 +520,8 @@ function ResetSheet({ visible, startEmail, onClose }: { visible: boolean; startE
     if (!/^\d{6}$/.test(code.replace(/\s+/g, ''))) { setError('Enter the 6-digit code from the email.'); return; }
     if (next.length < 6) { setError('Use a password of at least 6 characters.'); return; }
     if (next !== again) { setError('The two passwords do not match.'); return; }
+    const other = accountTakenBy(email);
+    if (other) { setError(takenMessage(other)); return; }
     busyRef.current = true;
     setBusy('reset');
     setError('');
@@ -710,6 +720,10 @@ export function DeleteSection({ title = 'Delete', onErased }: {
   const release = () => { busyRef.current = false; };
   const [pinFor, setPinFor] = React.useState<null | 'phone'>(null);
   const signedIn = status !== 'signed-out' && !!email;
+  // with more than one profile on the phone, erasing takes this profile's data only, and the words say so
+  const shared = useProfiles((p) => p.list.length > 1);
+  const sharedRef = React.useRef(shared);
+  sharedRef.current = shared;
 
   const run = async (what: 'account' | 'cloud' | 'phone') => {
     setBusy(what);
@@ -717,7 +731,11 @@ export function DeleteSection({ title = 'Delete', onErased }: {
     try {
       if (what === 'account') { await deleteAccount(); toast('Account deleted'); }
       else if (what === 'cloud') { await deleteCloudCopy(); toast('Cloud data deleted'); }
-      else { await eraseThisPhone(); toast('Everything on this phone was deleted.'); erased = true; }
+      else {
+        await eraseThisPhone();
+        toast(sharedRef.current ? 'Everything in this profile on this phone was deleted.' : 'Everything on this phone was deleted.');
+        erased = true;
+      }
       tap();
     } catch (e) {
       Alert.alert('Could not delete', describe(e));
@@ -757,9 +775,12 @@ export function DeleteSection({ title = 'Delete', onErased }: {
     busyRef.current = true;
     // erasing takes locked pages with it, so the PIN is asked for first when anything is locked
     if (!pinOk && (await locksNeedPin())) { release(); setPinFor('phone'); return; }
+    const inProfile = sharedRef.current;
     ask(
-      'Delete everything on this phone?',
-      'Tasks, notes, the journal, scores, lectures, habits, settings, attachments and the PIN are erased from this phone. '
+      inProfile ? 'Delete everything in this profile?' : 'Delete everything on this phone?',
+      (inProfile
+        ? "This profile's tasks, notes, journal, scores, lectures, habits, settings, attachments and PIN are erased from this phone. Other profiles stay as they are. "
+        : 'Tasks, notes, the journal, scores, lectures, habits, settings, attachments and the PIN are erased from this phone. ')
         + (signedIn ? 'You are signed out here first, so the copy in the cloud stays and can be brought back. ' : '')
         + 'This cannot be undone.',
       'Delete everything', 'phone',
@@ -785,10 +806,13 @@ export function DeleteSection({ title = 'Delete', onErased }: {
           </>
         ) : null}
         <PillButton
-          label={busy === 'phone' ? 'Deleting' : 'Delete everything on this phone'} icon="trash-outline"
-          color={C.danger} outline onPress={() => { if (!busy) confirmPhone(); }} style={signedIn ? { marginTop: 16 } : undefined}
+          label={busy === 'phone' ? 'Deleting' : shared ? 'Delete everything in this profile' : 'Delete everything on this phone'}
+          icon="trash-outline" color={C.danger} outline onPress={() => { if (!busy) confirmPhone(); }}
+          style={signedIn ? { marginTop: 16 } : undefined}
         />
-        <Text style={st.danger}>Every tool's data and settings on this phone.</Text>
+        <Text style={st.danger}>
+          {shared ? "Every tool's data and settings in this profile. Other profiles stay." : "Every tool's data and settings on this phone."}
+        </Text>
       </Card>
       <PinSheet
         visible={!!pinFor} mode="enter" onClose={() => setPinFor(null)}

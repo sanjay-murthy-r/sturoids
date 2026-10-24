@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { persist, PersistStorage, StorageValue } from 'zustand/middleware';
 import { uid, todayKey, toMinutes, fmtShortDate, fmtMediaTime, cleanDays, DayName, DAY_NAMES } from './utils';
 import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
+import { pkey } from './profiles';
 import { ToolKey, DEFAULT_SLOTS, DEFAULT_ARCHIVED, ROUTE_TO_TOOL, TOOLS, normaliseSlots, normaliseArchived, toolByKey } from './tools';
 import {
   ScoreNode, ScoreTag, Learning, sanitizeScores, sanitizeTags, sanitizeLearnings, indexScores, descendantIds,
@@ -1146,14 +1147,20 @@ export function migrateV6(p: any, fromBefore6: boolean): any {
 
 /** v6 is 1.7: one-off ToDos, Recently deleted, and one row per collection */
 const STORE_VERSION = 6;
-/** zustand's name for the saved store; the rows sit under it */
-const STORE_KEY = 'student-hub-v2';
+/** zustand's name for the saved store; the rows sit under it. Per profile ('student-hub-v2__<id>:notes'), see profiles.ts */
+const STORE_KEY = pkey('student-hub-v2');
 /** the version of the rows, which collections have one, and a count of saves */
 const META_KEY = STORE_KEY + ':meta';
 const rowKey = (k: string) => STORE_KEY + ':' + k;
-/** the single row everything was saved in before 1.7: read to move from, removed after a later launch loads cleanly */
-const LEGACY_KEY = 'student-hub-v1';
+/**
+ * the single row everything was saved in before 1.7: read to move from, removed after a later launch loads cleanly.
+ * Only the first profile can have one: another's key names a row that never existed
+ */
+const LEGACY_KEY = pkey('student-hub-v1');
 interface RowsMeta { version: number; keys: string[]; seq: number; savedAt: number }
+
+/** Whether this launch found nothing saved: a fresh install, or a profile on its first launch. */
+export const loadedFresh = () => loadedFrom === 'none';
 
 /** Set once a load has applied saved state, so a failure after that point is never taken for a failed load. */
 let mergedFromStorage = false;
@@ -1233,15 +1240,22 @@ function setSaveFailing(failing: boolean) {
   saveListeners.forEach((cb) => cb(failing));
 }
 
-/** Writes a save that is still waiting for its pause: only the rows whose text changed, then the meta row. */
-export function flushSaves(): void {
+/** the writes on their way to the disk, so a flush can wait for every one of them (a profile switch does) */
+const writesInFlight = new Set<Promise<void>>();
+const writesSettled = (): Promise<void> => Promise.all([...writesInFlight]).then(() => undefined);
+
+/**
+ * Writes a save that is still waiting for its pause: only the rows whose text changed, then the meta row. Resolves
+ * once every write on its way has reached the disk or failed (savesFailing says which), this one and any before it.
+ */
+export function flushSaves(): Promise<void> {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
   const next = pendingSave;
   pendingSave = null;
-  if (!next) return;
+  if (!next) return writesSettled();
   const state: any = next.state || {};
   const pairs: [string, string][] = [];
   const wrote: { key: string; text: string; before: string | undefined }[] = [];
@@ -1258,9 +1272,9 @@ export function flushSaves(): void {
     }
   } catch {
     setSaveFailing(true);
-    return;
+    return writesSettled();
   }
-  if (!pairs.length) return;
+  if (!pairs.length) return writesSettled();
   latestSave = next;
   for (const w of wrote) {
     rowText.set(w.key, w.text);
@@ -1273,7 +1287,7 @@ export function flushSaves(): void {
     savedAt: Date.now(),
   };
   pairs.push([META_KEY, JSON.stringify(meta)]);
-  Promise.resolve(AsyncStorage.multiSet(pairs)).then(
+  const write = Promise.resolve(AsyncStorage.multiSet(pairs)).then(
     () => {
       legacyChars = null;
       setSaveFailing(false);
@@ -1291,6 +1305,9 @@ export function flushSaves(): void {
       setSaveFailing(true);
     },
   );
+  writesInFlight.add(write);
+  write.finally(() => { writesInFlight.delete(write); });
+  return writesSettled();
 }
 
 /** Whether a change is still waiting for its pause before it is saved. */
@@ -2492,7 +2509,7 @@ if (useStore.persist.hasHydrated()) setAccent(useStore.getState().settings.accen
 // so the defaults never overwrite what is still on disk. A single row that fails is settled while
 // reading (readSaved): its collection alone starts fresh and is never saved over.
 
-export const RECOVERY_KEY = 'student-hub-v1.recovery';
+export const RECOVERY_KEY = pkey('student-hub-v1.recovery');
 
 let loadFailed = false;
 let rowUnreadable = false;

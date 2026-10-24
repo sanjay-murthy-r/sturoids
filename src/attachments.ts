@@ -1,8 +1,9 @@
 import * as FileSystem from 'expo-file-system';
 import type { Attachment } from './store';
+import { pdir } from './profiles';
 
-/** Where the notes editor keeps its own copies of attached media and files. */
-export const ATT_DIR = FileSystem.documentDirectory + 'attachments/';
+/** Where the notes editor keeps its own copies of attached media and files: each profile has its own folder. */
+export const ATT_DIR = pdir('attachments/');
 
 /**
  * Deletes the copies this app made. A note can also hold the picker's original uri (the fallback when copying

@@ -38,12 +38,14 @@ import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolB
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
 import { CloudSection, DeleteSection, ago, dayOf, locksNeedPin } from '../src/components/CloudCard';
 import { isFollowCopy, useCloud } from '../src/cloud';
+import { pkey, useProfiles } from '../src/profiles';
+import { ProfileSwitcher, ProfilesSection } from '../src/components/ProfileSwitcher';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.7.0';
 
-/** When the last backup file was made, kept apart from the data so it never reaches the cloud's fingerprint. */
-const LAST_EXPORT_KEY = 'sturoids-last-export';
+/** When the last backup file was made, kept apart from the data so it never reaches the cloud's fingerprint. Per profile */
+const LAST_EXPORT_KEY = pkey('sturoids-last-export');
 
 const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
   { key: 'default', label: 'Default', desc: 'Soft grey with raised surfaces' },
@@ -379,10 +381,14 @@ const ProfileCard = React.memo(function ProfileCard() {
   );
 });
 
-/** Settings' top: the photo, the name, the account and how the backup stands. Opens the Account page. */
-const ProfileHeader = React.memo(function ProfileHeader({ onOpen }: { onOpen: () => void }) {
+/**
+ * Settings' top: the photo, the name, the account and how the backup stands. Opens the Account page. With more than one
+ * profile on the phone, a Switch pill on its right opens the profile switcher.
+ */
+const ProfileHeader = React.memo(function ProfileHeader({ onOpen, onSwitch }: { onOpen: () => void; onSwitch: () => void }) {
   useTheme();
   const name = useStore((s) => s.settings.name);
+  const several = useProfiles((p) => p.list.length > 1);
   const hour24 = useStore((s) => s.settings.hour24);
   // only what the header shows: a file's progress or the usage figure never re-renders it
   const cloudStatus = useCloud((c) => c.status);
@@ -429,7 +435,11 @@ const ProfileHeader = React.memo(function ProfileHeader({ onOpen }: { onOpen: ()
             </FadeSwap>
           </Row>
         </View>
-        <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+        {several ? (
+          <PillButton label="Switch" small outline onPress={onSwitch} style={{ marginLeft: 12 }} />
+        ) : (
+          <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+        )}
       </Row>
     </Card>
   );
@@ -511,7 +521,7 @@ const PAGE_TITLES: Record<Page, string> = {
 const isPage = (p: unknown): p is Page => typeof p === 'string' && Object.prototype.hasOwnProperty.call(PAGE_TITLES, p);
 
 /** Pages that open with a heading: it sits close under the bar. A page that opens with a card keeps the full gap. */
-const CARD_FIRST: Page[] = ['account', 'delete'];
+const CARD_FIRST: Page[] = ['delete'];
 
 /**
  * What a backup is, for the dialog that asks before it replaces everything: "From 3 Oct: 42 notes, 120 journal entries,
@@ -971,6 +981,8 @@ export default function Settings() {
   const cloudAuto = useCloud((c) => c.auto);
   const cloudReason = useCloud((c) => c.reason);
   const cloudLost = useCloud((c) => c.lost);
+  const severalProfiles = useProfiles((p) => p.list.length > 1);
+  const [switcher, setSwitcher] = useState(false);
   // parts that turn up after the first paint (the screen-lock choices, a kept copy, Remove PIN) fade in where they
   // stand. They leave at once: this page's cards do not glide, so a fading ghost would lie over the lines moving up
   const built = useBuilt();
@@ -1351,7 +1363,9 @@ export default function Settings() {
         : lastExport ? 'Last exported ' + dayOf(lastExport) : 'Export or import a backup file',
     trash: trashCount ? trashCount + (trashCount === 1 ? ' item' : ' items') : 'Empty',
     updates: 'Version ' + APP_VERSION,
-    delete: signedIn ? 'Your account, cloud data or this phone' : 'Everything on this phone',
+    delete: signedIn
+      ? (severalProfiles ? 'Your account, cloud data or this profile' : 'Your account, cloud data or this phone')
+      : severalProfiles ? 'Everything in this profile' : 'Everything on this phone',
   };
 
   const pageBody = (p: Page) => {
@@ -1359,6 +1373,8 @@ export default function Settings() {
       case 'account':
         return (
           <>
+            <ProfilesSection />
+            <SectionTitle>Name and photo</SectionTitle>
             <ProfileCard />
             <CloudSection title="Cloud backup" />
           </>
@@ -1667,7 +1683,7 @@ export default function Settings() {
           <EdgeScroll contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
             {/* the list rises in once, as Settings opens; coming back from a page it is simply there as it was left */}
             <Arrive first={!built.current} index={0}>
-              <ProfileHeader onOpen={() => open('account')} />
+              <ProfileHeader onOpen={() => open('account')} onSwitch={() => setSwitcher(true)} />
             </Arrive>
             {groups.map((g, gi) => (
               <Arrive key={g.title} first={!built.current} index={gi + 1}>
@@ -1711,6 +1727,7 @@ export default function Settings() {
         visible={!!pinStep} mode={pinStep?.mode ?? 'enter'} tint={pinTint}
         onClose={() => setPinStep(null)} onDone={pinDone}
       />
+      <ProfileSwitcher visible={switcher} onClose={() => setSwitcher(false)} onManage={() => open('account')} />
     </ScreenBG>
   );
 }

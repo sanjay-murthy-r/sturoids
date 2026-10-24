@@ -49,10 +49,12 @@ function closeAllLocks() {
 }
 
 /**
- * Erases everything this app keeps on this phone: every tool's data and settings, Recently deleted, the journal's
- * texts, note attachments, the PIN, reminders, a kept copy of unreadable data, and the copies in the cache. The cloud
- * account is signed out first and this phone's record of the cloud is forgotten, so nothing empty is ever sent over the
- * copy in the cloud: signing in again finds that copy and asks.
+ * Erases everything the profile in use keeps on this phone: every tool's data and settings, Recently deleted, the
+ * journal's texts, note attachments, the PIN, reminders, a kept copy of unreadable data, and the copies in the cache. The
+ * cloud account is signed out first and this phone's record of the cloud is forgotten, so nothing empty is ever sent
+ * over the copy in the cloud: signing in again finds that copy and asks. Every key and folder here is the profile's own
+ * (profiles.ts), so another profile on the phone is never touched; the cache is the phone's, and holds only passing
+ * copies (exports on their way to a share, picker copies), which any profile may clear.
  */
 export async function eraseThisPhone() {
   try {
@@ -69,9 +71,20 @@ export async function eraseThisPhone() {
   await removePin();
   closeAllLocks();
   await Promise.all([emptyFolder(JOURNAL_DIR), emptyFolder(ATT_DIR), deleteRecoveryCopy().catch(() => {}), clearCache()]);
+  // with other profiles on the phone this one stays itself: its name and colour survive, so it is never "Unnamed"
+  const { name, accent } = useStore.getState().settings;
+  let keepWho = false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    keepWho = (require('./profiles') as typeof import('./profiles')).useProfiles.getState().list.length > 1;
+  } catch {
+    // no profiles module: a single person's phone
+  }
   // every saved row goes, a collection that could not be loaded this launch included, and saving starts over
   await clearSavedData();
-  useStore.getState().replaceAll(initialData());
+  const fresh = initialData();
+  if (keepWho) fresh.settings = { ...fresh.settings, name, accent };
+  useStore.getState().replaceAll(fresh);
   flushSaves();
   rescheduleAllReminders().catch(() => {});
 }

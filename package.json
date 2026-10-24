@@ -11,7 +11,8 @@
     "test:scores": "node scripts/test-scores.js",
     "test:analytics": "node scripts/test-analytics.js",
     "test:cloud": "node scripts/test-cloud.js",
-    "test:sigmodel": "node scripts/test-sigmodel.js"
+    "test:sigmodel": "node scripts/test-sigmodel.js",
+    "test:profiles": "node scripts/test-profiles.js"
   },
   "dependencies": {
     "@expo-google-fonts/inter-tight": "^0.4.2",

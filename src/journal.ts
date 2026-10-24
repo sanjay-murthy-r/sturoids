@@ -2,13 +2,14 @@ import * as FileSystem from 'expo-file-system';
 import { useStore, JournalEntry, trashedEntryIds } from './store';
 import type { DayDone, DoneItem, FocusSession, Habit } from './store';
 import { habitDueOn, streaks, todayKey, uid } from './utils';
+import { pdir } from './profiles';
 
 // The Journal's data layer. The store keeps a small index per entry; the text of every entry lives in its
 // own file. The journal's index is one AsyncStorage row, and Android cannot read a row over about 2 MB,
 // which a daily journal's texts would eventually reach.
 
-const DIR = (FileSystem.documentDirectory || '') + 'journal/';
-/** where each entry's text lives, one file per entry (erasing the phone empties it) */
+const DIR = pdir('journal/');
+/** where each entry's text lives, one file per entry (erasing the phone empties it); each profile has its own */
 export const JOURNAL_DIR = DIR;
 const EXCERPT_LEN = 200;
 const pathFor = (id: string) => DIR + id + '.txt';
@@ -20,6 +21,19 @@ function ensureDir(): Promise<void> {
 }
 
 const cache = new Map<string, string>();
+
+/** the saves and deletes on their way, so a profile switch can wait for a page's last words to be written */
+const inFlight = new Set<Promise<unknown>>();
+function track<R>(work: Promise<R>): Promise<R> {
+  inFlight.add(work);
+  work.finally(() => { inFlight.delete(work); }).catch(() => {});
+  return work;
+}
+
+/** Resolves once every save and delete of a journal text on its way has finished (or failed). */
+export async function journalSettled(): Promise<void> {
+  while (inFlight.size) await Promise.all([...inFlight].map((w) => w.then(() => undefined, () => undefined)));
+}
 
 /** The text of an entry ('' when it has none yet). Cached after the first read. */
 export async function readBody(id: string): Promise<string> {
@@ -34,10 +48,12 @@ export async function readBody(id: string): Promise<string> {
   }
 }
 
-async function writeBody(id: string, text: string): Promise<void> {
-  await ensureDir();
-  await FileSystem.writeAsStringAsync(pathFor(id), text);
-  cache.set(id, text);
+function writeBody(id: string, text: string): Promise<void> {
+  return track((async () => {
+    await ensureDir();
+    await FileSystem.writeAsStringAsync(pathFor(id), text);
+    cache.set(id, text);
+  })());
 }
 
 async function deleteBody(id: string): Promise<void> {
@@ -76,7 +92,11 @@ export interface EntryDraft {
  * Saves an entry: its text to its file, then its index to the store, so the index never points at text that
  * was not written. Creates the entry when `id` is new. Returns the id.
  */
-export async function saveEntry(d: EntryDraft): Promise<string> {
+export function saveEntry(d: EntryDraft): Promise<string> {
+  return track(saveEntryNow(d));
+}
+
+async function saveEntryNow(d: EntryDraft): Promise<string> {
   const id = d.id || uid();
   await writeBody(id, d.body);
   // read after the write, so a pin or a change of day made while the file was being written is kept
@@ -108,9 +128,9 @@ export async function saveEntry(d: EntryDraft): Promise<string> {
   return id;
 }
 
-export async function deleteEntry(id: string): Promise<void> {
+export function deleteEntry(id: string): Promise<void> {
   useStore.getState().removeJournalEntry(id);
-  await deleteBody(id);
+  return track(deleteBody(id));
 }
 
 /** Deletes the texts of entries gone for good (from Recently deleted). */

@@ -4,6 +4,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
 import { useStore } from './store';
+import { PIN_ATTEMPTS_BASE, PIN_BASE, activeProfile, pkey } from './profiles';
 
 // What locks, and what opens it. One app PIN of four digits opens everything that locks: the journal, the Notes tool
 // and single locked notes. The journal and Notes can also open with the phone's own screen lock, each only if the
@@ -24,9 +25,11 @@ export const PIN_LEN = 4;
 export const LEGACY_MIN = 4;
 export const LEGACY_MAX = 8;
 
-const PIN_KEY = 'sturoids.pin.v2';
-const LEGACY_KEYS = ['sturoids.pin.v1', 'sturoids.journalPass.v1'];
-const ATTEMPTS_KEY = 'sturoids.pinAttempts.v2';
+// each profile has its own PIN and its own count of wrong guesses (profiles.ts); only the first profile can hold a code
+// from before the PIN became four digits
+const PIN_KEY = pkey(PIN_BASE);
+const LEGACY_KEYS = activeProfile === 'main' ? ['sturoids.pin.v1', 'sturoids.journalPass.v1'] : [];
+const ATTEMPTS_KEY = pkey(PIN_ATTEMPTS_BASE);
 const MAX_TRIES = 5;
 /** the wait after each run of five wrong PINs, longer each time until a right one; the last repeats */
 const COOLDOWNS_MS = [30_000, 60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000];
@@ -235,21 +238,45 @@ export const pinCooldownMs = () => Math.max(0, coolUntil - Date.now());
 
 /** Checks a code against the PIN, or, before one exists, against the codes it replaces. */
 export async function verifyPin(code: string): Promise<'ok' | 'wrong' | 'cooldown'> {
-  await loadAttempts();
-  if (pinCooldownMs() > 0) return 'cooldown';
-  let ok = false;
-  const current = await read(PIN_KEY);
-  if (current && current !== 'unreadable') {
-    ok = (await digest(code, current.salt)) === current.hash;
-  } else if (!current) {
-    for (const k of LEGACY_KEYS) {
-      const old = await read(k);
-      if (old && old !== 'unreadable' && (await digest(code, old.salt)) === old.hash) {
-        ok = true;
-        break;
+  return judge(async () => {
+    let ok = false;
+    const current = await read(PIN_KEY);
+    if (current && current !== 'unreadable') {
+      ok = (await digest(code, current.salt)) === current.hash;
+    } else if (!current) {
+      for (const k of LEGACY_KEYS) {
+        const old = await read(k);
+        if (old && old !== 'unreadable' && (await digest(code, old.salt)) === old.hash) {
+          ok = true;
+          break;
+        }
       }
     }
-  }
+    return ok;
+  });
+}
+
+/** Whether another profile on this phone keeps a PIN: its notes or journal may be locked (unreadable counts as yes). */
+export async function profileHasPin(id: string): Promise<boolean> {
+  return !!(await read(pkey(PIN_BASE, id)));
+}
+
+/**
+ * Checks a code against another profile's PIN, before that profile is deleted from here. Wrong guesses count toward
+ * this phone's own wait, as they do at any keypad, so the PIN cannot be guessed from the profile list.
+ */
+export async function verifyProfilePin(id: string, code: string): Promise<'ok' | 'wrong' | 'cooldown'> {
+  return judge(async () => {
+    const stored = await read(pkey(PIN_BASE, id));
+    return !!stored && stored !== 'unreadable' && (await digest(code, stored.salt)) === stored.hash;
+  });
+}
+
+/** Runs one check of a code, counting wrong guesses and serving the waits. */
+async function judge(check: () => Promise<boolean>): Promise<'ok' | 'wrong' | 'cooldown'> {
+  await loadAttempts();
+  if (pinCooldownMs() > 0) return 'cooldown';
+  const ok = await check();
   if (ok) {
     resetAttempts();
     return 'ok';

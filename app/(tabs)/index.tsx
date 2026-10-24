@@ -37,6 +37,8 @@ import { indexScores, upcoming, groupSummary, fmtPct, fromToday } from '../../sr
 import { openScoreNode } from '../../src/scoresNav';
 import { useNow } from '../../src/hooks/useNow';
 import { TWO_COL_AT, WIDE_AT, WIDE_MAX, columnWidth } from '../../src/layout';
+import { useProfiles } from '../../src/profiles';
+import { ProfileSwitcher } from '../../src/components/ProfileSwitcher';
 
 // what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
 const NO_SESSIONS: FocusSession[] = [];
@@ -70,6 +72,31 @@ const JOURNAL_RECENT_DAYS = 14;
 
 /** a 13 pt text link reaches a 44 dp target without moving anything around it */
 const LINK_SLOP = { top: 14, bottom: 14, left: 10, right: 10 };
+
+/**
+ * The greeting as a way in to the account: a tap opens Settings' Account page, and with more than one profile on the
+ * phone a hold opens the profile switcher. The press is a slight give of the whole block, never a box behind the words.
+ */
+function GreetingPress({ onPress, onLongPress, several, children }: {
+  onPress: () => void; onLongPress: () => void; several: boolean; children: React.ReactNode;
+}) {
+  const level = useAnimLevel();
+  const p = useSharedValue(0);
+  React.useEffect(() => { if (level === 'none') p.value = 0; }, [level]);
+  const aStyle = useAnimatedStyle(() => ({ transform: [{ scale: 1 - 0.02 * p.value }] }));
+  return (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      onPressIn={level === 'none' ? undefined : () => { p.value = withTiming(1, { duration: 90, easing: EASE_OUT }); }}
+      onPressOut={level === 'none' ? undefined : () => { p.value = withTiming(0, { duration: 180, easing: EASE_OUT }); }}
+      accessibilityRole="button"
+      accessibilityHint={'Opens your account.' + (several ? ' Hold to switch profile.' : '')}
+    >
+      <Animated.View style={aStyle}>{children}</Animated.View>
+    </Pressable>
+  );
+}
 
 /** "3 hours 20 minutes", for a screen reader */
 function spokenMinutes(m: number) {
@@ -112,7 +139,10 @@ export default function Today() {
   const dwCapSec = useStore((s) => (s.deepWork?.mode === 'countdown' ? s.deepWork.targetMin * 60 : Infinity));
   const dwSubject = useStore((s) => s.deepWork?.subject ?? '');
 
-  const [nameSheet, setNameSheet] = useState(false);
+  // the profile switcher, opened by holding the greeting when the phone has more than one profile
+  const [switcher, setSwitcher] = useState(false);
+  const severalProfiles = useProfiles((p) => p.list.length > 1);
+  const openAccount = useCallback(() => openPage('/settings', { page: 'account' }), []);
   const [qaEdit, setQaEdit] = useState(false);
   const [qaAddSheet, setQaAddSheet] = useState(false);
   // the website shortcut the add sheet is editing; kept while the sheet closes, so its words never change mid-way
@@ -452,7 +482,10 @@ export default function Today() {
   const greetingKey = greeting.kind + '|' + (greeting.sub || '');
   const greetingBlock = (
         <Enter index={0}>
-          <Pressable onPress={() => setNameSheet(true)} accessibilityRole="button" accessibilityHint="Change your name">
+          <GreetingPress
+            onPress={openAccount} several={severalProfiles}
+            onLongPress={() => { if (severalProfiles) { tap(); setSwitcher(true); } else openAccount(); }}
+          >
             <Text style={T.kicker}>{fmtDate(now)}</Text>
             <FadeSwap swapKey={greetingKey}>
               <Text style={[T.display, { marginTop: 8, marginBottom: greeting.sub ? 6 : 24 }]}>
@@ -462,7 +495,7 @@ export default function Today() {
               </Text>
               {greeting.sub ? <Text style={[T.label, { marginBottom: 24 }]}>{greeting.sub}</Text> : null}
             </FadeSwap>
-          </Pressable>
+          </GreetingPress>
         </Enter>
   );
 
@@ -769,29 +802,10 @@ export default function Today() {
         )}
       </ScrollView>
 
-      <NameSheet visible={nameSheet} onClose={() => setNameSheet(false)} />
+      <ProfileSwitcher visible={switcher} onClose={() => setSwitcher(false)} onManage={openAccount} />
       <QuickAddSheet visible={qaAddSheet} onClose={() => setQaAddSheet(false)} archived={archived} editing={qaEditing} />
       <QuickTaskSheet visible={taskSheet} onClose={() => setTaskSheet(false)} />
     </ScreenBG>
-  );
-}
-
-/** The greeting's name. What is typed lives here, so a keystroke re-renders the sheet alone, never the whole day. */
-function NameSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const setSetting = useStore((s) => s.setSetting);
-  const [draft, setDraft] = useState('');
-  // each opening starts from the saved name
-  useEffect(() => { if (visible) setDraft(useStore.getState().settings.name); }, [visible]);
-  const save = () => { setSetting('name', draft.trim()); onClose(); };
-  return (
-    <Sheet visible={visible} onClose={onClose} title="Your name">
-      {/* a short cap, so a long name never wraps the greeting over several lines */}
-      <Field
-        value={draft} onChangeText={setDraft} placeholder="What should the greeting call you?" autoFocus maxLength={30}
-        returnKeyType="done" onSubmitEditing={save}
-      />
-      <PillButton label="Save" onPress={save} />
-    </Sheet>
   );
 }
 

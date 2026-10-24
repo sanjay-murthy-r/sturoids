@@ -33,7 +33,9 @@ import { useHydrated } from '../src/hooks/useHydrated';
 import { setIntroPhase } from '../src/intro';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost, toast } from '../src/components/Toast';
+import { activeProfile, loadProfiles, profileName, takeArrival, useProfiles } from '../src/profiles';
+import { SwitchingOverlay } from '../src/components/ProfileSwitcher';
 import { ShareIntake } from '../src/shareIntake';
 import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
 
@@ -135,6 +137,12 @@ function tellLoadNotice(notice: LoadNotice, lost: string[], signedIn: boolean) {
   );
 }
 
+// a launch a profile switch started skips the intro: read as early as the store, so the first frame already knows
+const arrivalRead = takeArrival();
+
+/** how long the app waits for the profiles' registry before it shows anyway (it is a small read, and never needed) */
+const PROFILES_WAIT_MS = 1500;
+
 /** Said once a launch, the first time a save fails: the changes are still in the app, but not yet on the phone. */
 let saveTroubleTold = false;
 function tellSaveTrouble() {
@@ -179,10 +187,42 @@ export default function RootLayout() {
   const introFonts = introLoaded || !!introError;
   const appFonts = appLoaded || !!appError;
   const splashHidden = useRef(false);
+  // whether this launch is the one a profile switch started (null until the note has been read)
+  const [arrived, setArrived] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    arrivalRead.then((v) => { if (live) setArrived(v); }, () => { if (live) setArrived(false); });
+    return () => { live = false; };
+  }, []);
+  // the profiles' registry, read once the data is in: a fresh profile takes its name and colour before the first frame
+  const profilesLoaded = useProfiles((p) => p.loaded);
+  const [profilesLate, setProfilesLate] = useState(false);
+  useEffect(() => {
+    if (!hydrated) return undefined;
+    loadProfiles().catch(() => {});
+    const t = setTimeout(() => setProfilesLate(true), PROFILES_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [hydrated]);
   // With motion off there is no intro to paint first: the app is built as soon as the data and its fonts are in, and the
-  // splash stays up until the app's own first frame, so it never fades onto empty material.
-  const instant = level === 'none';
+  // splash stays up until the app's own first frame, so it never fades onto empty material. A launch a switch started
+  // skips the intro the same way, straight to the app.
+  const instant = level === 'none' || arrived === true;
   const showApp = (revealed || instant) && appFonts;
+
+  // arriving from a switch: no intro, the app is revealed at once, and once it shows it says which profile it opened
+  useEffect(() => {
+    if (arrived !== true) return;
+    setRevealed(true);
+    setIntroDone(true);
+  }, [arrived]);
+  useEffect(() => {
+    if (arrived !== true || !showApp) return undefined;
+    const t = setTimeout(() => {
+      const me = useProfiles.getState().list.find((p) => p.id === activeProfile);
+      toast('Switched to ' + profileName({ name: useStore.getState().settings.name.trim() || me?.name || '' }));
+    }, 600);
+    return () => clearTimeout(t);
+  }, [arrived, showApp]);
 
   // notifications and reminder rescheduling never compete with the intro
   useEffect(() => {
@@ -220,7 +260,7 @@ export default function RootLayout() {
 
   // wait for the persisted settings too: the intro's animation level, the theme
   // background and the accent must all be the user's on the very first frame
-  if (!hydrated || !introFonts) {
+  if (!hydrated || !introFonts || arrived === null || !(profilesLoaded || profilesLate)) {
     return <View style={{ flex: 1, backgroundColor: bg }} />;
   }
 
@@ -253,9 +293,11 @@ export default function RootLayout() {
         </View>
       )}
       {showApp && <ToastHost />}
+      {/* covers everything while the app restarts into another profile */}
+      <SwitchingOverlay />
       {/* a YouTube link shared to the app is offered to YT Vault, once the intro is over */}
       {showApp && <ShareIntake />}
-      {!introDone && (
+      {!introDone && !arrived && (
         <StartScreen onReveal={() => setRevealed(true)} onDone={() => setIntroDone(true)} />
       )}
     </GestureHandlerRootView>
