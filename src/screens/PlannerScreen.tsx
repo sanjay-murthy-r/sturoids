@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, Alert, useWindowDimensions } from 'r
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useFocusEffect } from 'expo-router';
-import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, BLOCK_COLORS, bgFor, oneLine } from '../theme';
+import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, BLOCK_COLORS, oneLine } from '../theme';
 import { useStore, PlannerBlock, PlannerWeek, Habit } from '../store';
 import {
   DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours, blockOnNow, cleanDays,
@@ -57,8 +57,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const fk = useFocusKey();
   const level = useAnimLevel();
   const built = useBuilt();
-  // repaints on a new accent (the day and the NOW badge read it); the day wheel's ends fade into the screen's ground
-  const theme = useTheme();
+  useTheme(); // repaints on a new accent: the day and the NOW badge read it
 
   const planner = useStore((s) => s.planner);
   const removeBlock = useStore((s) => s.removeBlock);
@@ -308,21 +307,18 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 44 + (tabMode ? 0 : insets.bottom) }}
         showsVerticalScrollIndicator={false}
       >
-        {/* the day: drag the wheel or tap a day beside it, and the blocks follow in the same direction. The days stand
-            on a ring, the far ones raised and soft, fading into the ground at both ends. The header's hero rises with
-            it, in the screen's first entrance */}
+        {/* the day: drag the wheel or tap a day beside it, and the blocks follow in the same direction. The header's
+            hero rises with it, in the screen's first entrance */}
         <Enter index={0}>
           {header.hero}
           <View style={st.wheelWrap}>
             <Wheel
               loop
-              depth
-              fade={bgFor(theme)}
               count={7}
               index={dayIdx}
               onChange={pickDay}
               label={dayLabel}
-              spacing={78}
+              spacing={96}
               minScale={0.6}
               colorOn={C.accent}
               colorOff={C.textFaint}
