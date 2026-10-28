@@ -783,7 +783,7 @@ const BoardItem = React.memo(function BoardItem({
   // the ring that marks a widget being edited: a fine line of the accent that draws in as the board settles and goes
   // while the widget is held up
   const outline = useAnimatedStyle(() => ({
-    opacity: 0.55 * settle.value * (1 - lift.value),
+    opacity: 0.45 * settle.value * (1 - lift.value),
     transform: [{ scale: 1.012 - 0.012 * settle.value }] as const,
   }));
   const sizes = def.sizes;
@@ -1041,7 +1041,9 @@ function Preview({ def, size, ready, room, cellW, boardW, picked, onPress }: {
   const level = useAnimLevel();
   const small = size === 'S' && !def.flow;
   const natW = small ? Math.max(150, cellW) : Math.max(300, boardW);
-  const natH = def.flow ? FLOW_PREVIEW_H : heightOf(size);
+  // a section that flows takes its own height (at most FLOW_PREVIEW_H) once drawn, so a short one leaves no gap
+  const [flowH, setFlowH] = useState<number | null>(null);
+  const natH = def.flow ? Math.min(FLOW_PREVIEW_H, flowH ?? FLOW_PREVIEW_H) : heightOf(size);
   const scale = Math.min(small ? 0.8 : 0.74, (room - PREVIEW_PAD * 2) / natW);
   const Component = def.Component;
   const noop = useCallback(() => {}, []);
@@ -1063,7 +1065,11 @@ function Preview({ def, size, ready, room, cellW, boardW, picked, onPress }: {
         {ready ? (
           <Animated.View
             entering={FadeIn.duration(260).easing(EASE_OUT)}
-            style={{ width: natW, height: natH, transform: [{ scale }], transformOrigin: 'top left' }}
+            style={{ width: natW, height: def.flow ? undefined : natH, transform: [{ scale }], transformOrigin: 'top left' }}
+            onLayout={def.flow ? (e) => {
+              const hh = Math.ceil(e.nativeEvent.layout.height);
+              if (hh > 0 && Math.abs(hh - (flowH ?? 0)) > 1) setFlowH(hh);
+            } : undefined}
           >
             <Component id={'preview-' + def.type} size={size} editing preview setConfig={noop} />
           </Animated.View>
@@ -1084,7 +1090,7 @@ const st = StyleSheet.create({
   nudgeKeys: { flexDirection: 'row', alignItems: 'center', marginTop: 16 },
   item: { position: 'absolute', left: 0, top: 0 },
   landing: { position: 'absolute', borderRadius: S.radius + 2, borderWidth: 1.5, borderStyle: 'dashed', opacity: 0.7 },
-  outline: { borderRadius: S.radius + 4, margin: -5, borderWidth: 1.5 },
+  outline: { borderRadius: S.radius + 3, margin: -3, borderWidth: 1.25 },
   flowPad: { height: 4 },
   ghost: {
     borderWidth: 1, borderStyle: 'dashed', borderRadius: S.radius, alignItems: 'center', justifyContent: 'center', gap: 4,
