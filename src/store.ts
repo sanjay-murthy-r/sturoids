@@ -358,9 +358,9 @@ export const DEFAULT_QUICK: QuickItem[] = [
 ];
 
 /** Where Sturoids' releases are published: Settings, Updates checks it unless another repo is typed in. */
-export const DEFAULT_UPDATE_REPO = 'sanjay-murthy-r/all-in-one-student-app';
-/** the owner's GitHub name before it changed: a repo saved under it is moved to the new one */
-const OLD_UPDATE_OWNER = /^sanjaypersonal448-cloud\//i;
+export const DEFAULT_UPDATE_REPO = 'sanjay-murthy-r/sturoids';
+/** the repo's earlier addresses (the owner's old GitHub name, and the repo before it was named Sturoids): a saved one is moved to the new */
+const OLD_UPDATE_REPO = /^(sanjaypersonal448-cloud|sanjay-murthy-r)\/all-in-one-student-app$/i;
 
 export const DEFAULT_SETTINGS: Settings = {
   name: '',
@@ -1212,9 +1212,8 @@ function cleanSettingsV6(s: any): Settings {
   st.writingFont = st.writingFont === 'serif' ? 'serif' : 'sans';
   if (!(Number.isInteger(st.focusGoalMin) && st.focusGoalMin >= 0 && st.focusGoalMin <= 600)) st.focusGoalMin = DEFAULT_SETTINGS.focusGoalMin;
   if (!(isFiniteNumber(st.backupNudgeAt) && st.backupNudgeAt >= 0)) st.backupNudgeAt = DEFAULT_SETTINGS.backupNudgeAt;
-  // no repo yet checks Sturoids' own releases; one under the owner's old GitHub name follows the rename
-  if (typeof st.githubRepo !== 'string' || !st.githubRepo.trim()) st.githubRepo = DEFAULT_UPDATE_REPO;
-  else if (OLD_UPDATE_OWNER.test(st.githubRepo.trim())) st.githubRepo = st.githubRepo.trim().replace(OLD_UPDATE_OWNER, 'sanjay-murthy-r/');
+  // no repo yet checks Sturoids' own releases; one saved under an earlier address follows the rename
+  if (typeof st.githubRepo !== 'string' || !st.githubRepo.trim() || OLD_UPDATE_REPO.test(st.githubRepo.trim())) st.githubRepo = DEFAULT_UPDATE_REPO;
   return st;
 }
 

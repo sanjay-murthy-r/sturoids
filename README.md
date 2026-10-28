@@ -1,6 +1,6 @@
 # Sturoids
 
-A local-first student hub for Android phones and tablets: tasks, Deep Work, a planner, notes, a journal, exam scores, a calculator, Desmos, a lecture-video vault and AI links, on one dark neumorphic material. React Native 0.79 (new architecture), Expo SDK 53, expo-router, zustand, Reanimated.
+A local-first study app for Android phones and tablets, and Windows PCs: tasks, Deep Work, a planner, notes, a journal, exam scores, a calculator, Desmos, a lecture-video vault and AI links, on one dark neumorphic material. React Native 0.79 (new architecture), Expo SDK 53, expo-router, zustand, Reanimated.
 
 ## Build
 
