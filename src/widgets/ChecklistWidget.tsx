@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { shortClock } from '../components/QuickTaskSheet';
 import { openTool } from '../toolNav';
 import { Kicker, MiniTick, TILE_TEXT_MAX, Tile, TileNote, kit } from './kit';
+import { FadeSwap } from '../components/Motion';
 import { useTodayItems } from './data';
 import type { WidgetProps } from './types';
 
@@ -26,7 +27,9 @@ export function ChecklistWidget({ size }: WidgetProps) {
   return (
     <Tile size={size} pad={16}>
       <Pressable onPress={() => openTool('tasks')} accessibilityRole="button" accessibilityHint="Opens Tasks" hitSlop={8}>
-        <Kicker>{left ? 'ToDos · ' + left + ' left' : 'ToDos · all done'}</Kicker>
+        <FadeSwap swapKey={left ? 'ToDos · ' + left + ' left' : 'ToDos · all done'}>
+          <Kicker>{left ? 'ToDos · ' + left + ' left' : 'ToDos · all done'}</Kicker>
+        </FadeSwap>
       </Pressable>
       <View style={st.list}>
         {rows.map((t) => (

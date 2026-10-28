@@ -32,6 +32,7 @@ import { READ_MAX, frame } from '../layout';
 import { toastTrashed } from '../trashToast';
 import { openPage, openTool } from '../toolNav';
 import { examAhead, revisionPlan, studySubjects } from '../toolLogic';
+import { useArrowsLift } from '../hooks/useRail';
 
 type Sort = 'newest' | 'oldest' | 'best' | 'az';
 const SORTS: { key: Sort; label: string }[] = [
@@ -414,6 +415,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return [{ id: null as string | null, label: 'Top level' }, ...groups].filter((dst) => canMove(ix, moveNode.id, dst.id));
   }, [moveNode, scores, ix]);
 
+  const arrowsLift = useArrowsLift();
   const fabRight = areaW > READ_MAX ? (areaW - READ_MAX) / 2 + 20 : 20;
   // a learning also carries its exam's category, so a category chip finds every learning from the exams inside it
   const learningCats = React.useCallback((l: Learning) => {
@@ -671,7 +673,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
             accessibilityLabel="Add an exam or a group"
             style={[
               st.fab,
-              { right: fabRight, bottom: mode === 'tab' ? 24 : insets.bottom + 20 },
+              { right: fabRight, bottom: (mode === 'tab' ? 24 : insets.bottom + 20) + arrowsLift },
               theme === 'minimal'
                 ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
                 : { backgroundColor: C.card, ...neuRaised('high') },

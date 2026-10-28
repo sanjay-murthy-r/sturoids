@@ -6,7 +6,9 @@ import { DAY_NAMES, focusStreak } from '../utils';
 import { focusWeek } from '../subjects';
 import { colorForSubject } from '../blocks';
 import { openPage } from '../toolNav';
-import { Kicker, TILE_TEXT_MAX, Tile, kit, spokenMinutes, useBoardToday } from './kit';
+import { Kicker, SeenCount, TILE_TEXT_MAX, Tile, kit, spokenMinutes, useBoardToday, useWhenSeen } from './kit';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { EASE_OUT, useAnimLevel } from '../components/Motion';
 import type { WidgetProps } from './types';
 
 /** the colours the week's subjects take, most focused first, when the Planner has none of its own for them */
@@ -49,7 +51,9 @@ export function FocusWeekWidget({ size }: WidgetProps) {
   return (
     <Tile size={size} onPress={() => openPage('/focus-history')} label={label} hint="Opens the focus history">
       <Kicker>Focus, this week</Kicker>
-      <Text style={st.total} maxFontSizeMultiplier={TILE_TEXT_MAX}>{week.totalMin ? hm(week.totalMin) : 'Nothing yet'}</Text>
+      {week.totalMin
+        ? <SeenCount value={week.totalMin} format={hm} style={st.total} />
+        : <Text style={st.total} maxFontSizeMultiplier={TILE_TEXT_MAX}>Nothing yet</Text>}
       <Text style={[kit.sub, { color: streak > 1 ? C.green : C.textFaint }]} numberOfLines={1} maxFontSizeMultiplier={TILE_TEXT_MAX}>
         {[streak > 1 ? streak + '-day run' : '', week.best ? 'Best ' + dayOf(week.best.dateKey) + ', ' + week.best.min + ' min' : '']
           .filter(Boolean).join(' · ') || 'A session a day starts a run'}
@@ -59,11 +63,11 @@ export function FocusWeekWidget({ size }: WidgetProps) {
           <View key={d.dateKey} style={st.col}>
             <View style={[st.trough, { backgroundColor: C.inset }]}>
               {/* the day's subjects stacked from the floor, most focused at the bottom */}
-              <View style={{ height: Math.max(d.min ? 4 : 0, (d.min / max) * BAR_H), width: '100%', borderRadius: 6, overflow: 'hidden' }}>
+              <DayStack height={Math.max(d.min ? 4 : 0, (d.min / max) * BAR_H)}>
                 {[...d.bySubject].reverse().map((s) => (
                   <View key={s.key} style={{ flex: s.min, backgroundColor: inks.get(s.key) || C.slate }} />
                 ))}
-              </View>
+              </DayStack>
             </View>
             <Text style={[st.day, i === 6 && { color: C.accent, fontFamily: F.smSemi }]} maxFontSizeMultiplier={TILE_TEXT_MAX}>
               {dayOf(d.dateKey)[0]}
@@ -73,6 +77,18 @@ export function FocusWeekWidget({ size }: WidgetProps) {
       </View>
     </Tile>
   );
+}
+
+/** A day's stack of subjects, growing or shrinking to its new height (held while Today is away, eased when it is back). */
+function DayStack({ height, children }: { height: number; children: React.ReactNode }) {
+  const level = useAnimLevel();
+  const target = useWhenSeen(height);
+  const h = useSharedValue(target);
+  React.useEffect(() => {
+    h.value = level === 'none' ? target : withTiming(target, { duration: 520, easing: EASE_OUT });
+  }, [target, level]);
+  const style = useAnimatedStyle(() => ({ height: h.value }));
+  return <Animated.View style={[{ width: '100%', borderRadius: 6, overflow: 'hidden' }, style]}>{children}</Animated.View>;
 }
 
 const st = StyleSheet.create({

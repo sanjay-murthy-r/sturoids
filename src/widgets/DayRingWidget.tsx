@@ -4,7 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { C, F } from '../theme';
 import { useStore } from '../store';
 import { openTool } from '../toolNav';
-import { Ring, TILE_TEXT_MAX, Tile, kit, spokenMinutes } from './kit';
+import { Ring, SeenCount, TILE_TEXT_MAX, Tile, kit, spokenMinutes } from './kit';
+import { FadeSwap } from '../components/Motion';
 import { useFocusToday, useTodayItems } from './data';
 import type { WidgetProps } from './types';
 
@@ -27,18 +28,18 @@ export function DayRingWidget({ size }: WidgetProps) {
       <View style={st.stage}>
         <View style={st.layer}><Ring size={104} stroke={9} value={total ? (total - left) / total : 0} color={C.accent} /></View>
         {showGoal ? <View style={st.layer}><Ring size={80} stroke={7} value={focus / goal} color={C.green} /></View> : null}
-        <View style={[st.layer, st.centre]}>
+        <FadeSwap swapKey={total === 0 ? 'none' : left === 0 ? 'done' : 'left'} style={[st.layer, st.centre]}>
           {total === 0 ? (
             <Ionicons name="sunny-outline" size={22} color={C.textFaint} />
           ) : left === 0 ? (
             <Ionicons name="checkmark" size={26} color={C.green} />
           ) : (
             <>
-              <Text style={st.count} maxFontSizeMultiplier={TILE_TEXT_MAX}>{left}</Text>
+              <SeenCount value={left} style={st.count} />
               <Text style={kit.sub} maxFontSizeMultiplier={TILE_TEXT_MAX}>left</Text>
             </>
           )}
-        </View>
+        </FadeSwap>
       </View>
     </Tile>
   );

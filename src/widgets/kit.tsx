@@ -8,7 +8,8 @@ import type { WidgetSize } from '../store';
 import { useStore } from '../store';
 import { todayKey } from '../utils';
 import { useTheme } from '../components/UI';
-import { Bouncy, CountUp } from '../components/Motion';
+import Animated, { useAnimatedProps, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { Bouncy, CHANGE, CountUp, EASE_OUT, useAnimLevel } from '../components/Motion';
 import { heightOf } from './logic';
 import type { ToolKey } from '../tools';
 
@@ -95,41 +96,65 @@ export function LockedNote({ what }: { what: string }) {
 
 /* ---------------------------------------------------------------- marks */
 
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+/** how a widget's ring or bar moves to a new value: long enough to read as progress, never a wobble */
+const SWEEP = { duration: 520, easing: EASE_OUT };
+
+/** A fraction, 0 to 1, that eases to each new value it is given (held while its tab is away), a step with no motion. */
+function useEased(value: number) {
+  const level = useAnimLevel();
+  const p = useWhenSeen(Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0)));
+  const v = useSharedValue(p);
+  React.useEffect(() => {
+    v.value = level === 'none' ? p : withTiming(p, SWEEP);
+  }, [p, level]);
+  return v;
+}
+
 /**
- * A ring of progress, 0 to 1, over its carved track: drawn still (a ring's sweep is not a transform), so it changes in
- * a step with the figure beside it.
+ * A ring of progress, 0 to 1, over its carved track. A new value sweeps the ring round to it on the UI thread, so a
+ * ToDo ticked elsewhere shows here as the ring moving on, not jumping.
  */
 export function Ring({ size, stroke, value, color, track = true }: {
   size: number; stroke: number; value: number; color: string; track?: boolean;
 }) {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
-  const p = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+  const v = useEased(value);
+  const arc = useAnimatedProps(() => ({
+    strokeDashoffset: c * (1 - v.value),
+    // a ring at nothing draws no cap: a round cap alone would show as a dot
+    strokeOpacity: v.value > 0.002 ? 1 : 0,
+  }));
   return (
     <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
       {track ? <Circle cx={size / 2} cy={size / 2} r={r} stroke={C.inset} strokeWidth={stroke} fill="none" /> : null}
-      {p > 0 ? (
-        <Circle
-          cx={size / 2} cy={size / 2} r={r} stroke={color} strokeWidth={stroke} fill="none" strokeLinecap="round"
-          strokeDasharray={`${c} ${c}`} strokeDashoffset={c * (1 - p)}
-        />
-      ) : null}
+      <AnimatedCircle
+        cx={size / 2} cy={size / 2} r={r} stroke={color} strokeWidth={stroke} fill="none" strokeLinecap="round"
+        strokeDasharray={`${c} ${c}`} animatedProps={arc}
+      />
     </Svg>
   );
 }
 
-/** A slim carved track with its fill: a widget's progress bar. */
+/** A slim carved track with its fill: a widget's progress bar. Its fill eases to a new value (a transform only). */
 export function Track({ value, color, height = 6 }: { value: number; color?: string; height?: number }) {
   const theme = useTheme();
-  const p = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+  const v = useEased(value);
+  const [w, setW] = React.useState(0);
+  // the fill is the track's full width slid left by what is left to go, so only a transform moves
+  const fill = useAnimatedStyle(() => ({ transform: [{ translateX: -w * (1 - v.value) }] }));
   return (
     <View
+      onLayout={(e) => setW(e.nativeEvent.layout.width)}
       style={[
         { height, borderRadius: height / 2, overflow: 'hidden' },
         theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...neuInset('hairline') },
       ]}
     >
-      <View style={{ width: `${Math.round(p * 1000) / 10}%`, height: '100%', borderRadius: height / 2, backgroundColor: color || C.accent }} />
+      {w > 0 ? (
+        <Animated.View style={[{ width: w, height: '100%', borderRadius: height / 2, backgroundColor: color || C.accent }, fill]} />
+      ) : null}
     </View>
   );
 }
@@ -143,17 +168,27 @@ export function DayPill({ label, color }: { label: string; color: string }) {
   );
 }
 
-/** A small round tick for a row inside a tile: outlined open, filled once done; reaches 44 dp with its slop. */
+/**
+ * A small round tick for a row inside a tile: outlined open, filled once done; reaches 44 dp with its slop. Ticked, the
+ * fill grows in from the middle with the mark; unticked, it fades back to the outline.
+ */
 export function MiniTick({ done, color, onPress, label }: { done: boolean; color: string; onPress?: () => void; label: string }) {
+  const level = useAnimLevel();
+  const on = useSharedValue(done ? 1 : 0);
+  React.useEffect(() => {
+    on.value = level === 'none' ? (done ? 1 : 0) : withTiming(done ? 1 : 0, done ? { duration: 220, easing: EASE_OUT } : CHANGE);
+  }, [done, level]);
+  const fillStyle = useAnimatedStyle(() => ({ opacity: on.value, transform: [{ scale: 0.4 + 0.6 * on.value }] }));
   return (
-    <Pressable
-      onPress={onPress} hitSlop={12} disabled={!onPress} accessible={!!onPress}
-      importantForAccessibility={onPress ? 'auto' : 'no-hide-descendants'}
+    <Bouncy
+      onPress={onPress} disabled={!onPress} scaleTo={0.8} radius={11} hitSlop={12} sink={false}
       accessibilityRole="checkbox" accessibilityState={{ checked: done }} accessibilityLabel={label}
-      style={[kit.tick, done ? { backgroundColor: color, borderColor: color } : { borderColor: C.borderBright }]}
+      style={[kit.tick, { borderColor: C.borderBright }]}
     >
-      {done ? <Ionicons name="checkmark" size={12} color={C.onAccent} /> : null}
-    </Pressable>
+      <Animated.View style={[StyleSheet.absoluteFill, kit.tickFill, { backgroundColor: color }, fillStyle]}>
+        <Ionicons name="checkmark" size={12} color={C.onAccent} />
+      </Animated.View>
+    </Bouncy>
   );
 }
 
@@ -247,7 +282,8 @@ export const kit = StyleSheet.create({
   noteBody: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, lineHeight: 16, letterSpacing: TRACK.fine },
   pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, marginLeft: 8 },
   pillText: { fontFamily: F.smSemi, ...oneLine(11), letterSpacing: TRACK.fine },
-  tick: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  tick: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  tickFill: { margin: -1.5, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   placeholder: {
     borderWidth: 1, borderStyle: 'dashed', borderRadius: S.radiusSm, paddingVertical: 14, paddingHorizontal: 16,
     marginBottom: S.gap,

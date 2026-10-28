@@ -4,7 +4,7 @@ import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, F, MIN, NEU, TRACK } from '../theme';
 import { useTheme } from './UI';
-import { EASE_OUT, useAnimLevel } from './Motion';
+import { EASE_EXIT, EASE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
 import { useRail } from '../hooks/useRail';
 
@@ -27,7 +27,8 @@ export function toast(message: string, action?: ToastAction, opts?: ToastOptions
 
 /** the card rises in on an ease out and sinks away on a short ease in */
 const IN = { duration: 240, easing: EASE_OUT };
-const OUT_EASE = Easing.in(Easing.quad);
+// the leaving curve every panel uses (a plain ease-in reached full speed in its last frame and read as snatched away)
+const OUT_EASE = EASE_EXIT;
 /** how long a toast stays: a plain note, one with an action, and one with an action while a screen reader is on */
 const STAY_MS = 2200;
 const STAY_ACTION_MS = 4200;

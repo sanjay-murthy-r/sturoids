@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
@@ -27,6 +27,8 @@ import { QuickTaskSheet, shortClock } from '../components/QuickTaskSheet';
 import { toastTrashed, toastTrashedMany } from '../trashToast';
 import { leftoverTodos, orderTodos } from '../todos';
 import { useBringIntoView } from '../hooks/useBringIntoView';
+import { useArrowsLift, useRail } from '../hooks/useRail';
+import { RAIL_W, READ_MAX, TWO_COL_AT, WIDE_MAX } from '../layout';
 
 type Tab = 'daily' | 'missions';
 
@@ -288,9 +290,13 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     : contextLine(openCount > 0 ? openCount + ' open' : missions.length > 0 && 'All done', dueSoonLine ?? nextDueLine);
 
   const tabMode = mode === 'tab';
+  // a wide window (a tablet turned sideways, the PC) shows both lists side by side, with no switch between them
+  const { width: winW } = useWindowDimensions();
+  const rail = useRail();
+  const twoCol = winW - (rail && tabMode ? RAIL_W : 0) >= TWO_COL_AT;
   const exp = useExport(tab === 'daily' ? ['todos', 'longterm'] : ['longterm', 'todos'], { range: tab === 'daily' ? 'week' : '30d' });
   const header = useToolHeader({ scrollRef,
-    title: tab === 'daily' ? 'ToDos' : 'Tasks',
+    title: twoCol ? 'Tasks' : tab === 'daily' ? 'ToDos' : 'Tasks',
     mode: tabMode ? 'tab' : 'page',
     context,
     live: dueSoon.length > 0,
@@ -322,38 +328,14 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const drop = level === 'full' ? 24 : 0;
   const sinkStyle = useAnimatedStyle(() => ({ opacity: 1 - sink.value, transform: [{ translateY: drop * sink.value }] }));
 
+  const arrowsLift = useArrowsLift();
   const empty = tab === 'daily' ? dailyTasks.length === 0 : missions.length === 0;
   // switching lists, or a list filling or emptying, brings the new body into the old one's place: the other list comes
   // in from the side its segment is on, and a list that fills or empties rises where the other stood
   const bodyKey = tab + (empty ? ':empty' : ':list');
   const bodyIn = useSwapIn(bodyKey, tab === 'daily' ? 0 : 1);
 
-  return (
-    <ScreenBG guard={tabMode}>
-      {header.bar}
-      <Animated.ScrollView
-        key={fk}
-        ref={scrollRef}
-        {...header.scrollProps}
-        // a tap on a row or a button while a step is being typed does its work, instead of only closing the keyboard
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 130 + (tabMode ? 0 : insets.bottom) }}
-        showsVerticalScrollIndicator={false}
-      >
-        <View ref={topRef} collapsable={false} />
-        {/* the header's hero, the list switch and the list rise together: the screen's first entrance */}
-        <Enter index={0}>
-          {header.hero}
-          <SegmentedControl
-            options={TABS}
-            value={tab}
-            onChange={(k) => setTab(k)}
-            stretch
-            style={{ marginBottom: 16 }}
-          />
-
-          <Animated.View key={bodyKey} entering={bodyIn}>
-            {tab === 'daily' ? (
+  const dailyBody = (
               <>
                 {leftovers.length > 0 && (
                   // the card fades away once the last leftover is decided, and the list below glides up
@@ -396,7 +378,9 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   </Animated.View>
                 )}
               </>
-            ) : missions.length === 0 ? (
+  );
+  const missionBody = (
+    missions.length === 0 ? (
               <EmptyState icon="flag-outline" title="Deadline-bound work lives here" body="Mock tests, revision targets, projects." />
             ) : (
               <MissionList
@@ -405,14 +389,56 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 onToggle={toggleMission} onToggleOpen={toggleOpen} onEdit={editMission} onDelete={deleteMission}
                 onStepFocus={revealStep} onClearDone={clearDone}
               />
-            )}
-          </Animated.View>
+    )
+  );
+
+  return (
+    <ScreenBG guard={tabMode} maxWidth={twoCol ? WIDE_MAX : READ_MAX}>
+      {header.bar}
+      <Animated.ScrollView
+        key={fk}
+        ref={scrollRef}
+        {...header.scrollProps}
+        // a tap on a row or a button while a step is being typed does its work, instead of only closing the keyboard
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 130 + (tabMode ? 0 : insets.bottom) }}
+        showsVerticalScrollIndicator={false}
+      >
+        <View ref={topRef} collapsable={false} />
+        {/* the header's hero, the list switch and the list rise together: the screen's first entrance */}
+        <Enter index={0}>
+          {header.hero}
+          {twoCol ? (
+            <View style={st.twoCol}>
+              <View style={st.col}>
+                <Text style={st.colHead}>ToDos</Text>
+                {dailyBody}
+              </View>
+              <View style={st.col}>
+                <Text style={st.colHead}>Long-term</Text>
+                {missionBody}
+              </View>
+            </View>
+          ) : (
+            <>
+              <SegmentedControl
+                options={TABS}
+                value={tab}
+                onChange={(k) => setTab(k)}
+                stretch
+                style={{ marginBottom: 16 }}
+              />
+              <Animated.View key={bodyKey} entering={bodyIn}>
+                {tab === 'daily' ? dailyBody : missionBody}
+              </Animated.View>
+            </>
+          )}
         </Enter>
       </Animated.ScrollView>
 
       <Animated.View
         pointerEvents={typing ? 'none' : 'box-none'}
-        style={[st.fabWrap, { bottom: tabMode ? 24 : insets.bottom + 20 }, fabIn]}
+        style={[st.fabWrap, { bottom: (tabMode ? 24 : insets.bottom + 20) + arrowsLift }, fabIn]}
       >
         <Animated.View style={sinkStyle}>
           <Bouncy
@@ -843,6 +869,9 @@ const st = StyleSheet.create({
   // wide enough for either of its labels, so the field beside it holds still as it changes
   setTime: { marginLeft: 8, minWidth: 92 },
   fabWrap: { position: 'absolute', right: 20, bottom: 24 },
+  twoCol: { flexDirection: 'row', alignItems: 'flex-start', gap: 20 },
+  col: { flex: 1, minWidth: 0 },
+  colHead: { ...T.kicker, marginBottom: 12, marginLeft: 4 },
   fab: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center' },
   sheetSection: {
     color: C.textFaint, fontSize: 11, fontFamily: F.smSemi,

@@ -15,13 +15,14 @@ import {
   ScreenBG, Field, EmptyState, ListRow, ListSlice, Row, Chip, Sheet, PillButton, DotMenu, GateHeader, useTheme, useToolHeader,
   contextLine,
 } from '../components/UI';
-import { ARRIVE, Bouncy, EASE_OUT, Enter, FADE_IN, glide, useAnimLevel } from '../components/Motion';
+import { ARRIVE, Bouncy, EASE_OUT, Enter, FADE_IN, glide, rowOut, useAnimLevel } from '../components/Motion';
 import { tap } from '../haptics';
 import { toastTrashed } from '../trashToast';
 import { ToolGate } from '../components/LockGate';
 import { fmtClockTime, todayKey, yesterdayKey } from '../utils';
 import { useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
+import { useArrowsLift } from '../hooks/useRail';
 
 /**
  * A note with nothing in it: no title, no words, no attachment. Deleting one takes it away for good, on the list and
@@ -129,8 +130,10 @@ function Marked({ text, ranges, style, lines }: { text: string; ranges: readonly
 }
 
 /** One note in the list, memoised: a change to one note re-renders its own row, not the screenful. */
-const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, showFolder, today, hour24, onOpen, onMenu, hit }: {
+const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, leave, showFolder, today, hour24, onOpen, onMenu, hit }: {
   note: Note; first: boolean; last: boolean; dip: SharedValue<number>;
+  /** how the row leaves if it goes from this same list (a delete, a move to another folder); none for a new list */
+  leave?: ReturnType<typeof rowOut>;
   /** off while the list shows one folder, whose name every row would only repeat */
   showFolder: boolean;
   today: string; hour24: boolean;
@@ -141,6 +144,7 @@ const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, showFol
   const dipStyle = useAnimatedStyle(() => ({ opacity: dip.value }));
   const meta = [showFolder ? n.folder : '', n.subject ?? '', rowWhen(n.updatedAt, today, hour24)].filter(Boolean).join(' · ');
   return (
+    <Animated.View exiting={leave}>
     <ListSlice first={first} last={last}>
       <Animated.View style={dipStyle}>
         <ListRow onPress={() => onOpen(n.id)} onLongPress={() => onMenu(n)} style={st.note}>
@@ -165,6 +169,7 @@ const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, showFol
         </ListRow>
       </Animated.View>
     </ListSlice>
+    </Animated.View>
   );
 });
 
@@ -241,14 +246,15 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   React.useEffect(() => { lastFilter.current = filterKey; });
   // another folder's notes come up from a faint start, so the change reads as one step instead of a jump
   const dip = useSharedValue(1);
-  const shownFolder = React.useRef(folder);
+  // the same for a new search's results: they come up as one step, not swapped in a frame
+  const shownFolder = React.useRef(filterKey);
   React.useEffect(() => {
-    if (shownFolder.current === folder) return;
-    shownFolder.current = folder;
+    if (shownFolder.current === filterKey) return;
+    shownFolder.current = filterKey;
     if (level === 'none') return;
     dip.value = 0.3;
     dip.value = withTiming(1, { duration: level === 'full' ? 240 : 180, easing: EASE_OUT });
-  }, [folder, level]);
+  }, [filterKey, level]);
 
   // one page per tap: a second tap within the gap (a double tap, or a tap while the page is still coming in) is ignored,
   // so it never stacks two copies of a note or makes two new ones
@@ -302,6 +308,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
     fabOn.value = level === 'none' ? to : withTiming(to, { duration: keyboardOpen ? 140 : 200, easing: EASE_OUT });
   }, [keyboardOpen, level]);
   const fabStyle = useAnimatedStyle(() => ({ opacity: fabOn.value }));
+  const arrowsLift = useArrowsLift();
   const count = filtered.length;
   const today = useToday();
   const hour24 = useStore((s) => s.settings.hour24);
@@ -309,10 +316,10 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const renderItem = React.useCallback(({ item, index }: { item: Note; index: number }) => (
     <NoteRow
       note={item} first={index === 0} last={index === count - 1}
-      dip={dip} showFolder={showFolder} today={today} hour24={hour24} onOpen={openNote} onMenu={openMenu}
-      hit={hits?.get(item.id)}
+      dip={dip} leave={sameList ? rowOut(level) : undefined} showFolder={showFolder} today={today} hour24={hour24}
+      onOpen={openNote} onMenu={openMenu} hit={hits?.get(item.id)}
     />
-  ), [count, showFolder, today, hour24, openNote, openMenu, hits]);
+  ), [count, showFolder, today, hour24, openNote, openMenu, hits, sameList, level]);
 
   return (
     <ScreenBG guard={tabMode}>
@@ -372,7 +379,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
         pointerEvents={keyboardOpen ? 'none' : 'box-none'}
         importantForAccessibility={keyboardOpen ? 'no-hide-descendants' : 'auto'}
         accessibilityElementsHidden={keyboardOpen}
-        style={[st.fabSpot, { bottom: tabMode ? 24 : insets.bottom + 20 }, fabStyle]}
+        style={[st.fabSpot, { bottom: (tabMode ? 24 : insets.bottom + 20) + arrowsLift }, fabStyle]}
       >
         <Bouncy
           radius={999}

@@ -1,10 +1,13 @@
 import React from 'react';
 import { Pressable, View, ViewStyle } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, CHROME_FONT_MAX, F, MIN, TRACK, neuInset, neuRaised, oneLine } from '../theme';
 import { useTheme } from './UI';
-import { CHANGE, RISE_OUT, useAnimLevel } from './Motion';
+import { CHANGE, useAnimLevel } from './Motion';
+
+/** the thumb's move to its new segment: quick off the mark, a soft landing, no overshoot */
+const SLIDE = { duration: 300, easing: Easing.bezier(0.2, 0.9, 0.3, 1) };
 import { tick } from '../haptics';
 
 /** a segment's reach grows above and below to the rows' rhythm; its sides already meet the next segment */
@@ -42,11 +45,12 @@ export function SegmentedControl<K extends string>({
     const l = layouts[value];
     if (!l) return;
     if (animate && level !== 'none' && w.value > 0) {
-      // the thumb takes its new width at once and springs its scale from the old width: only transforms move
+      // the thumb takes its new width at once and eases its scale from the old width: only transforms move. An ease,
+      // not a spring: a spring's overshoot carried the thumb past its segment and into the trough's rim at the ends
       sx.value = w.value / l.width;
       w.value = l.width;
-      sx.value = withSpring(1, RISE_OUT);
-      x.value = withSpring(l.x, RISE_OUT);
+      sx.value = withTiming(1, SLIDE);
+      x.value = withTiming(l.x, SLIDE);
     } else {
       x.value = l.x;
       w.value = l.width;

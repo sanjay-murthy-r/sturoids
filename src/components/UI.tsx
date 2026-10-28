@@ -1207,12 +1207,38 @@ export function Toggle({ value, onChange, color, label }: {
 export type FieldProps = React.ComponentProps<typeof TextInput> & { style?: any; label?: string };
 
 /**
+ * Whether the field is in a sheet, and whether that sheet has finished rising. A field asked to take the keyboard as it
+ * appears (autoFocus) waits for the rise inside a sheet, so the keyboard never rides the panel's motion up.
+ */
+export const SheetRise = React.createContext<{ inSheet: boolean; risen: boolean }>({ inSheet: false, risen: true });
+
+/** autoFocus that waits for a sheet's rise: spread its props on a TextInput, and give it the ref it returns. */
+export function useSheetAutoFocus(autoFocus: boolean | undefined, outer?: React.Ref<TextInput>) {
+  const { inSheet, risen } = React.useContext(SheetRise);
+  const inner = React.useRef<TextInput | null>(null);
+  const ref = React.useCallback((n: TextInput | null) => {
+    inner.current = n;
+    if (typeof outer === 'function') outer(n);
+    else if (outer && typeof outer === 'object') (outer as React.MutableRefObject<TextInput | null>).current = n;
+  }, [outer]);
+  const asked = !!autoFocus && inSheet;
+  const done = React.useRef(false);
+  React.useEffect(() => {
+    if (!asked || !risen || done.current) return;
+    done.current = true;
+    inner.current?.focus();
+  }, [asked, risen]);
+  return { ref, autoFocus: !!autoFocus && !inSheet };
+}
+
+/**
  * A text field drawn as a line: an optional label above, the text, and a hairline underneath. While you type, an
  * accent line grows over the hairline from the left. Layout props go to the wrapper. The label is also what a screen
  * reader calls the field, and a ref reaches the TextInput itself (to focus it once a sheet has risen, say).
  */
 export const Field = React.forwardRef<TextInput, FieldProps>(function Field({ label, ...props }, ref) {
   const theme = useTheme();
+  const focusLater = useSheetAutoFocus(props.autoFocus, ref);
   const level = useAnimLevel();
   const [focused, setFocused] = React.useState(false);
   const on = useSharedValue(0);
@@ -1234,10 +1260,11 @@ export const Field = React.forwardRef<TextInput, FieldProps>(function Field({ la
     <View style={wrapStyle}>
       {label ? <Text style={st.fieldLabel} importantForAccessibility="no">{label}</Text> : null}
       <TextInput
-        ref={ref}
         placeholderTextColor={C.textFaint}
         selectionColor={C.accent}
         {...props}
+        ref={focusLater.ref}
+        autoFocus={focusLater.autoFocus}
         accessibilityLabel={props.accessibilityLabel ?? label}
         onFocus={(e) => { setFocused(true); props.onFocus?.(e); }}
         onBlur={(e) => { setFocused(false); props.onBlur?.(e); }}
@@ -1452,7 +1479,27 @@ export function Sheet({
   closedRef.current = onClosed;
   const risenRef = React.useRef(onRisen);
   risenRef.current = onRisen;
-  const risen = React.useCallback(() => { risenRef.current?.(); }, []);
+  // whether the panel has finished rising: fields asked to focus as it opens wait for it (SheetRise)
+  const [up, setUp] = React.useState(false);
+  const risen = React.useCallback(() => { setUp(true); risenRef.current?.(); }, []);
+  React.useEffect(() => { if (!visible) setUp(false); }, [visible]);
+  const riseCtx = React.useMemo(() => ({ inSheet: true, risen: up }), [up]);
+  // The body's height: it eases to what its content needs (up to the room there is), so a part that opens or closes
+  // inside an open sheet (a time, the days to repeat on) grows or shrinks the panel smoothly, its top edge gliding
+  // instead of jumping. Its first height, and any while the panel is still rising or motion is off, is simply taken.
+  const bodyH = useSharedValue(-1);
+  const contentH = React.useRef(0);
+  const upRef = React.useRef(false);
+  upRef.current = up;
+  const fitBody = React.useCallback((animate: boolean) => {
+    const to = Math.min(contentH.current, scrollMax);
+    if (to <= 0) return;
+    if (!animate || bodyH.value < 0 || level === 'none') bodyH.value = to;
+    else bodyH.value = withTiming(to, { duration: 260, easing: EASE_OUT });
+  }, [scrollMax, level]);
+  React.useEffect(() => { fitBody(upRef.current); }, [scrollMax]);
+  React.useEffect(() => { if (!render) bodyH.value = -1; }, [render]);
+  const bodyStyle = useAnimatedStyle(() => (bodyH.value < 0 ? {} : { height: bodyH.value }));
   const finishClose = React.useCallback(() => {
     leaving.current = false;
     mounted.current = false;
@@ -1566,8 +1613,9 @@ export function Sheet({
     <Modal visible transparent statusBarTranslucent animationType="none" onRequestClose={onClose}>
       {/* a modal is its own window: gestures inside it need their own root */}
       <GestureHandlerRootView style={{ flex: 1 }}>
-      <View style={{ flex: 1 }} pointerEvents={closing ? 'none' : 'box-none'}>
-      <Animated.View style={[st.sheetOverlay, backdropStyle]}>
+      {/* the dim covers the whole window, beside a narrow panel on a wide screen too; the panel stands at its foot */}
+      <View style={{ flex: 1, justifyContent: 'flex-end' }} pointerEvents={closing ? 'none' : 'box-none'}>
+      <Animated.View style={[StyleSheet.absoluteFill, st.sheetOverlay, backdropStyle]}>
         <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" />
       </Animated.View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -1590,15 +1638,18 @@ export function Sheet({
           </GestureDetector>
           {/* negative margin + matching padding: children's raised shadows get
               breathing room inside the ScrollView's clip bounds */}
+          <Animated.View style={[{ marginHorizontal: -10, marginTop: -8, overflow: 'hidden' }, bodyStyle]}>
           <ScrollView
             keyboardShouldPersistTaps="handled"
-            style={{ maxHeight: scrollMax, marginHorizontal: -10, marginTop: -8 }}
+            style={{ maxHeight: scrollMax }}
             contentContainerStyle={{ paddingHorizontal: 10, paddingTop: 8, paddingBottom: 10 }}
+            onContentSizeChange={(_w, h) => { contentH.current = h; fitBody(upRef.current); }}
           >
             {/* rows that fold out of a sheet never outlive it: when the modal goes, its content leaves at once (the
                 ambient screen does the same), so no exit animation runs on in a window that is being torn down */}
-            <LayoutAnimationConfig skipExiting>{children}</LayoutAnimationConfig>
+            <LayoutAnimationConfig skipExiting><SheetRise.Provider value={riseCtx}>{children}</SheetRise.Provider></LayoutAnimationConfig>
           </ScrollView>
+          </Animated.View>
         </Animated.View>
       </KeyboardAvoidingView>
       </View>

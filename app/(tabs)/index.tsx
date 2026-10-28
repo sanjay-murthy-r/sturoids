@@ -18,7 +18,7 @@ import {
 import { makeSampleStore } from '../../src/widgets/sample';
 import { fmtDate, uid } from '../../src/utils';
 import { ArrivalPulse, Card, PillButton, PullPill, ScreenBG, SectionTopTrim, Sheet, useHeaderPull, useTheme } from '../../src/components/UI';
-import { Bouncy, EASE_OUT, Enter, FadeSwap, glide, useAnimLevel, useFocusKey } from '../../src/components/Motion';
+import { Bouncy, EASE_OUT, Enter, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { toast } from '../../src/components/Toast';
 import { tap, tick } from '../../src/haptics';
 import { normaliseSlots, toolByKey } from '../../src/tools';
@@ -94,6 +94,7 @@ export default function Today() {
   const openAccount = useCallback(() => openPage('/settings', { page: 'account' }), []);
   const [editing, setEditing] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const todayLevel = useAnimLevel();
   // the day's column, known ahead on a wide window (so the board's columns are right on the first frame), then measured
   const { width: dayWinW } = useWindowDimensions();
   const [areaW, setAreaW] = useState(() => columnWidth(dayWinW, true, BOARD_MAX));
@@ -249,10 +250,13 @@ export default function Today() {
         >
           {header}
           <SystemBanners />
-          <Board
-            count={count} width={boardW} editing={editing} archived={archived}
-            onEdit={setEditing} onDragging={setDragging} scroll={scroll}
-          />
+          {/* a banner coming or going above moves the board with it, gliding, never in one frame */}
+          <Animated.View layout={glide(todayLevel)}>
+            <Board
+              count={count} width={boardW} editing={editing} archived={archived}
+              onEdit={setEditing} onDragging={setDragging} scroll={scroll}
+            />
+          </Animated.View>
         </Animated.ScrollView>
       </BoardNow.Provider>
       <ProfileSwitcher visible={switcher} onClose={() => setSwitcher(false)} onManage={openAccount} />
@@ -267,6 +271,7 @@ export default function Today() {
  * after a week of use with no account and no backup file in two weeks, a card saying the data lives only on this phone.
  */
 function SystemBanners() {
+  const level = useAnimLevel();
   const attention = useBackupAttention();
   const signedIn = useCloud((s) => s.ready && s.status !== 'signed-out');
   const firstOpenedAt = useStore((s) => s.settings.firstOpenedAt);
@@ -291,7 +296,7 @@ function SystemBanners() {
   return (
     <>
       {attention !== 'ok' ? (
-        <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(160)}>
+        <Animated.View entering={rowIn(level)} exiting={rowOut(level)}>
           <NudgeRow
             icon={attention === 'lost' ? 'cloud-offline-outline' : 'pause-circle-outline'} iconColor={C.amber}
             text={BACKUP_ATTENTION_TEXT[attention]} action="Fix" actionColor={C.amber} onPress={openAccount}
@@ -300,7 +305,7 @@ function SystemBanners() {
         </Animated.View>
       ) : null}
       {nudge ? (
-        <Animated.View entering={FadeIn.duration(220)} exiting={FadeOut.duration(160)}>
+        <Animated.View entering={rowIn(level)} exiting={rowOut(level)}>
           <Card pad={S.cardPad}>
             <View style={st.nudgeHead}>
               <Ionicons name="phone-portrait-outline" size={18} color={C.amber} />
@@ -355,6 +360,7 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
   onEdit: (on: boolean) => void; onDragging: (on: boolean) => void; scroll: BoardScroll;
 }) {
   const level = useAnimLevel();
+  const still = level === 'none';
   const theme = useTheme();
   const saved = useStore((s) => s.todayLayout);
   // a PC keeps its own arrangement once one is made there; until then it shows the tablet's (the account's, synced)
@@ -601,7 +607,7 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
         {/* where the dragged widget will land: its place drawn in a fine line of the accent, flat on the material */}
         {dragRect ? (
           <Animated.View
-            pointerEvents="none" entering={FadeIn.duration(160).easing(EASE_OUT)} exiting={FadeOut.duration(180)} layout={glide(level)}
+            pointerEvents="none" entering={still ? undefined : FadeIn.duration(160).easing(EASE_OUT)} exiting={still ? undefined : FadeOut.duration(180)} layout={glide(level)}
             style={[
               st.landing,
               { left: dragRect.x, top: dragRect.y, width: dragRect.w, height: dragRect.h, borderColor: theme === 'minimal' ? MIN.border : C.accent },
@@ -610,7 +616,7 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
         ) : null}
         {editing && !drag ? gaps.map((g) => (
           <Animated.View
-            key={g.key} entering={FadeIn.duration(220).easing(EASE_OUT)} exiting={FadeOut.duration(140)}
+            key={g.key} entering={still ? undefined : FadeIn.duration(220).easing(EASE_OUT)} exiting={still ? undefined : FadeOut.duration(140)}
             style={{ position: 'absolute', left: g.x, top: g.y, width: g.w, height: g.h }}
           >
             <Pressable
@@ -640,7 +646,7 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
         })}
       </View>
       {editing ? (
-        <Animated.View entering={FadeIn.duration(220).easing(EASE_OUT)} style={st.editKeys}>
+        <Animated.View entering={still ? undefined : FadeIn.duration(220).easing(EASE_OUT)} style={st.editKeys}>
           <PillButton label="Add widget" icon="add" onPress={() => openGallery(null)} />
           <PillButton label="Done" outline onPress={() => onEdit(false)} style={{ marginLeft: 14 }} />
         </Animated.View>
@@ -782,17 +788,28 @@ const BoardItem = React.memo(function BoardItem({
   }));
   // the ring that marks a widget being edited: a fine line of the accent that draws in as the board settles and goes
   // while the widget is held up
+  // a new size (the size chip) eases to its place as the widgets around it glide, never in one frame
+  const boxW = useSharedValue(width);
+  const boxH = useSharedValue(def.flow ? -1 : heightOf(w.size));
+  useEffect(() => {
+    const to = def.flow ? -1 : heightOf(w.size);
+    if (level === 'none' || !placed.current) { boxW.value = width; boxH.value = to; return; }
+    boxW.value = withTiming(width, MOVE);
+    boxH.value = to < 0 ? -1 : withTiming(to, MOVE);
+  }, [width, w.size, def.flow, level]);
+  const sizeStyle = useAnimatedStyle(() => (boxH.value < 0 ? { width: boxW.value } : { width: boxW.value, height: boxH.value }));
   const outline = useAnimatedStyle(() => ({
     opacity: 0.45 * settle.value * (1 - lift.value),
     transform: [{ scale: 1.012 - 0.012 * settle.value }] as const,
   }));
   const sizes = def.sizes;
-  const box = def.flow ? null : { height: heightOf(w.size) };
+
   const setOwn = useCallback((patch: Record<string, unknown>) => setConfig(id, patch), [id, setConfig]);
   const Component = def.Component;
   return (
     <Animated.View
-      style={[st.item, { width }, box, place]}
+      exiting={level === 'none' ? undefined : FadeOut.duration(180).easing(EASE_OUT)}
+      style={[st.item, sizeStyle, place]}
       onLayout={(e) => {
         const hh = e.nativeEvent.layout.height;
         h.value = hh;
@@ -819,7 +836,7 @@ const BoardItem = React.memo(function BoardItem({
       </Enter>
       {editing && !dragging ? (
         <>
-          <Animated.View entering={ZoomIn.duration(220).easing(EASE_OUT)} exiting={ZoomOut.duration(140)} style={st.removeAt}>
+          <Animated.View entering={level === 'none' ? undefined : ZoomIn.duration(220).easing(EASE_OUT)} exiting={level === 'none' ? undefined : ZoomOut.duration(140)} style={st.removeAt}>
             <Bouncy
               onPress={() => onRemove(w.id)} hitSlop={10} scaleTo={0.86} radius={14}
               style={[st.remove, theme === 'minimal' ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.card, ...neuRaised('low') }]}
@@ -829,7 +846,7 @@ const BoardItem = React.memo(function BoardItem({
             </Bouncy>
           </Animated.View>
           {sizes.length > 1 ? (
-            <Animated.View entering={ZoomIn.duration(220).delay(40).easing(EASE_OUT)} exiting={ZoomOut.duration(140)} style={st.sizeAt}>
+            <Animated.View entering={level === 'none' ? undefined : ZoomIn.duration(220).delay(40).easing(EASE_OUT)} exiting={level === 'none' ? undefined : ZoomOut.duration(140)} style={st.sizeAt}>
               <Pressable
                 onPress={() => onResize(w.id)} hitSlop={12} style={[st.sizeChip, { borderColor: C.outline, backgroundColor: C.card }]}
                 accessibilityRole="button" accessibilityLabel={def.title + ', size ' + w.size} accessibilityHint="Changes its size"

@@ -749,6 +749,6 @@ const st = StyleSheet.create({
   },
   caption: {
     marginTop: GAP_CAPTION, height: CAPTION_H, lineHeight: CAPTION_H, textAlign: 'center',
-    color: C.textDim, fontFamily: F.brand, fontSize: 10.5, letterSpacing: 1.6, paddingLeft: 1.6,
+    color: C.textDim, fontFamily: F.brand, fontSize: 11, letterSpacing: 1.6, paddingLeft: 1.6,
   },
 });
