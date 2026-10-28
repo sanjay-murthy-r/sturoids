@@ -34,6 +34,8 @@ let running = false;
 let ready = false;
 let busy = false;
 let again = false;
+/** whether a run asked for while one was busy wanted every widget drawn afresh */
+let againForce = false;
 
 /** The store's rows as the widgets read them (the same shape the task handler reads from storage). */
 function currentData(): PhoneData {
@@ -52,6 +54,7 @@ export async function updatePhoneWidgets(force = false): Promise<void> {
   if (!L || !ready) return;
   if (busy) {
     again = true;
+    againForce = againForce || force;
     return;
   }
   busy = true;
@@ -94,8 +97,10 @@ export async function updatePhoneWidgets(force = false): Promise<void> {
   } finally {
     busy = false;
     if (again) {
+      const f = againForce;
       again = false;
-      setTimeout(() => updatePhoneWidgets(), 0);
+      againForce = false;
+      setTimeout(() => updatePhoneWidgets(f), 0);
     }
   }
 }

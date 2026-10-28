@@ -40,13 +40,18 @@ export async function readPhoneData(only?: readonly PhoneRow[]): Promise<PhoneDa
   const id = await activeProfileId();
   const base = pkey(STORE_BASE, id);
   const rows: Partial<Record<PhoneRow, unknown>> = {};
+  // a settings row that is there but cannot be read: the locks are taken as on, as the app itself does, so a locked
+  // journal or notes never shows on the home screen because of a bad read
+  let settingsUnread = false;
   try {
     const keys = only || PHONE_ROWS;
     const pairs = await AsyncStorage.multiGet([base + ':meta', ...keys.map((k) => base + ':' + k)]);
     const meta = parse(pairs[0]?.[1]);
     if (meta) {
       keys.forEach((k, i) => {
-        rows[k] = parse(pairs[i + 1]?.[1]);
+        const raw = pairs[i + 1]?.[1];
+        rows[k] = parse(raw);
+        if (k === 'settings' && raw != null && (rows[k] == null || typeof rows[k] !== 'object')) settingsUnread = true;
       });
     } else {
       // before 1.7 everything sat in one row, under zustand's { state, version }
@@ -61,10 +66,16 @@ export async function readPhoneData(only?: readonly PhoneRow[]): Promise<PhoneDa
         rows[k] = parse(await AsyncStorage.getItem(base + ':' + k));
       } catch {
         rows[k] = undefined;
+        if (k === 'settings') settingsUnread = true;
       }
     }
   }
-  return cleanData(rows);
+  const data = cleanData(rows);
+  if (settingsUnread) {
+    data.settings.journalLocked = true;
+    data.settings.notesLocked = true;
+  }
+  return data;
 }
 
 /* ---------------------------------------------------------------- the Calculator widget's own sum */

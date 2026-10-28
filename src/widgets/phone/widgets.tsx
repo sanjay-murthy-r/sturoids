@@ -114,6 +114,18 @@ function Disc({ size, color, glyph, glyphColor, uri, ring }: { size: number; col
   );
 }
 
+/** A small disc inside a 40dp target: the disc is drawn small, the tap reaches round it. */
+function DiscKey(props: { size: number; color: ColorProp; glyph: string; glyphColor: string; uri: string }) {
+  return (
+    <FlexWidget style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center', marginVertical: -8, marginRight: -8 }} {...tap(props.uri)}>
+      <Disc size={props.size} color={props.color} glyph={props.glyph} glyphColor={props.glyphColor} />
+    </FlexWidget>
+  );
+}
+
+/** How many rows of `rowH` fit in a widget `box` high, under `chrome` dp of heading and padding; at least one. */
+const fit = (box: PhoneBox, chrome: number, rowH: number) => Math.max(1, Math.floor((box.height - chrome) / rowH));
+
 /** A flat pill: a D-n, a time, a preset. */
 function Pill({ text, p, color, fill, uri }: { text: string; p: PhonePalette; color?: ColorProp; fill?: ColorProp; uri?: string }) {
   return (
@@ -167,19 +179,21 @@ function GateWidget({ gate, p }: { gate: Gate; p: PhonePalette }) {
 
 /* ---------------------------------------------------------------- app */
 
-function DayRing({ m, p }: { m: DayRingModel; p: PhonePalette }) {
+function DayRing({ m, p, box }: { m: DayRingModel; p: PhonePalette; box: PhoneBox }) {
   const goal = m.goalMin > 0;
+  // the ring takes the room the widget has, under the line beneath it: never wider or taller than the widget
+  const R = Math.max(56, Math.min(96, box.width - 24, box.height - 24 - 18));
   const ring = ringSvg({
-    size: 96, stroke: 7, frac: m.total ? m.done / m.total : 0, color: p.accent, track: p.well,
+    size: R, stroke: R < 80 ? 6 : 7, frac: m.total ? m.done / m.total : 0, color: p.accent, track: p.well,
     inner: goal ? { frac: m.focusMin / m.goalMin, color: p.green } : undefined,
   });
   return (
     <Frame p={p} uri={m.uri} pad={12}>
       <FlexWidget style={{ flex: 1, width: 'match_parent', alignItems: 'center', justifyContent: 'center' }}>
-        <OverlapWidget style={{ width: 96, height: 96 }}>
-          <SvgWidget svg={ring} style={{ width: 96, height: 96 }} />
-          <FlexWidget style={{ width: 96, height: 96, flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-            <Txt text={m.total ? String(m.left) : '0'} size={28} face="num" color={p.text} fixed />
+        <OverlapWidget style={{ width: R, height: R }}>
+          <SvgWidget svg={ring} style={{ width: R, height: R }} />
+          <FlexWidget style={{ width: R, height: R, flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <Txt text={m.total ? String(m.left) : '0'} size={R < 80 ? 22 : 28} face="num" color={p.text} fixed />
             <Txt text={m.total ? (m.left === 1 ? 'left' : 'left') : 'nothing due'} size={11} face="sm" color={p.faint} fixed />
           </FlexWidget>
         </OverlapWidget>
@@ -209,7 +223,7 @@ function BlockLine({ b, p }: { b: NonNullable<AtAGlanceModel['block']>; p: Phone
 
 function TodoRow({ r, p, compact }: { r: { title: string; sub: string; uri: string; late?: boolean }; p: PhonePalette; compact?: boolean }) {
   return (
-    <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', flexGap: 10, width: 'match_parent', paddingVertical: compact ? 2 : 4 }} {...tap(r.uri)}>
+    <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', flexGap: 10, width: 'match_parent', height: compact ? 28 : 34 }} {...tap(r.uri)}>
       <FlexWidget style={{ width: 16, height: 16, borderRadius: 8, borderWidth: 1.5, borderColor: r.late ? p.amber : p.faint }} />
       <Txt text={r.title} size={13} color={p.text} style={{ flex: 1 }} />
       {r.sub ? <Txt text={r.sub} size={11} face="sm" color={r.late ? p.amber : p.faint} fixed /> : null}
@@ -244,7 +258,8 @@ function AtAGlance({ m, p }: { m: AtAGlanceModel; p: PhonePalette }) {
 }
 
 function Agenda({ m, p, box }: { m: AgendaModel; p: PhonePalette; box: PhoneBox }) {
-  const room = Math.max(3, Math.floor((box.height - 80) / 34));
+  // rows of 36dp under the date (and the untimed line and the now line, when they show)
+  const room = fit(box, 32 + 30 + (m.untimed ? 22 : 0) + 12, 36);
   // keep the rows around now in view: a few before, the rest after
   const from = Math.max(0, Math.min(m.nowAt - 1, m.rows.length - room));
   const rows = m.rows.slice(from, from + room);
@@ -254,7 +269,7 @@ function Agenda({ m, p, box }: { m: AgendaModel; p: PhonePalette; box: PhoneBox 
     if (i === nowAt) out.push(<NowLine key="now" p={p} />);
     const tint = r.kind === 'block' ? hexOf(r.color, p) : r.kind === 'exam' ? p.amber : p.slate;
     out.push(
-      <FlexWidget key={r.id} style={{ flexDirection: 'row', alignItems: 'center', flexGap: 10, width: 'match_parent', paddingVertical: 4 }} {...tap(r.uri)}>
+      <FlexWidget key={r.id} style={{ flexDirection: 'row', alignItems: 'center', flexGap: 10, width: 'match_parent', height: 36 }} {...tap(r.uri)}>
         <FlexWidget style={{ width: 3, height: 26, borderRadius: 2, backgroundColor: r.past ? p.line : tint }} />
         <FlexWidget style={{ flex: 1, flexDirection: 'column' }}>
           <Txt text={r.title} size={13} face={r.on ? 'semi' : 'reg'} color={r.past ? p.faint : p.text} />
@@ -296,8 +311,11 @@ const NowLine = ({ p }: { p: PhonePalette }) => (
 function Clock({ m, p, box }: { m: ClockModel; p: PhonePalette; box: PhoneBox }) {
   // the date keeps its room beside the ring: on a narrow widget the ring gives way first, then the date's size
   const narrow = box.width < 200;
-  const ring = Math.max(40, Math.min(72, Math.round(Math.min(box.width - 28 - 10 - (narrow ? 80 : 96), box.height * 0.42))));
-  const svg = ringSvg({ size: ring, stroke: 4, frac: m.dayFrac, color: rgba(p.accent, 0.85), track: p.well, dot: p.accent });
+  // the ring shows only where the date keeps its room beside it; a short widget drops the greeting
+  const ring = Math.min(72, Math.round(Math.min(box.width - 28 - 10 - (narrow ? 80 : 96), box.height * 0.42)));
+  const showRing = ring >= 40;
+  const short = box.height < 150;
+  const svg = ringSvg({ size: Math.max(40, ring), stroke: 4, frac: m.dayFrac, color: rgba(p.accent, 0.85), track: p.well, dot: p.accent });
   return (
     <Frame p={p} uri={m.uri} pad={14} gap={6}>
       <Row gap={10} style={{ alignItems: 'flex-start' }}>
@@ -305,10 +323,10 @@ function Clock({ m, p, box }: { m: ClockModel; p: PhonePalette; box: PhoneBox })
           <Txt text={m.weekday} size={11} face="smMed" color={p.accent} caps fixed />
           <Txt text={m.day + ' ' + m.month} size={narrow ? 22 : 26} face="head" color={p.text} fixed />
         </FlexWidget>
-        <SvgWidget svg={svg} style={{ width: ring, height: ring }} />
+        {showRing ? <SvgWidget svg={svg} style={{ width: ring, height: ring }} /> : null}
       </Row>
       <Spacer />
-      <Txt text={m.greeting} size={12} face="sm" color={p.dim} />
+      {short ? null : <Txt text={m.greeting} size={12} face="sm" color={p.dim} />}
       <Txt text={m.next || 'Nothing else planned'} size={13} face="med" color={p.text} lines={box.height < 200 ? 1 : 2} />
       <Txt
         text={m.left ? m.left + (m.left === 1 ? ' ToDo left' : ' ToDos left') : 'All ToDos done'}
@@ -424,7 +442,8 @@ function Calculator({ pad, p, box }: { pad: CalcPad; p: PhonePalette; box: Phone
 
 /* ---------------------------------------------------------------- tasks */
 
-function NextUp({ m, p }: { m: NextUpModel; p: PhonePalette }) {
+function NextUp({ m, p, box }: { m: NextUpModel; p: PhonePalette; box: PhoneBox }) {
+  const short = box.height < 150;
   if (!m.item) {
     return (
       <Frame p={p} uri={APP_LINK.addTodo}>
@@ -441,43 +460,48 @@ function NextUp({ m, p }: { m: NextUpModel; p: PhonePalette }) {
         <Txt text={m.left + ' left'} size={11} face="sm" color={p.faint} fixed />
       </Row>
       <Spacer />
-      <Txt text={m.item.title} size={15} face="semi" color={p.text} lines={3} />
+      <Txt text={m.item.title} size={15} face="semi" color={p.text} lines={short ? 2 : 3} />
       {m.item.sub ? <Txt text={m.item.sub} size={12} face="sm" color={m.item.late ? p.amber : p.faint} fixed /> : null}
       <Spacer />
-      <Row>
-        <Spacer />
-        <Disc size={40} color={rgba(p.accent, 0.16)} glyph="check" glyphColor={p.accent} uri={m.uri} />
-      </Row>
+      {/* a short widget is all one tap: the disc would push the title off */}
+      {short ? null : (
+        <Row>
+          <Spacer />
+          <Disc size={40} color={rgba(p.accent, 0.16)} glyph="check" glyphColor={p.accent} uri={m.uri} />
+        </Row>
+      )}
     </Frame>
   );
 }
 
-function Checklist({ m, p }: { m: ChecklistModel; p: PhonePalette }) {
+function Checklist({ m, p, box }: { m: ChecklistModel; p: PhonePalette; box: PhoneBox }) {
   return (
     <Frame p={p} uri={m.uri} pad={14} gap={4}>
       <Row>
         <Kicker text={m.left ? 'ToDos · ' + m.left + ' left' : 'ToDos'} p={p} />
         <Spacer />
-        <Disc size={26} color={p.well} glyph="plus" glyphColor={p.accent} uri={APP_LINK.addTodo} />
+        <DiscKey size={28} color={p.well} glyph="plus" glyphColor={p.accent} uri={APP_LINK.addTodo} />
       </Row>
       {m.rows.length
-        ? m.rows.map((r) => <TodoRow key={r.id} r={r} p={p} compact />)
+        ? m.rows.slice(0, fit(box, 28 + 28, 32)).map((r) => <TodoRow key={r.id} r={r} p={p} compact />)
         : [<Empty key="e" p={p} glyph="check" title={m.done ? 'All done for today' : 'Nothing due today'} body="Tap + to add one" />]}
     </Frame>
   );
 }
 
-function Deadlines({ m, p }: { m: DeadlinesModel; p: PhonePalette }) {
+function Deadlines({ m, p, box }: { m: DeadlinesModel; p: PhonePalette; box: PhoneBox }) {
+  const shown = m.rows.slice(0, fit(box, 28 + 20, 36));
+  const more = m.more + m.rows.length - shown.length;
   return (
     <Frame p={p} uri={m.uri} pad={14} gap={6}>
       <Row>
         <Kicker text="Deadlines" p={p} />
         <Spacer />
-        {m.more ? <Txt text={'+' + m.more + ' more'} size={11} face="sm" color={p.faint} fixed /> : null}
+        {more ? <Txt text={'+' + more + ' more'} size={11} face="sm" color={p.faint} fixed /> : null}
       </Row>
-      {m.rows.length
-        ? m.rows.map((r) => (
-          <FlexWidget key={r.id} style={{ flexDirection: 'column', flexGap: 4, width: 'match_parent' }} {...tap(r.uri)}>
+      {shown.length
+        ? shown.map((r) => (
+          <FlexWidget key={r.id} style={{ flexDirection: 'column', flexGap: 4, width: 'match_parent', paddingVertical: 4 }} {...tap(r.uri)}>
             <Row>
               <Txt text={r.title} size={13} color={p.text} style={{ flex: 1 }} />
               {r.steps ? <Txt text={r.steps} size={11} face="sm" color={p.faint} fixed /> : null}
@@ -493,15 +517,16 @@ function Deadlines({ m, p }: { m: DeadlinesModel; p: PhonePalette }) {
 
 /* ---------------------------------------------------------------- deep work */
 
-function QuickStart({ m, p }: { m: QuickStartModel; p: PhonePalette }) {
+function QuickStart({ m, p, box }: { m: QuickStartModel; p: PhonePalette; box: PhoneBox }) {
+  const short = box.height < 150;
   return (
     <Frame p={p} uri={m.uri} pad={14}>
       <Kicker text="Deep Work" p={p} />
       <FlexWidget style={{ flex: 1, width: 'match_parent', alignItems: 'center', justifyContent: 'center' }}>
-        <Disc size={56} color={p.accent} glyph={m.running && !m.paused ? 'pause' : 'play'} glyphColor={p.onAccent} uri={m.uri} />
+        <Disc size={short ? 40 : 56} color={p.accent} glyph={m.running && !m.paused ? 'pause' : 'play'} glyphColor={p.onAccent} uri={m.uri} />
       </FlexWidget>
       <Txt text={m.running ? (m.paused ? 'Paused · ' : 'Running · ') + minText(m.runningMin) : 'Start ' + minText(m.minutes)} size={13} face="semi" color={p.text} align="center" fixed style={{ width: 'match_parent' }} />
-      <Txt text={minText(m.todayMin) + ' today'} size={11} face="sm" color={p.faint} align="center" fixed style={{ width: 'match_parent' }} />
+      {short ? null : <Txt text={minText(m.todayMin) + ' today'} size={11} face="sm" color={p.faint} align="center" fixed style={{ width: 'match_parent' }} />}
     </Frame>
   );
 }
@@ -654,11 +679,13 @@ function TodaysBlocks({ m, p, box }: { m: TodaysBlocksModel; p: PhonePalette; bo
       {m.blocks.length ? (
         <FlexWidget style={{ flexDirection: 'column', flexGap: 4, width: 'match_parent' }}>
           <SvgWidget svg={svg} style={{ width: w, height: h }} />
-          <Row>
-            <Txt text={m.startLabel} size={11} face="sm" color={p.faint} fixed />
-            <Spacer />
-            <Txt text={m.endLabel} size={11} face="sm" color={p.faint} fixed />
-          </Row>
+          {box.height < 150 ? null : (
+            <Row>
+              <Txt text={m.startLabel} size={11} face="sm" color={p.faint} fixed />
+              <Spacer />
+              <Txt text={m.endLabel} size={11} face="sm" color={p.faint} fixed />
+            </Row>
+          )}
         </FlexWidget>
       ) : (
         <Txt text="Nothing planned today" size={13} face="sm" color={p.faint} />
@@ -674,8 +701,10 @@ function TodaysBlocks({ m, p, box }: { m: TodaysBlocksModel; p: PhonePalette; bo
   );
 }
 
-function HabitGrid({ m, p }: { m: HabitGridModel; p: PhonePalette }) {
+function HabitGrid({ m, p, box }: { m: HabitGridModel; p: PhonePalette; box: PhoneBox }) {
   const cell = 14;
+  const habits = m.habits.slice(0, fit(box, 28 + 20 + (m.more ? 18 : 0), 26));
+  const more = m.more + m.habits.length - habits.length;
   return (
     <Frame p={p} uri={m.uri} pad={14} gap={5}>
       <Row gap={6}>
@@ -687,9 +716,10 @@ function HabitGrid({ m, p }: { m: HabitGridModel; p: PhonePalette }) {
           </FlexWidget>
         ))}
       </Row>
-      {m.habits.length
-        ? m.habits.map((h) => (
-          <Row key={h.id} gap={6}>
+      {habits.length
+        ? habits.map((h) => (
+          // the whole row is the habit's tap, not its last small cell
+          <Row key={h.id} gap={6} style={{ height: 24 }}>
             <Txt text={h.title} size={13} color={p.text} style={{ flex: 1 }} />
             {h.cells.map((c, i) => (
               <FlexWidget
@@ -699,13 +729,12 @@ function HabitGrid({ m, p }: { m: HabitGridModel; p: PhonePalette }) {
                   backgroundColor: c === 'done' ? p.green : c === 'rest' ? p.bg : p.well,
                   ...(c === 'open' ? { borderWidth: 1.5, borderColor: p.green } : c === 'rest' ? { borderWidth: 1, borderColor: p.line } : null),
                 }}
-                {...(i === h.cells.length - 1 ? tap(h.uri) : null)}
               />
             ))}
           </Row>
         ))
         : [<Empty key="e" p={p} glyph="check" title="No habits yet" body="Add one in the Planner" />]}
-      {m.more ? <Txt text={'+' + m.more + ' more'} size={11} face="sm" color={p.faint} fixed /> : null}
+      {more ? <Txt text={'+' + more + ' more'} size={11} face="sm" color={p.faint} fixed /> : null}
     </Frame>
   );
 }
@@ -788,13 +817,14 @@ function Pinned({ m, p }: { m: NotesModel; p: PhonePalette }) {
 }
 
 function RecentNotes({ m, p, box }: { m: NotesModel; p: PhonePalette; box: PhoneBox }) {
-  const room = Math.max(2, Math.floor((box.height - 60) / 64));
+  // a card with its excerpt and folder is about 80dp
+  const room = fit(box, 32 + 36, 88);
   return (
     <Frame p={p} uri={m.uri} gap={8}>
       <Row>
         <Kicker text="Recent notes" p={p} />
         <Spacer />
-        <Disc size={26} color={p.well} glyph="plus" glyphColor={p.green} uri={APP_LINK.newNote} />
+        <DiscKey size={28} color={p.well} glyph="plus" glyphColor={p.green} uri={APP_LINK.newNote} />
       </Row>
       {m.rows.length
         ? m.rows.slice(0, room).map((n) => <NoteCard key={n.id} n={n} p={p} wide />)
@@ -908,13 +938,13 @@ function Move({ move, p }: { move: 'up' | 'down' | 'level' | 'none'; p: PhonePal
   return <Glyph name={move} size={14} color={move === 'up' ? p.green : move === 'down' ? p.danger : p.faint} />;
 }
 
-function Results({ m, p }: { m: ResultsModel; p: PhonePalette }) {
+function Results({ m, p, box }: { m: ResultsModel; p: PhonePalette; box: PhoneBox }) {
   return (
     <Frame p={p} uri={m.uri} pad={14} gap={6}>
       <Kicker text="Results" p={p} />
       {m.rows.length
-        ? m.rows.map((r) => (
-          <Row key={r.id} gap={10} style={{ paddingVertical: 3 }}>
+        ? m.rows.slice(0, fit(box, 28 + 20, 30)).map((r) => (
+          <Row key={r.id} gap={10} style={{ height: 24 }}>
             <Txt text={r.title} size={13} color={p.text} style={{ flex: 1 }} uri={r.uri} />
             <Txt text={r.pct} size={14} face="med" color={p.text} fixed />
             <Move move={r.move} p={p} />
@@ -1058,20 +1088,20 @@ export function renderPhoneWidget(name: PhoneWidgetName, d: PhoneData, box: Phon
   if (gate) return <GateWidget gate={gate} p={p} />;
   const m: any = model !== undefined ? model : modelFor(name, d, now);
   switch (name) {
-    case 'DayRing': return <DayRing m={m} p={p} />;
+    case 'DayRing': return <DayRing m={m} p={p} box={box} />;
     case 'AtAGlance': return <AtAGlance m={m} p={p} />;
     case 'Agenda': return <Agenda m={m} p={p} box={box} />;
     case 'Clock': return <Clock m={m} p={p} box={box} />;
     case 'Search': return <Search p={p} />;
-    case 'NextUp': return <NextUp m={m} p={p} />;
-    case 'Checklist': return <Checklist m={m} p={p} />;
-    case 'Deadlines': return <Deadlines m={m} p={p} />;
-    case 'QuickStart': return <QuickStart m={m} p={p} />;
+    case 'NextUp': return <NextUp m={m} p={p} box={box} />;
+    case 'Checklist': return <Checklist m={m} p={p} box={box} />;
+    case 'Deadlines': return <Deadlines m={m} p={p} box={box} />;
+    case 'QuickStart': return <QuickStart m={m} p={p} box={box} />;
     case 'Session': return <Session m={m} p={p} />;
     case 'FocusWeek': return <FocusWeek m={m} p={p} box={box} />;
     case 'NowNext': return <NowNext m={m} p={p} />;
     case 'TodaysBlocks': return <TodaysBlocks m={m} p={p} box={box} />;
-    case 'HabitGrid': return <HabitGrid m={m} p={p} />;
+    case 'HabitGrid': return <HabitGrid m={m} p={p} box={box} />;
     case 'Streak': return <Streak m={m} p={p} />;
     case 'NewNote': return <NewNote m={m} p={p} />;
     case 'Pinned': return <Pinned m={m} p={p} />;
@@ -1080,7 +1110,7 @@ export function renderPhoneWidget(name: PhoneWidgetName, d: PhoneData, box: Phon
     case 'MoodStrip': return <MoodStrip m={m} p={p} />;
     case 'OnThisDay': return <OnThisDay m={m} p={p} />;
     case 'Countdown': return <Countdown m={m} p={p} />;
-    case 'Results': return <Results m={m} p={p} />;
+    case 'Results': return <Results m={m} p={p} box={box} />;
     case 'SubjectTrend': return <SubjectTrend m={m} p={p} box={box} />;
     case 'ContinueWatching': return <ContinueWatching m={m} p={p} box={box} />;
     case 'WatchList': return <WatchList m={m} p={p} box={box} />;
