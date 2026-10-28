@@ -1074,6 +1074,17 @@ const scenarios = {
     assert.deepEqual(next.state().doneLog, st().doneLog);
     assert.equal(app.store.hasAnyUserData({ doneLog: { [today]: { todos: [{ id: 'x', title: 'X' }] } } }), true);
     assert.equal(app.store.hasAnyUserData({ doneLog: {} }), false);
+    // the rest of what a student makes counts as well, so an empty-looking phone is one that holds none of it
+    const has = (p) => app.store.hasAnyUserData(p);
+    assert.equal(has({ planner: { Mon: [{ id: 'b' }], Tue: [] } }), true, 'a planner block');
+    assert.equal(has({ planner: { Mon: [], Tue: [] } }), false);
+    assert.equal(has({ weekTemplates: { A: {} } }), true);
+    assert.equal(has({ learnings: [{ id: 'l' }] }) && has({ scoreTags: [{ id: 't' }] }) && has({ journalTags: ['x'] }), true);
+    assert.equal(has({ calcHistory: [{ id: 'c' }] }) && has({ todoReminders: [{ id: 'r' }] }) && has({ vaultFolders: [{ id: 'f' }] }), true);
+    assert.equal(has({ noteFolders: ['General', 'Maths'] }), true);
+    assert.equal(has({ noteFolders: ['General'] }), false);
+    assert.equal(has({ desmosState: '{}' }) && has({ todayLayout: [] }) && has({ todayColumns: { k: [] } }), true);
+    assert.equal(has({ desmosState: '', todayLayout: null, todayColumns: {}, aiLinks: [{ id: 'a' }], quickAccess: [{ id: 'q' }] }), false);
   },
 
   async "the day's record keeps 400 days, and junk in it is cleaned on load and import"() {

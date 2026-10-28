@@ -438,7 +438,8 @@ function watchChanges() {
     if (!useCloud.getState().pending) patch({ pending: true });
     if (!meta.auto) return;
     if (changeTimer) clearTimeout(changeTimer);
-    changeTimer = setTimeout(() => { changeTimer = null; syncNow().catch(() => {}); }, AFTER_CHANGE_MS);
+    // automatic backing up may have been turned off while the wait ran
+    changeTimer = setTimeout(() => { changeTimer = null; if (meta.auto) syncNow().catch(() => {}); }, AFTER_CHANGE_MS);
   });
   // data that loaded after the app gave up waiting for it can go up now
   useStore.persist.onFinishHydration(() => {
@@ -575,7 +576,7 @@ function scheduleRetry() {
   retries++;
   retryTimer = setTimeout(() => {
     retryTimer = null;
-    if (useCloud.getState().status === 'error') syncNow().catch(() => {});
+    if (meta.auto && useCloud.getState().status === 'error') syncNow().catch(() => {});
   }, wait);
 }
 
@@ -789,6 +790,9 @@ export async function deleteCloudCopy() {
     auto: false, lastSyncedAt: null, remote: null, reason: null, hasCopy: false, pending: true, usedBytes: 0, status: 'idle',
     note: null, error: null,
   });
+  // a backup already waiting for its pause must not put the data back
+  if (changeTimer) { clearTimeout(changeTimer); changeTimer = null; }
+  stopRetry();
 }
 
 export async function setAuto(on: boolean) {
@@ -796,7 +800,11 @@ export async function setAuto(on: boolean) {
   await saveMeta();
   patch({ auto: on });
   if (on && useCloud.getState().pending) syncNow().catch(() => {});
-  if (!on) stopRetry();
+  if (!on) {
+    // a backup already waiting for its pause is cancelled with the switch
+    if (changeTimer) { clearTimeout(changeTimer); changeTimer = null; }
+    stopRetry();
+  }
 }
 
 // ---------------------------------------------------------------- the copy in the cloud
@@ -952,13 +960,47 @@ export function syncNow(force = false, opts: { mobileData?: boolean } = {}): Pro
         return;
       }
       const { skipped, waiting, unused } = await sendFiles(s, userId, attachments, filesGo);
-      const updatedAt = new Date().toISOString();
-      const { data, error } = await cloud().from('backups').upsert({
+      const row = {
         user_id: userId, snapshot: json, device: deviceName(), device_id: meta.deviceId, app_version: appVersion(),
-        bytes: json.length, files: Math.max(0, attachments.length - skipped - waiting), updated_at: updatedAt,
-      }).select('updated_at').single();
-      if (error) throw error;
-      meta.lastRemoteAt = data?.updated_at ?? updatedAt;
+        bytes: json.length, files: Math.max(0, attachments.length - skipped - waiting), updated_at: new Date().toISOString(),
+      };
+      // The copy is written only if it is still the one this phone saw at the top of the run: attachments can take
+      // minutes to send, and another phone may have written meanwhile. Its copy is then asked about, never replaced,
+      // and the files it uploaded are left alone. Keeping this phone's data on purpose (`force`) replaces it.
+      let data: { updated_at: string } | null = null;
+      if (force) {
+        const r = await cloud().from('backups').upsert(row).select('updated_at').single();
+        if (r.error) throw r.error;
+        data = r.data;
+      } else {
+        if (remote) {
+          const r = await cloud().from('backups').update(row).eq('user_id', userId).eq('updated_at', meta.lastRemoteAt)
+            .select('updated_at').maybeSingle();
+          if (r.error) throw r.error;
+          data = r.data;
+        }
+        if (!data) {
+          // no row to update, or it is no longer the copy seen: a row that is there now is another phone's
+          const now = remote ? await readRemote(userId) : null;
+          if (now) {
+            await meetNewer(s, now);
+            return;
+          }
+          const r = await cloud().from('backups').insert(row).select('updated_at').single();
+          if (r.error) {
+            if ((r.error as any).code !== '23505') throw r.error;
+            // another phone wrote the first copy just now
+            const other = await readRemote(userId);
+            if (other) {
+              await meetNewer(s, other);
+              return;
+            }
+            throw r.error;
+          }
+          data = r.data;
+        }
+      }
+      meta.lastRemoteAt = data!.updated_at;
       meta.lastHash = hash;
       meta.lastSyncedAt = Date.now();
       meta.rescue = false;

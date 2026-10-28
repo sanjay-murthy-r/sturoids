@@ -266,19 +266,20 @@ export async function profileHasPin(id: string): Promise<boolean> {
  * this phone's own wait, as they do at any keypad, so the PIN cannot be guessed from the profile list.
  */
 export async function verifyProfilePin(id: string, code: string): Promise<'ok' | 'wrong' | 'cooldown'> {
+  // a right PIN of another profile is no proof for this one, so it never clears this profile's wrong guesses or waits
   return judge(async () => {
     const stored = await read(pkey(PIN_BASE, id));
     return !!stored && stored !== 'unreadable' && (await digest(code, stored.salt)) === stored.hash;
-  });
+  }, { reset: false });
 }
 
 /** Runs one check of a code, counting wrong guesses and serving the waits. */
-async function judge(check: () => Promise<boolean>): Promise<'ok' | 'wrong' | 'cooldown'> {
+async function judge(check: () => Promise<boolean>, { reset = true } = {}): Promise<'ok' | 'wrong' | 'cooldown'> {
   await loadAttempts();
   if (pinCooldownMs() > 0) return 'cooldown';
   const ok = await check();
   if (ok) {
-    resetAttempts();
+    if (reset) resetAttempts();
     return 'ok';
   }
   failures += 1;
