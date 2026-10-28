@@ -493,15 +493,19 @@ function Anchor({ ids, radius = S.radiusSm, children }: { ids: string[]; radius?
 }
 
 /** A page's scroll: EdgeScroll's, with its offset and its ref kept for bringing a linked row into view. */
-function PageScroll({ children, scrollRef, y, ...props }: React.ComponentProps<typeof Animated.ScrollView> & {
+function PageScroll({ children, scrollRef, y, pull = null, ...props }: React.ComponentProps<typeof Animated.ScrollView> & {
   scrollRef: React.RefObject<Animated.ScrollView | null>; y: { value: number };
+  /** the content pull round the scroll view itself (not round this pair, whose edge sits beside it) */
+  pull?: ReturnType<typeof useContentPull> | null;
 }) {
   const level = useAnimLevel();
   const onScroll = useAnimatedScrollHandler((e) => { y.value = e.contentOffset.y; });
   const at = useDerivedValue(() => edgeStrength(y.value, level));
   return (
     <>
-      <Animated.ScrollView {...props} ref={scrollRef as any} onScroll={onScroll} scrollEventThrottle={16}>{children}</Animated.ScrollView>
+      <PullArea gesture={pull}>
+        <Animated.ScrollView {...props} ref={scrollRef as any} onScroll={onScroll} scrollEventThrottle={16}>{children}</Animated.ScrollView>
+      </PullArea>
       <ScrollEdge at={at} />
     </>
   );
@@ -1978,8 +1982,7 @@ export default function Settings() {
           importantForAccessibility={page ? 'no-hide-descendants' : 'auto'}
           accessibilityElementsHidden={!!page}
         >
-          <PullArea gesture={listPull}>
-          <PageScroll scrollRef={listScroll} y={listY} style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
+          <PageScroll scrollRef={listScroll} y={listY} pull={listPull} style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
             {/* the list rises in once, as Settings opens; coming back from a page it is simply there as it was left */}
             <Arrive first={!built.current} index={0}>
               <SettingsSiftField />
@@ -2004,7 +2007,6 @@ export default function Settings() {
               <Colophon />
             </Arrive>
           </PageScroll>
-          </PullArea>
         </Animated.View>
         {layerPage ? (
           // an open page is its own layer over the list, with its own scroll that starts at the top. It is opaque so the
@@ -2017,9 +2019,8 @@ export default function Settings() {
             accessibilityElementsHidden={!page}
           >
             <LayoutAnimationConfig key={layerPage} skipEntering>
-              <PullArea gesture={pagePull}>
               <PageScroll
-                scrollRef={pageScroll} y={pageY} style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled"
+                scrollRef={pageScroll} y={pageY} pull={pagePull} style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled"
               >
                 <View ref={pageTop} collapsable={false} />
                 {/* a page's first heading sits close under the header, like the list's first card; a page that opens
@@ -2028,7 +2029,6 @@ export default function Settings() {
                   <View style={CARD_FIRST.includes(layerPage) ? undefined : { marginTop: -S.section + 10 }}>{pageBody(layerPage)}</View>
                 </TargetContext.Provider>
               </PageScroll>
-              </PullArea>
             </LayoutAnimationConfig>
           </Animated.View>
         ) : null}

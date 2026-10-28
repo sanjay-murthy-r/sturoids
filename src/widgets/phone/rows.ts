@@ -63,7 +63,9 @@ export async function readPhoneData(only?: readonly PhoneRow[]): Promise<PhoneDa
     // one row too large to read fails the whole read: each is read on its own, so the others still draw
     for (const k of PHONE_ROWS) {
       try {
-        rows[k] = parse(await AsyncStorage.getItem(base + ':' + k));
+        const raw = await AsyncStorage.getItem(base + ':' + k);
+        rows[k] = parse(raw);
+        if (k === 'settings' && raw != null && (rows[k] == null || typeof rows[k] !== 'object')) settingsUnread = true;
       } catch {
         rows[k] = undefined;
         if (k === 'settings') settingsUnread = true;

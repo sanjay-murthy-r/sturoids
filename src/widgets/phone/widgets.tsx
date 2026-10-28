@@ -364,7 +364,7 @@ const PAD_ROWS: CalcKey[][] = [
 ];
 /** below this height the widget is its display alone, a tap opening the Calculator: any shorter, and its keys fall
  * under 36dp, too small to hit */
-const PAD_MIN_H = 280;
+const PAD_MIN_H = 300;
 /** the display above the keys, kept one height whether or not an answer shows, so the keys never move under a finger */
 const DISPLAY_H = 66;
 

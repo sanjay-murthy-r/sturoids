@@ -5,7 +5,7 @@
 // half-written page is never sent back to its top.
 
 import React from 'react';
-import { useFocusEffect, usePathname } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, usePathname } from 'expo-router';
 import type { SharedValue } from 'react-native-reanimated';
 
 /** how long a page keeps its place once left */
@@ -17,6 +17,8 @@ const kept = new Map<string, { y: number; at: number }>();
 type Scrollable = {
   scrollTo?: (o: { x?: number; y: number; animated?: boolean }) => void;
   scrollToOffset?: (o: { offset: number; animated?: boolean }) => void;
+  /** a SectionList has neither of the above: its scroll view is behind this */
+  getScrollResponder?: () => Scrollable | null | undefined;
 };
 
 function scrollNode(node: Scrollable | null, y: number) {
@@ -24,6 +26,7 @@ function scrollNode(node: Scrollable | null, y: number) {
   try {
     if (typeof node.scrollToOffset === 'function') node.scrollToOffset({ offset: y, animated: false });
     else if (typeof node.scrollTo === 'function') node.scrollTo({ x: 0, y, animated: false });
+    else if (typeof node.getScrollResponder === 'function') scrollNode(node.getScrollResponder() ?? null, y);
   } catch {
     // a list torn down mid-way: nothing to move
   }
@@ -37,7 +40,9 @@ export type ScrollMemoryMode = 'timed' | 'keep';
  */
 export function useScrollMemory(scrollY: SharedValue<number>, opts: { mode?: ScrollMemoryMode; ref?: any } = {}) {
   const mode = opts.mode ?? 'timed';
-  const path = usePathname();
+  // a page is told apart by its parameters too: one subject's place is not another's
+  const params = useLocalSearchParams();
+  const path = usePathname() + '?' + JSON.stringify(Object.entries(params).sort(([a], [b]) => (a < b ? -1 : 1)));
   const node = React.useRef<Scrollable | null>(null);
   const ext = React.useRef(opts.ref);
   ext.current = opts.ref;

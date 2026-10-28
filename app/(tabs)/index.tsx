@@ -177,8 +177,9 @@ export default function Today() {
     };
   }, [introDone]);
 
-  // a drag down from inside the greeting opens Sift; off while the board is edited
-  const headerPull = useHeaderPull(focused && !editing);
+  // a drag down from inside the greeting opens Sift; off while the board is edited, and when Settings turns the pull off
+  const pullMode = useStore((s) => s.settings.siftPull);
+  const headerPull = useHeaderPull(focused && !editing && pullMode !== 'off');
 
   // a greeting that changes while Today is open dips out and back as the new words; a figure in the same sentence
   // changes in place, so the line never blinks each minute
