@@ -9,11 +9,11 @@ import type {
 import type { ScoreNode } from '../../scores';
 import { fmtExamDate, fmtPct, indexScores, resultTable, topExams, upcoming, whenOf } from '../../scores';
 import { focusWeek, subjectSummary, subjectsOf } from '../../subjects';
-import { journalDayFor, journalStreak, moodSeries, onThisDay, promptFor } from '../../journalCore';
+import { habitSince, journalDayFor, journalStreak, moodSeries, onThisDay, promptFor } from '../../journalCore';
 import { DAY_NAMES, DayName, blockOnNow, dayName, fmtClockTime, fmtMediaTime, focusStreak, habitDueOn, streaks, toMinutes, todayKey } from '../../utils';
 import {
   blockProgress, dPill, daysBetween, dayWindow, lastSevenDays, minutesLeft, nextBlockOf, nextUpOf, noteExcerptOf,
-  noteTitleOf, recentVideos, todayItems, TodayItem,
+  noteTitleOf, continueVideo, recentVideos, todayItems, TodayItem,
 } from '../logic';
 
 /* ---------------------------------------------------------------- the widgets */
@@ -467,13 +467,14 @@ export function deadlinesModel(d: PhoneData, now: Date): DeadlinesModel {
   };
 }
 
-export interface QuickStartModel { minutes: number; todayMin: number; running: boolean; runningMin: number; uri: string }
+export interface QuickStartModel { minutes: number; todayMin: number; running: boolean; paused: boolean; runningMin: number; uri: string }
 export function quickStartModel(d: PhoneData, now: Date): QuickStartModel {
   const w = d.deepWork;
   return {
     minutes: d.settings.focusLastMin || 25,
     todayMin: focusToday(d, now),
     running: !!w,
+    paused: !!w && !w.running,
     runningMin: w ? Math.floor(liveSec(w, now) / 60) : 0,
     uri: w ? openLink('focus') : APP_LINK.startFocus,
   };
@@ -545,7 +546,7 @@ export function focusWeekModel(d: PhoneData, now: Date): FocusWeekModel {
   const best = week.best ? WEEKDAYS[new Date(week.best.dateKey + 'T00:00:00').getDay()].slice(0, 3) + ' · ' + minText(week.best.min) : '';
   return {
     days, maxMin: Math.max(1, ...days.map((x) => x.min)), totalMin: week.totalMin + live, best,
-    streak: focusStreak(d.sessions, d.settings.focusGoalMin || 1).current,
+    streak: focusStreak(d.sessions, d.settings.focusGoalMin || 1, now).current,
     subjects: top.map(([k, v]) => ({ name: v.name, color: colorOf(k) })),
     uri: openLink('focus'),
   };
@@ -570,6 +571,8 @@ export interface TodaysBlocksModel {
   blocks: { id: string; subject: string; color: string; from: number; to: number; on: boolean; time: string; uri: string }[];
   /** where now falls on the line, 0 to 1, or -1 outside it */
   nowAt: number;
+  /** the block that starts next today, or null when none is left */
+  nextId: string | null;
   startLabel: string; endLabel: string;
   uri: string;
 }
@@ -588,6 +591,8 @@ export function todaysBlocksModel(d: PhoneData, now: Date): TodaysBlocksModel {
       on: on?.id === b.id, time: clockOf(b.start, h24), uri: blockLink(day, b.id),
     })),
     nowAt: nowMin >= win.start && nowMin <= win.end ? at(nowMin) : -1,
+    // the first block still to begin, so a day that is over has none rather than its first block again
+    nextId: blocks.find((b) => toMinutes(b.start) > nowMin && on?.id !== b.id)?.id ?? null,
     startLabel: fmtClockTime(win.start, h24), endLabel: fmtClockTime(win.end, h24),
     uri: openLink('planner', { day }),
   };
@@ -602,15 +607,19 @@ export interface HabitGridModel {
 export function habitGridModel(d: PhoneData, now: Date): HabitGridModel {
   const today = todayKey(now);
   const keys = lastSevenDays(today);
-  const rows = d.habits.slice(0, 4).map((h) => ({
-    id: h.id, title: h.title.trim() || 'Habit',
-    cells: keys.map((k) => {
-      if (h.doneDates.includes(k)) return 'done' as const;
-      if (!habitDueOn(h, k)) return 'rest' as const;
-      return k === today ? ('open' as const) : ('missed' as const);
-    }),
-    uri: openLink('planner', { item: h.id }),
-  }));
+  const rows = d.habits.slice(0, 4).map((h) => {
+    // a day before the habit existed was never due, as the app's own grid and the Planner count it
+    const since = habitSince(h);
+    return {
+      id: h.id, title: h.title.trim() || 'Habit',
+      cells: keys.map((k) => {
+        if (h.doneDates.includes(k)) return 'done' as const;
+        if (!habitDueOn(h, k) || (!!since && k < since)) return 'rest' as const;
+        return k === today ? ('open' as const) : ('missed' as const);
+      }),
+      uri: openLink('planner', { item: h.id }),
+    };
+  });
   return {
     days: keys.map((k) => ({ label: WEEKDAYS[new Date(k + 'T00:00:00').getDay()].slice(0, 1), today: k === today })),
     habits: rows, more: Math.max(0, d.habits.length - 4), uri: openLink('planner'),
@@ -634,7 +643,7 @@ export function streakModel(d: PhoneData, now: Date): StreakModel | null {
 export interface NoteRow { id: string; title: string; excerpt: string; folder: string; when: string; locked: boolean; uri: string }
 function noteRow(n: Note, now: Date): NoteRow {
   return {
-    id: n.id, title: noteTitleOf(n), excerpt: n.locked ? 'Locked' : noteExcerptOf(n), folder: n.folder,
+    id: n.id, title: n.locked ? (n.title.trim() || 'Locked note') : noteTitleOf(n), excerpt: n.locked ? 'Locked' : noteExcerptOf(n), folder: n.folder,
     when: whenText(n.updatedAt, now), locked: !!n.locked, uri: openLink('notes', { item: n.id }),
   };
 }
@@ -785,8 +794,7 @@ function videoRow(v: VaultVideo): VideoRow {
 export interface VideosModel { rows: VideoRow[]; uri: string }
 /** The video to carry on with: the last opened one that was left part-way, else the last opened. */
 export function continueModel(d: PhoneData): VideosModel {
-  const recent = recentVideos(d.vaultVideos, d.vaultVideos.length);
-  const pick = recent.find((v) => num(v.resumeAt) > 0) || recent[0];
+  const pick = continueVideo(d.vaultVideos);
   return { rows: pick ? [videoRow(pick)] : [], uri: openLink('vault') };
 }
 export function watchListModel(d: PhoneData): VideosModel {

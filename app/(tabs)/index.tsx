@@ -522,10 +522,11 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
     point.current.scrollAt = scrollAt;
     if (r) aim(id, r.x + r.w / 2, r.y + r.h / 2);
   }, [aim, onDragging]);
-  const dragEnd = useCallback((id: string) => {
+  // a drag the system cancelled (keep false) puts the widget back where it was instead of dropping it
+  const dragEnd = useCallback((id: string, keep = true) => {
     stopEdge();
     const d = live.current.drag;
-    if (d && d.id === id) settleDrop(id, d.col, d.index);
+    if (keep && d && d.id === id) settleDrop(id, d.col, d.index);
     setDrag(null);
     onDragging(false);
   }, [onDragging, settleDrop, stopEdge]);
@@ -639,7 +640,7 @@ const BoardItem = React.memo(function BoardItem({
   scroll: BoardScroll;
   onMeasure: (id: string, h: number) => void; onRemove: (id: string) => void; onResize: (id: string) => void;
   onHold: () => void; onDragStart: (id: string, scrollAt: number) => void; onAim: (id: string, cx: number, cy: number) => void;
-  onEdge: (id: string, screenY: number, winH: number) => void; onDragEnd: (id: string) => void;
+  onEdge: (id: string, screenY: number, winH: number) => void; onDragEnd: (id: string, keep?: boolean) => void;
   setConfig: (id: string, patch: Record<string, unknown>) => void;
 }) {
   const theme = useTheme();
@@ -698,7 +699,7 @@ const BoardItem = React.memo(function BoardItem({
     cb.current.onAim(id, cx, cy);
     cb.current.onEdge(id, screenY, winH);
   }, [id, winH]);
-  const end = useCallback(() => cb.current.onDragEnd(id), [id]);
+  const end = useCallback((keep: boolean) => cb.current.onDragEnd(id, keep), [id]);
 
   const gesture = useMemo(() => {
     if (editing) {
@@ -718,9 +719,9 @@ const BoardItem = React.memo(function BoardItem({
           const cy = py.value + e.translationY + h.value / 2;
           runOnJS(aimAt)(cx, cy, e.absoluteY);
         })
-        .onFinalize(() => {
+        .onFinalize((_e, success) => {
           if (!held.value) return;
-          runOnJS(end)();
+          runOnJS(end)(success);
         });
     }
     return Gesture.LongPress()

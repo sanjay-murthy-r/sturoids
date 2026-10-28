@@ -490,9 +490,9 @@ function QuickStart({ m, p }: { m: QuickStartModel; p: PhonePalette }) {
     <Frame p={p} uri={m.uri} pad={14}>
       <Kicker text="Deep Work" p={p} />
       <FlexWidget style={{ flex: 1, width: 'match_parent', alignItems: 'center', justifyContent: 'center' }}>
-        <Disc size={56} color={p.accent} glyph={m.running ? 'pause' : 'play'} glyphColor={p.onAccent} uri={m.uri} />
+        <Disc size={56} color={p.accent} glyph={m.running && !m.paused ? 'pause' : 'play'} glyphColor={p.onAccent} uri={m.uri} />
       </FlexWidget>
-      <Txt text={m.running ? 'Running · ' + minText(m.runningMin) : 'Start ' + minText(m.minutes)} size={13} face="semi" color={p.text} align="center" fixed style={{ width: 'match_parent' }} />
+      <Txt text={m.running ? (m.paused ? 'Paused · ' : 'Running · ') + minText(m.runningMin) : 'Start ' + minText(m.minutes)} size={13} face="semi" color={p.text} align="center" fixed style={{ width: 'match_parent' }} />
       <Txt text={minText(m.todayMin) + ' today'} size={11} face="sm" color={p.faint} align="center" fixed style={{ width: 'match_parent' }} />
     </Frame>
   );
@@ -635,7 +635,7 @@ function TodaysBlocks({ m, p, box }: { m: TodaysBlocksModel; p: PhonePalette; bo
   }
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect x="0" y="12" width="${w}" height="6" rx="3" fill="${p.well}"/>${rects}</svg>`;
   const on = m.blocks.find((b) => b.on);
-  const next = m.blocks.find((b) => b.from >= Math.max(0, m.nowAt) && !b.on);
+  const next = m.blocks.find((b) => b.id === m.nextId);
   return (
     <Frame p={p} uri={m.uri} pad={14} gap={8}>
       <Row>

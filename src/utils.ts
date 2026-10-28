@@ -262,11 +262,12 @@ export function focusMinutesByDay(sessions: readonly { dateKey: string; netSecon
 export function focusStreak(
   sessions: readonly { dateKey: string; netSeconds: number }[],
   minMinutes = 1,
+  now: Date = new Date(),
 ): { current: number; best: number } {
   const need = Math.max(1, Math.round(minMinutes) || 1);
   const days: string[] = [];
   for (const [k, min] of focusMinutesByDay(sessions)) if (min >= need && /^\d{4}-\d{2}-\d{2}$/.test(k)) days.push(k);
-  return streaks(days);
+  return streaks(days, undefined, now);
 }
 
 /** Every YouTube link in a text, as written (a fresh expression each time: a global one keeps its place between calls). */

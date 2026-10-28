@@ -441,3 +441,9 @@ export function noteExcerptOf(n: { title: string; body: string }): string {
 export function recentVideos<V extends { openedAt?: number; addedAt: number }>(videos: readonly V[], n: number): V[] {
   return videos.slice().sort((a, b) => (b.openedAt || b.addedAt) - (a.openedAt || a.addedAt)).slice(0, n);
 }
+
+/** The video to carry on with: the one opened most recently that was left part-way, else the one opened most recently. */
+export function continueVideo<V extends { openedAt?: number; addedAt: number; resumeAt?: number }>(videos: readonly V[]): V | null {
+  const recent = recentVideos(videos, videos.length);
+  return recent.find((v) => (v.resumeAt || 0) > 0) ?? recent[0] ?? null;
+}

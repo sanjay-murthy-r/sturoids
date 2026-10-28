@@ -23,8 +23,9 @@ export function FocusWeekWidget({ size }: WidgetProps) {
   const today = useBoardToday();
   const sessions = useStore((s) => s.sessions);
   const planner = useStore((s) => s.planner);
+  const goal = useStore((s) => s.settings.focusGoalMin || 0);
   const week = React.useMemo(() => focusWeek(sessions, today), [sessions, today]);
-  const streak = React.useMemo(() => focusStreak(sessions).current, [sessions, today]);
+  const streak = React.useMemo(() => focusStreak(sessions, goal > 0 ? goal : 1).current, [sessions, goal, today]);
   // the subjects of the week, most focused first: the first three keep a colour each, the rest share a quiet one
   const inks = React.useMemo(() => {
     const total = new Map<string, { name: string; min: number }>();

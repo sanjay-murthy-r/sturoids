@@ -8,7 +8,7 @@ import { useStore, VaultVideo } from '../store';
 import { fmtMediaTime } from '../utils';
 import { openTool } from '../toolNav';
 import { Kicker, TILE_TEXT_MAX, Tile, TileNote, kit } from './kit';
-import { recentVideos } from './logic';
+import { continueVideo, recentVideos } from './logic';
 import type { WidgetProps } from './types';
 
 const thumbOf = (videoId: string) => 'https://img.youtube.com/vi/' + videoId + '/mqdefault.jpg';
@@ -37,7 +37,7 @@ function Thumb({ videoId, w, h }: { videoId: string; w: number | `${number}%`; h
 /** Continue watching: the video opened last, its thumbnail, and where it was left; a tap carries on from there. */
 export function ContinueWatchingWidget({ size }: WidgetProps) {
   const videos = useStore((s) => s.vaultVideos);
-  const v = React.useMemo(() => recentVideos(videos, 1)[0] ?? null, [videos]);
+  const v = React.useMemo(() => continueVideo(videos), [videos]);
   if (!v) {
     return (
       <Tile size={size} onPress={() => openTool('vault')} label="No lectures yet" hint="Opens YT Vault">

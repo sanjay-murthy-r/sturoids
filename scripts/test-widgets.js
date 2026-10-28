@@ -196,6 +196,17 @@ test('recent videos: opened first by when, else by when added', () => {
   assert.equal(v[0].id, 'a', 'the list itself is left alone');
 });
 
+test('continue video: the latest opened one left part-way, else the latest opened', () => {
+  const v = [
+    { id: 'a', addedAt: 5, resumeAt: 30, openedAt: 2 },
+    { id: 'b', addedAt: 1, openedAt: 10 },
+    { id: 'c', addedAt: 7, resumeAt: 60, openedAt: 8 },
+  ];
+  assert.equal(L.continueVideo(v).id, 'c');
+  assert.equal(L.continueVideo([v[1]]).id, 'b');
+  assert.equal(L.continueVideo([]), null);
+});
+
 /* ---------------------------------------------------------------- columns and drag */
 
 {

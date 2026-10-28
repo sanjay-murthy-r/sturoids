@@ -297,6 +297,48 @@ test('a single locked note shows its name, never its words', () => {
   assert.ok(!/hidden/.test(JSON.stringify(locked)));
 });
 
+test('a locked note never shows the first line of its words as a name', () => {
+  const rows = model.pinnedModel(busy(), NOW).rows;
+  assert.equal(rows.find((r) => r.id === 'n2').title, 'Locked note');
+  assert.equal(model.recentNotesModel(busy(), NOW).rows.find((r) => r.id === 'n2').title, 'Locked note');
+  const only = model.cleanData({ notes: [{ id: 'n2', title: '', body: 'Secret plans', locked: true, updatedAt: 5 }] });
+  assert.equal(model.newNoteModel(only, NOW).last.title, 'Locked note');
+  const named = model.cleanData({ notes: [{ id: 'n3', title: 'Chem', body: 'x', locked: true, updatedAt: 5 }] });
+  assert.equal(model.newNoteModel(named, NOW).last.title, 'Chem');
+});
+
+test("Today's blocks: the next one is the first still to begin, none once the day is over", () => {
+  const d = model.cleanData({ planner: { Mon: [
+    { id: 'p1', subject: 'Physics', start: '09:00', end: '10:30', color: 'teal' },
+    { id: 'p2', subject: 'Maths', start: '11:00', end: '12:00', color: 'teal' },
+  ] } });
+  const at = (h, m) => model.todaysBlocksModel(d, new Date(2026, 9, 26, h, m));
+  assert.equal(at(7, 0).nextId, 'p1');
+  assert.equal(at(9, 30).nextId, 'p2');
+  assert.equal(at(11, 30).nextId, null);
+  assert.equal(at(14, 0).nextId, null, 'past the window, nothing is next');
+});
+
+test('Habit grid: days before the habit existed are rest days', () => {
+  const id = Math.floor(new Date(2026, 9, 24, 12).getTime()).toString(36).padStart(8, '0') + 'x';
+  const d = model.cleanData({ habits: [{ id, title: 'New', doneDates: [] }] });
+  assert.deepEqual(model.habitGridModel(d, NOW).habits[0].cells, ['rest', 'rest', 'rest', 'rest', 'missed', 'missed', 'open']);
+});
+
+test('Quick start: a paused session says so', () => {
+  const w = { startedAt: NOW.getTime() - 600e3, running: false, accumSec: 600, mode: 'stopwatch', targetMin: 0 };
+  const m = model.quickStartModel(model.cleanData({ deepWork: w }), NOW);
+  assert.equal(m.running, true);
+  assert.equal(m.paused, true);
+  assert.equal(model.quickStartModel(model.cleanData({ deepWork: { ...w, running: true, startTs: NOW.getTime() } }), NOW).paused, false);
+});
+
+test('Focus week: the streak is judged on the widget\'s own clock', () => {
+  const key = (n) => { const x = new Date(2026, 9, 26 + n); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+  const d = model.cleanData({ sessions: [-2, -1, 0].map((n, i) => ({ id: 's' + i, dateKey: key(n), endedAt: 1, netSeconds: 1800, taskTitles: [] })) });
+  assert.equal(model.focusWeekModel(d, NOW).streak, 3);
+});
+
 /* ---------------------------------------------------------------- models */
 
 test('Day ring counts today\'s ToDos (a weekday ToDo only on its day) and the running session', () => {
