@@ -1,5 +1,5 @@
 @echo off
-title Student Hub - APK builder
+title Sturoids - APK builder
 cd /d "%~dp0"
 
 where node >nul 2>nul

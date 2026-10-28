@@ -1,4 +1,4 @@
-# All-in-One Student App — Build Spec v2 (expanded)
+# Sturoids — Build Spec v2 (expanded)
 
 *Supersedes v1. Adds: full glass design language, deeper per-feature detail, Claude's added ideas (marked ✦), and the revised distribution plan (GitHub installer, no store).*
 

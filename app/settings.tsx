@@ -16,7 +16,7 @@ import {
   C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, WritingFont, bgFor, neuInset, neuRaised, shadowsSupported, writingFace,
 } from '../src/theme';
 import {
-  useStore, exportSnapshot, importSnapshot, readSnapshot, applySnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves,
+  useStore, DEFAULT_UPDATE_REPO, exportSnapshot, importSnapshot, readSnapshot, applySnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves,
   savedSize, savesFailing, subscribeSaveProblems, SAVE_WARN_CHARS, ReadSnapshot, TrashItem, TrashKind, trashDaysLeft,
 } from '../src/store';
 import { compareVersions, fmtShortDate, todayKey } from '../src/utils';
@@ -28,6 +28,7 @@ import {
   EdgeScroll, EmptyState, RowIcon, useTheme, ScrollEdge, edgeStrength, ArrivalPulse, IconBtn,
 } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
+import { Release, downloadAndInstall, installKind, isNewer, isRepo, latestRelease, openRelease } from '../src/updates';
 import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt, useEntrance, useLoop } from '../src/components/Motion';
 import { tap, tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
@@ -823,60 +824,134 @@ const ToolsSection = React.memo(function ToolsSection() {
   );
 });
 
-/** The update check, with the repo it reads typed in place (see useSettingDraft). */
-const UpdatesCard = React.memo(function UpdatesCard() {
-  const repoDraft = useSettingDraft('githubRepo');
-  const [checking, setChecking] = useState(false);
-  // set at the tap, so a second tap while GitHub answers starts no second check
-  const checkingRef = useRef(false);
+/**
+ * Updates: the version running, one key to check GitHub for a newer release, and one to install it. On a phone the
+ * new APK downloads here, a bar showing how far, and Android's installer takes it from there; on a PC the release's
+ * installer opens in the browser. The repo it reads is Sturoids' own, shown under the version, and can be changed.
+ */
+type UpdateState =
+  | { k: 'idle' } | { k: 'checking' } | { k: 'current' } | { k: 'available'; rel: Release }
+  | { k: 'downloading'; rel: Release; p: number } | { k: 'handed'; rel: Release };
 
-  const checkUpdate = async () => {
-    if (checkingRef.current) return;
-    // what is in the field is what is checked, and it is kept, even if the pause has not come yet
+const UpdatesCard = React.memo(function UpdatesCard() {
+  useTheme();
+  const level = useAnimLevel();
+  const repoDraft = useSettingDraft('githubRepo');
+  const [state, setState] = useState<UpdateState>({ k: 'idle' });
+  const [editRepo, setEditRepo] = useState(false);
+  // set at the tap, so a second tap while GitHub answers (or while it downloads) starts nothing
+  const busy = useRef(false);
+  const repo = repoDraft.draft.trim() || DEFAULT_UPDATE_REPO;
+
+  const check = async () => {
+    if (busy.current) return;
     repoDraft.commit();
-    const repo = repoDraft.draft.trim();
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+    if (!isRepo(repo)) {
       toast('Enter the repo as owner/repo first.');
+      setEditRepo(true);
       return;
     }
-    checkingRef.current = true;
-    setChecking(true);
-    // a check that hangs on a poor connection gives up after a while instead of saying "Checking" for ever
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10 * 1000);
+    busy.current = true;
+    setState({ k: 'checking' });
     try {
-      const r = await fetch('https://api.github.com/repos/' + repo + '/releases/latest', { signal: ctrl.signal });
-      if (r.status === 404) throw Object.assign(new Error('That repo has no releases yet.'), { shown: true });
-      if (r.status === 403 || r.status === 429) throw Object.assign(new Error('GitHub is busy. Try again in a few minutes.'), { shown: true });
-      if (!r.ok) throw new Error('status ' + r.status);
-      const j = await r.json();
-      const latest = String(j.tag_name || '');
-      if (compareVersions(latest, APP_VERSION) > 0) {
-        Alert.alert(latest + ' available', 'Download the new APK from GitHub?', [
-          { text: 'Later', style: 'cancel' },
-          { text: 'Open', onPress: () => Linking.openURL(j.html_url) },
-        ]);
-      } else {
-        toast('Up to date: v' + APP_VERSION + ' is the newest release.');
-      }
+      const rel = await latestRelease(repo);
+      setState(isNewer(rel, APP_VERSION) ? { k: 'available', rel } : { k: 'current' });
     } catch (e: any) {
-      Alert.alert('Check failed', e?.shown ? e.message
-        : e?.name === 'AbortError' ? 'GitHub did not answer in time. Try again.'
-          : 'Could not reach GitHub. Check your connection and try again.');
+      setState({ k: 'idle' });
+      Alert.alert('Check failed', e?.shown ? e.message : 'Could not reach GitHub. Check your connection and try again.');
     } finally {
-      clearTimeout(timer);
-      checkingRef.current = false;
-      setChecking(false);
+      busy.current = false;
     }
   };
 
+  const install = async (rel: Release) => {
+    if (busy.current) return;
+    const kind = installKind(rel);
+    if (kind !== 'apk') {
+      openRelease(rel).catch(() => toast("Couldn't open GitHub"));
+      return;
+    }
+    busy.current = true;
+    tap();
+    setState({ k: 'downloading', rel, p: 0 });
+    try {
+      let last = 0;
+      await downloadAndInstall(rel, (p) => {
+        // the bar moves in whole percents, so a fast download never re-renders the card on every packet
+        if (Math.floor(p * 100) === Math.floor(last * 100)) return;
+        last = p;
+        setState({ k: 'downloading', rel, p });
+      });
+      setState({ k: 'handed', rel });
+    } catch (e: any) {
+      setState({ k: 'available', rel });
+      Alert.alert('Install failed', e?.shown ? e.message : 'The update could not be downloaded. Check your connection and try again.');
+    } finally {
+      busy.current = false;
+    }
+  };
+
+  const rel = state.k === 'available' || state.k === 'downloading' || state.k === 'handed' ? state.rel : null;
+  const kind = rel ? installKind(rel) : 'page';
+  const status = state.k === 'current' ? 'You have the newest version.'
+    : state.k === 'handed' ? "Finish in Android's installer. Your data stays as it is."
+      : rel ? 'Version ' + rel.version + ' is out.' : 'Checks GitHub for a newer release.';
   return (
     <Card>
-      <Text style={st.label}>GitHub repo (owner/repo)</Text>
-      <Field value={repoDraft.draft} onChangeText={repoDraft.change} onBlur={repoDraft.commit}
-        placeholder="e.g. sanjay/sturoids" autoCapitalize="none" autoCorrect={false}
-        returnKeyType="go" onSubmitEditing={checkUpdate} />
-      <PillButton label={checking ? 'Checking…' : 'Check for updates'} icon="cloud-download-outline" onPress={checkUpdate} />
+      <View style={st.updHead}>
+        <View style={{ flex: 1 }}>
+          <Text style={[T.body, { fontFamily: F.med }]}>Sturoids {APP_VERSION}</Text>
+          <FadeSwap swapKey={state.k + (rel?.version || '')}>
+            <Text style={[T.caption, { marginTop: 2 }, state.k === 'available' ? { color: C.accent } : null]}>{status}</Text>
+          </FadeSwap>
+        </View>
+        {state.k === 'checking' ? <Text style={[T.caption, { color: C.textFaint }]}>Checking…</Text> : null}
+      </View>
+
+      {rel && rel.notes && state.k === 'available' ? (
+        <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(220)}>
+          <Text style={st.updNotes} numberOfLines={5}>{rel.notes}</Text>
+        </Animated.View>
+      ) : null}
+
+      {state.k === 'downloading' ? (
+        <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(180)} style={st.updBarWrap}>
+          <View style={[st.updBar, { backgroundColor: C.inset, ...neuInset('hairline') }]}>
+            <View style={[st.updFill, { width: `${Math.round(state.p * 100)}%`, backgroundColor: C.accent }]} />
+          </View>
+          <Text style={[T.caption, st.updPct]}>{'Downloading  ' + Math.round(state.p * 100) + '%'}</Text>
+        </Animated.View>
+      ) : null}
+
+      <View style={st.updKeys}>
+        {rel && state.k !== 'handed' ? (
+          <PillButton
+            label={state.k === 'downloading' ? 'Downloading…' : kind === 'apk' ? 'Install ' + rel.version : kind === 'exe' ? 'Download for PC' : 'Open on GitHub'}
+            icon={kind === 'page' ? 'open-outline' : 'download-outline'} onPress={() => install(rel)}
+          />
+        ) : (
+          <PillButton
+            label={state.k === 'checking' ? 'Checking…' : 'Check for updates'} icon="cloud-download-outline"
+            outline={state.k === 'handed'} onPress={check}
+          />
+        )}
+      </View>
+
+      {/* where it looks: Sturoids' own releases, unless another repo is typed in */}
+      <Pressable onPress={() => setEditRepo((v) => !v)} hitSlop={8} style={st.updSource} accessibilityRole="button" accessibilityHint="Change the GitHub repo updates come from">
+        <Ionicons name="logo-github" size={13} color={C.textFaint} />
+        <Text style={[T.caption, { marginLeft: 6, flex: 1 }]} numberOfLines={1}>{repo}</Text>
+        <Text style={[st.link, { color: C.textDim }]}>{editRepo ? 'Done' : 'Change'}</Text>
+      </Pressable>
+      {editRepo ? (
+        <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(180)}>
+          <Field
+            value={repoDraft.draft} onChangeText={repoDraft.change} onBlur={repoDraft.commit}
+            placeholder={DEFAULT_UPDATE_REPO} autoCapitalize="none" autoCorrect={false}
+            returnKeyType="go" onSubmitEditing={() => { setEditRepo(false); check(); }} style={{ marginTop: 10, marginBottom: 0 }}
+          />
+        </Animated.View>
+      ) : null}
     </Card>
   );
 });
@@ -2032,6 +2107,14 @@ const st = StyleSheet.create({
   trashNote: { marginTop: 18, marginHorizontal: 4 },
   pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 4 },
   label: { color: C.textDim, fontFamily: F.smMed, fontSize: 13, letterSpacing: TRACK.small, marginBottom: 8 },
+  updHead: { flexDirection: 'row', alignItems: 'center' },
+  updNotes: { color: C.textDim, fontFamily: F.sm, fontSize: 13, lineHeight: 19, letterSpacing: TRACK.fine, marginTop: 12 },
+  updBarWrap: { marginTop: 16 },
+  updBar: { height: 6, borderRadius: 3, overflow: 'hidden' },
+  updFill: { height: '100%', borderRadius: 3 },
+  updPct: { marginTop: 8, fontVariant: ['tabular-nums'] },
+  updKeys: { flexDirection: 'row', marginTop: 18 },
+  updSource: { flexDirection: 'row', alignItems: 'center', marginTop: 16, paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.hairline },
   hint: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine, marginTop: 10, lineHeight: 17 },
   // the writing font's sample: two lines' room, so the card keeps its height as the face changes on a phone
   writingSample: { marginTop: 16, minHeight: 54 },

@@ -34,7 +34,8 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.SCHEDULE_EXACT_ALARM",
-        "android.permission.USE_EXACT_ALARM"
+        "android.permission.USE_EXACT_ALARM",
+        "android.permission.REQUEST_INSTALL_PACKAGES"
       ]
     },
     "plugins": [
@@ -458,6 +459,14 @@
       "eas": {
         "projectId": "3c5fbee9-3b22-4f4a-a856-e55295966de1"
       }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/icon.png",
+      "name": "Sturoids",
+      "backgroundColor": "#262624",
+      "themeColor": "#262624"
     }
   }
 }

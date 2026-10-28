@@ -25,8 +25,6 @@ const PLATE = 160;
 const R = 42;
 const GAP_WORD = 30;
 const WORD_H = 26;
-const GAP_CAPTION = 10;
-const CAPTION_H = 12;
 const GAP_SIG = 34;
 /** hero signature: width as a fraction of the screen width, centre as a fraction of its height */
 const HERO_W = 0.78;
@@ -290,6 +288,8 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
   const rise = useSharedValue(full ? 0 : 1);
   const grooves = useSharedValue(full ? 0 : 1);
   const word = useSharedValue(full ? 0 : 1);
+  // the line under the wordmark is gone (it named the app by its old name); its beat still runs, drawing nothing, so the
+  // timeline and the skip keep their shape
   const caption = useSharedValue(full ? 0 : CAPTION_OPACITY);
   const leaveWords = useSharedValue(0);
   const leavePlate = useSharedValue(0);
@@ -561,10 +561,6 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
     opacity: word.value * (1 - leaveWords.value),
     transform: [{ translateY: 8 * (1 - word.value) - 6 * leaveWords.value }],
   }));
-  const captionStyle = useAnimatedStyle(() => ({
-    opacity: caption.value * (1 - leaveWords.value),
-    transform: [{ translateY: -6 * leaveWords.value }],
-  }));
   const sigStyle = useAnimatedStyle(() => ({
     opacity: 1 - leaveSig.value,
     transform: [{ scale: 1 - 0.03 * leaveSig.value }],
@@ -622,7 +618,7 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
     (((wide ? DESIGN_W : W) / 2 - EDGE) * model.vw) / reachX,
   );
   const sigH = (sigW * model.vh) / model.vw;
-  const columnH = PLATE + GAP_WORD + WORD_H + GAP_CAPTION + CAPTION_H + GAP_SIG + sigH;
+  const columnH = PLATE + GAP_WORD + WORD_H + GAP_SIG + sigH;
   const k = wide ? Math.min(K_MAX, (FIT_H * H) / columnH) : 1;
   // the column is centred and scaled about its centre, so the slot's centre sits k * (columnH - sigH) / 2 below the
   // screen's, and an offset inside it moves k times as far on screen
@@ -666,7 +662,6 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
           <Animated.View style={[st.wordRow, wordStyle]}>
             {WORD.map((ch, i) => <WordLetter key={i} ch={ch} index={i} word={word} />)}
           </Animated.View>
-          <Animated.Text style={[st.caption, captionStyle]} allowFontScaling={false}>ALL-IN-ONE STUDENT APP</Animated.Text>
 
           <Animated.View style={[{ width: sigW, height: sigH, marginTop: GAP_SIG }, sigStyle]}>
             {full ? (
@@ -742,9 +737,5 @@ const st = StyleSheet.create({
   word: {
     height: WORD_H, lineHeight: WORD_H, textAlign: 'center',
     color: C.text, fontFamily: F.brand, fontSize: 22, letterSpacing: 3,
-  },
-  caption: {
-    height: CAPTION_H, lineHeight: CAPTION_H, marginTop: GAP_CAPTION, textAlign: 'center',
-    color: C.textFaint, fontFamily: F.brandMed, fontSize: 11, letterSpacing: 2.2, paddingLeft: 2.2,
   },
 });
