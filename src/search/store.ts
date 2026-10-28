@@ -7,18 +7,21 @@ import { pkey } from '../profiles';
 // memory (recent searches, recently opened results, how often each result was opened) is kept per profile.
 
 export type SiftScope = 'all' | 'todos' | 'notes' | 'journal' | 'vault' | 'scores' | 'settings';
+/** The filters Sift is narrowed to: one or more of them, or none for everything. */
+export type SiftScopes = readonly Exclude<SiftScope, 'all'>[];
 
 /** Where Sift was opened from: the header pull (the field morphs out of the header), a tab, More, Today, a shortcut. */
 export type SiftOrigin = 'pull' | 'tab' | 'more' | 'today' | 'shortcut' | 'other';
 
 export interface SiftState {
   open: boolean;
-  scope: SiftScope;
+  /** the filters chosen; none is everything */
+  scopes: SiftScopes;
   query: string;
   origin: SiftOrigin;
 }
 
-export const useSearch = create<SiftState>(() => ({ open: false, scope: 'all', query: '', origin: 'other' }));
+export const useSearch = create<SiftState>(() => ({ open: false, scopes: [], query: '', origin: 'other' }));
 
 /**
  * How far Sift is open, 0 to 1, on the UI thread: the overlay drives it, and the app behind (AppFrame) scales and dims
@@ -32,11 +35,13 @@ export const siftShown = makeMutable(0);
  */
 export const siftPull = makeMutable(0);
 
-/** Opens Sift. A query and a scope can come with it (a shortcut, Settings). */
-export function openSift(origin: SiftOrigin = 'other', opts: { scope?: SiftScope; query?: string } = {}) {
+/** Opens Sift. A query and filters can come with it (a shortcut; Settings opens it on its own filter). */
+export function openSift(origin: SiftOrigin = 'other', opts: { scope?: SiftScope | SiftScopes; query?: string } = {}) {
   const s = useSearch.getState();
   if (s.open) return;
-  useSearch.setState({ open: true, origin, scope: opts.scope ?? 'all', query: opts.query ?? '' });
+  const asked = opts.scope == null ? [] : typeof opts.scope === 'string' ? [opts.scope] : opts.scope;
+  const scopes = asked.filter((k): k is Exclude<SiftScope, 'all'> => k !== 'all');
+  useSearch.setState({ open: true, origin, scopes, query: opts.query ?? '' });
 }
 
 /** Closes Sift; the overlay plays its way out. */

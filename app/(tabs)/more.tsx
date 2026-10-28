@@ -116,7 +116,8 @@ export default function More() {
   const openMenu = React.useCallback((t: Tool) => { setMenuFor(t); setMenuOpen(true); }, []);
   const openArchive = React.useCallback(() => setArchiveSheet(true), []);
   // the page is a list: its header is the big title alone, with no line of context and nothing live
-  const header = useToolHeader({ scrollRef, title: 'More', mode: 'tab' });
+  // a pull down anywhere on the list, once it is at its top, opens Sift too (Settings' choice)
+  const header = useToolHeader({ scrollRef, title: 'More', mode: 'tab', contentPull: 'all' });
   // the backup paused or lost: the Settings row says so in amber, and opens Account straight away
   const attention = useBackupAttention();
 
@@ -129,7 +130,7 @@ export default function More() {
   return (
     <ScreenBG guard>
       {header.bar}
-      <Animated.ScrollView
+      {header.pullArea(<Animated.ScrollView
         key={fk}
         ref={scrollRef}
         {...header.scrollProps}
@@ -194,7 +195,7 @@ export default function More() {
             </ListRow>
           </ListCard>
         </Enter>
-      </Animated.ScrollView>
+      </Animated.ScrollView>)}
 
       <DotMenu
         visible={menuOpen}

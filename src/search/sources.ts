@@ -17,7 +17,7 @@ import { subjectsOf, Subject } from '../subjects';
 import { toast } from '../components/Toast';
 import { SearchDoc, SearchIndex } from './engine';
 import { SETTINGS_INDEX, SETTINGS_PAGE_TITLES, SettingRow, SettingsPage, isPageRow } from './settingsIndex';
-import type { SiftScope } from './store';
+import type { SiftScope, SiftScopes } from './store';
 
 // What Sift searches: documents built from the store, the settings index and the profiles' registry, each with its
 // kind, its section, its icon and where it opens. A locked tool's content and an archived tool's content are left out
@@ -39,7 +39,9 @@ export const SECTION_SCOPE: Record<string, SiftScope> = {
   'AI links': 'all', Calculator: 'all', 'Recently deleted': 'all', Profiles: 'all',
 };
 
-export const inScope = (section: string, scope: SiftScope) => scope === 'all' || SECTION_SCOPE[section] === scope;
+/** Whether a section is among the filters chosen (none chosen is everything). */
+export const inScope = (section: string, scopes: SiftScopes) =>
+  !scopes.length || (scopes as readonly string[]).includes(SECTION_SCOPE[section] as string);
 
 /** Extra words a tool is found by. */
 const TOOL_WORDS: Partial<Record<ToolKey, string>> = {

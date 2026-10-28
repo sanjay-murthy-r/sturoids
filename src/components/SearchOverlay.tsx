@@ -28,7 +28,7 @@ import { startVoice, voiceAvailable, VoiceSession } from '../voice';
 import { Range, SearchResult, fold, highlight, parseDay, queryTerms, snippet } from '../search/engine';
 import { SiftDoc, addTodo, inScope, newNote, restoreDocs, useSiftSources } from '../search/sources';
 import {
-  ENTER_HINT_MS, OpenedRef, PinnedRef, SiftScope, closeSift, forgetOpened, forgetQuery, loadSiftMemory, queryPinKey,
+  ENTER_HINT_MS, OpenedRef, PinnedRef, SiftScope, SiftScopes, closeSift, forgetOpened, forgetQuery, loadSiftMemory, queryPinKey,
   rememberOpen, rememberQuery, siftPull, siftShown, togglePin, unpin, useSearch, useSiftMemory,
 } from '../search/store';
 
@@ -302,7 +302,15 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   const startY = useSharedValue(0);
 
   const [q, setQ] = React.useState(() => useSearch.getState().query);
-  const [scope, setScope] = React.useState<SiftScope>(() => useSearch.getState().scope);
+  // the filters chosen: one or more, or none for everything
+  const [scopes, setScopes] = React.useState<SiftScopes>(() => useSearch.getState().scopes);
+  const isAll = scopes.length === 0;
+  const has = React.useCallback((k: Exclude<SiftScope, 'all'>) => scopes.length === 0 || scopes.includes(k), [scopes]);
+  const toggleScope = React.useCallback((k: SiftScope) => {
+    tick();
+    if (k === 'all') { setScopes([]); return; }
+    setScopes((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]));
+  }, []);
   const [dq, setDq] = React.useState(q);
   const [pinFor, setPinFor] = React.useState<'notes' | 'journal' | null>(null);
 
@@ -314,7 +322,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     const s = useSearch.getState();
     setQ(s.query);
     setDq(s.query);
-    setScope(s.scope);
+    setScopes(s.scopes);
   }, [open]);
 
   /* ---- in and out */
@@ -384,11 +392,11 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   const result: SearchResult<SiftDoc['payload']> | null = React.useMemo(() => {
     if (!dq.trim()) return null;
     return sources.index.search(dq, {
-      filter: (d) => inScope(d.section, scope),
+      filter: (d) => inScope(d.section, scopes),
       usage: (k) => memory.uses[k] || 0,
-      perSection: scope === 'all' ? 5 : 30,
+      perSection: isAll ? 5 : scopes.length === 1 ? 30 : 12,
     });
-  }, [dq, scope, sources.rev, restore, memory.uses]);
+  }, [dq, scopes, sources.rev, restore, memory.uses]);
 
   const go = React.useCallback((doc: SiftDoc) => {
     rememberOpen({
@@ -435,7 +443,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
 
     if (!query) {
       // nothing typed: what was pinned, what you searched, what you opened, and tools that fit now
-      if (scope === 'all' && memory.pinned.length) {
+      if (isAll && memory.pinned.length) {
         out.push({ t: 'head', key: 'h-pinned', label: 'Pinned' });
         for (const p of memory.pinned) {
           if (p.kind === 'query') {
@@ -456,7 +464,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
           }
         }
       }
-      if (scope === 'all' || scope === 'settings') {
+      if (has('settings')) {
         const recent = memory.recent.filter((r) => !pinnedKeys.has(queryPinKey(r)));
         if (recent.length) {
           out.push({ t: 'head', key: 'h-recent', label: 'Recent searches' });
@@ -469,7 +477,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
           }
         }
       }
-      if (scope === 'all') {
+      if (isAll) {
         const opened = memory.opened.filter((o) => index.get(o.key) && !pinnedKeys.has(o.key));
         if (opened.length) {
           out.push({ t: 'head', key: 'h-opened', label: 'Recently opened' });
@@ -498,7 +506,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
         }
       }
       if (!out.length) out.push({ t: 'note', key: 'n-start', text: 'Type to sift through your ToDos, notes, journal, videos, scores and settings.' });
-      if (scope === 'all' && !memory.pinned.length) {
+      if (isAll && !memory.pinned.length) {
         out.push({ t: 'hint', key: 'n-pin', text: 'Hold a search, a tool or any result to pin it here.' });
       }
       return out;
@@ -506,7 +514,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
 
     // a sum: its answer first, whichever scope is chosen
     if (math) out.push({ t: 'math', key: 'math', expr: math.expr, answer: math.answer });
-    if (scope === 'all') {
+    if (isAll) {
       // a day: what it holds
       const d = parseDay(query);
       if (d) out.push({ t: 'day', key: 'day:' + d.key, day: dayCard(d.key, d.date, hour24, journalLocked, archived) });
@@ -528,19 +536,19 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     }
 
     // the journal's texts are still being read
-    if (journalLoading && (scope === 'all' || scope === 'journal')) {
+    if (journalLoading && has('journal')) {
       out.push({ t: 'loading', key: 'loading-journal', label: 'Searching the journal…' });
     }
 
     // locked tools: one row each, to unlock and search them too
     const locks: Item[] = [];
-    if (notesLocked && !archived.includes('notes') && (scope === 'all' || scope === 'notes')) {
+    if (notesLocked && !archived.includes('notes') && has('notes')) {
       locks.push({
         t: 'row', key: 'lock:notes', index: n++, icon: 'lock-closed-outline', color: colorOf('green'),
         title: 'Notes are locked', subtitle: 'Unlock to search them', onPress: () => { Keyboard.dismiss(); setPinFor('notes'); },
       });
     }
-    if (journalLocked && !archived.includes('journal') && (scope === 'all' || scope === 'journal')) {
+    if (journalLocked && !archived.includes('journal') && has('journal')) {
       locks.push({
         t: 'row', key: 'lock:journal', index: n++, icon: 'lock-closed-outline', color: colorOf('gold'),
         title: 'The journal is locked', subtitle: 'Unlock to search it', onPress: () => { Keyboard.dismiss(); setPinFor('journal'); },
@@ -552,16 +560,16 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     }
 
     // what the query itself can become
-    if (scope === 'all' || scope === 'todos' || scope === 'notes') {
+    if (has('todos') || has('notes')) {
       const acts: Item[] = [];
       const clip = query.length > 40 ? query.slice(0, 39).trimEnd() + '…' : query;
-      if ((scope === 'all' || scope === 'todos') && !archived.includes('tasks')) {
+      if (has('todos') && !archived.includes('tasks')) {
         acts.push({ t: 'row', key: 'q:todo', index: n++, icon: 'add-circle-outline', color: colorOf(toolByKey('tasks')!.colorKey), title: 'Add “' + clip + '” as a ToDo', onPress: () => run(() => addTodo(query)) });
       }
-      if ((scope === 'all' || scope === 'notes') && !archived.includes('notes')) {
+      if (has('notes') && !archived.includes('notes')) {
         acts.push({ t: 'row', key: 'q:note', index: n++, icon: 'create-outline', color: colorOf(toolByKey('notes')!.colorKey), title: 'New note “' + clip + '”', onPress: () => run(() => newNote(query)) });
       }
-      if (scope === 'all') {
+      if (isAll) {
         const fq = fold(query);
         const subject = fq.length >= 2 ? subjects.find((s) => fold(s.name) === fq) ?? (fq.length >= 3 ? subjects.find((s) => fold(s.name).startsWith(fq)) : undefined) : undefined;
         if (subject && !archived.includes('focus')) {
@@ -589,13 +597,13 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       const dym = result?.didYouMean;
       out.unshift({
         t: 'note', key: 'n-none',
-        text: scope === 'all' ? 'Nothing matches “' + query + '”.' : 'Nothing in ' + SCOPES.find((x) => x.key === scope)!.label + ' matches “' + query + '”.',
+        text: isAll ? 'Nothing matches “' + query + '”.' : 'Nothing in ' + scopes.map((k) => SCOPES.find((x) => x.key === k)!.label).join(', ') + ' matches “' + query + '”.',
         action: dym ? { label: 'Did you mean “' + dym + '”?', onPress: () => { setQ(dym); setDq(dym); } }
-          : scope !== 'all' ? { label: 'Search everything', onPress: () => setScope('all') } : undefined,
+          : !isAll ? { label: 'Search everything', onPress: () => setScopes([]) } : undefined,
       });
     }
     return out;
-  }, [dq, scope, result, math, memory, pinnedKeys, index, journalLoading, notesLocked, journalLocked, archived, subjects, hour24, aiLinks, go, run, openRecent]);
+  }, [dq, scopes, isAll, has, result, math, memory, pinnedKeys, index, journalLoading, notesLocked, journalLocked, archived, subjects, hour24, aiLinks, go, run, openRecent]);
 
   /**
    * Enter: a sum goes to the Calculator, written in (even one with no answer yet, to be finished there); anything else
@@ -610,10 +618,10 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       const first = items.find((x) => x.t === 'top' || x.t === 'doc');
       return first && (first.t === 'top' || first.t === 'doc') ? { kind: 'doc', doc: first.doc } : null;
     }
-    const fresh = sources.index.search(query, { filter: (d) => inScope(d.section, scope), usage: (k) => memory.uses[k] || 0, perSection: 5 });
+    const fresh = sources.index.search(query, { filter: (d) => inScope(d.section, scopes), usage: (k) => memory.uses[k] || 0, perSection: 5 });
     const doc = fresh.top?.doc ?? fresh.sections[0]?.hits[0]?.doc;
     return doc ? { kind: 'doc', doc } : null;
-  }, [dq, items, sources.index, scope, memory.uses]);
+  }, [dq, items, sources.index, scopes, memory.uses]);
   const onSubmit = () => {
     const target = enterTarget(q);
     if (!target) return;
@@ -872,7 +880,10 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
               contentContainerStyle={st.chips} style={st.chipsRow}
             >
               {SCOPES.map((s) => (
-                <Chip key={s.key} small label={s.label} active={scope === s.key} onPress={() => setScope(s.key)} style={st.chip} />
+                <Chip
+                  key={s.key} small label={s.label} active={s.key === 'all' ? isAll : scopes.includes(s.key)}
+                  onPress={() => toggleScope(s.key)} style={st.chip}
+                />
               ))}
             </ScrollView>
 

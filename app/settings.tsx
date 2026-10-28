@@ -25,7 +25,7 @@ import { useToday } from '../src/hooks/useNow';
 import { SignatureStill } from '../src/components/Signature';
 import {
   ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu,
-  EdgeScroll, EmptyState, RowIcon, useTheme, ScrollEdge, edgeStrength, ArrivalPulse, IconBtn,
+  EdgeScroll, EmptyState, RowIcon, useTheme, ScrollEdge, edgeStrength, ArrivalPulse, IconBtn, PullArea, useContentPull,
 } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
 import { Release, downloadAndInstall, installKind, isNewer, isRepo, latestRelease, openRelease } from '../src/updates';
@@ -46,8 +46,8 @@ import { useProfiles } from '../src/profiles';
 import { ProfileAvatar, ProfileSwitcher, ProfilesSection, useActiveProfile } from '../src/components/ProfileSwitcher';
 import { LAST_EXPORT_KEY } from '../src/backupNudge';
 import { useBackupAttention } from '../src/cloud';
-import { SettingsPage, isPageRow, searchSettings, settingId } from '../src/search/settingsIndex';
-import type { Range } from '../src/search/engine';
+import { SettingsPage, settingId } from '../src/search/settingsIndex';
+import { openSift } from '../src/search/store';
 import { useBringIntoView } from '../src/hooks/useBringIntoView';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
@@ -71,6 +71,13 @@ const ANIMS: { key: AnimLevel; label: string; desc: string }[] = [
   { key: 'full', label: 'Everything', desc: 'Entrances, pages and lists move too' },
 ];
 
+const PULL_OPTIONS = [{ key: 'top', label: 'Top bar' }, { key: 'anywhere', label: 'Anywhere' }, { key: 'off', label: 'Off' }];
+const PULL_SAYS: Record<string, string> = {
+  top: 'Pull down on the bar at the top of a tab.',
+  anywhere: 'Pull down on the bar, or anywhere on Settings and More once they are at their top. A scroll never counts.',
+  off: 'Sift opens only from its field and its button.',
+};
+const NAV_OPTIONS = [{ key: 'side', label: 'Side rail' }, { key: 'bottom', label: 'Bottom bar' }];
 const GRACE_OPTIONS = [{ key: '0', label: 'Immediately' }, { key: '90', label: '90 s' }, { key: '300', label: '5 min' }];
 
 /** how long typing may pause before the words reach the store */
@@ -500,94 +507,24 @@ function PageScroll({ children, scrollRef, y, ...props }: React.ComponentProps<t
   );
 }
 
-/** A label with the ranges a query matched in the accent, at the same weight. */
-function MarkedLabel({ text, ranges }: { text: string; ranges: Range[] }) {
-  const parts: React.ReactNode[] = [];
-  let at = 0;
-  ranges.forEach(([a, b], i) => {
-    if (a > at) parts.push(text.slice(at, a));
-    parts.push(<Text key={i} style={{ color: C.accent }}>{text.slice(a, b)}</Text>);
-    at = b;
-  });
-  if (at < text.length) parts.push(text.slice(at));
-  return <Text style={[T.body, { fontFamily: F.med }]} numberOfLines={2}>{parts}</Text>;
-}
-
 /**
- * The field at the top of Settings' list: one carved well, as Sift's field is, holding the glyph, the words and a clear
- * key whose room is kept, so nothing in the well moves as typing starts. It filters the list in place, to the settings
- * that match.
+ * The field at the top of Settings' list: a carved well with the glyph and the words, as More's is. A tap opens Sift with
+ * its Settings filter on, where every setting can be found and opened at its row (Sift is the one search in the app).
  */
-const SettingsSearchField = React.memo(function SettingsSearchField({ value, onChange }: {
-  value: string; onChange: (v: string) => void;
-}) {
+function SettingsSiftField() {
   const theme = useTheme();
-  const level = useAnimLevel();
-  const input = useRef<TextInput>(null);
-  const [focused, setFocused] = useState(false);
-  const well = theme === 'minimal'
-    ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: focused ? C.accent + '88' : MIN.border }
-    : { backgroundColor: C.inset, ...neuInset('mid') };
+  const well = theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('mid') };
   return (
-    <Pressable onPress={() => input.current?.focus()} style={[st.searchWell, well]} accessible={false}>
-      <Ionicons name="search" size={18} color={focused ? C.accent : C.textFaint} />
-      <TextInput
-        ref={input} value={value} onChangeText={onChange} placeholder="Search settings" placeholderTextColor={C.textFaint}
-        selectionColor={C.accent} cursorColor={C.accent} autoCorrect={false} autoCapitalize="none" returnKeyType="search"
-        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-        style={st.searchInput} accessibilityLabel="Search settings" maxFontSizeMultiplier={CHROME_FONT_MAX}
-      />
-      <View style={st.searchClear}>
-        {value ? (
-          <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(160)} exiting={level === 'none' ? undefined : FadeOut.duration(120)}>
-            <Pressable
-              onPress={() => { onChange(''); input.current?.focus(); }} hitSlop={10}
-              accessibilityRole="button" accessibilityLabel="Clear the search" style={st.searchClearKey}
-            >
-              <Ionicons name="close-circle" size={18} color={C.textFaint} />
-            </Pressable>
-          </Animated.View>
-        ) : null}
-      </View>
+    <Pressable
+      onPress={() => { tap(); openSift('other', { scope: 'settings' }); }}
+      accessibilityRole="search" accessibilityLabel="Search settings" accessibilityHint="Opens Sift on its Settings filter"
+      style={({ pressed }) => [st.searchWell, well, pressed && { opacity: 0.8 }]}
+    >
+      <Ionicons name="search" size={18} color={C.textFaint} />
+      <Text style={st.searchText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>Search settings</Text>
     </Pressable>
   );
-});
-
-/** What Settings' own search found: the matching settings, grouped by page, each opening its page at the row. */
-const SettingsResults = React.memo(function SettingsResults({ query, onPick }: {
-  query: string; onPick: (page: SettingsPage, rowId: string | null) => void;
-}) {
-  useTheme();
-  const groups = useMemo(() => searchSettings(query), [query]);
-  if (!groups.length) {
-    return (
-      <EmptyState compact icon="search-outline" title="No settings match" body={'Nothing in Settings is called "' + query.trim() + '". Try another word.'} />
-    );
-  }
-  return (
-    <>
-      {groups.map((g) => (
-        <View key={g.page}>
-          <SectionTitle>{g.title}</SectionTitle>
-          <ListCard>
-            {g.rows.map(({ row, ranges }) => (
-              <ListRow
-                key={row.id} onPress={() => { tick(); onPick(row.page, isPageRow(row) ? null : row.id); }}
-                style={[st.catRow, st.twoLineRow]} accessibilityLabel={row.label + (row.caption ? ', ' + row.caption : '')}
-              >
-                <View style={{ flex: 1 }}>
-                  <MarkedLabel text={row.label} ranges={ranges} />
-                  {row.caption ? <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={2}>{row.caption}</Text> : null}
-                </View>
-                <Ionicons name="chevron-forward" size={17} color={C.textFaint} style={st.rowEnd} />
-              </ListRow>
-            ))}
-          </ListCard>
-        </View>
-      ))}
-    </>
-  );
-});
+}
 
 /** Deep Work's daily goal: off, or an hour or more. A goal set elsewhere (the history) shows as its own choice. */
 const GOALS: { key: string; label: string }[] = [
@@ -1154,17 +1091,18 @@ export default function Settings() {
     if (params.row) setTarget({ id: String(params.row), n: String(params.n ?? Date.now()) });
   }, [params.page, params.row, params.n]);
   const open = useCallback((p: Page) => setPage(p), []);
-  // Settings' own search: it filters the list in place; a result opens its page at the row
-  const [query, setQuery] = useState('');
-  const searching = query.trim().length > 0;
-  const pickResult = useCallback((p: SettingsPage, rowId: string | null) => {
-    Keyboard.dismiss();
-    if (rowId) setTarget({ id: rowId, n: String(Date.now()) });
-    setPage(p as Page);
-  }, []);
+  // A pull down on the bar, or anywhere on the list or a page once it is at its top (Settings' choice), opens Sift on its
+  // Settings filter. One progress for both, so the bar's pill follows either.
+  const pullMode = useStore((s) => s.settings.siftPull);
+  const pullProgress = useSharedValue(0);
+  const openSettingsSift = useCallback(() => openSift('pull', { scope: 'settings' }), []);
+  const listY = useSharedValue(0);
+  const listScroll = useAnimatedRef<Animated.ScrollView>();
+  const listPull = useContentPull(pullMode === 'anywhere' && !page, listY, pullProgress, openSettingsSift);
   // the page's scroll, so a linked row can be brought into view
   const pageScroll = useAnimatedRef<Animated.ScrollView>();
   const pageY = useSharedValue(0);
+  const pagePull = useContentPull(pullMode === 'anywhere' && !!page, pageY, pullProgress, openSettingsSift);
   const { topRef: pageTop, bring } = useBringIntoView({
     scrollTo: (y, animated) => { (pageScroll.current as any)?.scrollTo?.({ y, animated }); },
     scrollY: pageY, padTop: 12, barH: 0, still: level === 'none',
@@ -1678,7 +1616,35 @@ export default function Settings() {
           </>
         );
       case 'tools':
-        return <Anchor ids={[sid('tools', 'Tab bar slots'), sid('tools', 'Archived')]}><ToolsSection /></Anchor>;
+        return (
+          <>
+            <Anchor ids={[sid('tools', 'Tab bar slots'), sid('tools', 'Archived')]}><ToolsSection /></Anchor>
+            <SectionTitle>Getting around</SectionTitle>
+            <Card>
+              <Anchor ids={[sid('tools', 'Pull down to search')]}>
+                <Text style={[T.body, { fontFamily: F.med }]}>Pull down to search</Text>
+                <Text style={[T.caption, { marginTop: 2, marginBottom: 10 }]}>{PULL_SAYS[settings.siftPull]}</Text>
+                <SegmentedControl
+                  size="sm" stretch value={settings.siftPull}
+                  onChange={(k) => setSetting('siftPull', k as typeof settings.siftPull)} options={PULL_OPTIONS}
+                />
+              </Anchor>
+              <Hairline />
+              <Anchor ids={[sid('tools', 'Tab bar on wide screens')]}>
+                <Text style={[T.body, { fontFamily: F.med, marginTop: 10 }]}>Tab bar on wide screens</Text>
+                <Text style={[T.caption, { marginTop: 2, marginBottom: 10 }]}>
+                  {settings.tabNav === 'side'
+                    ? 'On a tablet or the PC the tabs sit down the left side, with arrows at the bottom right to step between tabs and pages.'
+                    : 'On a tablet or the PC the tabs sit along the bottom, as on a phone; swipe sideways to change tab.'}
+                </Text>
+                <SegmentedControl
+                  size="sm" stretch value={settings.tabNav}
+                  onChange={(k) => setSetting('tabNav', k as typeof settings.tabNav)} options={NAV_OPTIONS}
+                />
+              </Anchor>
+            </Card>
+          </>
+        );
       case 'motion':
         return (
           <>
@@ -2000,7 +1966,10 @@ export default function Settings() {
     <ScreenBG>
       {/* one bar for the list and every page: the title dips and comes back as the page changes, and back climbs page,
           list, out. Each layer's scroll draws its own edge under the bar (EdgeScroll), since two scrolls share it */}
-      <NeuHeader title={page ? PAGE_TITLES[page] : 'Settings'} onBack={() => { if (!back()) router.back(); }} />
+      <NeuHeader
+        title={page ? PAGE_TITLES[page] : 'Settings'} onBack={() => { if (!back()) router.back(); }}
+        pull pullProgress={pullProgress} pullOpen={openSettingsSift}
+      />
       <View style={st.body}>
         {/* the list never remounts: while a page is open it takes no touches and is hidden from screen readers */}
         <Animated.View
@@ -2009,13 +1978,12 @@ export default function Settings() {
           importantForAccessibility={page ? 'no-hide-descendants' : 'auto'}
           accessibilityElementsHidden={!!page}
         >
-          <EdgeScroll contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
+          <PullArea gesture={listPull}>
+          <PageScroll scrollRef={listScroll} y={listY} style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
             {/* the list rises in once, as Settings opens; coming back from a page it is simply there as it was left */}
             <Arrive first={!built.current} index={0}>
-              <SettingsSearchField value={query} onChange={setQuery} />
+              <SettingsSiftField />
             </Arrive>
-            {searching ? <SettingsResults query={query} onPick={pickResult} /> : null}
-            <View style={searching ? st.hidden : undefined} pointerEvents={searching ? 'none' : 'auto'}>
             <Arrive first={!built.current} index={0}>
               <ProfileHeader onOpen={() => open('account')} onSwitch={() => setSwitcher(true)} />
             </Arrive>
@@ -2035,8 +2003,8 @@ export default function Settings() {
             <Arrive first={!built.current} index={groups.length + 1}>
               <Colophon />
             </Arrive>
-            </View>
-          </EdgeScroll>
+          </PageScroll>
+          </PullArea>
         </Animated.View>
         {layerPage ? (
           // an open page is its own layer over the list, with its own scroll that starts at the top. It is opaque so the
@@ -2049,6 +2017,7 @@ export default function Settings() {
             accessibilityElementsHidden={!page}
           >
             <LayoutAnimationConfig key={layerPage} skipEntering>
+              <PullArea gesture={pagePull}>
               <PageScroll
                 scrollRef={pageScroll} y={pageY} style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled"
               >
@@ -2059,6 +2028,7 @@ export default function Settings() {
                   <View style={CARD_FIRST.includes(layerPage) ? undefined : { marginTop: -S.section + 10 }}>{pageBody(layerPage)}</View>
                 </TargetContext.Provider>
               </PageScroll>
+              </PullArea>
             </LayoutAnimationConfig>
           </Animated.View>
         ) : null}
@@ -2078,16 +2048,12 @@ const st = StyleSheet.create({
   scroll: { padding: S.pad, paddingTop: 12, paddingBottom: 40 },
   // an open page covers the list exactly (a layer within the body, below the header)
   pageLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  // the list under a search: kept mounted (its scroll and its state), out of sight and out of reach
-  hidden: { display: 'none' },
-  // the search well: as tall as a row, its corners the cards' own; the cards below keep the list's rhythm from it
+  // the search field: as tall as a row, its corners the cards' own; the cards below keep the list's rhythm from it
   searchWell: {
     height: 48, borderRadius: S.radiusSm, flexDirection: 'row', alignItems: 'center', paddingLeft: 16, paddingRight: 6,
     marginTop: 2, marginBottom: S.gap + 4, overflow: 'hidden',
   },
-  searchInput: { flex: 1, marginLeft: 12, color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, paddingVertical: 0 },
-  searchClear: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  searchClearKey: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  searchText: { flex: 1, marginLeft: 12, color: C.textFaint, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body },
   statusDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
   catRow: { paddingVertical: 13 },
   // level with the toggle's words above it; the press carves a little past them

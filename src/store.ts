@@ -297,6 +297,13 @@ export interface Settings {
   focusAlertAsked: boolean;
   /** when the one-time "Your data only lives on this phone" card was answered on this phone (ms); 0, never */
   backupNudgeAt: number;
+  /**
+   * How a pull down opens Sift: 'top' from the bar at the top of a tab only, 'anywhere' also from anywhere on a page
+   * (Settings, More) once it is at its top, 'off' never
+   */
+  siftPull: 'top' | 'anywhere' | 'off';
+  /** on a wide screen (a tablet, a PC), where the tabs sit: a rail down the left side, or a bar along the bottom */
+  tabNav: 'side' | 'bottom';
 }
 
 export type PlannerWeek = Record<DayName, PlannerBlock[]>;
@@ -404,6 +411,8 @@ export const DEFAULT_SETTINGS: Settings = {
   focusGoalMin: 0,
   focusAlertAsked: false,
   backupNudgeAt: 0,
+  siftPull: 'anywhere',
+  tabNav: 'side',
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -1212,6 +1221,8 @@ function cleanSettingsV6(s: any): Settings {
   st.writingFont = st.writingFont === 'serif' ? 'serif' : 'sans';
   if (!(Number.isInteger(st.focusGoalMin) && st.focusGoalMin >= 0 && st.focusGoalMin <= 600)) st.focusGoalMin = DEFAULT_SETTINGS.focusGoalMin;
   if (!(isFiniteNumber(st.backupNudgeAt) && st.backupNudgeAt >= 0)) st.backupNudgeAt = DEFAULT_SETTINGS.backupNudgeAt;
+  st.siftPull = st.siftPull === 'top' || st.siftPull === 'off' ? st.siftPull : 'anywhere';
+  st.tabNav = st.tabNav === 'bottom' ? 'bottom' : 'side';
   // no repo yet checks Sturoids' own releases; one saved under an earlier address follows the rename
   if (typeof st.githubRepo !== 'string' || !st.githubRepo.trim() || OLD_UPDATE_REPO.test(st.githubRepo.trim())) st.githubRepo = DEFAULT_UPDATE_REPO;
   return st;

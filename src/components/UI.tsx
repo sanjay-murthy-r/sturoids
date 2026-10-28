@@ -24,7 +24,7 @@ import {
 import { tap, tick } from '../haptics';
 import { stepTab } from '../toolNav';
 import { READ_MAX, WIDE_AT } from '../layout';
-import { openSift, siftPull } from '../search/store';
+import { SiftScope, openSift, siftPull } from '../search/store';
 import { TimeWheel, defaultTime, isTime, timeLabel } from './TimeWheel';
 import { ScrollMemoryMode, useScrollMemory } from '../hooks/useScrollMemory';
 
@@ -132,6 +132,11 @@ export interface ToolHeaderOptions {
   scrollMemory?: ScrollMemoryMode;
   /** the screen's own ref to its scroll view, when it keeps one: scrollProps carries the ref and passes it on */
   scrollRef?: any;
+  /**
+   * A pull down anywhere on the page, once it is at its top, opens Sift (when Settings' choice is 'anywhere'): wrap the
+   * scroll view in `pullArea`. Pass the filter Sift should open on, or 'all'.
+   */
+  contentPull?: SiftScope;
 }
 
 /** The compact title and the context line, set as the Header Lab drew them. */
@@ -232,10 +237,17 @@ const partsOf = (context: ToolHeaderOptions['context']): ContextPart[] | null =>
  */
 export function useToolHeader({
   title, mode = 'page', context, live = false, covered = false, actions, right, onBack, contentStyle, pull = true,
-  scrollMemory, scrollRef,
+  scrollMemory, scrollRef, contentPull,
 }: ToolHeaderOptions) {
   const insets = useSafeAreaInsets();
   const scrollY = useSharedValue(0);
+  const pullProgress = useSharedValue(0);
+  const pullMode = useStore((s) => s.settings.siftPull);
+  const pullOpen = React.useCallback(
+    () => openSift('pull', contentPull && contentPull !== 'all' ? { scope: contentPull } : {}),
+    [contentPull],
+  );
+  const content = useContentPull(!!contentPull && pullMode === 'anywhere' && pull, scrollY, pullProgress, pullOpen);
   const onScroll = useAnimatedScrollHandler((e) => { scrollY.value = e.contentOffset.y; });
   const memory = useScrollMemory(scrollY, { mode: scrollMemory, ref: scrollRef });
   const scrollProps = React.useMemo(
@@ -252,12 +264,14 @@ export function useToolHeader({
     bar: (
       <ToolBar
         title={title} back={!tab} onBack={onBack} actions={actions} right={right} scrollY={scrollY} overlay={tab}
-        contentStyle={contentStyle} pull={tab && pull}
+        contentStyle={contentStyle} pull={tab && pull} pullProgress={contentPull ? pullProgress : undefined} pullOpen={pullOpen}
       />
     ),
     hero: <ToolHero title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} reserve={tab ? reserve : 0} />,
     scrollProps,
     scrollY,
+    /** the page's scroll view, wrapped in the content pull when it has one */
+    pullArea: (child: React.ReactElement) => <PullArea gesture={contentPull ? content : null}>{child}</PullArea>,
     // tab: the big title's line is centred on the bar's row, beside the tray; the hero's own top padding is part of the lift
     padTop: tab ? insets.top + BAR_PAD + (BAR_ROW - DISPLAY_LINE) / 2 - HERO_TOP : parts ? 4 : 12,
     barH: tab ? insets.top + BAR_PAD * 2 + BAR_ROW : 0,
@@ -269,10 +283,16 @@ export function useToolHeader({
  * useToolHeader. Its title can change in place and cross-fades; `compact` no longer does anything, since the bar is one
  * line in every mode.
  */
-export function NeuHeader({ title, right, onBack, variant = 'page' }: {
+export function NeuHeader({ title, right, onBack, variant = 'page', pull, pullProgress, pullOpen }: {
   title: string; right?: React.ReactNode; onBack?: () => void; variant?: 'page' | 'tab'; compact?: boolean;
+  /** a pull down on the bar opens Sift; with pullProgress the bar also shows the pill for a pull on the page */
+  pull?: boolean; pullProgress?: SharedValue<number>; pullOpen?: () => void;
 }) {
-  return <ToolBar title={title} back={variant === 'page'} onBack={onBack} right={right} />;
+  return (
+    <ToolBar
+      title={title} back={variant === 'page'} onBack={onBack} right={right} pull={pull} pullProgress={pullProgress} pullOpen={pullOpen}
+    />
+  );
 }
 
 /** One flat icon button of the tray: it carves in while pressed. */
@@ -289,7 +309,7 @@ function TrayButton({ action }: { action: ToolAction }) {
   );
 }
 
-function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false, contentStyle, pull = false }: {
+function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false, contentStyle, pull = false, pullProgress, pullOpen }: {
   title: string; back: boolean; onBack?: () => void; actions?: ToolAction[]; right?: React.ReactNode;
   /** the offset the edge follows; without it (the older NeuHeader) the bar has no hairline or shade */
   scrollY?: SharedValue<number>;
@@ -297,14 +317,20 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
       a compact title that waits for it, instead of an opaque bar above the scroll that always shows its title */
   overlay?: boolean;
   contentStyle?: ToolHeaderOptions['contentStyle'];
-  /** a drag down from inside the bar opens Sift (tab mode, calm screens) */
+  /** a drag down from inside the bar opens Sift (calm screens) */
   pull?: boolean;
+  /** the pull's progress, shared with a pull on the page's content (useContentPull): the bar shows its pill for both */
+  pullProgress?: SharedValue<number>;
+  /** what a pull opens (Sift on everything, unless the page asks for its own filter) */
+  pullOpen?: () => void;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const headerPull = useHeaderPull(pull && overlay);
+  const pullMode = useStore((s) => s.settings.siftPull);
+  const bandPull = pull && pullMode !== 'off';
+  const headerPull = useHeaderPull(bandPull, pullProgress, pullOpen);
   const pullRow = useAnimatedStyle(() => ({
     transform: [{ translateY: level === 'full' ? 6 * Math.min(1.3, headerPull.progress.value) : 0 }],
   }));
@@ -365,12 +391,12 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
       ) : null}
       {/* the header band takes a one-finger drag down (Sift): from under the status bar, which is the phone's shade, to
           the bar's lower rim; the tray's buttons sit above it and keep their taps */}
-      {pull && overlay ? (
+      {bandPull ? (
         <GestureDetector gesture={headerPull.gesture}>
           <Animated.View collapsable={false} style={[StyleSheet.absoluteFill, { top: insets.top }]} />
         </GestureDetector>
       ) : null}
-      <Animated.View pointerEvents={through} style={[hdr.row, contentStyle, pull && overlay && !contentStyle ? pullRow : null]}>
+      <Animated.View pointerEvents={through} style={[hdr.row, contentStyle, (bandPull || pullProgress) && !contentStyle ? pullRow : null]}>
         {back ? (
           <Bouncy
             onPress={onBack || (() => router.back())} scaleTo={1} sink={false} radius={BACK_W / 2} hitSlop={4}
@@ -412,7 +438,7 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
         ) : null}
       </Animated.View>
       {scrollY ? <ScrollEdge at={edge} style={hdr.under} /> : null}
-      {pull && overlay ? <PullPill progress={headerPull.progress} /> : null}
+      {bandPull || pullProgress ? <PullPill progress={headerPull.progress} /> : null}
       {rest.length ? <DotMenu visible={overflow} onClose={() => setOverflow(false)} items={rest} /> : null}
     </View>
   );
@@ -563,8 +589,9 @@ export const PULL_OPEN = 64;
  * it opens Sift with its field morphing out of the header. `enabled` false (an edit mode, a running session) turns
  * it off. Put the gesture on the header band's own view (a GestureDetector around it), never on scrolling content.
  */
-export function useHeaderPull(enabled: boolean) {
-  const progress = useSharedValue(0);
+export function useHeaderPull(enabled: boolean, outside?: SharedValue<number>, open: () => void = openFromPull) {
+  const own = useSharedValue(0);
+  const progress = outside ?? own;
   const armed = useSharedValue(false);
   const gesture = React.useMemo(() => Gesture.Pan()
     .enabled(enabled)
@@ -573,36 +600,90 @@ export function useHeaderPull(enabled: boolean) {
     .failOffsetY(-10)
     .failOffsetX([-16, 16])
     .onStart(() => { armed.value = false; })
-    .onUpdate((e) => {
-      const ty = Math.max(0, e.translationY);
-      // up to the threshold it follows the finger; past it, it gives a little, as a rubber band does
-      const p = ty <= PULL_OPEN ? ty / PULL_OPEN : 1 + ((ty - PULL_OPEN) / PULL_OPEN) * 0.35;
-      progress.value = p;
-      siftPull.value = Math.min(1, p);
-      const over = ty >= PULL_OPEN;
-      if (over !== armed.value) {
-        armed.value = over;
-        if (over) runOnJS(tick)();
-      }
-    })
-    .onEnd((e, success) => {
-      // a cancelled drag (a call, the shade) never opens it
-      if (success && e.translationY >= PULL_OPEN) {
-        siftPull.value = 1;
-        runOnJS(openSift)('pull');
-        // the pill hands over to Sift's field, which takes its place
-        progress.value = withTiming(0, { duration: 200, easing: EASE_OUT });
-      } else {
-        progress.value = withTiming(0, { duration: 180, easing: EASE_OUT });
-        siftPull.value = withTiming(0, { duration: 180, easing: EASE_OUT });
-      }
-    })
-    .onFinalize(() => {
-      armed.value = false;
-      if (progress.value > 0 && progress.value < 1) progress.value = withTiming(0, { duration: 180, easing: EASE_OUT });
-      else if (progress.value > 1 && siftPull.value < 1) progress.value = withTiming(0, { duration: 180, easing: EASE_OUT });
-    }), [enabled]);
+    .onUpdate((e) => { pullTo(e.translationY, progress, armed); })
+    .onEnd((e, success) => { pullEnd(success && e.translationY >= PULL_OPEN, progress, open); })
+    .onFinalize(() => { pullSettle(progress, armed); }), [enabled, open]);
   return { gesture, progress };
+}
+
+/** Sift opened by a pull, on everything */
+const openFromPull = () => openSift('pull');
+
+/** a pull's progress as the finger goes: up to the threshold it follows the finger, past it it gives a little */
+function pullTo(dy: number, progress: SharedValue<number>, armed: SharedValue<boolean>) {
+  'worklet';
+  const ty = Math.max(0, dy);
+  const p = ty <= PULL_OPEN ? ty / PULL_OPEN : 1 + ((ty - PULL_OPEN) / PULL_OPEN) * 0.35;
+  progress.value = p;
+  siftPull.value = Math.min(1, p);
+  const over = ty >= PULL_OPEN;
+  if (over !== armed.value) {
+    armed.value = over;
+    if (over) runOnJS(tick)();
+  }
+}
+/** let go: past the threshold Sift opens, its field taking the pill's place; short of it the pill eases away */
+function pullEnd(opens: boolean, progress: SharedValue<number>, open: () => void) {
+  'worklet';
+  // a cancelled drag (a call, the shade) never opens it
+  if (opens) {
+    siftPull.value = 1;
+    runOnJS(open)();
+    progress.value = withTiming(0, { duration: 220, easing: EASE_OUT });
+  } else {
+    progress.value = withTiming(0, { duration: 200, easing: EASE_OUT });
+    siftPull.value = withTiming(0, { duration: 200, easing: EASE_OUT });
+  }
+}
+function pullSettle(progress: SharedValue<number>, armed: SharedValue<boolean>) {
+  'worklet';
+  armed.value = false;
+  if (progress.value > 0 && progress.value < 1) progress.value = withTiming(0, { duration: 200, easing: EASE_OUT });
+  else if (progress.value > 1 && siftPull.value < 1) progress.value = withTiming(0, { duration: 200, easing: EASE_OUT });
+}
+
+/**
+ * The same pull from anywhere on a page's content, once the page is at its top (Settings, More; the 'anywhere' choice in
+ * Settings). It is a pull and never a scroll: it counts only if the page was already at its top when the finger came
+ * down and stays there, so a drag that scrolls the page up to its top and goes on never opens Sift, nor does a drag
+ * that turns sideways (a tab swipe) or goes up first. It runs beside the scroll view's own gesture (PullArea), which
+ * carries on scrolling as ever. `open` opens Sift (with the page's own filter).
+ */
+export function useContentPull(enabled: boolean, scrollY: SharedValue<number>, progress: SharedValue<number>, open: () => void) {
+  const armed = useSharedValue(false);
+  const sx = useSharedValue(0);
+  const sy = useSharedValue(0);
+  return React.useMemo(() => {
+    const pan = Gesture.Pan()
+      .enabled(enabled)
+      .maxPointers(1)
+      .manualActivation(true)
+      .onTouchesDown((e, m) => {
+        const t = e.changedTouches[0];
+        sx.value = t.absoluteX;
+        sy.value = t.absoluteY;
+        // a page that is not at its top (or still moving there) is being scrolled, not pulled
+        if (scrollY.value > 0.5) m.fail();
+      })
+      .onTouchesMove((e, m) => {
+        const t = e.changedTouches[0];
+        const dx = t.absoluteX - sx.value;
+        const dy = t.absoluteY - sy.value;
+        if (scrollY.value > 0.5 || dy < -6 || (Math.abs(dx) > 16 && Math.abs(dx) > dy)) { m.fail(); return; }
+        if (dy > 12 && dy > Math.abs(dx) * 1.6) m.activate();
+      })
+      .onStart(() => { armed.value = false; })
+      .onUpdate((e) => { pullTo(e.translationY - 12, progress, armed); })
+      .onEnd((e, success) => { pullEnd(success && e.translationY - 12 >= PULL_OPEN && scrollY.value <= 0.5, progress, open); })
+      .onFinalize(() => { pullSettle(progress, armed); });
+    return Gesture.Simultaneous(pan, Gesture.Native());
+  }, [enabled, open]);
+}
+
+/** A page's one scroll view with the content pull round it: put it where the scroll view goes. */
+export function PullArea({ gesture, children }: { gesture: ReturnType<typeof useContentPull> | null; children: React.ReactElement }) {
+  if (!gesture) return children;
+  return <GestureDetector gesture={gesture}>{children}</GestureDetector>;
 }
 
 /**

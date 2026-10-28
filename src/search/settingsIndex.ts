@@ -59,6 +59,8 @@ const DEFS: Record<SettingsPage, Def[]> = {
     ['Tabs and tools', 'What sits in the tab bar', 'tab bar slots tools'],
     ['Tab bar slots', 'Choose the three tools in the bar', 'tabs bar slots swap tools'],
     ['Archived', 'Tools kept out of sight', 'archive hide restore tools'],
+    ['Pull down to search', 'Top bar, anywhere or off', 'pull gesture swipe down search sift open'],
+    ['Tab bar on wide screens', 'A side rail or a bottom bar', 'tablet pc navigation rail bottom vertical horizontal tabs arrows'],
   ],
   motion: [
     ['Motion and start screen', 'Animations and the intro', 'motion animation intro'],
