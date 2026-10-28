@@ -63,7 +63,7 @@ const SCOPES: { key: SiftScope; label: string }[] = [
 const ASKABLE: { host: RegExp; url: (q: string) => string }[] = [
   { host: /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/, url: (q) => 'https://chatgpt.com/?q=' + encodeURIComponent(q) },
   { host: /(^|\.)perplexity\.ai$/, url: (q) => 'https://www.perplexity.ai/search?q=' + encodeURIComponent(q) },
-  { host: /(^|\.)google\.[a-z.]+$/, url: (q) => 'https://www.google.com/search?q=' + encodeURIComponent(q) },
+  { host: /^google\.[a-z.]+$/, url: (q) => 'https://www.google.com/search?q=' + encodeURIComponent(q) },
 ];
 
 /** Runs what a result opens a moment after Sift starts to leave (see HAND_OVER_MS). */

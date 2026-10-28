@@ -268,8 +268,12 @@ export default function RootLayout() {
   useEffect(() => {
     if (!introDone) return;
     setIntroPhase('done');
-    appIsUp();
   }, [introDone]);
+  // with motion off the intro is over at once, before the app's faces are in and the navigator is mounted: a link that
+  // opened the app waits for the app to be shown
+  useEffect(() => {
+    if (introDone && showApp) appIsUp();
+  }, [introDone, showApp]);
 
   // the system navigation bar follows the theme's material (app.json only sets the launch colour)
   useEffect(() => {

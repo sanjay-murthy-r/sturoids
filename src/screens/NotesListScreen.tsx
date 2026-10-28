@@ -5,6 +5,7 @@ import type { SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useToolNav } from '../toolNav';
+import { markFreshNote } from '../freshNotes';
 import { NoteHit, matchNote, splitRanges } from '../toolLogic';
 import type { Range } from '../search/engine';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,16 +22,6 @@ import { ToolGate } from '../components/LockGate';
 import { fmtClockTime, todayKey, yesterdayKey } from '../utils';
 import { useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
-
-/**
- * Notes made here with New note that nobody has written in yet. The note's page takes one away again if it is still
- * blank when the page closes, so backing out never leaves an "Untitled" row behind.
- */
-const freshNotes = new Set<string>();
-/** True once, for a note New note made, the first time its page closes. */
-export function takeFreshNote(id: string): boolean {
-  return freshNotes.delete(id);
-}
 
 /**
  * A note with nothing in it: no title, no words, no attachment. Deleting one takes it away for good, on the list and
@@ -271,7 +262,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const newNote = () => once(() => {
     const id = addNote({ folder: folder || 'General' });
     // still blank when its page closes, it goes again
-    freshNotes.add(id);
+    markFreshNote(id);
     nav.openNote(id);
   });
   // The header counts the notes in the folder you are in, or all of them, and not the search's matches: a line that

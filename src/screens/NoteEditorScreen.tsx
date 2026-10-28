@@ -33,7 +33,8 @@ import { NOT_KEPT, keepFile, viewUri } from '../attachments';
 import { toastTrashed } from '../trashToast';
 import { useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
-import { FolderNameSheet, isBlankNote, takeFreshNote } from './NotesListScreen';
+import { FolderNameSheet, isBlankNote } from './NotesListScreen';
+import { takeFreshNote } from '../freshNotes';
 
 /** a line of the body: the Writing font sets it (26 in the sans, 27 in the serif); the room kept while dictating counts in it */
 const LINE_H = 26;

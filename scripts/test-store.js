@@ -1360,6 +1360,31 @@ const scenarios = {
     assert.equal(app.store.isDeviceOnlyChange(app.state(), prev), true, 'answering the card is no change to back up');
   },
 
+  async 'a journal open request reaches a Journal already in front, and is dropped when nobody takes it for long'() {
+    const app = boot();
+    await settled(app);
+    const j = app.load('src/journal.ts');
+    let heard = 0;
+    const off = j.onJournalOpenRequest(() => { heard++; });
+    const req = j.requestJournalOpen('2026-10-01', 'e1');
+    assert.equal(heard, 1, 'a listener hears the request as it is made');
+    const taken = j.takeJournalOpenRequest();
+    assert.equal(taken.dateKey, '2026-10-01');
+    assert.equal(taken.entryId, 'e1');
+    assert.equal(j.takeJournalOpenRequest(), null, 'a request is taken once');
+    off();
+    j.requestJournalOpen('2026-10-02');
+    assert.equal(heard, 1, 'an unsubscribed listener hears nothing');
+    const realNow = Date.now;
+    Date.now = () => realNow() + 60_000;
+    try {
+      assert.equal(j.takeJournalOpenRequest(), null, 'a request nobody took for a minute is dropped');
+    } finally {
+      Date.now = realNow;
+    }
+    assert.ok(req.at > 0);
+  },
+
   async '2.0: the reminders ring early, a week before, and on a weekly ToDo\'s days only'() {
     const scheduled = [];
     const N = {
