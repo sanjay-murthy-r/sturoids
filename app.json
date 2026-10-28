@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sturoids",
     "slug": "all-in-one-student-app",
-    "version": "1.7.0",
+    "version": "2.0.0",
     "scheme": "sturoids",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -24,7 +24,7 @@
     },
     "android": {
       "package": "com.sanjay.studenthub",
-      "versionCode": 11,
+      "versionCode": 12,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
