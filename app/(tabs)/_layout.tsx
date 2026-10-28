@@ -46,15 +46,16 @@ export default function TabLayout() {
   const theme = useStore((s) => s.settings.theme);
   const level = useAnimLevel();
   const { width } = useWindowDimensions();
+  const side = useStore((s) => s.settings.tabNav === 'side');
   return (
     <Tabs
       tabBar={(props) => <NeuTabBar {...props} />}
       backBehavior="initialRoute"
       screenOptions={{
         headerShown: false,
-        // a wide window (a tablet, a wide split screen) keeps its tabs in a rail on the left, like a phone's bar
-        // turned on its side; crossing the width keeps whichever tab is open
-        tabBarPosition: width >= WIDE_AT ? 'left' : 'bottom',
+        // a wide window (a tablet, a wide split screen, the PC) keeps its tabs in a rail on the left, like a phone's bar
+        // turned on its side, unless Settings puts them along the bottom; crossing the width keeps whichever tab is open
+        tabBarPosition: width >= WIDE_AT && side ? 'left' : 'bottom',
         sceneStyle: { backgroundColor: bgFor(theme) },
         // a tab slides a short way in from its side of the bar; with only some motion it fades to instead
         animation: level === 'none' ? 'none' : level === 'some' ? 'fade' : 'shift',

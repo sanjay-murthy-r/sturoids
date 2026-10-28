@@ -17,6 +17,7 @@ import { tick } from '../haptics';
 import { M, closeBrackets, fmt, makeScope, math, shown, toEngine } from '../calcEngine';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RAIL_W, TWO_COL_AT, WIDE_AT, WIDE_MAX } from '../layout';
+import { useRail } from '../hooks/useRail';
 
 /** A sum that is only a number: it has nothing to preview, and "=" on it has nothing to answer. */
 const BARE = /^[−-]?(\d+\.?\d*|\.\d+)(×10\^[−-]?\d+)?$/;
@@ -453,7 +454,8 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // the left and the keypad on the right. A phone too short for its keys (a 360 x 640 screen, the tab bar and the
   // functions taking their share) fits them to the room it has the same way.
   const wide = width >= WIDE_AT;
-  const split = wide && width > height && width - (mode === 'tab' ? RAIL_W : 0) >= TWO_COL_AT;
+  const rail = useRail();
+  const split = wide && width > height && width - (mode === 'tab' && rail ? RAIL_W : 0) >= TWO_COL_AT;
   // the keys' labels follow a large system font as far as KEY_SCALE_MAX, and the keys' natural heights with them
   const scale = Math.min(fontScale, KEY_SCALE_MAX);
   const at = `${width}x${height}@${fontScale}`;

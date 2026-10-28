@@ -38,6 +38,7 @@ import { ToastHost } from '../src/components/Toast';
 import { loadProfiles, takeArrival, useProfiles } from '../src/profiles';
 import { ArrivalMoment, SwitchingOverlay } from '../src/components/ProfileSwitcher';
 import { AppFrame, SearchOverlay } from '../src/components/SearchOverlay';
+import { NavArrows } from '../src/components/NavArrows';
 import { QuickAddHost } from '../src/components/QuickAddHost';
 import { appIsUp } from '../src/actions';
 import { ShareIntake } from '../src/shareIntake';
@@ -317,6 +318,8 @@ export default function RootLayout() {
             }}
           />
           </ErrorBoundary>
+          {/* a wide screen with its tabs in the side rail: back and forward at the bottom right */}
+          <NavArrows />
         </View>
         </AppFrame>
       )}

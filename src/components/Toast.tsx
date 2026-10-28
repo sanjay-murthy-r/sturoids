@@ -1,12 +1,12 @@
 import React from 'react';
-import { AccessibilityInfo, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, F, MIN, NEU, TRACK } from '../theme';
 import { useTheme } from './UI';
 import { EASE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
-import { WIDE_AT } from '../layout';
+import { useRail } from '../hooks/useRail';
 
 export interface ToastAction { label: string; onPress: () => void }
 /** More a toast can do: its words themselves can be a way somewhere (Recently deleted), said to a screen reader as `hint`. */
@@ -38,7 +38,7 @@ export function ToastHost() {
   const theme = useTheme();
   const level = useAnimLevel();
   const insets = useSafeAreaInsets();
-  const { width: winW } = useWindowDimensions();
+  const rail = useRail();
   const [shownToast, setShownToast] = React.useState<Shown | null>(null);
   const shown = useSharedValue(0);
   // a toast that takes the place of one still showing: its words come up in the same card
@@ -118,8 +118,8 @@ export function ToastHost() {
   );
 
   return (
-    // above the tab bar on a phone; a wide window keeps its tabs in a rail at the side, so the card sits low
-    <Animated.View pointerEvents="box-none" style={[st.wrap, { bottom: insets.bottom + (winW >= WIDE_AT ? 24 : 96) }, style]}>
+    // above the tab bar; a wide window with its tabs in the rail at the side has no bar below, so the card sits low
+    <Animated.View pointerEvents="box-none" style={[st.wrap, { bottom: insets.bottom + (rail ? 24 : 96) }, style]}>
       <View
         pointerEvents={action || onMessage ? 'auto' : 'none'}
         style={[
