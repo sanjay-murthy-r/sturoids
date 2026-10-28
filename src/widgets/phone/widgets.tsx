@@ -344,8 +344,11 @@ const PAD_ROWS: CalcKey[][] = [
   ['1', '2', '3', '+'],
   ['0', '.', 'DEL', '='],
 ];
-/** below this height the widget is its display alone, a tap opening the Calculator */
-const PAD_MIN_H = 230;
+/** below this height the widget is its display alone, a tap opening the Calculator: any shorter, and its keys fall
+ * under 36dp, too small to hit */
+const PAD_MIN_H = 280;
+/** the display above the keys, kept one height whether or not an answer shows, so the keys never move under a finger */
+const DISPLAY_H = 66;
 
 function CalcKeyWidget({ k, p, h }: { k: CalcKey; p: PhonePalette; h: number }) {
   const op = k === '+' || k === '−' || k === '×' || k === '÷' || k === '(' || k === ')';
@@ -373,16 +376,19 @@ function Calculator({ pad, p, box }: { pad: CalcPad; p: PhonePalette; box: Phone
   const display = (
     <FlexWidget
       style={{
-        width: 'match_parent', borderRadius: 16, backgroundColor: p.well, paddingHorizontal: 14, paddingVertical: 10,
-        flexDirection: 'column', flexGap: 2, ...(compact ? { flex: 1, justifyContent: 'center' } : null),
+        width: 'match_parent', borderRadius: 16, backgroundColor: p.well, paddingHorizontal: 14, paddingVertical: 8,
+        flexDirection: 'column', flexGap: 2, justifyContent: 'center',
+        ...(compact ? { flex: 1 } : { height: DISPLAY_H }),
       }}
       {...tap(open)}
     >
-      <Row>
-        <Kicker text="Calculator" p={p} />
-        <Spacer />
-        {pad.done ? <Txt text="Answer" size={11} face="sm" color={p.accent} fixed /> : null}
-      </Row>
+      {compact || pad.done ? (
+        <Row>
+          {compact ? <Kicker text="Calculator" p={p} /> : null}
+          <Spacer />
+          {pad.done ? <Txt text="Answer" size={11} face="sm" color={p.accent} fixed /> : null}
+        </Row>
+      ) : null}
       <Txt
         text={pad.expr || '0'} size={answer ? 15 : 26} face={answer ? 'reg' : 'num'} color={answer || !pad.expr ? p.dim : p.text}
         align="right" fixed uri={open} style={{ width: 'match_parent' }}
@@ -400,7 +406,8 @@ function Calculator({ pad, p, box }: { pad: CalcPad; p: PhonePalette; box: Phone
     );
   }
   const gap = box.width > 260 ? 7 : 5;
-  const keyH = Math.max(28, (box.height - 24 - 86 - 10 - gap * 4) / 5);
+  // the keys' real height: the widget less its padding, the display and the gaps
+  const keyH = (box.height - 24 - DISPLAY_H - 10 - gap * 4) / 5;
   return (
     <Frame p={p} uri={open} pad={12} gap={10}>
       {display}

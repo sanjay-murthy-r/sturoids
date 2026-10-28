@@ -439,9 +439,9 @@
               "label": "Calculator",
               "description": "A full keypad on the home screen, answers as you type",
               "minWidth": "180dp",
-              "minHeight": "110dp",
-              "targetCellWidth": 3,
-              "targetCellHeight": 4,
+              "minHeight": "250dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 5,
               "resizeMode": "horizontal|vertical",
               "updatePeriodMillis": 0,
               "previewImage": "./assets/widget-previews/calculator.png"
