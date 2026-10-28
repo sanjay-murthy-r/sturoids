@@ -427,7 +427,7 @@ export interface SignatureProps {
  * The handwritten signature, and the date after it: written in ink at hero size, travelling into its slot
  * (transforms only), sinking into a carve, with one soft accent catch of light along the carve.
  */
-export function Signature({
+export const Signature = React.memo(function Signature({
   width, model = SIG, hand = BUILT_IN_HAND, heroScale, heroX, heroY, tau, date, dateTau, dateLate, travel, ink, carve, glint,
 }: SignatureProps) {
   const g = useMemo(() => geometry(width, model, hand), [width, model, hand]);
@@ -465,7 +465,7 @@ export function Signature({
       </Animated.View>
     </Animated.View>
   );
-}
+});
 
 /** The composed end state: the carved signature, and the date when there is one, at rest, nothing animated. */
 export function SignatureStill({ width, date, model = SIG, hand = BUILT_IN_HAND }: {

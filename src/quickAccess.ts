@@ -1,12 +1,24 @@
 import { Alert, Linking } from 'react-native';
 import { QuickItem, SETTINGS_QUICK } from './store';
 import { TOOLS } from './tools';
+import { ACTIONS, ACTION_IDS, runAction } from './actions';
 
-/** In-app destinations for the quick-access editor: every tool, then Settings. */
+/** The one-tap actions a quick-access tile can hold (src/actions.ts): Search, New note, Add ToDo, Start focus. */
+export const ACTION_CATALOG: Omit<QuickItem, 'id'>[] = ACTION_IDS.map((id) => ({
+  label: ACTIONS[id].label, icon: ACTIONS[id].icon, color: ACTIONS[id].color, kind: 'action' as const, target: id,
+}));
+
+/** In-app destinations for the quick-access editor: every tool, then Settings, then the actions. */
 export const ROUTE_CATALOG: Omit<QuickItem, 'id'>[] = [
   ...TOOLS.map((t) => ({ label: t.shortLabel, icon: t.icon, color: t.colorKey, kind: 'tool' as const, target: t.key })),
   SETTINGS_QUICK,
+  ...ACTION_CATALOG,
 ];
+
+/** Runs an action tile (kind 'action'); false when it is not one, or names an action this version does not know. */
+export function launchAction(item: QuickItem): boolean {
+  return item.kind === 'action' && runAction(item.target, 'tile');
+}
 
 /**
  * A typed address as a link the browser can open: "wikipedia.org" and "www.khanacademy.org/math" gain https://, an

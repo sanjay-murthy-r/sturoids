@@ -334,6 +334,38 @@ function data(notes) {
     }
   });
 
+  await check('2.0: Today\'s board, the new fields and the new kinds in Recently deleted travel exactly, carrying no files', async () => {
+    const a = attach('board-file', crypto.randomBytes(900));
+    const d = {
+      ...data([{ id: 'n1', title: 'Here', body: '', subject: 'Physics', attachments: [a] }]),
+      settings: { name: 'Sam', focusGoalMin: 90, backupNudgeAt: 0, focusAlertAsked: false },
+      todayLayout: [{ id: 'w1', type: 'dayRing', size: 'S' }, { id: 'w2', type: 'checklist', size: 'M', config: { n: 4 } }],
+      dailyTasks: [{ id: 'd1', title: 'Gym', doneOn: null, createdAt: 1, repeat: 'daily', days: [0, 2, 4] }],
+      missions: [{ id: 'm1', title: 'Essay', deadline: '2026-11-02', done: false, subtasks: [], early: ['3d', '1d'], remind: 'morning' }],
+      sessions: [{ id: 's1', dateKey: '2026-10-20', endedAt: 5, netSeconds: 1800, taskTitles: [], subject: 'Physics', manual: true }],
+      scores: [{ id: 'e1', kind: 'exam', parentId: null, title: 'Mock', date: '2026-11-10', remind: ['week'], createdAt: 1, updatedAt: 1 }],
+    };
+    trash = [
+      { id: 't1', kind: 'habit', data: { id: 'h1', title: 'Read', doneDates: ['2026-10-01'] } },
+      { id: 't2', kind: 'mission', data: { id: 'm2', title: 'Old', deadline: '2026-10-01', done: true, subtasks: [] } },
+      { id: 't3', kind: 'exam', data: { id: 'e2', nodes: [{ id: 'e2', kind: 'exam', title: 'Unit test' }], learnings: [] } },
+    ];
+    try {
+      const uri = CACHE + 'board.json';
+      const json = JSON.stringify(d, null, 2);
+      const w = await backup.writeBackup(uri, json, d.notes);
+      assert.deepEqual(w, { carried: 1, missing: 0 }, 'only the note\'s file travels; the new kinds hold none');
+      const opened = await backup.openBackup(uri);
+      assert.deepEqual(JSON.parse(opened.json), d, 'the data reads back exactly');
+      fs.rmSync(toPath(ATT_DIR), { recursive: true, force: true });
+      const result = await opened.restoreFiles((id) => (id === 'board-file' ? backup.restoredPath(a) : null));
+      assert.equal(result.complete, true);
+      assert.deepEqual(Object.keys(result.files), ['board-file']);
+    } finally {
+      trash = [];
+    }
+  });
+
   fs.rmSync(PHONE, { recursive: true, force: true });
   let failed = 0;
   for (const [state, name] of results) {

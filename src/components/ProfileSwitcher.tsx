@@ -1,13 +1,15 @@
 import React from 'react';
 import { Alert, Modal, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { Image } from 'expo-image';
 import { ACCENT_CHOICES, C, F, T, TRACK, bgFor } from '../theme';
 import { useStore } from '../store';
 import {
-  MAX_PROFILES, PROFILE_NAME_MAX, ProfileInfo, activeProfile, addProfile, cancelSwitch, cleanName, closeToFinish,
+  MAX_PROFILES, PROFILE_NAME_MAX, ProfileInfo, activeProfile, addProfile, avatarFile, cancelSwitch, cleanName, closeToFinish,
   profileInitial, profileName, removeProfile, renameProfile, switchProfile, useProfiles,
 } from '../profiles';
+import { setIntroPhase, useIntro } from '../intro';
 import { DotMenu, Field, IconBtn, ListCard, ListRow, PillButton, SectionTitle, Sheet, useTheme } from './UI';
 import { Bouncy, CHANGE, EASE_OUT, useAnimLevel } from './Motion';
 import { toast } from './Toast';
@@ -32,15 +34,43 @@ function useProfileList(): ProfileInfo[] {
   }, [list, name, accent]);
 }
 
+/**
+ * The profile in use as the screens show it: its name and accent from its own settings, its account from the registry
+ * (or the cloud's, passed in, while the registry has not heard it yet).
+ */
+export function useActiveProfile(email?: string | null): ProfileInfo {
+  const list = useProfileList();
+  const me = list.find((p) => p.id === activeProfile) as ProfileInfo;
+  return React.useMemo(() => (email !== undefined && email !== me.email ? { ...me, email } : me), [me, email]);
+}
+
 /** "Priya's profile", or "that profile" for one with no name. */
 const theirs = (p: ProfileInfo) => (p.name.trim() ? p.name.trim() + "'s profile" : 'that profile');
 
-/** A profile's avatar: its initial in its colour, on a tint of it. */
+/**
+ * A profile's avatar: its photo, or its initial in its colour on a tint of it. The profile in use shows the photo in its
+ * own settings; another profile's comes from the file its last launch wrote (profiles.ts avatarFile), keyed by its
+ * revision so a new photo is never shown stale. A file that cannot be read falls back to the initial.
+ */
 export function ProfileAvatar({ profile, size = 36 }: { profile: ProfileInfo; size?: number }) {
+  const level = useAnimLevel();
+  const own = useStore((s) => (profile.id === activeProfile ? s.settings.avatar : ''));
+  const rev = profile.avatarRev ?? 0;
+  const uri = own || (rev ? avatarFile(profile.id) : '');
+  const [failed, setFailed] = React.useState<string | null>(null);
+  const key = own ? 'own' : uri + '#' + rev;
   const initial = profileInitial(profile);
   return (
     <View style={[st.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: profile.color + '38' }]}>
-      {initial ? (
+      {uri && failed !== key ? (
+        <Image
+          key={key}
+          source={own ? { uri } : { uri, cacheKey: 'profile-avatar:' + profile.id + ':' + rev }}
+          style={{ width: size, height: size }} contentFit="cover" transition={level === 'none' ? 0 : 160}
+          onError={() => setFailed(key)}
+          accessibilityIgnoresInvertColors
+        />
+      ) : initial ? (
         <Text style={{ color: profile.color, fontFamily: F.semi, fontSize: Math.round(size * 0.42) }} maxFontSizeMultiplier={1.2}>
           {initial}
         </Text>
@@ -153,6 +183,11 @@ export function ConfirmSwitchSheet({ profile, onClose }: { profile: ProfileInfo 
         void switchProfile(p.id);
       }}
     >
+      {p ? (
+        <View style={st.confirmWho}>
+          <ProfileAvatar profile={p} size={64} />
+        </View>
+      ) : null}
       <Text style={st.body}>
         {'Sturoids restarts into ' + (p ? theirs(p) : 'that profile') + '. Reminders ring only for the profile in use.'}
       </Text>
@@ -415,7 +450,7 @@ export function SwitchingOverlay() {
   return (
     <Modal visible transparent statusBarTranslucent animationType="none" onRequestClose={() => {}}>
       <Animated.View style={[StyleSheet.absoluteFill, st.overlay, { backgroundColor: bgFor(theme) }, fade]} accessibilityViewIsModal>
-        <ProfileAvatar profile={s.to} size={72} />
+        <ProfileAvatar profile={s.to} size={96} />
         <Text style={[T.head, st.overlayText]} accessibilityLiveRegion="polite">
           {'Switching to ' + profileName(s.to)}
         </Text>
@@ -430,7 +465,61 @@ export function SwitchingOverlay() {
   );
 }
 
+/** how long the arrival holds still before it fades into Today, and the longest it waits for the app to draw */
+const ARRIVE_HOLD = 600;
+const ARRIVE_WAIT_MAX = 2500;
+const ARRIVE_FADE = 280;
+
+/**
+ * The moment after a switch's restart: the profile's photo (or its initial) and its name on the material, held for
+ * about 600 ms while the app is built beneath, then it fades into Today's entrance (the intro phase moves to leaving as
+ * it starts to fade, so the day rises in its place). Takes every touch while it holds.
+ */
+export function ArrivalMoment({ onDone }: { onDone: () => void }) {
+  const theme = useTheme();
+  const level = useAnimLevel();
+  const me = useActiveProfile();
+  const shown = useSharedValue(1);
+  const [leaving, setLeaving] = React.useState(false);
+  const done = React.useRef(onDone);
+  done.current = onDone;
+  const finish = React.useCallback(() => { done.current(); }, []);
+  React.useEffect(() => {
+    let held = false;
+    let capped = false;
+    let gone = false;
+    const go = () => {
+      if (gone || !held || !(capped || useIntro.getState().appDrawn)) return;
+      gone = true;
+      off();
+      clearTimeout(cap);
+      setLeaving(true);
+      setIntroPhase('leaving');
+      if (level === 'none') { shown.value = 0; finish(); return; }
+      shown.value = withTiming(0, { duration: ARRIVE_FADE, easing: EASE_OUT }, (fin) => { if (fin) runOnJS(finish)(); });
+    };
+    const off = useIntro.subscribe(go);
+    const hold = setTimeout(() => { held = true; go(); }, ARRIVE_HOLD);
+    // an app that takes long to draw never keeps the moment up for good
+    const cap = setTimeout(() => { capped = true; go(); }, ARRIVE_WAIT_MAX);
+    return () => { gone = true; off(); clearTimeout(hold); clearTimeout(cap); };
+  }, []);
+  const fade = useAnimatedStyle(() => ({ opacity: shown.value }));
+  return (
+    <Animated.View
+      pointerEvents={leaving ? 'none' : 'auto'}
+      style={[StyleSheet.absoluteFill, st.overlay, st.arrival, { backgroundColor: bgFor(theme) }, fade]}
+      accessibilityLiveRegion="polite"
+    >
+      <ProfileAvatar profile={me} size={96} />
+      <Text style={[T.head, st.overlayText]} numberOfLines={2}>{profileName(me)}</Text>
+    </Animated.View>
+  );
+}
+
 const st = StyleSheet.create({
+  arrival: { zIndex: 90 },
+  confirmWho: { alignItems: 'center', marginBottom: 18 },
   avatar: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   addMark: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, backgroundColor: 'transparent' },
   lineText: { flex: 1, minWidth: 0, marginLeft: 14 },

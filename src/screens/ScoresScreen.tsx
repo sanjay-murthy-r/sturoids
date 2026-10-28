@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert, BackHandler } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated from 'react-native-reanimated';
@@ -18,6 +18,7 @@ import {
   PillButton, Chip, Field, useTheme, useToolHeader, contextLine,
 } from '../components/UI';
 import type { ContextPart, ToolAction } from '../components/UI';
+import { useExport, SummaryOpts } from '../reports';
 import { Appear, Bouncy, Enter, FadeSwap, useAnimLevel } from '../components/Motion';
 import { useSwapIn } from '../components/Swap';
 import { ScoreEditor, ScoreEditTarget } from '../components/ScoreEditor';
@@ -28,6 +29,9 @@ import { LearningSheet, LearningTarget } from '../components/LearningSheet';
 import { toast } from '../components/Toast';
 import { tap, tick } from '../haptics';
 import { READ_MAX, frame } from '../layout';
+import { toastTrashed } from '../trashToast';
+import { openPage, openTool } from '../toolNav';
+import { examAhead, revisionPlan, studySubjects } from '../toolLogic';
 
 type Sort = 'newest' | 'oldest' | 'best' | 'az';
 const SORTS: { key: Sort; label: string }[] = [
@@ -173,8 +177,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const learnings = useStore((s) => s.learnings);
   const removeLearning = useStore((s) => s.removeLearning);
   const restoreLearnings = useStore((s) => s.restoreLearnings);
-  const removeScoreNode = useStore((s) => s.removeScoreNode);
-  const restoreScoreNodes = useStore((s) => s.restoreScoreNodes);
+  const trashExam = useStore((s) => s.trashExam);
   const duplicateScoreNode = useStore((s) => s.duplicateScoreNode);
   const moveScoreNode = useStore((s) => s.moveScoreNode);
   const scoreTags = useStore((s) => s.scoreTags);
@@ -223,6 +226,12 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [picked, setPicked] = useState<string[]>([]);
   const [match, setMatch] = useState<TagMatch>('any');
   const [find, setFind] = useState('');
+  // the subjects "Study for this" offers, while its menu is open (and kept while it closes)
+  const [studyFor, setStudyFor] = useState<string[] | null>(null);
+  const studyOpen = studyFor != null;
+  const heldStudy = useRef<string[]>([]);
+  if (studyFor) heldStudy.current = studyFor;
+
   // a tag deleted in the manager leaves the filter with it, so the notebook never filters by a tag that is gone
   const tagIds = useStore((s) => s.scoreTags.map((t) => t.id).join(','));
   useEffect(() => {
@@ -262,12 +271,12 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const gate = useRef({ depth: 0, sheet: false });
   gate.current = {
     depth: trail.length,
-    sheet: addOpen || menuOpen || moveOpen || catOpen || tagsOpen || learnMenu || learn != null || editor != null,
+    sheet: addOpen || menuOpen || moveOpen || catOpen || tagsOpen || learnMenu || learn != null || editor != null || studyOpen,
   };
   const back = React.useCallback((): boolean => {
     if (gate.current.sheet) {
       setAddOpen(false); setMenuOpen(false); setMoveOpen(false); setCatOpen(false);
-      setTagsOpen(false); setLearnMenu(false); setLearn(null); setEditor(null);
+      setTagsOpen(false); setLearnMenu(false); setLearn(null); setEditor(null); setStudyFor(null);
       return true;
     }
     if (!gate.current.depth) return false;
@@ -278,6 +287,37 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     const sub = BackHandler.addEventListener('hardwareBackPress', back);
     return () => sub.remove();
   }, [back]));
+
+  // Arrivals: Sift opens the notebook or Analytics (`view`), on top of the root. The param is cleared once followed, so
+  // the same link works again
+  const params = useLocalSearchParams<{ view?: string }>();
+  useFocusEffect(React.useCallback(() => {
+    const v = params.view;
+    if (v !== 'notebook' && v !== 'analytics') return;
+    if (v === 'analytics') { setAnalyticsView(null); setTrendPick(null); }
+    setStack([{ kind: v }]);
+    router.setParams({ view: undefined } as any);
+  }, [params.view]));
+
+  // Before an exam: "Study for this" opens Deep Work on its subject (a menu picks one of several), and "Add revision
+  // tasks" adds a long-term task per subject due the day before, leaving out any already there, with an Undo
+  const study = (exam: ScoreNode) => {
+    const names = studySubjects(ix, exam);
+    tick();
+    if (names.length > 1) { setStudyFor(names); return; }
+    openTool('focus', names.length ? { subject: names[0] } : undefined);
+  };
+  const addRevision = (exam: ScoreNode) => {
+    const s = useStore.getState();
+    const plan = revisionPlan(ix, exam, s.missions, today);
+    if (!plan.length) { toast('Its revision tasks are already in Tasks'); return; }
+    const ids = plan.map((p) => s.addMission(p.title, p.deadline));
+    tap();
+    toast(plan.length === 1 ? 'Added a revision task' : 'Added ' + plan.length + ' revision tasks', {
+      label: 'Undo',
+      onPress: () => { const st0 = useStore.getState(); ids.forEach((id) => st0.removeMission(id)); },
+    });
+  };
 
   // the exam form asks, after adding an exam, for its page to open here
   const pendingOpen = useScoresNav((s) => s.open);
@@ -305,14 +345,11 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     inside.add(n.id);
     const learned = learnings.filter((l) => inside.has(l.nodeId)).length;
     const name = nameOf(ix, n);
+    // into Recently deleted, with everything under it and its learnings; the toast's Undo puts it all back
     const run = () => {
-      const removed = removeScoreNode(n.id);
-      if (!removed.nodes.length) return;
-      tap();
-      toast('Deleted ' + name, {
-        label: 'Undo',
-        onPress: () => restoreScoreNodes(removed),
-      });
+      const id = trashExam(n.id);
+      if (id) tap();
+      toastTrashed(id);
     };
     if (!below.length && !learned) { run(); return; }
     let what: string;
@@ -331,6 +368,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
       const things = [exams ? plural(exams, 'exam') : '', groups ? plural(groups, 'group') : '', learned ? plural(learned, 'learning') : ''].filter(Boolean);
       what = 'Everything inside goes with it: ' + (things.length > 1 ? things.slice(0, -1).join(', ') + ' and ' + things[things.length - 1] : things[0]) + '.';
     }
+    what += ' You can restore it from Recently deleted for 30 days.';
     Alert.alert('Delete ' + name + '?', what, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: run },
@@ -356,6 +394,10 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     { label: n.kind === 'group' ? 'Rename' : 'Edit', icon: 'create-outline', onPress: () => editNode(n) },
     ...(n.kind === 'group' && examsUnder(ix, n.id).length
       ? [{ label: 'Category for its exams', icon: 'albums-outline', onPress: () => openCategoryFor(n) }]
+      : []),
+    // a subject of an exam has a page of its own across the app: its focus, its trend, its notes, its next exam
+    ...(n.kind === 'exam' && !isTopExam(ix, n) && n.title.trim()
+      ? [{ label: 'Subject page', icon: 'school-outline', onPress: () => openPage('/subject', { key: subjectKey(n.title), name: n.title.trim() }) }]
       : []),
     { label: 'Duplicate without marks', icon: 'copy-outline', onPress: () => duplicate(n) },
     { label: 'Move to…', icon: 'return-down-forward-outline', onPress: () => { setMoveNode(n); setMoveOpen(true); } },
@@ -471,6 +513,13 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   // Only actions that act on what is in view: the notebook and Analytics each manage what they filter by, and a group,
   // an exam or a subject has its own menu beside the way into the notebook.
+  // Export follows the page in view: Analytics' exams, one exam, one subject across exams, or a group's exams
+  const exp = useExport('scores', (): SummaryOpts => {
+    if (analytics && focus) return { examIds: focus.pts.map((p) => p.id), scopeLabel: focus.label };
+    if (here && isTopExam(ix, here)) return { examId: here.id };
+    if (here && here.kind === 'exam') return { subject: here.title, range: 'all' };
+    return { examIds: examsUnder(ix, here?.id ?? null).map((n) => n.id), scopeLabel: here ? nameOf(ix, here) : undefined };
+  });
   const tray: ToolAction[] = [];
   if (aside) {
     tray.push({ icon: 'pricetags-outline', label: analytics ? 'Manage categories' : 'Manage tags', onPress: () => setTagsOpen(true) });
@@ -484,6 +533,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
       });
     }
   }
+  if (!notebook) tray.push(exp.action);
   const header = useToolHeader({
     title: notebook ? 'Learnings' : analytics ? 'Analytics' : here ? nameOf(ix, here) : 'Scores',
     // the root of a bar slot is the only page with the big title; every level below it, and the root opened from More, has an arrow
@@ -594,6 +644,9 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 onLearningMenu={openLearning}
                 before={beforeExam?.items ?? null}
                 onSeeBefore={seeBefore}
+                ahead={isTopExam(ix, here) && examAhead(ix, here, today)}
+                onStudy={() => study(here)}
+                onRevision={() => addRevision(here)}
               />
             ) : (
               <GroupView
@@ -637,6 +690,13 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           { label: here ? 'New exam in ' + nameOf(ix, here) : 'New exam', icon: 'ribbon-outline', onPress: () => newExam(here?.id ?? null) },
           { label: here ? 'New group in ' + nameOf(ix, here) : 'New group', icon: 'folder-outline', onPress: () => setEditor({ mode: 'new', kind: 'group', parentId: here?.id ?? null }) },
         ]}
+      />
+      <DotMenu
+        visible={studyOpen}
+        onClose={() => setStudyFor(null)}
+        items={heldStudy.current.map((name) => ({
+          label: 'Study ' + name, icon: 'timer-outline', onPress: () => openTool('focus', { subject: name }),
+        }))}
       />
       <DotMenu
         visible={menuOpen}
@@ -702,6 +762,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
       />
       <TagManagerSheet visible={tagsOpen} onClose={() => setTagsOpen(false)} />
       <ScoreEditor target={editor} onClose={() => setEditor(null)} />
+      {exp.sheet}
     </ScreenBG>
   );
 }
@@ -1036,7 +1097,7 @@ function shareOf(ix: ScoreIndex, n: ScoreNode, parent: ScoreNode | undefined): s
 
 function ExamView({
   hero, exam, ix, today, delta, onOpen, onMenu, onEdit, onAddPart, learnings, onAddLearning, onLearningMenu, before,
-  onSeeBefore,
+  onSeeBefore, ahead, onStudy, onRevision,
 }: {
   /** the header's first block, carried in the page's first entrance */
   hero: React.ReactNode;
@@ -1050,6 +1111,10 @@ function ExamView({
   before: Learning[] | null;
   /** opens the notebook on that category */
   onSeeBefore: () => void;
+  /** a dated exam still to come and not marked: it offers to study for it and to add revision tasks */
+  ahead: boolean;
+  onStudy: () => void;
+  onRevision: () => void;
 }) {
   const r = resultOf(exam, ix);
   const parts = (ix.children.get(exam.id) || []).filter((k) => k.kind === 'exam').sort((a, b) => a.createdAt - b.createdAt);
@@ -1096,9 +1161,17 @@ function ExamView({
               <Text style={st.unmarked}>Not marked yet</Text>
               {/* an exam set up ahead of its day (from the last one's subjects, usually) is marked on the form, every
                   subject in one place; a subject with parts opens its sheet */}
-              <View style={{ flexDirection: 'row', marginTop: 14 }}>
+              <View style={st.heroActions}>
                 <PillButton small label="Add marks" icon="create-outline" onPress={onEdit} />
+                {ahead ? <PillButton small label="Study for this" icon="timer-outline" onPress={onStudy} /> : null}
               </View>
+              {ahead ? (
+                <Pressable onPress={onRevision} hitSlop={LINK_SLOP} accessibilityRole="button" style={st.revisionLink}>
+                  <Text style={[st.link, { color: C.accent }]}>Add revision tasks</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>One per subject, due the day before</Text>
+                </Pressable>
+              ) : null}
+
             </>
           )}
           <TagRow ids={exam.tags} style={{ marginTop: 14, marginBottom: -6 }} />
@@ -1398,6 +1471,9 @@ const st = StyleSheet.create({
   link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   /** the way from the before-exam card into the notebook, under the card */
   seeAll: { alignSelf: 'flex-start', paddingHorizontal: 4, paddingTop: 2 },
+  heroActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 14 },
+  // the link sits under the buttons, its words stretched to a 44 dp reach by LINK_SLOP
+  revisionLink: { alignSelf: 'flex-start', marginTop: 14, paddingHorizontal: 2 },
   barTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
   barFill: { height: 6, borderRadius: 3 },
   hintRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 4, marginBottom: 6 },

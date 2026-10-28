@@ -6,12 +6,13 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-na
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, DailyTask, Mission, TodoReminder } from '../store';
-import { yesterdayKey, daysUntil, fmtShortDate, fmtClockTime, toMinutes, indexAfterNeighbours } from '../utils';
+import { yesterdayKey, daysUntil, fmtShortDate, fmtClockTime, toMinutes, indexAfterNeighbours, daysLabel, todoDueOn } from '../utils';
 import {
   ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, useTheme, useToolHeader, contextLine,
-  ListCard, ListRow, StrikeText, TimeField,
+  ListCard, ListRow, StrikeText, TimeField, ArrivalPulse,
 } from '../components/UI';
 import type { ContextPart } from '../components/UI';
+import { useExport } from '../reports';
 import { SegmentedControl } from '../components/SegmentedControl';
 import {
   CHANGE, EASE_OUT, Enter, Bouncy, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useBuilt, useEntrance, useFocusKey,
@@ -23,6 +24,9 @@ import { toast } from '../components/Toast';
 import { useNow, useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { QuickTaskSheet, shortClock } from '../components/QuickTaskSheet';
+import { toastTrashed, toastTrashedMany } from '../trashToast';
+import { leftoverTodos, orderTodos } from '../todos';
+import { useBringIntoView } from '../hooks/useBringIntoView';
 
 type Tab = 'daily' | 'missions';
 
@@ -60,13 +64,31 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('daily');
 
-  // Today's Coming up row opens the long-term list; the param is cleared after, so the same link works again
-  const params = useLocalSearchParams<{ list?: string }>();
+  // Arrivals. Today's Coming up row opens the long-term list (`list`); Sift opens a ToDo or a task (`item`: the list it
+  // is on, scrolled to it, with one pulse) or the reminders sheet (`sheet`). Each param is cleared once followed, so the
+  // same link works again.
+  const params = useLocalSearchParams<{ list?: string; item?: string; sheet?: string }>();
+  const [arrive, setArrive] = useState<string | null>(null);
+  const [remindSheet, setRemindSheet] = useState(false);
   useFocusEffect(useCallback(() => {
-    if (params.list !== 'missions') return;
-    setTab('missions');
-    router.setParams({ list: undefined });
-  }, [params.list]));
+    const clear: Record<string, undefined> = {};
+    if (params.list === 'missions') { setTab('missions'); clear.list = undefined; }
+    if (params.item) {
+      const s = useStore.getState();
+      if (s.missions.some((m) => m.id === params.item)) setTab('missions');
+      else if (s.dailyTasks.some((t) => t.id === params.item)) setTab('daily');
+      setArrive(params.item);
+      clear.item = undefined;
+    }
+    if (params.sheet === 'reminders') { setRemindSheet(true); clear.sheet = undefined; }
+    if (Object.keys(clear).length) router.setParams(clear);
+  }, [params.list, params.item, params.sheet]));
+  // the pulse is given once; after it the same item can be arrived at again
+  React.useEffect(() => {
+    if (!arrive) return undefined;
+    const t = setTimeout(() => setArrive(null), 2000);
+    return () => clearTimeout(t);
+  }, [arrive]);
 
   const dailyTasks = useStore((s) => s.dailyTasks);
   const toggleDaily = useStore((s) => s.toggleDaily);
@@ -77,8 +99,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const missions = useStore((s) => s.missions);
   const toggleMission = useStore((s) => s.toggleMission);
-  const removeMission = useStore((s) => s.removeMission);
-  const restoreMission = useStore((s) => s.restoreMission);
+  const trashMission = useStore((s) => s.trashMission);
 
   const reminderOn = useStore((s) => s.settings.todoReminderEnabled);
   const hasCheckIns = useStore((s) => s.todoReminders.length > 0);
@@ -87,7 +108,6 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const [addSheet, setAddSheet] = useState(false);
   const [editTask, setEditTask] = useState<DailyTask | Mission | null>(null);
-  const [remindSheet, setRemindSheet] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [triaged, setTriaged] = useState<string[]>([]);
 
@@ -96,15 +116,14 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // session's "keep" list has to expire with it or kept leftovers never return
   React.useEffect(() => { setTriaged((x) => (x.length ? [] : x)); }, [today]);
 
-  const leftovers = useMemo(() => {
-    if (lastTriage === today) return [];
-    const yest = yesterdayKey();
-    return dailyTasks.filter(
-      (t) =>
-        t.createdAt < new Date(today + 'T00:00:00').getTime() &&
-        t.doneOn !== yest && t.doneOn !== today && !triaged.includes(t.id)
-    );
-  }, [dailyTasks, lastTriage, triaged, today]);
+  // one-offs left open from before; a repeating ToDo comes back by itself, so it is never asked about
+  const leftovers = useMemo(
+    () => (lastTriage === today ? [] : leftoverTodos(dailyTasks, today, yesterdayKey(), triaged)),
+    [dailyTasks, lastTriage, triaged, today],
+  );
+  // the list as shown: open ones by their time (untimed after), the ones ticked today sunk below them, and the weekly
+  // ones not due today dimmed at the end
+  const todoRows = useMemo(() => orderTodos(dailyTasks, today), [dailyTasks, today]);
 
   const keepOne = (id: string) => {
     setTriaged((x) => [...x, id]);
@@ -173,37 +192,21 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, [removeDaily, restoreDaily]);
   const editDaily = useCallback((t: DailyTask) => { setEditTask(t); setAddSheet(true); }, []);
   const editMission = useCallback((m: Mission) => { setEditTask(m); setAddSheet(true); }, []);
-  // a long-term task goes at once, steps and all, and the toast's Undo puts it back beside the task it followed
-  const deleteMission = useCallback((m: Mission) => {
-    const list = useStore.getState().missions;
-    const before = list.slice(0, Math.max(0, list.findIndex((x) => x.id === m.id))).map((x) => x.id);
-    const gone = removeMission(m.id);
-    if (!gone) return;
-    toast('Deleted ' + gone.mission.title, {
-      label: 'Undo',
-      onPress: () => restoreMission(gone.mission, indexAfterNeighbours(before, useStore.getState().missions.map((x) => x.id))),
-    });
-  }, [removeMission, restoreMission]);
+  // a long-term task goes to Recently deleted, steps and all, and the toast's Undo puts it back where it was
+  const deleteMission = useCallback((m: Mission) => { toastTrashed(trashMission(m.id)); }, [trashMission]);
   const toggleOpen = useCallback((id: string) => setExpanded((x) => (x === id ? null : id)), []);
   const clearDone = () => {
     const done = useStore.getState().missions.filter((m) => m.done);
     if (!done.length) return;
     const clear = () => {
-      const all = useStore.getState().missions;
-      // each with the tasks that stood before it, so Undo puts them back in their places even if the list changes
-      const taken = all.flatMap((m, i) => (m.done ? [{ m, before: all.slice(0, i).map((x) => x.id) }] : []));
-      if (!taken.length) return;
-      for (const t of taken) removeMission(t.m.id);
-      toast(taken.length === 1 ? 'Cleared the done task' : 'Cleared ' + taken.length + ' done tasks', {
-        label: 'Undo',
-        onPress: () => {
-          for (const t of taken) restoreMission(t.m, indexAfterNeighbours(t.before, useStore.getState().missions.map((x) => x.id)));
-        },
-      });
+      const ids = useStore.getState().missions.filter((m) => m.done).map((m) => m.id);
+      if (!ids.length) return;
+      // each to Recently deleted, keeping its place; one toast and one Undo for them all
+      toastTrashedMany(ids.map((id) => trashMission(id)), 'Moved ' + ids.length + ' done tasks to Recently deleted');
     };
     Alert.alert(
       done.length === 1 ? 'Clear the done task?' : 'Clear ' + done.length + ' done tasks?',
-      'They go with their steps. Open tasks stay as they are.',
+      'They move to Recently deleted with their steps. Open tasks stay as they are.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Clear', style: 'destructive', onPress: clear },
@@ -232,7 +235,8 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // the header's line: counts that are not zero, and what falls due. The minute turns it over (useNow, only while this
   // screen is in front), so a deadline coming up is noticed without a tap
   const now = useNow();
-  const openDaily = useMemo(() => dailyTasks.filter((t) => t.doneOn !== today).length, [dailyTasks, today]);
+  // a weekly ToDo off its days is not open today
+  const openDaily = useMemo(() => dailyTasks.filter((t) => t.doneOn !== today && todoDueOn(t, today)).length, [dailyTasks, today]);
   const openCount = useMemo(() => missions.filter((m) => !m.done).length, [missions]);
   const dueToday = useMemo(() => missions.filter((m) => !m.done && daysUntil(m.deadline) === 0).length, [missions, today]);
   // Today counts these as due too, so the ToDos' line never leaves out a task that is past its day
@@ -255,6 +259,8 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
       const tomorrow = left <= 0;
       if (tomorrow) left += 1440;
       if (t.doneOn === today && (!tomorrow || t.repeat !== 'daily')) continue;
+      // a weekly ToDo is due only on its days
+      if (!todoDueOn(t, tomorrow ? new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1) : now)) continue;
       if (left > 0 && left <= 60) out.push({ title: t.title, time: t.time });
     }
     for (const m of missions) {
@@ -282,20 +288,28 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     : contextLine(openCount > 0 ? openCount + ' open' : missions.length > 0 && 'All done', dueSoonLine ?? nextDueLine);
 
   const tabMode = mode === 'tab';
+  const exp = useExport(tab === 'daily' ? ['todos', 'longterm'] : ['longterm', 'todos'], { range: tab === 'daily' ? 'week' : '30d' });
   const header = useToolHeader({
     title: tab === 'daily' ? 'ToDos' : 'Tasks',
     mode: tabMode ? 'tab' : 'page',
     context,
     live: dueSoon.length > 0,
+    // the header pull opens Sift only while the list is calm: no sheet up over it
+    pull: !addSheet && !remindSheet,
     actions: [{
       // the bell looks on only when something can ring: reminders switched off in Settings leave it plain
       icon: remindersOn && (reminderOn || hasCheckIns) ? 'notifications' : 'notifications-outline',
       label: 'Reminders',
       color: remindersOn && reminderOn ? C.accent : undefined,
       onPress: () => setRemindSheet(true),
-    }],
+    }, exp.action],
   });
   reveal.current = { tab: tabMode, barH: header.barH, still: level === 'none', y: header.scrollY };
+  // a row Sift opened is brought into view
+  const { topRef, bring } = useBringIntoView({
+    scrollTo: (y, animated) => scrollRef.current?.scrollTo({ y, animated }),
+    scrollY: header.scrollY, padTop: header.padTop, barH: header.barH, still: level === 'none',
+  });
 
   // the add button arrives with the screen, and sinks out of the way while the keyboard is up: it would sit over the
   // end of the step being typed, where its own add button is
@@ -326,6 +340,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 130 + (tabMode ? 0 : insets.bottom) }}
         showsVerticalScrollIndicator={false}
       >
+        <View ref={topRef} collapsable={false} />
         {/* the header's hero, the list switch and the list rise together: the screen's first entrance */}
         <Enter index={0}>
           {header.hero}
@@ -371,10 +386,10 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 ) : (
                   <Animated.View layout={glide(level)}>
                     <ListCard>
-                      {dailyTasks.map((t) => (
+                      {todoRows.map(({ task: t, done, due }) => (
                         <DailyRow
-                          key={t.id} task={t} done={t.doneOn === today} hour24={hour24}
-                          onToggle={toggleDaily} onEdit={editDaily} onDelete={deleteDaily}
+                          key={t.id} task={t} done={done} due={due} hour24={hour24} arrive={arrive === t.id}
+                          onToggle={toggleDaily} onEdit={editDaily} onDelete={deleteDaily} onArrive={bring}
                         />
                       ))}
                     </ListCard>
@@ -386,6 +401,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
             ) : (
               <MissionList
                 open={openMissions} done={doneMissions} expanded={expanded} today={today} hint={!anySteps} hour24={hour24}
+                arrive={arrive} onArrive={bring}
                 onToggle={toggleMission} onToggleOpen={toggleOpen} onEdit={editMission} onDelete={deleteMission}
                 onStepFocus={revealStep} onClearDone={clearDone}
               />
@@ -425,33 +441,67 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
       />
 
       <RemindersSheet visible={remindSheet} onClose={() => setRemindSheet(false)} />
+      {exp.sheet}
     </ScreenBG>
   );
 }
 
 /**
- * One ToDo. Its own memoised row, so ticking it leaves every other row alone. A long press opens it for editing. A
- * time it is due by shows under it ("by 5 pm"), and one that comes back every day carries a small repeat glyph.
+ * A row a link opened: once it has laid out (and the list it is on has come in), the screen brings it into view, and
+ * then it pulses once.
  */
-const DailyRow = React.memo(function DailyRow({ task, done, hour24, onToggle, onEdit, onDelete }: {
-  task: DailyTask; done: boolean; hour24: boolean;
+function useArrival(arrive: boolean, onArrive: (view: View | null) => void) {
+  const ref = React.useRef<View>(null);
+  const cb = React.useRef(onArrive);
+  cb.current = onArrive;
+  React.useEffect(() => {
+    if (!arrive) return undefined;
+    const t = setTimeout(() => cb.current(ref.current), 320);
+    return () => clearTimeout(t);
+  }, [arrive]);
+  return ref;
+}
+
+/** the pulse waits for the scroll that brings its row into view */
+const PULSE_DELAY = 640;
+
+/**
+ * One ToDo. Its own memoised row, so ticking it leaves every other row alone. A long press opens it for editing. A
+ * time it is due by shows under it ("by 5 pm"), and one that comes back carries a small repeat glyph. One that repeats
+ * on chosen days says which; on the other days it stands back, dimmed.
+ */
+const DailyRow = React.memo(function DailyRow({ task, done, due, hour24, arrive, onToggle, onEdit, onDelete, onArrive }: {
+  task: DailyTask; done: boolean;
+  /** shows today: false for a weekly ToDo on a day it does not repeat on */
+  due: boolean;
+  hour24: boolean;
+  /** Sift opened this ToDo: it is brought into view and pulses once */
+  arrive: boolean;
   onToggle: (id: string) => void; onEdit: (t: DailyTask) => void; onDelete: (t: DailyTask) => void;
+  onArrive: (view: View | null) => void;
 }) {
   useTheme(); // a memo row: its repeat glyph follows the theme, which its props do not change with
+  const ref = useArrival(arrive, onArrive);
   const by = task.time ? 'by ' + shortClock(task.time, hour24) : '';
   const daily = task.repeat === 'daily';
+  const days = daily && task.days?.length ? daysLabel(task.days) : '';
+  const sub = [days, by].filter(Boolean).join(' · ');
+  const spoken = task.title + (days ? ', on ' + days : daily ? ', every day' : '') + (by ? ', ' + by : '') + (due ? '' : ', not today');
   return (
-    <ListRow onLongPress={() => onEdit(task)} accessibilityHint="Double tap and hold to edit">
-      <CheckCircle done={done} onPress={() => onToggle(task.id)} label={task.title + (daily ? ', every day' : '') + (by ? ', ' + by : '')} />
-      <View style={st.taskWrap}>
-        <StrikeText done={done} style={st.taskText}>{task.title}</StrikeText>
-        {by ? <Text style={[T.caption, { marginTop: 2 }]}>{by}</Text> : null}
-      </View>
-      {daily ? (
-        <Ionicons name="repeat" size={15} color={C.textFaint} style={st.repeat} accessibilityElementsHidden importantForAccessibility="no" />
-      ) : null}
-      <IconBtn name="trash-outline" size={18} onPress={() => onDelete(task)} accessibilityLabel={'Delete ' + task.title} />
-    </ListRow>
+    <View ref={ref} collapsable={false}>
+      <ListRow onLongPress={() => onEdit(task)} accessibilityHint="Double tap and hold to edit" style={due ? undefined : st.offDay}>
+        <CheckCircle done={done} onPress={() => onToggle(task.id)} label={spoken} />
+        <View style={st.taskWrap}>
+          <StrikeText done={done} style={st.taskText}>{task.title}</StrikeText>
+          {sub ? <Text style={[T.caption, { marginTop: 2 }]}>{sub}</Text> : null}
+        </View>
+        {daily ? (
+          <Ionicons name="repeat" size={15} color={C.textFaint} style={st.repeat} accessibilityElementsHidden importantForAccessibility="no" />
+        ) : null}
+        <IconBtn name="trash-outline" size={18} onPress={() => onDelete(task)} accessibilityLabel={'Delete ' + task.title} />
+      </ListRow>
+      <ArrivalPulse active={arrive} radius={14} delay={PULSE_DELAY} />
+    </View>
   );
 });
 
@@ -459,17 +509,23 @@ const DailyRow = React.memo(function DailyRow({ task, done, hour24, onToggle, on
  * The long-term tasks: the open ones by deadline, and the done ones folded under one quiet row beneath them. Built
  * with its list, so the fold starts closed each time the list is shown, and a part that turns up later fades in.
  */
-function MissionList({ open, done, expanded, today, hint, hour24, onToggle, onToggleOpen, onEdit, onDelete, onStepFocus, onClearDone }: {
+function MissionList({
+  open, done, expanded, today, hint, hour24, arrive, onArrive, onToggle, onToggleOpen, onEdit, onDelete, onStepFocus, onClearDone,
+}: {
   open: Mission[]; done: Mission[]; expanded: string | null; today: string;
   /** no task has steps yet: say once, under the list, how to give one some */
   hint: boolean;
   hour24: boolean;
+  /** the task Sift opened, if any: a done one unfolds the done tasks to show it */
+  arrive: string | null;
+  onArrive: (view: View | null) => void;
   onToggle: (id: string) => void; onToggleOpen: (id: string) => void; onEdit: (m: Mission) => void; onDelete: (m: Mission) => void;
   onStepFocus: (field: View | null) => void; onClearDone: () => void;
 }) {
   const level = useAnimLevel();
   const built = useBuilt();
   const [showDone, setShowDone] = useState(false);
+  React.useEffect(() => { if (arrive && done.some((m) => m.id === arrive)) setShowDone(true); }, [arrive]);
   const turn = useSharedValue(0);
   React.useEffect(() => {
     turn.value = level === 'none' ? (showDone ? 1 : 0) : withTiming(showDone ? 1 : 0, CHANGE);
@@ -478,7 +534,7 @@ function MissionList({ open, done, expanded, today, hint, hour24, onToggle, onTo
   const enter = built.current ? rowIn(level) : undefined;
   const rows = (list: Mission[]) => list.map((m) => (
     <MissionRow
-      key={m.id} m={m} today={today} open={expanded === m.id} hour24={hour24}
+      key={m.id} m={m} today={today} open={expanded === m.id} hour24={hour24} arrive={arrive === m.id} onArrive={onArrive}
       onToggle={onToggle} onToggleOpen={onToggleOpen} onEdit={onEdit} onDelete={onDelete} onStepFocus={onStepFocus}
     />
   ));
@@ -519,16 +575,20 @@ function MissionList({ open, done, expanded, today, hint, hour24, onToggle, onTo
  * One long-term task, with its steps folding out beneath it. The step being typed lives here, so a keystroke
  * re-renders this row only, and a half-typed step never follows you to another task.
  */
-const MissionRow = React.memo(function MissionRow({ m, open, hour24, onToggle, onToggleOpen, onEdit, onDelete, onStepFocus }: {
+const MissionRow = React.memo(function MissionRow({ m, open, hour24, arrive, onArrive, onToggle, onToggleOpen, onEdit, onDelete, onStepFocus }: {
   /** only compared, never read: a new day re-renders the row, so its countdown turns over at midnight */
   today: string;
   m: Mission; open: boolean; hour24: boolean;
+  /** Sift opened this task: it is brought into view and pulses once */
+  arrive: boolean;
+  onArrive: (view: View | null) => void;
   onToggle: (id: string) => void; onToggleOpen: (id: string) => void; onEdit: (m: Mission) => void; onDelete: (m: Mission) => void;
   /** the step field took focus: the screen keeps it clear of the bar */
   onStepFocus: (field: View | null) => void;
 }) {
   useTheme(); // a memo row: it follows a new accent itself, since its props do not change with one
   const level = useAnimLevel();
+  const arriveRef = useArrival(arrive, onArrive);
   const addSubtask = useStore((s) => s.addSubtask);
   const toggleSubtask = useStore((s) => s.toggleSubtask);
   const removeSubtask = useStore((s) => s.removeSubtask);
@@ -570,7 +630,7 @@ const MissionRow = React.memo(function MissionRow({ m, open, hour24, onToggle, o
     setDraft('');
   };
   return (
-    <View style={st.missionRow}>
+    <View style={st.missionRow} ref={arriveRef} collapsable={false}>
       <Row>
         <CheckCircle done={m.done} color={C.amber} onPress={() => onToggle(m.id)} label={m.title} />
         {/* a tap folds the steps out; a long press opens the task for editing, as a ToDo's does */}
@@ -609,6 +669,7 @@ const MissionRow = React.memo(function MissionRow({ m, open, hour24, onToggle, o
           </Animated.View>
         </Animated.View>
       )}
+      <ArrivalPulse active={arrive} radius={14} delay={PULSE_DELAY} />
     </View>
   );
 });
@@ -765,6 +826,8 @@ const st = StyleSheet.create({
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21, letterSpacing: TRACK.body },
   // a ToDo that comes back every day: a small glyph between its words and its delete
   repeat: { marginLeft: 8, marginRight: 2 },
+  // a weekly ToDo on a day it does not repeat on stands back
+  offDay: { opacity: 0.5 },
   missionRow: { paddingVertical: 12, paddingHorizontal: 12 },
   steps: { marginTop: 10, paddingLeft: 4 },
   stepWrap: { flex: 1, marginLeft: 10 },

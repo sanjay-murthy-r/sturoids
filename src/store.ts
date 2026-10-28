@@ -11,6 +11,8 @@ import {
   canMove, duplicateStructure, nextTagColor, sameTagName, pruneScoreRefs, withCategory, promoteToCategory,
 } from './scores';
 
+export type { ExamRemind } from './scores';
+
 // ---------- types ----------
 
 /** How long before a reminder for a task with a time: the morning of its day (08:00), or an hour before the time. */
@@ -20,6 +22,11 @@ export interface DailyTask {
   id: string; title: string; doneOn: string | null; createdAt: number;
   /** comes back every day; a ToDo without it is a one-off, which goes once it has been ticked and its day is over */
   repeat?: 'daily';
+  /**
+   * with repeat 'daily': the weekdays it comes back on, 0 Monday to 6 Sunday (as Habit.days): sorted, unique, never empty
+   * and never all seven. Absent, every day. Today shows it, and its reminder rings, only on those days (utils.todoDueOn)
+   */
+  days?: number[];
   /** 'HH:MM', due by */
   time?: string;
   remind?: TaskRemind;
@@ -32,8 +39,17 @@ export interface Mission {
   /** 'HH:MM' on the deadline day */
   time?: string;
   remind?: TaskRemind;
+  /** early reminders at 6 pm, three days and one day before the deadline, with or without a time; in this order */
+  early?: MissionEarly[];
 }
-export interface FocusSession { id: string; dateKey: string; endedAt: number; netSeconds: number; taskTitles: string[]; subject?: string }
+/** A long-term task's early reminders: '3d' three days before, '1d' the day before, both at 6 pm. */
+export type MissionEarly = '3d' | '1d';
+export const MISSION_EARLY: readonly MissionEarly[] = ['3d', '1d'];
+export interface FocusSession {
+  id: string; dateKey: string; endedAt: number; netSeconds: number; taskTitles: string[]; subject?: string;
+  /** logged by hand in the history ("Log a session"), not timed */
+  manual?: boolean;
+}
 export interface PlannerBlock { id: string; subject: string; start: string; end: string; color: string }
 export interface Habit {
   id: string; title: string; doneDates: string[]; remindTime?: string;
@@ -77,10 +93,16 @@ export interface AiLink { id: string; label: string; url: string; custom?: boole
 export interface CalcEntry { id: string; expr: string; result: string }
 /**
  * `tool` targets a ToolKey (opens wherever that tool currently lives — its tab
- * slot or its full page); `route` is a plain path (Settings); `url` a website, opened in the default browser.
+ * slot or its full page); `route` is a plain path (Settings); `url` a website, opened in the default browser; `action`
+ * an action id that src/actions.ts runs (a new note, add a ToDo, start focus, search).
  * `color` is a palette slot (e.g. 'green') or a literal hex.
  */
-export interface QuickItem { id: string; label: string; icon: string; color: string; kind: 'tool' | 'route' | 'url'; target: string }
+export interface QuickItem { id: string; label: string; icon: string; color: string; kind: 'tool' | 'route' | 'url' | 'action'; target: string }
+
+/** A widget's size on Today's board: S one cell (two side by side), M full width, L full width and two cells tall. */
+export type WidgetSize = 'S' | 'M' | 'L';
+/** One widget on Today's board, in order. `type` names a widget in src/widgets/registry.ts; `config` is its own. */
+export interface TodayWidget { id: string; type: string; size: WidgetSize; config?: Record<string, unknown> }
 export interface TodoReminder { id: string; time: string; label: string }
 
 /** A Deep Work session in flight — persisted so a process kill cannot lose it. */
@@ -130,11 +152,15 @@ export interface RemovedScoreTag {
   learnings: Record<string, string[]>;
 }
 
-export type TrashKind = 'note' | 'journal' | 'video' | 'timedNote' | 'bookmark' | 'attachment';
+export type TrashKind = 'note' | 'journal' | 'video' | 'timedNote' | 'bookmark' | 'attachment' | 'habit' | 'mission' | 'exam';
+
+/** What an exam kept in Recently deleted holds: the exam (or group) at `id`, everything under it, and their learnings. */
+export interface TrashedExam { id: string; nodes: ScoreNode[]; learnings: Learning[] }
 
 /**
  * Something deleted, kept for 30 days in Recently deleted. `data` is the thing itself (a note with its attachments,
- * a journal entry's index, a video with its notes), `parentId` the note or video a part came from, `index` its place.
+ * a journal entry's index, a video with its notes, a habit, a long-term task, or a TrashedExam), `parentId` the note or
+ * video a part came from, `index` its place.
  * A journal entry's text and an attachment's file stay where they were until the item is deleted for good.
  */
 export interface TrashItem {
@@ -262,6 +288,12 @@ export interface Settings {
   focusLastMode: 'countdown' | 'stopwatch';
   /** the face for what is written in Notes and the Journal (writingFace in theme.ts) */
   writingFont: 'sans' | 'serif';
+  /** Deep Work's daily goal in minutes, 0 = off: Today's focused cell shows the progress to it, the history its streak */
+  focusGoalMin: number;
+  /** the "You won't hear when this block ends" line was dismissed on this phone, so it never shows again */
+  focusAlertAsked: boolean;
+  /** when the one-time "Your data only lives on this phone" card was answered on this phone (ms); 0, never */
+  backupNudgeAt: number;
 }
 
 export type PlannerWeek = Record<DayName, PlannerBlock[]>;
@@ -361,6 +393,9 @@ export const DEFAULT_SETTINGS: Settings = {
   focusLastMin: 50,
   focusLastMode: 'countdown',
   writingFont: 'sans',
+  focusGoalMin: 0,
+  focusAlertAsked: false,
+  backupNudgeAt: 0,
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -393,16 +428,19 @@ export function initialData() {
     desmosState: '',
     /** what was ticked, day by day ('YYYY-MM-DD'), for the journal's day line */
     doneLog: {} as Record<string, DayDone>,
+    /** Today's board, in order; null until it is first edited: the default arrangement (src/widgets/registry.ts) */
+    todayLayout: null as TodayWidget[] | null,
   };
 }
 type DataKey = keyof ReturnType<typeof initialData>;
 const DATA_KEYS = Object.keys(initialData()) as DataKey[];
 
 /**
- * Settings that belong to this phone, not to the data: when the app was opened here. They never travel in a backup's
+ * Settings that belong to this phone, not to the data: when the app was opened here, and the one-time notes about this
+ * phone (its backups, its notification permission) answered here. They never travel in a backup's
  * fingerprint, a replace keeps this phone's own, and a change to them alone is not a change worth backing up.
  */
-export const DEVICE_SETTINGS = ['firstOpenedAt', 'lastOpenedAt'] as const;
+export const DEVICE_SETTINGS = ['firstOpenedAt', 'lastOpenedAt', 'backupNudgeAt', 'focusAlertAsked'] as const;
 const isDeviceSetting = (k: string) => (DEVICE_SETTINGS as readonly string[]).includes(k);
 
 /** The settings without this phone's own ones. */
@@ -448,6 +486,8 @@ export interface AppState {
   desmosState: string;
   /** what was ticked on each calendar day: kept as it was then, so a rename or a delete later never rewrites the past */
   doneLog: Record<string, DayDone>;
+  /** Today's board, in order; null: the default arrangement, until it is first edited */
+  todayLayout: TodayWidget[] | null;
 
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** puts tools in the three slots; a tool placed in a slot is restored if it was archived */
@@ -459,14 +499,14 @@ export interface AppState {
   addTodoReminder: (time: string, label: string) => void;
   removeTodoReminder: (id: string) => void;
 
-  /** a one-off unless `extra.repeat` is 'daily'; returns the new ToDo's id */
-  addDaily: (title: string, extra?: { repeat?: 'daily'; time?: string; remind?: TaskRemind }) => string;
+  /** a one-off unless `extra.repeat` is 'daily' (then on `extra.days` only, when given); returns the new ToDo's id */
+  addDaily: (title: string, extra?: { repeat?: 'daily'; days?: number[]; time?: string; remind?: TaskRemind }) => string;
   toggleDaily: (id: string) => void;
   /**
    * a field set to null in the patch is removed. A ToDo's reminder needs its time: one set without a time, or left
    * when the time is cleared, goes
    */
-  updateDaily: (id: string, patch: { title?: string; repeat?: 'daily' | null; time?: string | null; remind?: TaskRemind | null }) => void;
+  updateDaily: (id: string, patch: { title?: string; repeat?: 'daily' | null; days?: number[] | null; time?: string | null; remind?: TaskRemind | null }) => void;
   removeDaily: (id: string) => void;
   /** puts a removed task back at its old place in the list (an undo) */
   restoreDaily: (task: DailyTask, index: number) => void;
@@ -477,7 +517,7 @@ export interface AppState {
   addMission: (title: string, deadline: string) => string;
   toggleMission: (id: string) => void;
   /** a field set to null in the patch is removed */
-  updateMission: (id: string, patch: { title?: string; deadline?: string; time?: string | null; remind?: TaskRemind | null }) => void;
+  updateMission: (id: string, patch: { title?: string; deadline?: string; time?: string | null; remind?: TaskRemind | null; early?: MissionEarly[] | null }) => void;
   /** returns what it removed and where it stood, for an Undo */
   removeMission: (id: string) => { mission: Mission; index: number } | null;
   restoreMission: (m: Mission, index: number) => void;
@@ -492,6 +532,13 @@ export interface AppState {
   /** returns what it removed and where it stood, for an Undo */
   removeSession: (id: string) => { session: FocusSession; index: number } | null;
   restoreSession: (session: FocusSession, index: number) => void;
+  /**
+   * a session logged by hand for a day up to today (manual), put in its place by time; minutes 1 to 720. Returns its id,
+   * or null when the day or the minutes are not ones it takes
+   */
+  addManualSession: (s: { dateKey: string; minutes: number; subject?: string }) => string | null;
+  /** changes a session's subject ('' takes it off) or its minutes (1 to 720); false when there is no such session */
+  updateSession: (id: string, patch: { subject?: string; minutes?: number }) => boolean;
   setDeepWork: (s: ActiveSession | null) => void;
   patchDeepWork: (patch: Partial<ActiveSession>) => void;
 
@@ -607,6 +654,12 @@ export interface AppState {
   trashBookmark: (videoId: string, id: string) => string | null;
   /** the file stays where it is */
   trashAttachment: (noteId: string, attId: string) => string | null;
+  /** a habit, streak and all */
+  trashHabit: (id: string) => string | null;
+  /** a long-term task with its steps (a done one stays in the day's record) */
+  trashMission: (id: string) => string | null;
+  /** an exam or a group, with everything under it and their learnings */
+  trashExam: (id: string) => string | null;
   /**
    * 'parent-missing' when the note or video a part belongs to is not here (restore that first). Into a collection that
    * did not load this launch (and is not saved), the item comes back and stays in Recently deleted too, so it is never lost
@@ -617,6 +670,9 @@ export interface AppState {
   emptyTrash: () => void;
   /** what has been in Recently deleted for 30 days goes for good; the store calls it at launch and on a new day */
   purgeTrash: (now: number) => void;
+
+  /** Today's board as edited (cleaned); null goes back to the default arrangement */
+  setTodayLayout: (layout: TodayWidget[] | null) => void;
 
   /** a TRUE replace: every data key not in `data` goes back to its fresh value */
   replaceAll: (data: Partial<AppState>) => void;
@@ -726,7 +782,8 @@ function normaliseQuick(items: any): QuickItem[] {
       q = { ...q, color: QUICK_COLOR_REMAP[q.color.toUpperCase()] };
     }
     // shortcuts to other apps went with the app launcher in 1.5.1: without the permission to see them they cannot open
-    if (!['tool', 'route', 'url'].includes(q.kind)) continue;
+    if (!['tool', 'route', 'url', 'action'].includes(q.kind)) continue;
+    if (q.kind === 'action' && !q.target) continue;
     if (out.some((o) => o.kind === q.kind && o.target === q.target)) continue;
     out.push(q);
   }
@@ -848,6 +905,9 @@ const DIGIT_KEYS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 /** the parts of a written date, in the order they are written */
 const DATE_PARTS = ['dd', 'mm', 'yy'] as const;
 
+/** the longest session logged or edited by hand, in minutes (12 hours) */
+const MANUAL_MAX_MIN = 720;
+
 /** the largest Desmos graph kept, in characters; a larger one would bloat every save of its row */
 export const DESMOS_MAX_CHARS = 300000;
 
@@ -954,6 +1014,10 @@ function cleanDaily(t: any): DailyTask {
   if (typeof out.title !== 'string') out.title = out.title == null ? '' : String(out.title);
   if (typeof out.doneOn !== 'string') out.doneOn = null;
   if (out.repeat !== 'daily') delete out.repeat;
+  // chosen weekdays belong to a repeating ToDo only; none, or all seven, is every day
+  const days = out.repeat === 'daily' ? cleanDays(out.days) : undefined;
+  if (days) out.days = days;
+  else delete out.days;
   if (!validTime(out.time)) delete out.time;
   // a ToDo's reminder is set from its time, so without one it has nothing to ring at
   if (!REMINDS.includes(out.remind) || !out.time) delete out.remind;
@@ -964,7 +1028,51 @@ function cleanMission(m: any): Mission {
   const out = { ...m, done: m.done === true };
   if (!out.done || typeof out.doneOn !== 'string') delete out.doneOn;
   if (!validTime(out.time)) delete out.time;
-  if (!REMINDS.includes(out.remind)) delete out.remind;
+  // 'Morning of' rings at 8 am with or without a time; 'An hour before' needs the time it is an hour before
+  if (!REMINDS.includes(out.remind) || (out.remind === 'hour' && !out.time)) delete out.remind;
+  const early = Array.isArray(out.early) ? MISSION_EARLY.filter((e) => out.early.includes(e)) : [];
+  if (early.length) out.early = early;
+  else delete out.early;
+  return out;
+}
+
+/** A Deep Work session as kept: `manual` only when true, a subject only as text. */
+function cleanSession(x: any): FocusSession {
+  const out = { ...x };
+  if (out.manual !== true) delete out.manual;
+  if (out.subject !== undefined && typeof out.subject !== 'string') delete out.subject;
+  return out;
+}
+
+/** the most widgets Today's board keeps */
+const TODAY_MAX_WIDGETS = 60;
+const WIDGET_SIZES: WidgetSize[] = ['S', 'M', 'L'];
+
+/**
+ * Today's board as kept: null (the default arrangement) unless it is a list; each widget needs an id (once) and a type,
+ * its size one of S, M and L (M otherwise), its config a plain record. With `knownTypes` (the registry's), a widget of a
+ * type it does not know goes too. Never throws.
+ */
+export function cleanTodayLayout(raw: unknown, knownTypes?: readonly string[]): TodayWidget[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: TodayWidget[] = [];
+  const seen = new Set<string>();
+  for (const w of raw) {
+    if (out.length >= TODAY_MAX_WIDGETS) break;
+    if (!isRecord(w) || typeof w.id !== 'string' || !w.id || seen.has(w.id)) continue;
+    if (typeof w.type !== 'string' || !w.type || w.type.length > 40) continue;
+    if (knownTypes && !knownTypes.includes(w.type)) continue;
+    seen.add(w.id);
+    const widget: TodayWidget = { id: w.id, type: w.type, size: WIDGET_SIZES.includes(w.size) ? w.size : 'M' };
+    if (isRecord(w.config)) {
+      try {
+        widget.config = JSON.parse(JSON.stringify(w.config));
+      } catch {
+        // a config that cannot be saved is left out; the widget starts on its own defaults
+      }
+    }
+    out.push(widget);
+  }
   return out;
 }
 
@@ -975,7 +1083,7 @@ function cleanVideo(v: any): VaultVideo {
   return out;
 }
 
-const TRASH_KINDS: TrashKind[] = ['note', 'journal', 'video', 'timedNote', 'bookmark', 'attachment'];
+const TRASH_KINDS: TrashKind[] = ['note', 'journal', 'video', 'timedNote', 'bookmark', 'attachment', 'habit', 'mission', 'exam'];
 
 /** Whether a trash item stands behind the PIN now: its own lock, or the lock on the tool it came from. */
 function trashLockOf(item: TrashItem, settings: Partial<Settings>): boolean {
@@ -1011,11 +1119,17 @@ function cleanTrash(raw: any, settings?: Partial<Settings>): TrashItem[] {
     if (part && typeof it.parentId !== 'string') continue;
     if (it.kind === 'journal' && typeof it.data.dateKey !== 'string') continue;
     if (it.kind === 'attachment' && typeof it.data.uri !== 'string') continue;
+    // an exam keeps its own node among the ones it took; without it there is nothing to put back
+    const examNodes = it.kind === 'exam' ? listOf(it.data.nodes).filter((n) => isRecord(n) && typeof n.id === 'string' && n.id) : [];
+    if (it.kind === 'exam' && !examNodes.some((n) => n.id === it.data.id)) continue;
     seen.add(it.id);
     // a note's attachments are records only, so relinking or restoring them never reads a field of null
     const data = it.kind === 'note' ? { ...it.data, attachments: listOf(it.data.attachments).filter(isRecord) }
       : it.kind === 'video' ? { ...it.data, notes: listOf(it.data.notes).filter(isRecord), bookmarks: listOf(it.data.bookmarks).filter(isRecord) }
-        : it.data;
+        : it.kind === 'habit' ? cleanHabit(it.data)
+          : it.kind === 'mission' ? cleanMission({ ...it.data, subtasks: listOf(it.data.subtasks).filter(isRecord) })
+            : it.kind === 'exam' ? { id: it.data.id, nodes: examNodes, learnings: listOf(it.data.learnings).filter(isRecord) }
+              : it.data;
     const item: TrashItem = {
       id: it.id, kind: it.kind, deletedAt: it.deletedAt, title: typeof it.title === 'string' ? it.title : '', locked: false, data,
     };
@@ -1028,7 +1142,9 @@ function cleanTrash(raw: any, settings?: Partial<Settings>): TrashItem[] {
   return out;
 }
 
-const BOOLEAN_SETTINGS_V6 = ['introTapSkip', 'focusChime', 'examReminders', 'blockAlerts', 'attachmentsWifiOnly', 'calcFunctions', 'calcSci'] as const;
+const BOOLEAN_SETTINGS_V6 = [
+  'introTapSkip', 'focusChime', 'examReminders', 'blockAlerts', 'attachmentsWifiOnly', 'calcFunctions', 'calcSci', 'focusAlertAsked',
+] as const;
 
 function cleanSettingsV6(s: any): Settings {
   const st = { ...s };
@@ -1041,6 +1157,8 @@ function cleanSettingsV6(s: any): Settings {
   if (!(Number.isInteger(st.focusLastMin) && st.focusLastMin >= 1 && st.focusLastMin <= 600)) st.focusLastMin = DEFAULT_SETTINGS.focusLastMin;
   st.focusLastMode = st.focusLastMode === 'stopwatch' ? 'stopwatch' : 'countdown';
   st.writingFont = st.writingFont === 'serif' ? 'serif' : 'sans';
+  if (!(Number.isInteger(st.focusGoalMin) && st.focusGoalMin >= 0 && st.focusGoalMin <= 600)) st.focusGoalMin = DEFAULT_SETTINGS.focusGoalMin;
+  if (!(isFiniteNumber(st.backupNudgeAt) && st.backupNudgeAt >= 0)) st.backupNudgeAt = DEFAULT_SETTINGS.backupNudgeAt;
   return st;
 }
 
@@ -1113,6 +1231,8 @@ export function sanitizeV6(p: any): any {
   const out = { ...(p || {}) };
   if ('dailyTasks' in out) out.dailyTasks = listOf(out.dailyTasks).filter(isRecord).map(cleanDaily);
   if ('missions' in out) out.missions = listOf(out.missions).filter(isRecord).map(cleanMission);
+  if ('sessions' in out) out.sessions = listOf(out.sessions).filter(isRecord).map(cleanSession);
+  if ('todayLayout' in out) out.todayLayout = cleanTodayLayout(out.todayLayout);
   if ('vaultVideos' in out) out.vaultVideos = listOf(out.vaultVideos).filter(isRecord).map(cleanVideo);
   if ('habits' in out) out.habits = listOf(out.habits).filter(isRecord).map(cleanHabit);
   if ('doneLog' in out) out.doneLog = cleanDoneLog(out.doneLog);
@@ -1217,7 +1337,7 @@ const COLLECTION_NAMES: Record<string, string> = {
   planner: 'Planner', weekTemplates: 'Week templates', habits: 'Habits', notes: 'Notes', noteFolders: 'Note folders',
   vaultVideos: 'YT Vault', vaultFolders: 'YT Vault folders', calcHistory: 'Calculator history', deepWork: 'Deep Work',
   journal: 'Journal', journalTags: 'Journal tags', scores: 'Scores', scoreTags: 'Score tags', learnings: 'Learnings',
-  trash: 'Recently deleted', desmosState: 'Desmos', doneLog: 'Done history',
+  trash: 'Recently deleted', desmosState: 'Desmos', doneLog: 'Done history', todayLayout: 'Today',
 };
 
 /** The collections that could not be loaded this launch, by name ("Notes"); empty when everything loaded. */
@@ -1510,7 +1630,14 @@ const entryTitle = (e: JournalEntry) => firstLine(e.title) || 'Entry for ' + fmt
 const trashUnsaved = () => blockedRows.has('trash');
 
 /** The collection a trash item goes back into. */
-const homeOf = (kind: TrashKind): DataKey => (kind === 'note' || kind === 'attachment' ? 'notes' : kind === 'journal' ? 'journal' : 'vaultVideos');
+const homeOf = (kind: TrashKind): DataKey => (
+  kind === 'note' || kind === 'attachment' ? 'notes'
+    : kind === 'journal' ? 'journal'
+      : kind === 'habit' ? 'habits'
+        : kind === 'mission' ? 'missions'
+          : kind === 'exam' ? 'scores'
+            : 'vaultVideos'
+);
 
 function trashItemOf(kind: TrashKind, data: any, title: string, settings: Settings, extra: Partial<TrashItem> = {}): TrashItem {
   const item: TrashItem = { id: uid(), kind, deletedAt: Date.now(), title, locked: false, data, ...extra };
@@ -1777,6 +1904,44 @@ export const useStore = create<AppState>()(
           list.splice(Math.max(0, Math.min(index, list.length)), 0, session);
           return { sessions: list };
         }),
+      addManualSession: ({ dateKey, minutes, subject }) => {
+        const min = Math.round(Number(minutes));
+        const today = todayKey();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey) || dateKey > today || !(min >= 1 && min <= MANUAL_MAX_MIN)) return null;
+        const [y, m, d] = dateKey.split('-').map(Number);
+        // today's ends now; an earlier day's in its evening, so it sits after that day's timed sessions
+        const endedAt = dateKey === today ? Date.now() : new Date(y, m - 1, d, 18, 0).getTime();
+        if (!Number.isFinite(endedAt)) return null;
+        const id = uid();
+        const what = typeof subject === 'string' ? subject.trim().replace(/\s+/g, ' ') : '';
+        const session: FocusSession = {
+          id, dateKey, endedAt, netSeconds: min * 60, taskTitles: [], manual: true, ...(what ? { subject: what } : {}),
+        };
+        set((s) => {
+          // in its place by time, as the timed ones are
+          const at = s.sessions.findIndex((x) => x.endedAt > endedAt);
+          return { sessions: at < 0 ? [...s.sessions, session] : insertAt(s.sessions, session, at) };
+        });
+        return id;
+      },
+      updateSession: (id, patch) => {
+        const s = get();
+        const was = s.sessions.find((x) => x.id === id);
+        if (!was) return false;
+        const next: FocusSession = { ...was };
+        if (typeof patch.subject === 'string') {
+          const what = patch.subject.trim().replace(/\s+/g, ' ');
+          if (what) next.subject = what;
+          else delete next.subject;
+        }
+        if (patch.minutes !== undefined) {
+          const min = Math.round(Number(patch.minutes));
+          if (min >= 1 && min <= MANUAL_MAX_MIN) next.netSeconds = min * 60;
+        }
+        if (next.subject === was.subject && next.netSeconds === was.netSeconds) return true;
+        set({ sessions: s.sessions.map((x) => (x.id === id ? next : x)) });
+        return true;
+      },
       setDeepWork: (session) => set({ deepWork: session }),
       patchDeepWork: (patch) =>
         set((s) => (s.deepWork ? { deepWork: { ...s.deepWork, ...patch } } : {})),
@@ -2384,6 +2549,47 @@ export const useStore = create<AppState>()(
         });
         return item.id;
       },
+      trashHabit: (id) => {
+        if (trashUnsaved()) return null;
+        const s = get();
+        const index = s.habits.findIndex((h) => h.id === id);
+        if (index < 0) return null;
+        const habit = s.habits[index];
+        const item = trashItemOf('habit', habit, firstLine(habit.title) || 'Habit', s.settings, { index });
+        set({ habits: s.habits.filter((h) => h.id !== id), trash: [item, ...s.trash] });
+        return item.id;
+      },
+      trashMission: (id) => {
+        if (trashUnsaved()) return null;
+        const s = get();
+        const index = s.missions.findIndex((m) => m.id === id);
+        if (index < 0) return null;
+        const mission = s.missions[index];
+        const item = trashItemOf('mission', mission, firstLine(mission.title) || 'Long-term task', s.settings, { index });
+        set({ missions: s.missions.filter((m) => m.id !== id), trash: [item, ...s.trash] });
+        return item.id;
+      },
+      trashExam: (id) => {
+        if (trashUnsaved()) return null;
+        const s = get();
+        const node = s.scores.find((x) => x.id === id);
+        if (!node) return null;
+        const gone = descendantIds(indexScores(s.scores), id);
+        gone.add(id);
+        const data: TrashedExam = {
+          id,
+          nodes: s.scores.filter((x) => gone.has(x.id)),
+          learnings: s.learnings.filter((l) => gone.has(l.nodeId)),
+        };
+        const fallback = node.kind === 'group' ? 'Group' : 'Exam';
+        const item = trashItemOf('exam', data, firstLine(node.title) || fallback, s.settings);
+        set({
+          scores: s.scores.filter((x) => !gone.has(x.id)),
+          learnings: data.learnings.length ? s.learnings.filter((l) => !gone.has(l.nodeId)) : s.learnings,
+          trash: [item, ...s.trash],
+        });
+        return item.id;
+      },
       restoreFromTrash: (trashId) => {
         const s = get();
         const item = s.trash.find((t) => t.id === trashId);
@@ -2409,6 +2615,33 @@ export const useStore = create<AppState>()(
             const folderId = d.folderId && s.vaultFolders.some((f) => f.id === d.folderId) ? d.folderId : null;
             set({ vaultVideos: insertAt(s.vaultVideos, { ...d, folderId }, item.index), trash });
           }
+          return 'ok';
+        }
+        if (item.kind === 'habit') {
+          if (!s.habits.some((h) => h.id === d.id)) set({ habits: insertAt(s.habits, d, item.index), trash });
+          else set({ trash });
+          return 'ok';
+        }
+        if (item.kind === 'mission') {
+          if (!s.missions.some((m) => m.id === d.id)) set({ missions: insertAt(s.missions, d, item.index), trash });
+          else set({ trash });
+          return 'ok';
+        }
+        if (item.kind === 'exam') {
+          const have = new Set(s.scores.map((x) => x.id));
+          // already back (its own node is here): nothing of it comes in twice
+          if (have.has(d.id)) {
+            set({ trash });
+            return 'ok';
+          }
+          const nodes = listOf(d.nodes).filter((x) => !have.has(x.id));
+          const hasL = new Set(s.learnings.map((l) => l.id));
+          // checked as a load would: a group it sat in that went meanwhile puts it at the top level, a tag deleted
+          // meanwhile comes off it
+          const scores = sanitizeScores([...s.scores, ...nodes]);
+          const learnings = [...s.learnings, ...sanitizeLearnings(listOf(d.learnings).filter((l) => !hasL.has(l?.id)), s.scoreTags)];
+          const tied = pruneScoreRefs(scores, s.scoreTags, learnings);
+          set({ scores: tied.nodes, learnings: tied.learnings, trash });
           return 'ok';
         }
         if (item.kind === 'timedNote' || item.kind === 'bookmark') {
@@ -2447,6 +2680,8 @@ export const useStore = create<AppState>()(
         const old = s.trash.filter((t) => !(todayKey(new Date(t.deletedAt + TRASH_KEEP_MS)) >= today));
         if (old.length) dropForGood(s, old, set);
       },
+
+      setTodayLayout: (layout) => set({ todayLayout: cleanTodayLayout(layout) }),
 
       replaceAll: (data) => {
         const fresh = initialData();
@@ -2784,6 +3019,7 @@ export function exportSnapshot() {
     trash: s.trash,
     desmosState: s.desmosState,
     doneLog: s.doneLog,
+    todayLayout: s.todayLayout,
   };
 }
 

@@ -232,6 +232,88 @@ function streaksOnDays(doneDates: string[], due: number[]): { current: number; b
   return { current, best: Math.max(best, current) };
 }
 
+/**
+ * Whether a ToDo shows on a day (a date key or a date): a one-off and an every-day ToDo show every day; one that repeats
+ * on chosen weekdays (`days`, Monday 0, with repeat 'daily') shows only on those.
+ */
+export function todoDueOn(t: { repeat?: 'daily'; days?: number[] }, day: string | Date = new Date()): boolean {
+  if (t.repeat !== 'daily') return true;
+  return habitDueOn(t, day);
+}
+
+/** The minutes focused on each day ('YYYY-MM-DD'), from the sessions. */
+export function focusMinutesByDay(sessions: readonly { dateKey: string; netSeconds: number }[]): Map<string, number> {
+  const secs = new Map<string, number>();
+  for (const s of sessions || []) {
+    if (!s || typeof s.dateKey !== 'string') continue;
+    const n = Number(s.netSeconds);
+    if (!(n > 0)) continue;
+    secs.set(s.dateKey, (secs.get(s.dateKey) || 0) + n);
+  }
+  const out = new Map<string, number>();
+  for (const [k, n] of secs) out.set(k, Math.round(n / 60));
+  return out;
+}
+
+/**
+ * The run of days with focus that ends today (or yesterday, while today has none yet), and the longest there has been.
+ * A day counts once its sessions add up to `minMinutes` (at least one minute; the daily goal when one is passed).
+ */
+export function focusStreak(
+  sessions: readonly { dateKey: string; netSeconds: number }[],
+  minMinutes = 1,
+): { current: number; best: number } {
+  const need = Math.max(1, Math.round(minMinutes) || 1);
+  const days: string[] = [];
+  for (const [k, min] of focusMinutesByDay(sessions)) if (min >= need && /^\d{4}-\d{2}-\d{2}$/.test(k)) days.push(k);
+  return streaks(days);
+}
+
+/** Every YouTube link in a text, as written (a fresh expression each time: a global one keeps its place between calls). */
+function youTubeLinks(text: string): string[] {
+  const re = /(?:https?:\/\/)?(?:www\.|m\.|music\.)?(?:youtube\.com|youtube-nocookie\.com|youtu\.be)\/[^\s<>"']*/gi;
+  const out: string[] = [];
+  for (let m = re.exec(text); m; m = re.exec(text)) out.push(m[0]);
+  return out;
+}
+
+/** A link to a YouTube video, kept clean: the watch link alone, without what was shared around it or tracking bits. */
+export const cleanYouTubeUrl = (videoId: string) => 'https://www.youtube.com/watch?v=' + videoId;
+
+/**
+ * Every YouTube video linked in a text (a share, a paste of several links), in the order they appear, once each, as its
+ * id and a clean link. A playlist link without a video in it is left out (see isYouTubePlaylist).
+ */
+export function youTubeLinksIn(text: string): { videoId: string; url: string }[] {
+  const out: { videoId: string; url: string }[] = [];
+  const seen = new Set<string>();
+  const src = String(text || '');
+  for (const raw of youTubeLinks(src)) {
+    // a link written at the end of a sentence keeps its full stop or bracket outside it
+    const link = raw.replace(/[).,;:!?\]}]+$/, '');
+    const id = parseYouTubeId(link);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ videoId: id, url: cleanYouTubeUrl(id) });
+  }
+  // a bare id on its own, as parseYouTubeId has always taken it
+  if (!out.length) {
+    const id = parseYouTubeId(src);
+    if (id) out.push({ videoId: id, url: cleanYouTubeUrl(id) });
+  }
+  return out;
+}
+
+/**
+ * Whether a text holds a YouTube playlist link and no video: "/playlist?list=…", or a link with a list and no video id.
+ * A video watched inside a playlist ("watch?v=…&list=…") is a video, not a playlist.
+ */
+export function isYouTubePlaylist(text: string): boolean {
+  const src = String(text || '');
+  if (youTubeLinksIn(src).length) return false;
+  return youTubeLinks(src).some((link) => /[?&]list=[\w-]+/.test(link));
+}
+
 /** Extract a YouTube video id from most url shapes; null if not found. */
 export function parseYouTubeId(url: string): string | null {
   const u = (url || '').trim();

@@ -9,9 +9,11 @@ import { tick } from '../haptics';
 import { WIDE_AT } from '../layout';
 
 export interface ToastAction { label: string; onPress: () => void }
-type Shown = { message: string; action?: ToastAction; key: number };
+/** More a toast can do: its words themselves can be a way somewhere (Recently deleted), said to a screen reader as `hint`. */
+export interface ToastOptions { onMessage?: () => void; hint?: string }
+type Shown = { message: string; action?: ToastAction; opts?: ToastOptions; key: number };
 
-let show: ((message: string, action?: ToastAction) => void) | null = null;
+let show: ((message: string, action?: ToastAction, opts?: ToastOptions) => void) | null = null;
 
 /**
  * A short note that needs no answer, on a raised card above the tab bar for a little over two seconds. With an
@@ -19,8 +21,8 @@ let show: ((message: string, action?: ToastAction) => void) | null = null;
  * ten seconds, or until it is used or another toast takes its place, so there is time to reach the action. For
  * anything said from inside a sheet use an Alert: a sheet is its own window and would cover the card.
  */
-export function toast(message: string, action?: ToastAction) {
-  if (show) show(message, action);
+export function toast(message: string, action?: ToastAction, opts?: ToastOptions) {
+  if (show) show(message, action, opts);
 }
 
 /** the card rises in on an ease out and sinks away on a short ease in */
@@ -74,9 +76,9 @@ export function ToastHost() {
   }, [clear]);
 
   React.useEffect(() => {
-    show = (message, action) => {
+    show = (message, action, opts) => {
       counter.current += 1;
-      const next = { message, action, key: counter.current };
+      const next = { message, action, opts: opts?.onMessage ? opts : undefined, key: counter.current };
       const replacing = current.current != null;
       current.current = next;
       setShownToast(next);
@@ -92,7 +94,7 @@ export function ToastHost() {
         shown.value = withTiming(1, IN);
       }
       if (timer.current) clearTimeout(timer.current);
-      const stay = !action ? STAY_MS : reader.current ? STAY_ACTION_READER_MS : STAY_ACTION_MS;
+      const stay = !action && !next.opts ? STAY_MS : reader.current ? STAY_ACTION_READER_MS : STAY_ACTION_MS;
       timer.current = setTimeout(() => hide(200), stay);
     };
     return () => {
@@ -104,13 +106,22 @@ export function ToastHost() {
   const style = useAnimatedStyle(() => ({ opacity: shown.value, transform: [{ translateY: (1 - shown.value) * 10 }] }));
   const wordsStyle = useAnimatedStyle(() => ({ opacity: swap.value, transform: [{ translateY: (1 - swap.value) * 4 }] }));
   if (!shownToast) return null;
-  const { message, action, key } = shownToast;
+  const { message, action, opts, key } = shownToast;
+  const onMessage = opts?.onMessage;
+  const words = (
+    <Text
+      style={[st.text, action && { textAlign: 'left', flexShrink: 1 }, onMessage && st.textLink]}
+      numberOfLines={action ? 2 : undefined}
+    >
+      {message}
+    </Text>
+  );
 
   return (
     // above the tab bar on a phone; a wide window keeps its tabs in a rail at the side, so the card sits low
     <Animated.View pointerEvents="box-none" style={[st.wrap, { bottom: insets.bottom + (winW >= WIDE_AT ? 24 : 96) }, style]}>
       <View
-        pointerEvents={action ? 'auto' : 'none'}
+        pointerEvents={action || onMessage ? 'auto' : 'none'}
         style={[
           st.card,
           theme === 'minimal'
@@ -119,7 +130,18 @@ export function ToastHost() {
         ]}
       >
         <Animated.View style={[action ? st.rowWithAction : null, wordsStyle]}>
-          <Text style={[st.text, action && { textAlign: 'left', flexShrink: 1 }]} numberOfLines={action ? 2 : undefined}>{message}</Text>
+          {onMessage ? (
+            // the words open where the thing went; the card goes as they are used
+            <Pressable
+              key={'m' + key}
+              onPress={() => { tick(); hide(160); onMessage(); }}
+              hitSlop={{ top: 12, bottom: 12, left: 8, right: 4 }}
+              accessibilityRole="link" accessibilityHint={opts?.hint}
+              style={({ pressed }) => [action ? { flexShrink: 1 } : null, pressed && st.actionPressed]}
+            >
+              {words}
+            </Pressable>
+          ) : words}
           {action ? (
             <Pressable
               key={key}
@@ -151,6 +173,8 @@ const st = StyleSheet.create({
   text: { color: C.text, fontFamily: F.med, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 19, textAlign: 'center' },
   action: { marginLeft: 14, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
   actionPressed: { opacity: 0.55 },
+  // words that open something: a quiet underline, at the same weight
+  textLink: { textDecorationLine: 'underline', textDecorationColor: C.textFaint },
   // the accent is applied at the call site: a StyleSheet would freeze it at import and miss a change of accent
   actionText: { fontFamily: F.semi, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 19 },
 });

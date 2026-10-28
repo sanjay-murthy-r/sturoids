@@ -295,6 +295,18 @@ const scenarios = {
     assert.equal(out[2].email, 'z@x.io');
     assert.equal(out[3].name, '', 'a recovered profile has no name until it is given one');
     assert.deepEqual(p.cleanRegistry(JSON.parse(JSON.stringify({ v: 1, list: out })), main), out, 'cleaning twice changes nothing');
+    // a profile's photo revision survives the cleaning; anything that is not a real time is dropped
+    const revs = p.cleanRegistry({
+      v: 1,
+      list: [
+        { id: 'main', name: 'Me', color: '#66D28F', email: null, createdAt: 0, avatarRev: 1700000000000 },
+        { id: A, name: 'A', color: '#4FC4B8', email: null, createdAt: 1, avatarRev: 'soon' },
+        { id: Z, name: 'Z', color: '#4FC4B8', email: null, createdAt: 2, avatarRev: -4 },
+      ],
+    }, main);
+    assert.equal(revs[0].avatarRev, 1700000000000, 'avatarRev is kept');
+    assert.ok(!('avatarRev' in revs[1]) && !('avatarRev' in revs[2]), 'a junk avatarRev is dropped');
+    assert.deepEqual(p.cleanRegistry(JSON.parse(JSON.stringify({ v: 1, list: revs })), main), revs, 'and cleaning twice keeps it');
     const ids = new Set();
     for (let i = 0; i < 200; i++) ids.add(p.newProfileId([...ids]));
     assert.equal(ids.size, 200);

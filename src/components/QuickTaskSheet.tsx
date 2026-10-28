@@ -2,12 +2,14 @@ import React from 'react';
 import { Text, StyleSheet, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, T, TRACK } from '../theme';
-import { useStore, DailyTask, Mission, TaskRemind } from '../store';
-import { todayKey, toMinutes, fmtClockTime } from '../utils';
+import { useStore, DailyTask, Mission, MissionEarly, TaskRemind } from '../store';
+import { todayKey, toMinutes, fmtClockTime, cleanDays, daysLabel, daysUntil } from '../utils';
 import { shiftKey } from '../journal';
 import { fmtExamDate } from '../scores';
 import { turnOnReminders } from '../notifications';
-import { Sheet, Field, PillButton, Chip, Row, TimeField, Toggle } from './UI';
+import { Sheet, Field, PillButton, Chip, Row, TimeField } from './UI';
+import { DayToggles, toggledDay } from './DayToggles';
+import { tick } from '../haptics';
 import { SegmentedControl } from './SegmentedControl';
 import { JournalCalendar } from './JournalCalendar';
 import { Appear, FadeSwap } from './Motion';
@@ -28,6 +30,20 @@ const REMINDS: { key: TaskRemind | ''; label: string }[] = [
 ];
 /** a morning reminder rings at 8 am, as the scheduler sets it */
 const MORNING_MIN = 8 * 60;
+/** a long-term task's early reminders ring at 6 pm, as the scheduler sets them */
+const EARLY_MIN = 18 * 60;
+/** a long-term task's early reminders, each shown while its day is still to come */
+const EARLY: { key: MissionEarly; label: string; days: number }[] = [
+  { key: '3d', label: '3 days before', days: 3 }, { key: '1d', label: '1 day before', days: 1 },
+];
+
+/** How a ToDo comes back: a one-off, every day, or on the weekdays picked. */
+type RepeatMode = 'off' | 'daily' | 'days';
+const REPEATS: { key: RepeatMode; label: string }[] = [
+  { key: 'off', label: 'Off' }, { key: 'daily', label: 'Every day' }, { key: 'days', label: 'Some days' },
+];
+/** the days a ToDo starts on when "Some days" is first picked: the school week */
+const WEEKDAYS = [0, 1, 2, 3, 4];
 
 /** a 13 pt text link reaches a 44 dp target without moving anything around it */
 const LINK_SLOP = { top: 14, bottom: 14, left: 10, right: 10 };
@@ -52,10 +68,12 @@ const isMission = (t: DailyTask | Mission): t is Mission => 'deadline' in t;
 const hhmmOf = (m: number) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
 
 /** When a reminder rings, said under its choice: a sentence for the task's kind, or why a morning one cannot. */
-function ringsLine(kind: TaskKind, repeat: boolean, time: string, remind: TaskRemind, hour24: boolean): string {
+function ringsLine(kind: TaskKind, repeat: RepeatMode, time: string, remind: TaskRemind, hour24: boolean): string {
   const due = toMinutes(time);
   if (due < 0) return '';
-  const when = kind === 'mission' ? ' on the day it is due.' : repeat ? ' each day it is still open.' : ' each day until it is ticked.';
+  const when = kind === 'mission' ? ' on the day it is due.'
+    : repeat === 'days' ? ' on each of its days it is still open.'
+      : repeat === 'daily' ? ' each day it is still open.' : ' each day until it is ticked.';
   if (remind === 'morning') {
     return due > MORNING_MIN ? 'Rings at ' + shortClock(hhmmOf(MORNING_MIN), hour24) + when : 'Due too early for a morning reminder.';
   }
@@ -63,6 +81,30 @@ function ringsLine(kind: TaskKind, repeat: boolean, time: string, remind: TaskRe
   // an hour before a time just after midnight falls on the evening before
   if (at < 0) return 'Rings at ' + shortClock(hhmmOf(at + 1440), hour24) + ' the evening before.';
   return 'Rings at ' + shortClock(hhmmOf(at), hour24) + when;
+}
+
+/**
+ * When a long-term task's reminders ring, said under them in one sentence: the early ones at 6 pm, then the one on the
+ * day (the morning of it, with or without a time, or an hour before its time).
+ */
+export function missionRingsLine(early: readonly MissionEarly[], remind: TaskRemind | '', time: string, hour24: boolean): string {
+  const six = shortClock(hhmmOf(EARLY_MIN), hour24);
+  const parts: string[] = [];
+  if (early.includes('3d')) parts.push(six + ' three days before');
+  // after "6 pm three days before" the hour is not said again
+  if (early.includes('1d')) parts.push(early.includes('3d') ? 'the day before' : six + ' the day before');
+  const due = toMinutes(time);
+  let note = '';
+  if (remind === 'morning') {
+    if (due < 0 || due > MORNING_MIN) parts.push(shortClock(hhmmOf(MORNING_MIN), hour24) + ' on the day');
+    else note = 'Due too early for a morning reminder.';
+  } else if (remind === 'hour' && due >= 0) {
+    const at = due - 60;
+    parts.push(at < 0 ? shortClock(hhmmOf(at + 1440), hour24) + ' the evening before' : shortClock(hhmmOf(at), hour24) + ' on the day');
+  }
+  if (!parts.length) return note;
+  const list = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
+  return 'Rings at ' + list + '.' + (note ? ' ' + note : '');
 }
 
 /**
@@ -91,11 +133,16 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
   const [title, setTitle] = React.useState(initialTitle);
   const [due, setDue] = React.useState(() => shiftKey(todayKey(), 7));
   const [calendar, setCalendar] = React.useState(false);
-  // a ToDo that comes back every day; off, it is a one-off that goes once it is ticked and its day is over
-  const [daily, setDaily] = React.useState(false);
+  // how a ToDo comes back: off, it is a one-off that goes once it is ticked and its day is over; every day; or on the
+  // weekdays picked
+  const [repeat, setRepeat] = React.useState<RepeatMode>('off');
+  const [days, setDays] = React.useState<number[]>(WEEKDAYS);
+  const [lastDay, setLastDay] = React.useState(false);
   // the time it is due by ('' for none), and the reminder on it
   const [time, setTime] = React.useState('');
   const [remind, setRemind] = React.useState<TaskRemind | ''>('');
+  // a long-term task's early reminders, days before it is due
+  const [early, setEarly] = React.useState<MissionEarly[]>([]);
   // the time's field shows once "Add a time" is tapped, or from the start for a task that has one
   const [timeOpen, setTimeOpen] = React.useState(false);
   const added = React.useRef<{ kind: TaskKind; id: string } | null>(null);
@@ -103,25 +150,57 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
   // One task per opening. Return can land in the same frame as the button, and the sheet still takes a tap while it
   // leaves: either would add the task twice, and Undo would take back only one of them.
   const done = React.useRef(false);
+  // the kind as it is now, for the time's callback, which keeps its identity
+  const kindRef = React.useRef(kind);
+  kindRef.current = kind;
 
   React.useEffect(() => {
     if (!visible) return;
     done.current = false;
-    setKind(editing ? (isMission(editing) ? 'mission' : 'daily') : initialKind);
+    const m = editing && isMission(editing) ? editing : null;
+    const t = editing && !isMission(editing) ? editing : null;
+    setKind(editing ? (m ? 'mission' : 'daily') : initialKind);
     setTitle(editing ? editing.title : initialTitle);
-    setDue(editing && isMission(editing) ? editing.deadline : shiftKey(todayKey(), 7));
+    setDue(m ? m.deadline : shiftKey(todayKey(), 7));
     setCalendar(false);
-    setDaily(!!editing && !isMission(editing) && editing.repeat === 'daily');
+    setRepeat(t?.repeat === 'daily' ? (t.days?.length ? 'days' : 'daily') : 'off');
+    setDays(t?.days?.length ? [...t.days] : WEEKDAYS);
+    setLastDay(false);
     setTime(editing?.time ?? '');
-    setRemind(editing?.time ? editing.remind ?? '' : '');
+    // a long-term task's morning reminder needs no time; a ToDo's reminder hangs on its time
+    setRemind(m ? m.remind ?? '' : t?.time ? t.remind ?? '' : '');
+    setEarly(m?.early ? [...m.early] : []);
     setTimeOpen(!!editing?.time);
   }, [visible]);
 
   const pickTime = React.useCallback((v: string) => {
     setTime(v);
-    // a reminder hangs on its time: cleared, the time takes its reminder with it
-    if (!v) setRemind('');
+    // a reminder hangs on its time: cleared, the time takes its reminder with it (a long-term task's morning one stays)
+    if (!v) setRemind((r) => (r === 'morning' && kindRef.current === 'mission' ? r : ''));
   }, []);
+
+  const pickRepeat = (r: RepeatMode) => { setRepeat(r); setLastDay(false); };
+  const toggleDay = (d: number) => {
+    tick();
+    const next = toggledDay(days, d);
+    if (!next) { setLastDay(true); return; }
+    setDays(next);
+    setLastDay(false);
+  };
+  // kept in the order the scheduler reads them: three days before, then the day before
+  const toggleEarly = (e: MissionEarly) => {
+    setEarly((x) => (x.includes(e) ? x.filter((y) => y !== e) : EARLY.map((o) => o.key).filter((k) => k === e || x.includes(k))));
+  };
+  // a long-term task's reminder on its day: the morning of it or an hour before (one or the other; tapped again, off)
+  const toggleRemind = (r: TaskRemind) => setRemind((x) => (x === r ? '' : r));
+
+  // the early reminders whose moment is still to come for the deadline picked
+  const left = daysUntil(due);
+  const earlyShown = EARLY.filter((e) => left > e.days || (left === e.days && !pastEarlyToday()));
+  const isLong = kind === 'mission';
+  const shownEarly = early.filter((e) => earlyShown.some((o) => o.key === e));
+  // a long-term task's morning reminder rings with or without a time; any other reminder needs one
+  const remNow: TaskRemind | '' = remind && (time || (isLong && remind === 'morning')) ? remind : '';
 
   const add = () => {
     if (done.current) return;
@@ -129,41 +208,56 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
     if (!t) return;
     done.current = true;
     const at = time;
-    const rem: TaskRemind | null = at && remind ? remind : null;
+    const rem: TaskRemind | null = remNow || null;
+    const earlyKeep = isLong ? shownEarly : [];
+    const repeatOn = repeat !== 'off';
+    const daysKeep = repeat === 'days' ? cleanDays(days) ?? null : null;
+    const wasEarly = editing && isMission(editing) ? editing.early ?? [] : [];
     // a reminder newly set (a new one, or one moved to another time) asks for permission and turns reminders on, as
     // every reminder in the app does
-    const newReminder = !!rem && (!editing || rem !== (editing.remind ?? null) || at !== (editing.time ?? ''));
+    const newReminder = (!!rem && (!editing || rem !== (editing.remind ?? null) || at !== (editing.time ?? '')))
+      || earlyKeep.some((e) => !wasEarly.includes(e));
     const timeChanged = !!editing && (at !== (editing.time ?? '') || rem !== (editing.remind ?? null));
     if (editing && isMission(editing)) {
-      if (t !== editing.title || due !== editing.deadline || timeChanged) {
-        updateMission(editing.id, { title: t, deadline: due, time: at || null, remind: rem });
+      if (t !== editing.title || due !== editing.deadline || timeChanged || earlyKeep.join() !== wasEarly.join()) {
+        updateMission(editing.id, { title: t, deadline: due, time: at || null, remind: rem, early: earlyKeep.length ? earlyKeep : null });
         saved.current = 'Task saved';
       }
     } else if (editing) {
       const task = editing as DailyTask;
-      const repeat = daily ? 'daily' : null;
-      if (t !== task.title || repeat !== (task.repeat ?? null) || timeChanged) {
+      const rep = repeatOn ? 'daily' : null;
+      if (t !== task.title || rep !== (task.repeat ?? null) || (daysKeep || []).join() !== (task.days || []).join() || timeChanged) {
         // updateDaily clears an earlier day's tick when the ToDo becomes a one-off, so it stays open
-        updateDaily(task.id, { title: t, repeat, time: at || null, remind: rem });
+        updateDaily(task.id, { title: t, repeat: rep, days: daysKeep, time: at || null, remind: rem });
         saved.current = 'ToDo saved';
       }
     } else if (kind === 'daily') {
       const id = addDaily(t, {
-        ...(daily ? { repeat: 'daily' as const } : {}),
+        ...(repeatOn ? { repeat: 'daily' as const } : {}),
+        ...(daysKeep ? { days: daysKeep } : {}),
         ...(at ? { time: at } : {}),
         ...(rem ? { remind: rem } : {}),
       });
       added.current = { kind, id };
     } else {
       const id = addMission(t, due);
-      if (at) updateMission(id, { time: at, remind: rem });
+      if (at || rem || earlyKeep.length) {
+        updateMission(id, { time: at || null, remind: rem, early: earlyKeep.length ? earlyKeep : null });
+      }
       added.current = { kind, id };
     }
     onClose();
     if (newReminder && !useStore.getState().settings.remindersEnabled) void turnOnReminders();
   };
 
-  const showRings = !!(time && remind);
+  const showRings = isLong ? !!(shownEarly.length || remNow) : !!(time && remind);
+  const rings = !showRings ? ''
+    : isLong ? missionRingsLine(shownEarly, remNow, time, hour24)
+      : ringsLine(kind, repeat, time, remind as TaskRemind, hour24);
+  const caption = isLong
+    ? 'Stays until it is done, with a deadline.'
+    : repeat === 'daily' ? 'Comes back to your list every day.'
+      : repeat === 'days' ? 'Comes back on the days you pick.' : 'Stays on your list until it is ticked.';
   return (
     <Sheet
       visible={visible}
@@ -195,12 +289,8 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
             value={kind}
             onChange={(k) => setKind(k)}
           />
-          <FadeSwap swapKey={kind + (daily ? ':daily' : '')}>
-            <Text style={[T.caption, { marginBottom: 12 }]}>
-              {kind === 'mission'
-                ? 'Stays until it is done, with a deadline.'
-                : daily ? 'Comes back to your list every day.' : 'Stays on your list until it is ticked.'}
-            </Text>
+          <FadeSwap swapKey={kind + ':' + repeat}>
+            <Text style={[T.caption, { marginBottom: 12 }]}>{caption}</Text>
           </FadeSwap>
         </>
       )}
@@ -214,17 +304,29 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
         maxLength={140}
       />
       {kind === 'daily' ? (
-        <Row style={st.switchRow}>
-          <Text style={[T.body, { flex: 1 }]}>Every day</Text>
-          <Toggle value={daily} onChange={setDaily} label="Every day" />
-        </Row>
+        <View>
+          <Text style={st.label}>Repeat</Text>
+          <Row style={{ flexWrap: 'wrap' }}>
+            {REPEATS.map((r) => (
+              <Chip key={r.key} small label={r.label} active={repeat === r.key} onPress={() => pickRepeat(r.key)} />
+            ))}
+          </Row>
+          {repeat === 'days' ? (
+            <Appear>
+              <DayToggles value={days} onToggle={toggleDay} label="Repeat on" style={{ marginTop: 4 }} />
+              <Text style={[T.caption, st.daysCaption]} accessibilityLiveRegion="polite">
+                {lastDay ? 'At least one day' : daysLabel(days)}
+              </Text>
+            </Appear>
+          ) : <View style={st.repeatGap} />}
+        </View>
       ) : (
         <DuePicker due={due} calendar={calendar} onDue={setDue} onCalendar={setCalendar} />
       )}
       {timeOpen ? (
         <Appear>
           <TimeField label="Due by" value={time} onChange={pickTime} clearable />
-          {time ? (
+          {time && !isLong ? (
             <Appear>
               <Text style={st.label}>Reminder</Text>
               <Row style={{ flexWrap: 'wrap' }}>
@@ -232,12 +334,6 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
                   <Chip key={r.label} small label={r.label} active={remind === r.key} onPress={() => setRemind(r.key)} />
                 ))}
               </Row>
-              {/* the help line crosses over as the choice changes, and is gone with Off */}
-              <FadeSwap swapKey={showRings ? remind + time + daily : 'off'}>
-                {showRings ? (
-                  <Text style={[T.caption, st.rings]}>{ringsLine(kind, daily, time, remind as TaskRemind, hour24)}</Text>
-                ) : <View style={st.ringsGap} />}
-              </FadeSwap>
             </Appear>
           ) : null}
         </Appear>
@@ -250,6 +346,36 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
           <Text style={[st.linkText, { color: C.accent }]}>Add a time</Text>
         </Pressable>
       )}
+      {/* a long-term task's reminders need no time: days before it, and the morning of its day */}
+      {isLong ? (
+        <Appear>
+          <Text style={st.label}>Reminders</Text>
+          <Row style={{ flexWrap: 'wrap' }}>
+            {earlyShown.map((e) => (
+              <Chip
+                key={e.key} small label={e.label} active={early.includes(e.key)} onPress={() => toggleEarly(e.key)}
+                accessibilityRole="checkbox" accessibilityState={{ checked: early.includes(e.key) }}
+              />
+            ))}
+            <Chip
+              small label="Morning of" active={remind === 'morning'} onPress={() => toggleRemind('morning')}
+              accessibilityRole="checkbox" accessibilityState={{ checked: remind === 'morning' }}
+            />
+            {time ? (
+              <Chip
+                small label="An hour before" active={remind === 'hour'} onPress={() => toggleRemind('hour')}
+                accessibilityRole="checkbox" accessibilityState={{ checked: remind === 'hour' }}
+              />
+            ) : null}
+          </Row>
+        </Appear>
+      ) : null}
+      {/* the help line crosses over as the choice changes, and is gone with none */}
+      {isLong || time ? (
+        <FadeSwap swapKey={showRings ? rings : 'off'}>
+          {showRings && rings ? <Text style={[T.caption, st.rings]}>{rings}</Text> : <View style={st.ringsGap} />}
+        </FadeSwap>
+      ) : null}
       {editing ? <PillButton label="Save" onPress={add} /> : <PillButton label="Add" icon="add-outline" onPress={add} />}
       {showRings && !remindersEnabled ? (
         <Text style={[T.caption, { marginTop: 10 }]}>
@@ -258,6 +384,11 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
       ) : null}
     </Sheet>
   );
+}
+
+/** Whether 6 pm has gone today: an early reminder that falls today has then passed. */
+function pastEarlyToday(now: Date = new Date()): boolean {
+  return now.getHours() * 60 + now.getMinutes() >= EARLY_MIN;
 }
 
 /**
@@ -290,8 +421,10 @@ const DuePicker = React.memo(function DuePicker({ due, calendar, onDue, onCalend
 
 const st = StyleSheet.create({
   label: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8 },
-  // the switch sits under the title's field, with a field's 14 below it
-  switchRow: { marginTop: 2, marginBottom: 16, paddingLeft: 2 },
+  // the days' caption sits under the circles, with a field's 14 and a little after it
+  daysCaption: { marginTop: 8, marginBottom: 16, marginLeft: 2 },
+  // the chips' row keeps its own gap below; a little more before what follows
+  repeatGap: { height: 6 },
   timeLink: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, paddingLeft: 2, marginBottom: 18 },
   linkText: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   rings: { marginTop: -2, marginBottom: 14, marginLeft: 2 },

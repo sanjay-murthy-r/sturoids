@@ -31,8 +31,30 @@ export interface ScoreNode {
   note?: string;
   /** ids from the tag list; an exam and its subjects carry their own */
   tags?: string[];
+  /**
+   * a dated exam's own reminders, at 7 pm: a week before, the evening before. Set (even empty, for none), it decides for
+   * this exam over the global switch (settings.examReminders, the evening before); absent, the switch decides
+   */
+  remind?: ExamRemind[];
   createdAt: number;
   updatedAt: number;
+}
+
+/** When a dated exam reminds: 'week' a week before, 'eve' the evening before, both at 7 pm. */
+export type ExamRemind = 'week' | 'eve';
+export const EXAM_REMINDS: readonly ExamRemind[] = ['week', 'eve'];
+
+/** An exam's reminders as kept: known ones, once each, in a fixed order (an empty list is kept: none for this exam). */
+export function cleanExamRemind(raw: unknown): ExamRemind[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return EXAM_REMINDS.filter((r) => raw.includes(r));
+}
+
+/** The reminders an exam rings with: its own when it has them, else the evening before while the switch is on. */
+export function examRemindsOf(n: Pick<ScoreNode, 'remind'>, globalOn: boolean): ExamRemind[] {
+  const own = cleanExamRemind(n.remind);
+  if (own) return own;
+  return globalOn ? ['eve'] : [];
 }
 
 export interface ScoreResult {
@@ -437,6 +459,8 @@ export function sanitizeScores(raw: unknown): ScoreNode[] {
       const tags = [...new Set(r.tags.filter((t: unknown) => typeof t === 'string' && t))] as string[];
       if (tags.length) n.tags = tags;
     }
+    const remind = cleanExamRemind(r.remind);
+    if (remind && r.kind === 'exam') n.remind = remind;
     nodes.push(n);
   }
   const byId = new Map(nodes.map((n) => [n.id, n]));

@@ -227,6 +227,8 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const header = useToolHeader({
     title: 'AI Quick-Links',
     mode: mode === 'tab' ? 'tab' : 'page',
+    // the header pull opens Sift, except while the links are being edited
+    pull: !edit,
     actions: [
       { icon: 'information-circle-outline', label: 'About quick-links', onPress: () => setAbout(true) },
       {

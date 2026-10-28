@@ -21,6 +21,11 @@ export interface ProfileInfo {
   /** the cloud account signed in on it, or null */
   email: string | null;
   createdAt: number;
+  /**
+   * When the profile's photo was last written to its file (avatarFile), ms; absent while it has none. Only this travels
+   * in the registry, so the first-frame read stays small: the photo itself is read from the file by whoever shows it.
+   */
+  avatarRev?: number;
 }
 
 export const MAX_PROFILES = 5;
@@ -80,6 +85,9 @@ export function pdir(sub: string, id: ProfileId = activeProfile): string {
   return (FileSystem.documentDirectory || '') + (id === 'main' ? sub : 'profiles/' + id + '/' + sub);
 }
 
+/** A profile's photo as a file of its own (a copy of its settings' avatar), so other profiles can show it too. */
+export const avatarFile = (id: ProfileId = activeProfile): string => pdir('avatar.jpg', id);
+
 /** The key the cloud keeps a profile's session under: null for the first profile, which keeps Supabase's default. */
 export function sessionKey(id: ProfileId = activeProfile): string | null {
   return id === 'main' ? null : SESSION_BASE + '__' + id;
@@ -136,6 +144,7 @@ export function cleanRegistry(raw: unknown, main: ProfileInfo, found: readonly s
       email: typeof p.email === 'string' && p.email.trim() ? p.email.trim() : null,
       createdAt: typeof p.createdAt === 'number' && Number.isFinite(p.createdAt) ? p.createdAt : 0,
     };
+    if (typeof p.avatarRev === 'number' && Number.isFinite(p.avatarRev) && p.avatarRev > 0) entry.avatarRev = p.avatarRev;
     if (entry.id === 'main') first = entry;
     else rest.push(entry);
   }
@@ -321,7 +330,8 @@ function patchActive(p: Partial<Omit<ProfileInfo, 'id'>>) {
   if (at < 0) return;
   const cur = list[at];
   const next = { ...cur, ...p };
-  if (next.name === cur.name && next.color === cur.color && next.email === cur.email) return;
+  if (next.name === cur.name && next.color === cur.color && next.email === cur.email && next.avatarRev === cur.avatarRev) return;
+  if (!next.avatarRev) delete next.avatarRev;
   useProfiles.setState({ list: list.map((x, i) => (i === at ? next : x)) });
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => {
@@ -404,7 +414,10 @@ function startSync(trusted: boolean) {
   if (trusted) follow();
   store.useStore.subscribe((s, prev) => {
     if (s.settings.name !== prev.settings.name || s.settings.accent !== prev.settings.accent) follow();
+    if (s.settings.avatar !== prev.settings.avatar) mirrorAvatarSoon();
   });
+  // the photo's file is made at launch when it is missing (a photo set before files were kept, or restored with a backup)
+  if (trusted) void mirrorAvatar(true);
   if (pendingEmail) {
     const { email } = pendingEmail;
     pendingEmail = null;
@@ -417,6 +430,52 @@ function startSync(trusted: boolean) {
   } catch {
     // no app lifecycle here
   }
+}
+
+let avatarTimer: ReturnType<typeof setTimeout> | null = null;
+/** mirrors run one after another, so an older photo never lands after a newer one */
+let mirroring: Promise<void> = Promise.resolve();
+
+function mirrorAvatarSoon() {
+  if (avatarTimer) clearTimeout(avatarTimer);
+  avatarTimer = setTimeout(() => {
+    avatarTimer = null;
+    void mirrorAvatar(false);
+  }, 500);
+}
+
+/**
+ * Keeps the active profile's photo file in step with its settings' avatar: written (base64 JPEG) when there is one, and
+ * deleted when it is cleared, then the registry's avatarRev says so. `onlyIfMissing` (at launch) writes it only when the
+ * file is not there, or the registry has no revision for it.
+ */
+function mirrorAvatar(onlyIfMissing: boolean): Promise<void> {
+  mirroring = mirroring.then(async () => {
+    const store = storeModule();
+    if (store.localDataState() !== 'ok') return;
+    const avatar = store.useStore.getState().settings.avatar;
+    const file = avatarFile();
+    const me = useProfiles.getState().list.find((x) => x.id === activeProfile);
+    try {
+      const comma = typeof avatar === 'string' && avatar.startsWith('data:image/') ? avatar.indexOf(',') : -1;
+      if (comma < 0) {
+        if (onlyIfMissing && !me?.avatarRev) return;
+        await FileSystem.deleteAsync(file, { idempotent: true });
+        patchActive({ avatarRev: undefined });
+        return;
+      }
+      if (onlyIfMissing && me?.avatarRev) {
+        const info = await FileSystem.getInfoAsync(file);
+        if (info.exists) return;
+      }
+      if (activeProfile !== 'main') await FileSystem.makeDirectoryAsync(pdir(''), { intermediates: true }).catch(() => {});
+      await FileSystem.writeAsStringAsync(file, avatar.slice(comma + 1), { encoding: FileSystem.EncodingType.Base64 });
+      patchActive({ avatarRev: Date.now() });
+    } catch {
+      // the photo still shows from the settings for this profile; others show the initial until the next try
+    }
+  });
+  return mirroring;
 }
 
 /** Reads and clears a switch's note: true when this launch is the one a switch just started. */

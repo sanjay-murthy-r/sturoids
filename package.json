@@ -1,7 +1,7 @@
 {
   "name": "all-in-one-student-app",
   "version": "1.7.0",
-  "main": "expo-router/entry",
+  "main": "index.js",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
@@ -12,7 +12,13 @@
     "test:analytics": "node scripts/test-analytics.js",
     "test:cloud": "node scripts/test-cloud.js",
     "test:sigmodel": "node scripts/test-sigmodel.js",
-    "test:profiles": "node scripts/test-profiles.js"
+    "test:profiles": "node scripts/test-profiles.js",
+    "test:search": "node scripts/test-search.js",
+    "test:plan": "node scripts/test-plan.js",
+    "test:tools": "node scripts/test-tools.js",
+    "test:links": "node scripts/test-links.js",
+    "test:report": "node scripts/test-report.js",
+    "test:phone": "node scripts/test-phone-widgets.js"
   },
   "dependencies": {
     "@expo-google-fonts/inter-tight": "^0.4.2",
@@ -43,6 +49,7 @@
     "expo-navigation-bar": "~4.2.8",
     "expo-network": "~7.1.5",
     "expo-notifications": "~0.31.2",
+    "expo-print": "~14.1.4",
     "expo-router": "~5.0.7",
     "expo-screen-capture": "~7.2.0",
     "expo-screen-orientation": "~8.1.7",
@@ -57,6 +64,7 @@
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-native": "0.79.2",
+    "react-native-android-widget": "0.17.2",
     "react-native-gesture-handler": "~2.24.0",
     "react-native-reanimated": "~3.17.4",
     "react-native-safe-area-context": "5.4.0",

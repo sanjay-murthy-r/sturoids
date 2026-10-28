@@ -311,7 +311,26 @@ const checks = {
     assert.ok(!('tags' in sub), "a subject's tags start blank, like its marks");
     assert.ok(!('score' in root) && !('score' in sub), 'no marks');
   },
+
+  "an exam's own reminders are kept clean, and decide over the global switch"() {
+    const [a, b, c, g] = S.sanitizeScores([
+      node('a', null, 'exam', { remind: ['eve', 'x', 'week', 'eve'] }),
+      node('b', null, 'exam', { remind: [] }),
+      node('c', null, 'exam', { remind: 'eve' }),
+      node('g', null, 'group', { remind: ['eve'] }),
+    ]);
+    assert.deepEqual(a.remind, ['week', 'eve'], 'known ones, once each, in order');
+    assert.deepEqual(b.remind, [], 'none, kept: this exam rings nothing');
+    assert.ok(!('remind' in c));
+    assert.ok(!('remind' in g), 'a group rings nothing of its own');
+    assert.deepEqual(S.sanitizeScores([a, b, c, g]), [a, b, c, g], 'a second pass changes nothing');
+    assert.deepEqual(S.examRemindsOf(a, false), ['week', 'eve']);
+    assert.deepEqual(S.examRemindsOf(b, true), [], 'its own none wins over the switch');
+    assert.deepEqual(S.examRemindsOf(c, true), ['eve'], 'without its own, the switch: the evening before');
+    assert.deepEqual(S.examRemindsOf(c, false), []);
+  },
 };
+
 
 let failed = 0;
 for (const [name, run] of Object.entries(checks)) {

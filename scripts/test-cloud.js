@@ -13,6 +13,7 @@
  *     own), with a copy kept for the Undo; when both changed, the choice stays
  *   - attachments kept to Wi-Fi wait on mobile data while the data goes, and go once allowed or on Wi-Fi
  *   - a password reset by emailed code, and the password check behind Forgot PIN
+ *   - when the backup needs the user (paused, or signed out elsewhere), for More's dot and Today's banner
  * Usage: node scripts/test-cloud.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -422,6 +423,24 @@ const scenarios = {
     await app.cloud.deleteAccount();
     assert.ok(app.world.log.includes('signOut global'), 'every session: ' + app.world.log.join(' | '));
     assert.equal(app.cloudState().lost, false);
+  },
+
+  async 'the backup asks for the user only when it is paused or the account was signed out elsewhere'() {
+    const app = boot();
+    const { backupAttention } = app.cloud;
+    const now = Date.UTC(2026, 9, 10);
+    const ok = { ready: true, status: 'idle', auto: true, pending: false, lost: false, lastSyncedAt: now - 1000 };
+    assert.equal(backupAttention(ok, now), 'ok');
+    assert.equal(backupAttention({ ...ok, ready: false, lost: true }, now), 'ok', 'nothing said before the cloud has looked');
+    assert.equal(backupAttention({ ...ok, status: 'signed-out' }, now), 'ok', 'never signed in is the backup card, not this');
+    assert.equal(backupAttention({ ...ok, status: 'signed-out', lost: true }, now), 'lost');
+    assert.equal(backupAttention({ ...ok, status: 'choice' }, now), 'paused');
+    assert.equal(backupAttention({ ...ok, auto: false }, now), 'ok', 'automatic backups off with nothing waiting');
+    assert.equal(backupAttention({ ...ok, auto: false, pending: true }, now), 'paused');
+    assert.equal(backupAttention({ ...ok, status: 'error' }, now), 'ok', 'a failure for a while (offline) is not news yet');
+    assert.equal(backupAttention({ ...ok, status: 'error', lastSyncedAt: now - 2 * 24 * 3600 * 1000 }, now), 'paused');
+    assert.equal(backupAttention({ ...ok, status: 'error', lastSyncedAt: null }, now), 'paused');
+    assert.ok(app.cloud.BACKUP_ATTENTION_TEXT.paused.includes('tap to fix'));
   },
 
   async 'a newer copy is followed only from another phone, when this one changed nothing'() {

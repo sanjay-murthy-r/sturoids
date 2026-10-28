@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo } from 'react-native';
-import Animated, { Easing, LayoutAnimationConfig, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo, Keyboard } from 'react-native';
+import Animated, {
+  Easing, LayoutAnimationConfig, runOnJS, useAnimatedRef, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
+  useSharedValue, withSpring, withTiming,
+} from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import Constants from 'expo-constants';
-import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -22,7 +24,7 @@ import { useToday } from '../src/hooks/useNow';
 import { SignatureStill } from '../src/components/Signature';
 import {
   ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu,
-  EdgeScroll, EmptyState, RowIcon, useTheme,
+  EdgeScroll, EmptyState, RowIcon, useTheme, ScrollEdge, edgeStrength, ArrivalPulse, IconBtn,
 } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
 import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt, useEntrance, useLoop } from '../src/components/Motion';
@@ -38,14 +40,19 @@ import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolB
 import { ToolArchiveSheet } from '../src/components/ToolArchiveSheet';
 import { CloudSection, DeleteSection, ago, dayOf, locksNeedPin } from '../src/components/CloudCard';
 import { isFollowCopy, useCloud } from '../src/cloud';
-import { pkey, useProfiles } from '../src/profiles';
-import { ProfileSwitcher, ProfilesSection } from '../src/components/ProfileSwitcher';
+import { useProfiles } from '../src/profiles';
+import { ProfileAvatar, ProfileSwitcher, ProfilesSection, useActiveProfile } from '../src/components/ProfileSwitcher';
+import { LAST_EXPORT_KEY } from '../src/backupNudge';
+import { useBackupAttention } from '../src/cloud';
+import { SettingsPage, isPageRow, searchSettings, settingId } from '../src/search/settingsIndex';
+import type { Range } from '../src/search/engine';
+import { useBringIntoView } from '../src/hooks/useBringIntoView';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.7.0';
 
-/** When the last backup file was made, kept apart from the data so it never reaches the cloud's fingerprint. Per profile */
-const LAST_EXPORT_KEY = pkey('sturoids-last-export');
+// When the last backup file was made (LAST_EXPORT_KEY, src/backupNudge.ts) is kept apart from the data, so it never
+// reaches the cloud's fingerprint; Today's one-time backup card reads it too. Per profile.
 
 const THEMES: { key: ThemeMode; label: string; desc: string }[] = [
   { key: 'default', label: 'Default', desc: 'Soft grey with raised surfaces' },
@@ -309,31 +316,12 @@ async function pickPhoto(): Promise<string | null> {
   return small.base64 ? 'data:image/jpeg;base64,' + small.base64 : null;
 }
 
-/** Up to two initials from a name, or from the part of an email before the @. */
-function initialsOf(name: string, email: string | null): string {
-  const words = (name.trim() || (email || '').split('@')[0].replace(/[._-]+/g, ' ')).split(/\s+/).filter(Boolean);
-  return (words.length > 1 ? words[0][0] + words[words.length - 1][0] : (words[0] || '').slice(0, 1)).toUpperCase();
-}
-
-/** The profile photo, or initials on a tint of the accent when there is none. */
+/** The profile photo, or its initial on a tint of the accent when there is none (the switcher's own avatar). */
 function Avatar({ size }: { size: number }) {
-  useTheme(); // the initials' tint is the accent
-  const level = useAnimLevel();
-  const avatar = useStore((s) => s.settings.avatar);
-  const name = useStore((s) => s.settings.name);
+  useTheme(); // the tint is the accent
   const email = useCloud((c) => c.email);
-  const initials = initialsOf(name, email);
-  return (
-    <View style={[st.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: C.accent + '26' }]}>
-      {avatar ? (
-        <Image source={{ uri: avatar }} style={{ width: size, height: size }} contentFit="cover" transition={level === 'none' ? 0 : 180} />
-      ) : initials ? (
-        <Text style={{ color: C.accent, fontFamily: F.semi, fontSize: Math.round(size * 0.38) }}>{initials}</Text>
-      ) : (
-        <Ionicons name="person" size={Math.round(size * 0.46)} color={C.accent} />
-      )}
-    </View>
-  );
+  const me = useActiveProfile(email);
+  return <ProfileAvatar profile={me} size={size} />;
 }
 
 /** The photo and the name the greeting uses. What is typed stays in the field until a pause (see useSettingDraft). */
@@ -462,6 +450,149 @@ function CategoryRow({ icon, title, summary, onPress, danger }: {
     </ListRow>
   );
 }
+
+/* ---------------------------------------------------------------- a setting a link points at */
+
+/** The row a link (Sift, Settings' own search) asked for, and a new `n` each time it is asked for, so it pulses again. */
+type Target = { id: string; n: string } | null;
+
+const TargetContext = React.createContext<{ target: Target; bring: (v: View | null) => void }>({ target: null, bring: () => {} });
+
+const sid = (page: SettingsPage, label: string) => settingId(page, label);
+
+/**
+ * A place a setting can be found by its id (src/search/settingsIndex.ts): when a link asks for one of `ids`, the page
+ * scrolls it into view and it pulses once. Wraps a row, or a whole card or section for rows kept inside it.
+ */
+function Anchor({ ids, radius = S.radiusSm, children }: { ids: string[]; radius?: number; children: React.ReactNode }) {
+  const { target, bring } = React.useContext(TargetContext);
+  const ref = useRef<View>(null);
+  const hit = !!target && ids.includes(target.id);
+  const n = hit ? target!.n : '';
+  useEffect(() => {
+    if (!hit) return undefined;
+    // once the page has laid out under its own entrance
+    const t = setTimeout(() => bring(ref.current), 120);
+    return () => clearTimeout(t);
+  }, [hit, n]);
+  return (
+    <View ref={ref} collapsable={false}>
+      {children}
+      {hit ? <ArrivalPulse key={n} active radius={radius} delay={380} /> : null}
+    </View>
+  );
+}
+
+/** A page's scroll: EdgeScroll's, with its offset and its ref kept for bringing a linked row into view. */
+function PageScroll({ children, scrollRef, y, ...props }: React.ComponentProps<typeof Animated.ScrollView> & {
+  scrollRef: React.RefObject<Animated.ScrollView | null>; y: { value: number };
+}) {
+  const level = useAnimLevel();
+  const onScroll = useAnimatedScrollHandler((e) => { y.value = e.contentOffset.y; });
+  const at = useDerivedValue(() => edgeStrength(y.value, level));
+  return (
+    <>
+      <Animated.ScrollView {...props} ref={scrollRef as any} onScroll={onScroll} scrollEventThrottle={16}>{children}</Animated.ScrollView>
+      <ScrollEdge at={at} />
+    </>
+  );
+}
+
+/** A label with the ranges a query matched in the accent, at the same weight. */
+function MarkedLabel({ text, ranges }: { text: string; ranges: Range[] }) {
+  const parts: React.ReactNode[] = [];
+  let at = 0;
+  ranges.forEach(([a, b], i) => {
+    if (a > at) parts.push(text.slice(at, a));
+    parts.push(<Text key={i} style={{ color: C.accent }}>{text.slice(a, b)}</Text>);
+    at = b;
+  });
+  if (at < text.length) parts.push(text.slice(at));
+  return <Text style={[T.body, { fontFamily: F.med }]} numberOfLines={2}>{parts}</Text>;
+}
+
+/** The field at the top of Settings' list: it filters the list in place, to the settings that match. */
+const SettingsSearchField = React.memo(function SettingsSearchField({ value, onChange }: {
+  value: string; onChange: (v: string) => void;
+}) {
+  useTheme();
+  return (
+    <Row style={st.searchRow}>
+      <Ionicons name="search-outline" size={18} color={C.textFaint} style={st.searchIcon} />
+      <Field
+        value={value} onChangeText={onChange} placeholder="Search settings" autoCorrect={false} autoCapitalize="none"
+        returnKeyType="search" style={{ flex: 1, marginBottom: 0 }} accessibilityLabel="Search settings"
+      />
+      {value ? (
+        <IconBtn name="close-circle" size={18} color={C.textFaint} onPress={() => onChange('')} accessibilityLabel="Clear the search" />
+      ) : null}
+    </Row>
+  );
+});
+
+/** What Settings' own search found: the matching settings, grouped by page, each opening its page at the row. */
+const SettingsResults = React.memo(function SettingsResults({ query, onPick }: {
+  query: string; onPick: (page: SettingsPage, rowId: string | null) => void;
+}) {
+  useTheme();
+  const groups = useMemo(() => searchSettings(query), [query]);
+  if (!groups.length) {
+    return (
+      <EmptyState compact icon="search-outline" title="No settings match" body={'Nothing in Settings is called "' + query.trim() + '". Try another word.'} />
+    );
+  }
+  return (
+    <>
+      {groups.map((g) => (
+        <View key={g.page}>
+          <SectionTitle>{g.title}</SectionTitle>
+          <ListCard>
+            {g.rows.map(({ row, ranges }) => (
+              <ListRow
+                key={row.id} onPress={() => { tick(); onPick(row.page, isPageRow(row) ? null : row.id); }}
+                style={[st.catRow, st.twoLineRow]} accessibilityLabel={row.label + (row.caption ? ', ' + row.caption : '')}
+              >
+                <View style={{ flex: 1 }}>
+                  <MarkedLabel text={row.label} ranges={ranges} />
+                  {row.caption ? <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={2}>{row.caption}</Text> : null}
+                </View>
+                <Ionicons name="chevron-forward" size={17} color={C.textFaint} style={st.rowEnd} />
+              </ListRow>
+            ))}
+          </ListCard>
+        </View>
+      ))}
+    </>
+  );
+});
+
+/** Deep Work's daily goal: off, or an hour or more. A goal set elsewhere (the history) shows as its own choice. */
+const GOALS: { key: string; label: string }[] = [
+  { key: '0', label: 'Off' }, { key: '60', label: '1 h' }, { key: '120', label: '2 h' }, { key: '180', label: '3 h' },
+  { key: '240', label: '4 h' },
+];
+const goalLabel = (min: number) => (min % 60 ? Math.floor(min / 60) + ' h ' + (min % 60) : min / 60 + ' h');
+
+const FocusGoalCard = React.memo(function FocusGoalCard() {
+  useTheme();
+  const goal = useStore((s) => s.settings.focusGoalMin) || 0;
+  const setSetting = useStore((s) => s.setSetting);
+  const options = useMemo(() => {
+    if (GOALS.some((g) => Number(g.key) === goal)) return GOALS;
+    const own = { key: String(goal), label: goal < 60 ? goal + ' min' : goalLabel(goal) };
+    return [...GOALS, own].sort((a, b) => Number(a.key) - Number(b.key));
+  }, [goal]);
+  return (
+    <Card>
+      <Text style={[T.body, { fontFamily: F.med }]}>Daily focus goal</Text>
+      <Text style={[T.caption, { marginTop: 2, marginBottom: 14 }]}>
+        {goal ? 'Today shows how far you are toward it, and the history counts the days in a row you reach it.'
+          : 'Off. Set one and Today shows how far you are toward it.'}
+      </Text>
+      <SegmentedControl size="sm" stretch value={String(goal)} onChange={(k) => setSetting('focusGoalMin', Number(k))} options={options} />
+    </Card>
+  );
+});
 
 /**
  * The list's entrance the first time Settings opens. Whether it plays is decided once, as the list mounts: the list
@@ -736,10 +867,14 @@ const TRASH_KINDS: Record<TrashKind, { icon: string; label: string; locked: stri
   timedNote: { icon: 'chatbox-ellipses-outline', label: 'Note on a video', locked: 'Locked note' },
   bookmark: { icon: 'bookmark-outline', label: 'Bookmark', locked: 'Locked bookmark' },
   attachment: { icon: 'attach-outline', label: 'Attachment', locked: 'Locked attachment' },
+  habit: { icon: 'flame-outline', label: 'Habit', locked: 'Locked habit' },
+  mission: { icon: 'flag-outline', label: 'Long-term task', locked: 'Locked task' },
+  exam: { icon: 'ribbon-outline', label: 'Exam', locked: 'Locked exam' },
 };
 
 /** A deleted thing's name on its row: what it was called, or only its kind while it is locked. */
-const trashTitle = (t: TrashItem) => (t.locked ? TRASH_KINDS[t.kind].locked : t.title.trim() || 'Untitled');
+const kindOf = (t: TrashItem) => TRASH_KINDS[t.kind] ?? TRASH_KINDS.note;
+const trashTitle = (t: TrashItem) => (t.locked ? kindOf(t).locked : t.title.trim() || 'Untitled');
 
 /** The PIN pad's tint for a locked item: the colour of the tool it came from. */
 const trashTint = (t: TrashItem) => (t.kind === 'journal' ? C.gold : t.kind === 'note' || t.kind === 'attachment' ? C.green : C.accent);
@@ -762,7 +897,7 @@ const TrashRow = React.memo(function TrashRow({ item, onOpen }: {
   today: string;
 }) {
   useTheme();
-  const kind = TRASH_KINDS[item.kind];
+  const kind = kindOf(item);
   const title = trashTitle(item);
   const left = trashDaysLeft(item);
   const days = left + (left === 1 ? ' day left' : ' days left');
@@ -827,6 +962,8 @@ const TrashSection = React.memo(function TrashSection() {
       }
       tap();
       toast('Restored');
+      // a habit, a long-term task or an exam brings its reminders back with it
+      if (item.kind === 'habit' || item.kind === 'mission' || item.kind === 'exam') rescheduleAllReminders().catch(() => {});
     });
   };
 
@@ -876,7 +1013,7 @@ const TrashSection = React.memo(function TrashSection() {
       ) : (
         <EmptyState
           icon="trash-bin-outline" title="Nothing recently deleted"
-          body="Notes, journal entries and videos you delete stay here for 30 days, then they are deleted for good."
+          body="Notes, journal entries, videos, habits, long-term tasks and exams you delete stay here for 30 days, then they are deleted for good."
         />
       )}
       <DotMenu
@@ -905,15 +1042,43 @@ export default function Settings() {
   const router = useRouter();
   // Settings opens on its list of categories; each opens as its own page, a layer over the list within the screen, and
   // back returns to the list. The list stays mounted under the page, so it is as it was left (its scroll included).
-  // A link can name the page to open on (/settings?page=backup), read once as Settings mounts
-  const params = useLocalSearchParams<{ page?: string }>();
+  // A link can name the page to open on (/settings?page=backup), and a row on it (&row=motion:animations, with a new
+  // &n= each time, so the same row asked for again pulses again). Read as Settings mounts, and again whenever a link
+  // reaches Settings while it is already open
+  const params = useLocalSearchParams<{ page?: string; row?: string; n?: string }>();
   const [page, setPage] = useState<Page | null>(() => (isPage(params.page) ? params.page : null));
+  const [target, setTarget] = useState<Target>(() => (params.row ? { id: String(params.row), n: String(params.n ?? '0') } : null));
+  const seenLink = useRef(String(params.page ?? '') + '|' + String(params.row ?? '') + '|' + String(params.n ?? ''));
+  useEffect(() => {
+    const key = String(params.page ?? '') + '|' + String(params.row ?? '') + '|' + String(params.n ?? '');
+    if (key === seenLink.current) return;
+    seenLink.current = key;
+    if (isPage(params.page)) setPage(params.page);
+    if (params.row) setTarget({ id: String(params.row), n: String(params.n ?? Date.now()) });
+  }, [params.page, params.row, params.n]);
   const open = useCallback((p: Page) => setPage(p), []);
+  // Settings' own search: it filters the list in place; a result opens its page at the row
+  const [query, setQuery] = useState('');
+  const searching = query.trim().length > 0;
+  const pickResult = useCallback((p: SettingsPage, rowId: string | null) => {
+    Keyboard.dismiss();
+    if (rowId) setTarget({ id: rowId, n: String(Date.now()) });
+    setPage(p as Page);
+  }, []);
+  // the page's scroll, so a linked row can be brought into view
+  const pageScroll = useAnimatedRef<Animated.ScrollView>();
+  const pageY = useSharedValue(0);
+  const { topRef: pageTop, bring } = useBringIntoView({
+    scrollTo: (y, animated) => { (pageScroll.current as any)?.scrollTo?.({ y, animated }); },
+    scrollY: pageY, padTop: 12, barH: 0, still: level === 'none',
+  });
+  const targetCtx = useMemo(() => ({ target, bring }), [target, bring]);
   const pageRef = useRef(page);
   pageRef.current = page;
   const back = useCallback(() => {
     if (!pageRef.current) return false;
     setPage(null);
+    setTarget(null);
     return true;
   }, []);
   // the page in the layer: the one open now, or the last one, held while it leaves and let go once its exit is over
@@ -982,6 +1147,7 @@ export default function Settings() {
   const cloudReason = useCloud((c) => c.reason);
   const cloudLost = useCloud((c) => c.lost);
   const severalProfiles = useProfiles((p) => p.list.length > 1);
+  const attention = useBackupAttention();
   const [switcher, setSwitcher] = useState(false);
   // parts that turn up after the first paint (the screen-lock choices, a kept copy, Remove PIN) fade in where they
   // stand. They leave at once: this page's cards do not glide, so a fading ghost would lie over the lines moving up
@@ -1337,7 +1503,9 @@ export default function Settings() {
     ? 'Yours, recorded ' + fmtShortDate(todayKey(new Date(settings.ownSignature.recordedAt)))
     : 'The original';
   const summaries: Record<Page, string> = {
-    account: signedIn
+    account: signedIn && attention === 'paused' && cloudStatus !== 'choice'
+      ? 'Backup paused, tap to fix'
+      : signedIn
       ? cloudStatus === 'choice'
         ? (cloudReason === 'newer' ? 'A newer copy in the cloud needs your choice' : 'Your cloud copy can bring your data back')
         : (cloudEmail as string)
@@ -1351,7 +1519,8 @@ export default function Settings() {
           ? 'logo first' + (ownSignatureOn ? ', your signature' : '')
           : (ownSignatureOn ? 'your signature first' : 'signature first')),
     time: (settings.hour24 ? '24-hour clock' : '12-hour clock') + ', reminders ' + (settings.remindersEnabled ? 'on' : 'off'),
-    deepwork: (settings.focusChime ? 'Chime on' : 'Chime off') + ', ambient screen: '
+    deepwork: (settings.focusGoalMin ? 'Goal ' + goalLabel(settings.focusGoalMin) + ', ' : '')
+      + (settings.focusChime ? 'Chime on' : 'Chime off') + ', ambient screen: '
       + ([settings.ambientSeconds ? 'seconds' : '', settings.ambientClock ? 'time of day' : ''].filter(Boolean).join(' and ') || 'minutes only'),
     // single locked notes count too; with the whole Notes tool locked, "Notes locked" already says it
     privacy: [
@@ -1373,36 +1542,52 @@ export default function Settings() {
       case 'account':
         return (
           <>
-            <ProfilesSection />
-            <SectionTitle>Name and photo</SectionTitle>
-            <ProfileCard />
-            <CloudSection title="Cloud backup" />
+            <Anchor ids={[sid('account', 'Profiles')]}><ProfilesSection /></Anchor>
+            <Anchor ids={[sid('account', 'Name and photo')]}>
+              <SectionTitle>Name and photo</SectionTitle>
+              <ProfileCard />
+            </Anchor>
+            <Anchor
+              ids={['Cloud backup', 'Back up automatically', 'Attachments on Wi-Fi only', 'Back up now', 'Change password'].map((l) => sid('account', l))}
+            >
+              <CloudSection title="Cloud backup" />
+            </Anchor>
           </>
         );
       case 'appearance':
         return (
           <>
-            <SectionTitle>Theme</SectionTitle>
-            <Card pad={12}>
-              <OptionPicker options={SHOWN_THEMES} value={settings.theme} onPick={pickTheme} />
-            </Card>
-            <SectionTitle>Accent colour</SectionTitle>
-            <AccentCard />
-            <SectionTitle>Writing font</SectionTitle>
-            <WritingFontCard />
+            <Anchor ids={[sid('appearance', 'Theme')]}>
+              <SectionTitle>Theme</SectionTitle>
+              <Card pad={12}>
+                <OptionPicker options={SHOWN_THEMES} value={settings.theme} onPick={pickTheme} />
+              </Card>
+            </Anchor>
+            <Anchor ids={[sid('appearance', 'Accent colour')]}>
+              <SectionTitle>Accent colour</SectionTitle>
+              <AccentCard />
+            </Anchor>
+            <Anchor ids={[sid('appearance', 'Writing font')]}>
+              <SectionTitle>Writing font</SectionTitle>
+              <WritingFontCard />
+            </Anchor>
           </>
         );
       case 'tools':
-        return <ToolsSection />;
+        return <Anchor ids={[sid('tools', 'Tab bar slots'), sid('tools', 'Archived')]}><ToolsSection /></Anchor>;
       case 'motion':
         return (
           <>
-            <SectionTitle>Animations</SectionTitle>
-            <Card pad={12}>
-              <OptionPicker options={ANIMS} value={settings.animLevel} onPick={pickAnim} />
-            </Card>
+            <Anchor ids={[sid('motion', 'Animations')]}>
+              <SectionTitle>Animations</SectionTitle>
+              <Card pad={12}>
+                <OptionPicker options={ANIMS} value={settings.animLevel} onPick={pickAnim} />
+              </Card>
+            </Anchor>
             <SectionTitle>Start screen</SectionTitle>
+            <Anchor ids={[sid('motion', 'Start screen')]} radius={S.radius}>
             <Card>
+              <Anchor ids={[sid('motion', 'Disable the big signature')]}>
               <Row style={{ justifyContent: 'space-between' }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[T.body, { fontFamily: F.med }]}>Disable the big signature</Text>
@@ -1417,18 +1602,22 @@ export default function Settings() {
                   label="Disable the big signature"
                 />
               </Row>
+              </Anchor>
               <Hairline />
+              <Anchor ids={[sid('motion', 'Tap to skip the intro')]}>
               <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[T.body, { fontFamily: F.med }]}>Tap to skip the intro</Text>
-                  <Text style={[T.caption, { marginTop: 2 }]}>A tap during the start screen goes straight to Today.</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>A tap during the start screen goes straight to Today, in about half a second.</Text>
                 </View>
                 <Toggle
                   value={settings.introTapSkip} onChange={(v) => setSetting('introTapSkip', v)} color={C.accent}
                   label="Tap to skip the intro"
                 />
               </Row>
+              </Anchor>
               <Hairline />
+              <Anchor ids={[sid('motion', 'Your signature')]}>
               {/* the third choice: whose signature the start screen writes, and recording your own */}
               <ListRow
                 onPress={() => { tick(); openPage('/signature'); }} style={st.signatureRow}
@@ -1442,7 +1631,9 @@ export default function Settings() {
                 </View>
                 <Ionicons name="chevron-forward" size={17} color={C.textFaint} />
               </ListRow>
+              </Anchor>
             </Card>
+            </Anchor>
           </>
         );
       case 'time':
@@ -1450,11 +1641,14 @@ export default function Settings() {
           <>
             <SectionTitle>Clock and reminders</SectionTitle>
             <Card>
+              <Anchor ids={[sid('time', '24-hour time')]}>
               <Row style={{ justifyContent: 'space-between', marginBottom: 12 }}>
                 <Text style={T.body}>24-hour time</Text>
                 <Toggle value={settings.hour24} onChange={(v) => setSetting('hour24', v)} color={C.accent} label="24-hour time" />
               </Row>
+              </Anchor>
               <Hairline />
+              <Anchor ids={[sid('time', 'All reminders (master)')]}>
               <Row style={{ justifyContent: 'space-between', marginTop: 12 }}>
                 <Row>
                   <Text style={T.body}>All reminders (master)</Text>
@@ -1462,7 +1656,9 @@ export default function Settings() {
                 </Row>
                 <Toggle value={settings.remindersEnabled} onChange={toggleReminders} color={C.green} label="All reminders" />
               </Row>
+              </Anchor>
               <Hairline />
+              <Anchor ids={[sid('time', 'Exam reminders')]}>
               <Row style={{ justifyContent: 'space-between', marginTop: 12 }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={T.body}>Exam reminders</Text>
@@ -1475,13 +1671,19 @@ export default function Settings() {
                   label="Exam reminders"
                 />
               </Row>
+              </Anchor>
             </Card>
           </>
         );
       case 'deepwork':
         return (
           <>
+            <SectionTitle>Your goal</SectionTitle>
+            <Anchor ids={[sid('deepwork', 'Daily focus goal')]} radius={S.radius}>
+              <FocusGoalCard />
+            </Anchor>
             <SectionTitle>When a block ends</SectionTitle>
+            <Anchor ids={[sid('deepwork', 'Chime when a block ends')]} radius={S.radius}>
             <Card>
               <Row style={{ justifyContent: 'space-between' }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
@@ -1491,8 +1693,11 @@ export default function Settings() {
                 <Toggle value={settings.focusChime} onChange={(v) => setSetting('focusChime', v)} color={C.accent} label="Chime when a block ends" />
               </Row>
             </Card>
+            </Anchor>
             <SectionTitle>Ambient screen</SectionTitle>
+            <Anchor ids={[sid('deepwork', 'Ambient screen')]} radius={S.radius}>
             <Card>
+              <Anchor ids={[sid('deepwork', 'Seconds on the ambient screen')]}>
               <Row style={{ justifyContent: 'space-between', marginBottom: 10 }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[T.body, { fontFamily: F.med }]}>Seconds on the ambient screen</Text>
@@ -1502,7 +1707,9 @@ export default function Settings() {
                 </View>
                 <Toggle value={settings.ambientSeconds} onChange={(v) => setSetting('ambientSeconds', v)} color={C.accent} label="Seconds on the ambient screen" />
               </Row>
+              </Anchor>
               <Hairline />
+              <Anchor ids={[sid('deepwork', 'Time of day on the ambient screen')]}>
               <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[T.body, { fontFamily: F.med }]}>Time of day on the ambient screen</Text>
@@ -1510,7 +1717,9 @@ export default function Settings() {
                 </View>
                 <Toggle value={settings.ambientClock} onChange={(v) => setSetting('ambientClock', v)} color={C.accent} label="Time of day on the ambient screen" />
               </Row>
+              </Anchor>
             </Card>
+            </Anchor>
           </>
         );
       case 'privacy':
@@ -1518,6 +1727,7 @@ export default function Settings() {
           <>
             <SectionTitle>Locks</SectionTitle>
             <Card>
+              <Anchor ids={[sid('privacy', 'Lock the journal')]}>
               <Row style={{ justifyContent: 'space-between' }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[T.body, { fontFamily: F.med }]}>Lock the journal</Text>
@@ -1525,7 +1735,9 @@ export default function Settings() {
                 </View>
                 <Toggle value={settings.journalLocked} onChange={(v) => setToolLock('journal', v)} color={C.gold} label="Lock the journal" />
               </Row>
+              </Anchor>
               <Hairline />
+              <Anchor ids={[sid('privacy', 'Lock Notes')]}>
               <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[T.body, { fontFamily: F.med }]}>Lock Notes</Text>
@@ -1538,8 +1750,10 @@ export default function Settings() {
                 </View>
                 <Toggle value={settings.notesLocked === true} onChange={(v) => setToolLock('notes', v)} color={C.green} label="Lock Notes" />
               </Row>
+              </Anchor>
               {deviceLock ? (
                 <Animated.View entering={arrive}>
+                  <Anchor ids={[sid('privacy', 'Your screen lock can also open')]}>
                   <Hairline />
                   <Text style={[st.label, { marginTop: 10, marginBottom: 4 }]}>Your screen lock can also open</Text>
                   <Row style={{ justifyContent: 'space-between', marginTop: 6 }}>
@@ -1554,11 +1768,13 @@ export default function Settings() {
                     Fingerprint, face or the phone's own PIN, as well as the app PIN. A locked single note always asks for the
                     app PIN.
                   </Text>
+                  </Anchor>
                 </Animated.View>
               ) : null}
             </Card>
             <SectionTitle>App PIN</SectionTitle>
             <Card>
+              <Anchor ids={[sid('privacy', 'App PIN')]}>
               <Row style={{ justifyContent: 'space-between' }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[T.body, { fontFamily: F.med }]}>App PIN</Text>
@@ -1569,12 +1785,14 @@ export default function Settings() {
                   onPress={() => setPinStep({ mode: 'set', for: 'change' })}
                 />
               </Row>
+              </Anchor>
               {pinState !== 'none' && !pinInUse ? (
                 <Animated.View entering={arrive} style={{ marginTop: 10, alignSelf: 'flex-end' }}>
                   <PillButton small outline color={C.danger} label="Remove PIN" onPress={() => setPinStep({ mode: 'enter', for: 'remove' })} />
                 </Animated.View>
               ) : null}
               <Hairline />
+              <Anchor ids={[sid('privacy', 'Re-lock after')]}>
               <Text style={[st.label, { marginTop: 10, marginBottom: 8 }]}>Re-lock after</Text>
               <SegmentedControl
                 size="sm"
@@ -1583,6 +1801,7 @@ export default function Settings() {
                 onChange={(k) => setSetting('lockGraceSec', Number(k))}
                 options={GRACE_OPTIONS}
               />
+              </Anchor>
               <Text style={[T.caption, { marginTop: 14 }]}>
                 Locks hide pages; they do not encrypt them. Backups still include everything, so keep them somewhere safe.
               </Text>
@@ -1595,6 +1814,7 @@ export default function Settings() {
             <SectionTitle right={<InfoDot text="Everything lives on this phone, and in the cloud when you sign in under Account. A backup file works without an account: it carries your notes' attachments too. Importing replaces all current data." />}>
               Backup file
             </SectionTitle>
+            <Anchor ids={['Backup file', 'Export a backup file', 'Import backup'].map((l) => sid('backup', l))} radius={S.radius}>
             <Card>
               <PillButton
                 label={busy?.kind === 'export'
@@ -1635,22 +1855,27 @@ export default function Settings() {
                 </Animated.View>
               ) : null}
             </Card>
+            </Anchor>
           </>
         );
       case 'trash':
-        return <TrashSection />;
+        return <Anchor ids={[sid('trash', 'Empty Recently deleted')]}><TrashSection /></Anchor>;
       case 'updates':
         return (
           <>
             <SectionTitle right={<InfoDot text="Sideloaded APKs don't auto-update. This checks the GitHub Releases of the repo below for a newer version tag and links you to the download." />}>
               Check for a new version
             </SectionTitle>
-            <UpdatesCard />
+            <Anchor ids={[sid('updates', 'Check for a new version')]} radius={S.radius}><UpdatesCard /></Anchor>
           </>
         );
       case 'delete':
         // after an erase the page would hold one button over nothing: back to the list, which is fresh too
-        return <DeleteSection title={null} onErased={back} />;
+        return (
+          <Anchor ids={['Delete my account', 'Delete my cloud data', 'Delete everything on this phone'].map((l) => sid('delete', l))}>
+            <DeleteSection title={null} onErased={back} />
+          </Anchor>
+        );
     }
   };
 
@@ -1683,6 +1908,11 @@ export default function Settings() {
           <EdgeScroll contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
             {/* the list rises in once, as Settings opens; coming back from a page it is simply there as it was left */}
             <Arrive first={!built.current} index={0}>
+              <SettingsSearchField value={query} onChange={setQuery} />
+            </Arrive>
+            {searching ? <SettingsResults query={query} onPick={pickResult} /> : null}
+            <View style={searching ? st.hidden : undefined} pointerEvents={searching ? 'none' : 'auto'}>
+            <Arrive first={!built.current} index={0}>
               <ProfileHeader onOpen={() => open('account')} onSwitch={() => setSwitcher(true)} />
             </Arrive>
             {groups.map((g, gi) => (
@@ -1701,6 +1931,7 @@ export default function Settings() {
             <Arrive first={!built.current} index={groups.length + 1}>
               <Colophon />
             </Arrive>
+            </View>
           </EdgeScroll>
         </Animated.View>
         {layerPage ? (
@@ -1714,11 +1945,16 @@ export default function Settings() {
             accessibilityElementsHidden={!page}
           >
             <LayoutAnimationConfig key={layerPage} skipEntering>
-              <EdgeScroll style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
+              <PageScroll
+                scrollRef={pageScroll} y={pageY} style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled"
+              >
+                <View ref={pageTop} collapsable={false} />
                 {/* a page's first heading sits close under the header, like the list's first card; a page that opens
                     with a card keeps the full 12, so its top and its light are never cut off */}
-                <View style={CARD_FIRST.includes(layerPage) ? undefined : { marginTop: -S.section + 10 }}>{pageBody(layerPage)}</View>
-              </EdgeScroll>
+                <TargetContext.Provider value={targetCtx}>
+                  <View style={CARD_FIRST.includes(layerPage) ? undefined : { marginTop: -S.section + 10 }}>{pageBody(layerPage)}</View>
+                </TargetContext.Provider>
+              </PageScroll>
             </LayoutAnimationConfig>
           </Animated.View>
         ) : null}
@@ -1738,7 +1974,10 @@ const st = StyleSheet.create({
   scroll: { padding: S.pad, paddingTop: 12, paddingBottom: 40 },
   // an open page covers the list exactly (a layer within the body, below the header)
   pageLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  avatar: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  // the list under a search: kept mounted (its scroll and its state), out of sight and out of reach
+  hidden: { display: 'none' },
+  searchRow: { alignItems: 'center', marginBottom: 6 },
+  searchIcon: { marginRight: 10 },
   statusDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
   catRow: { paddingVertical: 13 },
   // level with the toggle's words above it; the press carves a little past them

@@ -2,19 +2,27 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { useFocusEffect } from 'expo-router';
-import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, BLOCK_COLORS, oneLine } from '../theme';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { C, CHROME_FONT_MAX, F, S, T, TRACK, BLOCK_COLORS } from '../theme';
 import { useStore, PlannerBlock, PlannerWeek, Habit } from '../store';
 import {
   DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours, blockOnNow, cleanDays,
   daysLabel, habitDueOn,
 } from '../utils';
+import { indexScores, topExams } from '../scores';
+import { openScoreNode } from '../scoresNav';
+import { useSubjects } from '../subjects';
+import { blockFocusParams, clashIn, colorForSubject, fmtDayShort, nextDateOf, repeatsOf } from '../blocks';
+import { ALL_DAYS, DayToggles, toggledDay } from '../components/DayToggles';
+import { toastTrashed } from '../trashToast';
+import { useBringIntoView } from '../hooks/useBringIntoView';
 import { useNow, useToday } from '../hooks/useNow';
 import { habitSince } from '../journal';
 import {
   ScreenBG, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, CheckCircle, useTheme, useToolHeader,
-  contextLine, ListCard, ListRow, TimeField, TimeWheel,
+  contextLine, ListCard, ListRow, TimeField, TimeWheel, Toggle, ArrivalPulse,
 } from '../components/UI';
+import { useExport } from '../reports';
 import { defaultTime } from '../components/TimeWheel';
 import { Ionicons } from '@expo/vector-icons';
 import { Wheel } from '../components/Wheel';
@@ -66,8 +74,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const habits = useStore((s) => s.habits);
   const toggleHabitToday = useStore((s) => s.toggleHabitToday);
   const toggleHabitDay = useStore((s) => s.toggleHabitDay);
-  const removeHabit = useStore((s) => s.removeHabit);
-  const restoreHabit = useStore((s) => s.restoreHabit);
+  const trashHabit = useStore((s) => s.trashHabit);
   // a change made from a sheet says so once the sheet has gone, where its Undo can be seen
   const afterSheet = React.useRef<(() => void) | null>(null);
   const runAfterSheet = useCallback(() => { const f = afterSheet.current; afterSheet.current = null; f?.(); }, []);
@@ -146,6 +153,36 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, [goTo]);
   useFocusEffect(backToToday);
   React.useEffect(() => { backToToday(); }, [today, backToToday]);
+
+  // Arrivals from Sift: a day (`day`, Mon to Sun) and on it a block or a habit (`item`), brought into view with one
+  // pulse; or the week templates (`sheet`). Each param is cleared once followed, so the same link works again. Declared
+  // after the focus's way back to today, so an arrival's day wins over it.
+  const params = useLocalSearchParams<{ day?: string; item?: string; sheet?: string }>();
+  const router = useRouter();
+  const [arrive, setArrive] = useState<string | null>(null);
+  useFocusEffect(useCallback(() => {
+    const clear: Record<string, undefined> = {};
+    let target = (DAY_NAMES as readonly string[]).includes(params.day || '') ? params.day as DayName : undefined;
+    if (params.day) clear.day = undefined;
+    if (params.item) {
+      // a block with no day given is found on its own day
+      if (!target) {
+        const week = useStore.getState().planner;
+        target = DAY_NAMES.find((d) => (week[d] || []).some((b) => b.id === params.item));
+      }
+      setArrive(params.item);
+      clear.item = undefined;
+    }
+    if (target) { pickedOn.current = todayKey(); goTo(target); }
+    if (params.sheet === 'templates') { setTplSheet(true); clear.sheet = undefined; }
+    if (Object.keys(clear).length) router.setParams(clear);
+  }, [params.day, params.item, params.sheet, goTo]));
+  // the pulse is given once; after it the same item can be arrived at again
+  React.useEffect(() => {
+    if (!arrive) return undefined;
+    const t = setTimeout(() => setArrive(null), 2000);
+    return () => clearTimeout(t);
+  }, [arrive]);
   const dayIn = useMemo(
     () => (built.current ? slideIn(level, dayDir.current * 16) : undefined),
     [day, level]
@@ -182,21 +219,12 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     });
   }, [day, removeBlock, restorePlanner]);
 
-  const deleteHabit = useCallback(async (h: Habit) => {
-    const all = useStore.getState().habits;
-    const before = all.slice(0, Math.max(0, all.findIndex((x) => x.id === h.id))).map((x) => x.id);
-    removeHabit(h.id);
-    toast('Deleted ' + h.title, {
-      label: 'Undo',
-      onPress: () => {
-        // beside the neighbour it had, even if the list changed while the toast was up
-        restoreHabit(h, indexAfterNeighbours(before, useStore.getState().habits.map((x) => x.id)));
-        void rescheduleAllReminders();
-      },
-    });
-    // re-run the scheduler after the delete, or the habit's daily reminder keeps firing for a habit that no longer exists
-    await rescheduleAllReminders();
-  }, [removeHabit, restoreHabit]);
+  // a habit goes to Recently deleted, streak and all; the toast's Undo puts it back where it was
+  const deleteHabit = useCallback((h: Habit) => {
+    const moved = toastTrashed(trashHabit(h.id), () => { void rescheduleAllReminders(); });
+    // re-run the scheduler after the delete, or the habit's daily reminder keeps firing for a habit that is not here
+    if (moved) void rescheduleAllReminders();
+  }, [trashHabit]);
 
   const openHabit = useCallback((h: Habit | null) => { setHabitEdit(h); setHabitSheet(true); }, []);
 
@@ -230,9 +258,13 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const { width: winW } = useWindowDimensions();
   const twoCol = columnWidth(winW, tabMode, WIDE_MAX) >= TWO_COL_AT;
   // the dot is for a block in progress this minute: nothing else says "now" in the header
+  const anySheet = blockSheet || copySheet || tplSheet || habitSheet || !!remindEdit;
+  const exp = useExport(['habits', 'planner'], { range: '30d' });
   const header = useToolHeader({
     title: 'Planner',
     mode: tabMode ? 'tab' : 'page',
+    // the header pull opens Sift only while the planner is calm: no sheet up over it
+    pull: !anySheet,
     context: contextLine(
       onNow
         ? [{ em: onNow.subject }, ' until ' + clock(onNow.end, hour24)]
@@ -252,7 +284,14 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       },
       { icon: 'copy-outline', label: 'Copy this day', onPress: () => setCopySheet(true) },
       { icon: 'albums-outline', label: 'Week templates', onPress: () => setTplSheet(true) },
+      exp.action,
     ],
+  });
+  // a block or a habit Sift opened is brought into view
+  const scrollRef = React.useRef<Animated.ScrollView>(null);
+  const { topRef, bring } = useBringIntoView({
+    scrollTo: (y, animated) => scrollRef.current?.scrollTo({ y, animated }),
+    scrollY: header.scrollY, padTop: header.padTop, barH: header.barH, still: level === 'none',
   });
 
   // blocks: the day's own entrance is for a day change; the screen's rises with the rest, every visit
@@ -261,7 +300,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <Animated.View key={day} entering={dayIn}>
         <DayBlocks
           day={day} blocks={blocks} hour24={hour24} nowMin={viewingToday ? nowMin : -1} deepWork={deepWork}
-          onEdit={openEdit} onDelete={deleteBlock}
+          arrive={arrive} onArrive={bring} onEdit={openEdit} onDelete={deleteBlock}
         />
       </Animated.View>
       {/* the wheel names the day, so the button's label never changes while the blocks slide */}
@@ -287,7 +326,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <ListCard>
             {habits.map((h) => (
               <HabitRow
-                key={h.id} h={h} today={today} hour24={hour24}
+                key={h.id} h={h} today={today} hour24={hour24} arrive={arrive === h.id} onArrive={bring}
                 onToggle={toggleHabitToday} onToggleDay={toggleHabitDay} onEdit={openHabit} onRemind={setRemindEdit}
                 onDelete={deleteHabit}
               />
@@ -303,10 +342,12 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       {header.bar}
       <Animated.ScrollView
         key={fk}
+        ref={scrollRef}
         {...header.scrollProps}
         contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 44 + (tabMode ? 0 : insets.bottom) }}
         showsVerticalScrollIndicator={false}
       >
+        <View ref={topRef} collapsable={false} />
         {/* the day: drag the wheel or tap a day beside it, and the blocks follow in the same direction. The header's
             hero rises with it, in the screen's first entrance */}
         <Enter index={0}>
@@ -326,6 +367,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
               textStyle={st.dayText}
               accessibilityLabel="Day"
             />
+            <DateLine dayIdx={dayIdx} today={today} />
             <Animated.View style={[st.todayLink, todayLinkStyle]} pointerEvents={away ? 'auto' : 'none'}>
               <Pressable onPress={() => pickDay(todayIdx)} disabled={!away} hitSlop={12} style={st.todayPress}>
                 <Text style={[st.todayText, { color: C.accent }]}>Today</Text>
@@ -347,7 +389,10 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         )}
       </Animated.ScrollView>
 
-      <BlockSheet visible={blockSheet} day={day} editing={editing} onClose={() => setBlockSheet(false)} />
+      <BlockSheet
+        visible={blockSheet} day={day} editing={editing} onClose={() => setBlockSheet(false)} onClosed={runAfterSheet}
+        onSaved={(message, undo) => { afterSheet.current = () => toast(message, undo ? { label: 'Undo', onPress: undo } : undefined); }}
+      />
 
       <CopySheet
         visible={copySheet}
@@ -371,6 +416,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <HabitSheet visible={habitSheet} editing={habitEdit} onClose={() => setHabitSheet(false)} />
 
       <ReminderSheet habit={remindEdit} onClose={() => setRemindEdit(null)} />
+      {exp.sheet}
     </ScreenBG>
   );
 }
@@ -379,12 +425,15 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
  * The day's blocks. Built afresh for each day (the day's own entrance brings them in); on the same day, a first block
  * added to an empty day fades in rather than appearing in one frame.
  */
-function DayBlocks({ day, blocks, hour24, nowMin, deepWork, onEdit, onDelete }: {
+function DayBlocks({ day, blocks, hour24, nowMin, deepWork, arrive, onArrive, onEdit, onDelete }: {
   day: DayName; blocks: PlannerBlock[]; hour24: boolean;
   /** the minute of the day, when the day shown is today; -1 on any other day */
   nowMin: number;
   /** Deep Work is in use (not archived), so a block is a way into it */
   deepWork: boolean;
+  /** the block or habit Sift opened, if any */
+  arrive: string | null;
+  onArrive: (view: View | null) => void;
   onEdit: (b: PlannerBlock) => void; onDelete: (b: PlannerBlock) => void;
 }) {
   const level = useAnimLevel();
@@ -401,6 +450,7 @@ function DayBlocks({ day, blocks, hour24, nowMin, deepWork, onEdit, onDelete }: 
             isNow={nowMin >= 0 && toMinutes(b.start) <= nowMin && nowMin < toMinutes(b.end)}
             progress={nowMin >= 0 ? blockProgress(b, nowMin) : 0}
             past={nowMin >= 0 && toMinutes(b.end) <= nowMin}
+            arrive={arrive === b.id} onArrive={onArrive}
             onEdit={onEdit} onDelete={onDelete}
           />
         ))}
@@ -442,16 +492,20 @@ function BlockProgress({ progress }: { progress: number }) {
 }
 
 /** One block of the day. Memoised, so the minute turning re-renders only the block on now (its NOW badge and its gauge). */
-const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, progress, past, deepWork, onEdit, onDelete }: {
+const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, progress, past, deepWork, arrive, onArrive, onEdit, onDelete }: {
   b: PlannerBlock; hour24: boolean; isNow: boolean;
   /** how far the block on now has run, 0 to 1; 0 for any other */
   progress: number;
   /** today's block that has ended: it steps back, so what is still to come stands out */
   past: boolean;
   deepWork: boolean;
+  /** Sift opened this block: it is brought into view and pulses once */
+  arrive: boolean;
+  onArrive: (view: View | null) => void;
   onEdit: (b: PlannerBlock) => void; onDelete: (b: PlannerBlock) => void;
 }) {
   useTheme(); // a memo row: it follows a new accent itself, since its props do not change with one
+  const ref = useArrival(arrive, onArrive);
   const span = clock(b.start, hour24) + ' – ' + clock(b.end, hour24);
   const body = (
     <>
@@ -470,22 +524,101 @@ const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, progress, past
       {isNow ? <BlockProgress progress={progress} /> : null}
     </>
   );
-  if (!deepWork) return <ListRow style={{ paddingVertical: 12 }}>{body}</ListRow>;
+  const pulse = <ArrivalPulse active={arrive} radius={14} delay={PULSE_DELAY} />;
+  if (!deepWork) {
+    return (
+      <View ref={ref} collapsable={false}>
+        <ListRow style={{ paddingVertical: 12 }}>{body}</ListRow>
+        {pulse}
+      </View>
+    );
+  }
   // Deep Work opens set to the block's length, or to what is left of it while it is on
-  const start = () => {
-    const d = new Date();
-    const m = d.getHours() * 60 + d.getMinutes();
-    const end = toMinutes(b.end);
-    openTool('focus', { subject: b.subject, minutes: isNow && m < end ? end - m : end - toMinutes(b.start) });
-  };
+  const start = () => openTool('focus', blockFocusParams(b, isNow));
   // a list row's own shape and carve, with the name a screen reader needs
   return (
-    <Bouncy
-      onPress={start} scaleTo={1} sink={false} radius={14} style={st.blockRow}
-      accessibilityRole="button" accessibilityLabel={'Start Deep Work on ' + b.subject + ', ' + span}
-    >
-      {body}
-    </Bouncy>
+    <View ref={ref} collapsable={false}>
+      <Bouncy
+        onPress={start} scaleTo={1} sink={false} radius={14} style={st.blockRow}
+        accessibilityRole="button" accessibilityLabel={'Start Deep Work on ' + b.subject + ', ' + span}
+      >
+        {body}
+      </Bouncy>
+      {pulse}
+    </View>
+  );
+});
+
+/**
+ * A row a link opened: once it has laid out (and the day it is on has come in), the screen brings it into view, and
+ * then it pulses once.
+ */
+function useArrival(arrive: boolean, onArrive: (view: View | null) => void) {
+  const ref = React.useRef<View>(null);
+  const cb = React.useRef(onArrive);
+  cb.current = onArrive;
+  React.useEffect(() => {
+    if (!arrive) return undefined;
+    const t = setTimeout(() => cb.current(ref.current), 320);
+    return () => clearTimeout(t);
+  }, [arrive]);
+  return ref;
+}
+
+/** the pulse waits for the scroll that brings its row into view */
+const PULSE_DELAY = 640;
+
+/** at most this many of the date's parts under the wheel; the rest are counted */
+const DATE_PARTS_MAX = 3;
+
+/**
+ * A quiet line under the wheel: the next date the picked weekday falls on, and what is due then, e.g.
+ * "Fri 31 Oct · Chem mock · Lab report due". Each exam and long-term task in it opens itself. An archived tool's are
+ * left out. Its own part, so the minute turning never re-renders it; the date turns over with `today`.
+ */
+const DateLine = React.memo(function DateLine({ dayIdx, today }: { dayIdx: number; today: string }) {
+  useTheme(); // a memo part: its links are in the accent
+  const scores = useStore((s) => s.scores);
+  const missions = useStore((s) => s.missions);
+  const archived = useStore((s) => s.settings.archivedTools);
+  const date = useMemo(() => nextDateOf(dayIdx, new Date(today + 'T00:00:00')), [dayIdx, today]);
+  const key = todayKey(date);
+  const parts = useMemo(() => {
+    const off = archived || [];
+    const out: { id: string; label: string; open: () => void }[] = [];
+    if (!off.includes('scores')) {
+      for (const n of topExams(indexScores(scores))) {
+        if (n.date !== key) continue;
+        const id = n.id;
+        out.push({ id, label: n.title.trim() || 'Exam', open: () => { openScoreNode(id); openTool('scores'); } });
+      }
+    }
+    if (!off.includes('tasks')) {
+      for (const m of missions) {
+        if (m.done || m.deadline !== key) continue;
+        const id = m.id;
+        out.push({ id, label: (m.title.trim() || 'Task') + ' due', open: () => openTool('tasks', { item: id }) });
+      }
+    }
+    return out;
+  }, [scores, missions, archived, key]);
+  const shown = parts.slice(0, DATE_PARTS_MAX);
+  const more = parts.length - shown.length;
+  return (
+    <View style={st.dateLine}>
+      <Text style={st.dateText} maxFontSizeMultiplier={CHROME_FONT_MAX}>{fmtDayShort(date)}</Text>
+      {shown.map((p) => (
+        <React.Fragment key={p.id}>
+          <Text style={st.dateDot} importantForAccessibility="no" maxFontSizeMultiplier={CHROME_FONT_MAX}> · </Text>
+          <Pressable onPress={p.open} hitSlop={12} accessibilityRole="link" accessibilityLabel={'Open ' + p.label} style={st.datePart}>
+            <Text style={[st.dateText, { color: C.accent }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>{p.label}</Text>
+          </Pressable>
+        </React.Fragment>
+      ))}
+      {more > 0 ? (
+        <Text style={st.dateText} maxFontSizeMultiplier={CHROME_FONT_MAX}>{' · ' + more + ' more'}</Text>
+      ) : null}
+    </View>
   );
 });
 
@@ -495,12 +628,16 @@ const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, progress, past
  * a zero: a habit with no streak yet shows none. A habit kept on some weekdays says which, and on a day it is not due it
  * reads as a rest day (its tick still counts). A long press opens it for editing.
  */
-const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onToggleDay, onEdit, onRemind, onDelete }: {
+const HabitRow = React.memo(function HabitRow({ h, today, hour24, arrive, onArrive, onToggle, onToggleDay, onEdit, onRemind, onDelete }: {
   h: Habit; today: string; hour24: boolean;
+  /** Sift opened this habit: it is brought into view and pulses once */
+  arrive: boolean;
+  onArrive: (view: View | null) => void;
   onToggle: (id: string) => void; onToggleDay: (id: string, dateKey: string) => void;
   onEdit: (h: Habit) => void; onRemind: (h: Habit) => void; onDelete: (h: Habit) => void;
 }) {
   useTheme(); // a memo row: it follows a new accent itself, since its props do not change with one
+  const ref = useArrival(arrive, onArrive);
   // the current streak counts back from today, so a new day can end it with no tick at all; rest days pass by
   const { current, best } = useMemo(() => streaks(h.doneDates, h.days), [h.doneDates, h.days, today]);
   const done = h.doneDates.includes(today);
@@ -516,49 +653,52 @@ const HabitRow = React.memo(function HabitRow({ h, today, hour24, onToggle, onTo
   return (
     // the row holds its own tick, its week and its buttons, each reached on its own by a screen reader; the row itself
     // is the long press that edits it, and says so
-    <ListRow style={st.habitRow} onLongPress={() => onEdit(h)} accessibilityHint="Double tap and hold to edit">
-      <Row>
-        <CheckCircle done={done} onPress={() => onToggle(h.id)} label={h.title + ', today' + (due ? '' : ', rest day')} />
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={[T.title, !due && { color: C.textDim }]}>{h.title}</Text>
-          {!due || streakText || time || daysText ? (
-            // the streak's figures dip and come back as the tick lands, instead of jumping. Each part keeps its icon with
-            // it, so a narrow phone wraps the line between parts
-            <FadeSwap swapKey={streakText + (due ? '' : '|rest')}>
-              <View style={st.subLine}>
-                {!due ? <Text style={T.caption}>Rest day</Text> : null}
-                {streakText ? (
-                  <View style={st.subPart}>
-                    <Flame atRisk={atRisk} />
-                    <Text style={T.caption}>{streakText}</Text>
-                  </View>
-                ) : null}
-                {time ? (
-                  <View style={st.subPart}>
-                    <Ionicons name="alarm-outline" size={13} color={C.textFaint} style={st.subIcon} />
-                    <Text style={T.caption}>{time}</Text>
-                  </View>
-                ) : null}
-                {daysText ? (
-                  <View style={st.subPart}>
-                    <Ionicons name="calendar-outline" size={13} color={C.textFaint} style={st.subIcon} />
-                    <Text style={[T.caption, st.subText]}>{daysText}</Text>
-                  </View>
-                ) : null}
-              </View>
-            </FadeSwap>
-          ) : null}
-        </View>
-        <IconBtn
-          name="alarm-outline" size={18}
-          color={time ? C.accent : C.textFaint}
-          onPress={() => onRemind(h)}
-          accessibilityLabel={time ? 'Reminder at ' + time : 'Set a reminder'}
-        />
-        <IconBtn name="trash-outline" size={18} onPress={() => onDelete(h)} accessibilityLabel={'Delete ' + h.title} />
-      </Row>
-      <WeekStrip id={h.id} title={h.title} doneDates={h.doneDates} days={h.days} today={today} onToggleDay={onToggleDay} />
-    </ListRow>
+    <View ref={ref} collapsable={false}>
+      <ListRow style={st.habitRow} onLongPress={() => onEdit(h)} accessibilityHint="Double tap and hold to edit">
+        <Row>
+          <CheckCircle done={done} onPress={() => onToggle(h.id)} label={h.title + ', today' + (due ? '' : ', rest day')} />
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={[T.title, !due && { color: C.textDim }]}>{h.title}</Text>
+            {!due || streakText || time || daysText ? (
+              // the streak's figures dip and come back as the tick lands, instead of jumping. Each part keeps its icon with
+              // it, so a narrow phone wraps the line between parts
+              <FadeSwap swapKey={streakText + (due ? '' : '|rest')}>
+                <View style={st.subLine}>
+                  {!due ? <Text style={T.caption}>Rest day</Text> : null}
+                  {streakText ? (
+                    <View style={st.subPart}>
+                      <Flame atRisk={atRisk} />
+                      <Text style={T.caption}>{streakText}</Text>
+                    </View>
+                  ) : null}
+                  {time ? (
+                    <View style={st.subPart}>
+                      <Ionicons name="alarm-outline" size={13} color={C.textFaint} style={st.subIcon} />
+                      <Text style={T.caption}>{time}</Text>
+                    </View>
+                  ) : null}
+                  {daysText ? (
+                    <View style={st.subPart}>
+                      <Ionicons name="calendar-outline" size={13} color={C.textFaint} style={st.subIcon} />
+                      <Text style={[T.caption, st.subText]}>{daysText}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </FadeSwap>
+            ) : null}
+          </View>
+          <IconBtn
+            name="alarm-outline" size={18}
+            color={time ? C.accent : C.textFaint}
+            onPress={() => onRemind(h)}
+            accessibilityLabel={time ? 'Reminder at ' + time : 'Set a reminder'}
+          />
+          <IconBtn name="trash-outline" size={18} onPress={() => onDelete(h)} accessibilityLabel={'Delete ' + h.title} />
+        </Row>
+        <WeekStrip id={h.id} title={h.title} doneDates={h.doneDates} days={h.days} today={today} onToggleDay={onToggleDay} />
+      </ListRow>
+      <ArrivalPulse active={arrive} radius={14} delay={PULSE_DELAY} />
+    </View>
   );
 });
 
@@ -664,19 +804,40 @@ function Swatch({ color, active, onPress }: { color: string; active: boolean; on
   );
 }
 
+/** "  Physics " and "physics" are one subject. */
+const subjectKeyOf = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+/** at most this many subject suggestions under the block's subject */
+const SUGGEST_MAX = 5;
+
+/** The days a block was added to, and its new id on each: what Undo takes back. */
+type AddedBlocks = { day: DayName; id: string }[];
+
 /**
  * A new block, or an edit of one. What is typed lives here, so a keystroke re-renders the sheet alone, never the
- * day's blocks and the habits behind it.
+ * day's blocks and the habits behind it. A new block can repeat on several days at once (Repeat on), each checked for
+ * overlaps, and takes the colour its subject already has in the week. An edit of a block that repeats (the same
+ * subject and times on other days) can change it on all of them.
  */
-function BlockSheet({ visible, day, editing, onClose }: {
+function BlockSheet({ visible, day, editing, onClose, onClosed, onSaved }: {
   visible: boolean; day: DayName; editing: PlannerBlock | null; onClose: () => void;
+  onClosed: () => void;
+  /** said once the sheet has gone: what was done, and how to undo it (null for a plain change on the day shown) */
+  onSaved: (message: string, undo: (() => void) | null) => void;
 }) {
   const addBlock = useStore((s) => s.addBlock);
   const updateBlock = useStore((s) => s.updateBlock);
+  const subjects = useSubjects();
   const [subj, setSubj] = useState('');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [color, setColor] = useState(BLOCK_COLORS[0]);
+  // the days a new block goes on; the day shown to begin with, and at least one always stays on
+  const [repeatDays, setRepeatDays] = useState<number[]>([DAY_NAMES.indexOf(day)]);
+  const [lastDay, setLastDay] = useState(false);
+  // an edit changes the block on every day it repeats too
+  const [everyDay, setEveryDay] = useState(false);
+  // a colour picked by hand is kept; until then a new block follows its subject's colour
+  const colorPicked = React.useRef(false);
   const hour24 = useStore((s) => s.settings.hour24);
   // Set once the block is saved, or while the overlap question is up. A second tap while the sheet leaves, or Return
   // landing in the same frame as the button, finds it set: the block is never added twice, nor found clashing with itself.
@@ -685,17 +846,45 @@ function BlockSheet({ visible, day, editing, onClose }: {
   React.useEffect(() => {
     if (!visible) return;
     busy.current = false;
+    colorPicked.current = !!editing;
     setSubj(editing ? editing.subject : '');
     setStart(editing ? editing.start : '');
     setEnd(editing ? editing.end : '');
     setColor(editing ? editing.color : BLOCK_COLORS[0]);
+    setRepeatDays([DAY_NAMES.indexOf(day)]);
+    setLastDay(false);
+    setEveryDay(false);
   }, [visible]);
+
+  // the same block on other days, as it was when the sheet opened: what "every day it repeats" changes with it
+  const planner = useStore((s) => s.planner);
+  const repeats = useMemo(() => (editing && visible ? repeatsOf(planner, day, editing) : []), [editing, visible, day, planner]);
+
+  const pickSubject = (v: string) => {
+    setSubj(v);
+    if (colorPicked.current) return;
+    const c = colorForSubject(useStore.getState().planner, v, day);
+    if (c) setColor(c);
+  };
+  // the subjects in use elsewhere (Focus, notes, the week, Scores), most used first, narrowed by what is typed
+  const typed = subjectKeyOf(subj);
+  const suggestions = useMemo(
+    () => subjects.filter((n) => { const k = subjectKeyOf(n); return k !== typed && k.startsWith(typed); }).slice(0, SUGGEST_MAX),
+    [subjects, typed],
+  );
 
   // a start picked with no end yet gives the block an hour, kept inside the day, so most blocks need one turn of the wheel
   const pickStart = (v: string) => {
     setStart(v);
     const from = toMinutes(v);
     if (from >= 0 && toMinutes(end) < 0) setEnd(hhmmOf(Math.min(from + 60, 1440)));
+  };
+  const toggleRepeat = (i: number) => {
+    tick();
+    const next = toggledDay(repeatDays, i);
+    if (!next) { setLastDay(true); return; }
+    setRepeatDays(next);
+    setLastDay(false);
   };
 
   const submit = () => {
@@ -705,32 +894,90 @@ function BlockSheet({ visible, day, editing, onClose }: {
     if (toMinutes(s) < 0 || toMinutes(e) < 0) { Alert.alert('Missing time', 'Pick when the block starts and ends.'); return; }
     if (toMinutes(e) <= toMinutes(s)) { Alert.alert('Time order', 'End must be after start.'); return; }
     busy.current = true;
-    const save = () => {
-      if (editing) updateBlock(day, { ...editing, subject: t, start: s, end: e, color });
-      else addBlock(day, { subject: t, start: s, end: e, color });
+    const week = useStore.getState().planner;
+    // the days and blocks this save touches: an edit's own block (and its repeats, when asked), or a new block's days
+    const edits: { day: DayName; id: string }[] = editing
+      ? [{ day, id: editing.id }, ...(everyDay ? repeats.map((r) => ({ day: r.day as DayName, id: r.id })) : [])]
+      : [];
+    const adds: DayName[] = editing ? [] : DAY_NAMES.filter((_, i) => repeatDays.includes(i));
+    const save = (skip: readonly DayName[]) => {
+      const fields = { subject: t, start: s, end: e, color };
+      if (editing) {
+        const olds: { day: DayName; block: PlannerBlock }[] = [];
+        for (const x of edits) {
+          if (skip.includes(x.day)) continue;
+          const old = (useStore.getState().planner[x.day] || []).find((b) => b.id === x.id);
+          if (!old) continue;
+          olds.push({ day: x.day, block: old });
+          updateBlock(x.day, { ...old, ...fields });
+        }
+        // a change on other days too says so, and can be taken back block by block
+        if (olds.length > 1) {
+          onSaved('Changed ' + t + ' on ' + olds.length + ' days', () => {
+            for (const o of olds) {
+              if ((useStore.getState().planner[o.day] || []).some((b) => b.id === o.block.id)) updateBlock(o.day, o.block);
+            }
+          });
+        }
+      } else {
+        const days = adds.filter((d) => !skip.includes(d));
+        const added: AddedBlocks = [];
+        for (const d of days) {
+          const had = new Set((useStore.getState().planner[d] || []).map((b) => b.id));
+          addBlock(d, fields);
+          const fresh = (useStore.getState().planner[d] || []).find((b) => !had.has(b.id));
+          if (fresh) added.push({ day: d, id: fresh.id });
+        }
+        // a block added to the day shown alone is there to see; on other days it says where it went
+        if (added.length && !(added.length === 1 && added[0].day === day)) {
+          onSaved(
+            'Added ' + t + ' to ' + (added.length === 1 ? fullDay(added[0].day) : added.length + ' days'),
+            () => { for (const a of added) useStore.getState().removeBlock(a.day, a.id); },
+          );
+        }
+      }
       onClose();
     };
-    // two blocks at once would both claim "now": say so, and let a deliberate overlap through
-    const clash = (useStore.getState().planner[day] || []).find((b) => (
-      b.id !== editing?.id && toMinutes(b.start) < toMinutes(e) && toMinutes(s) < toMinutes(b.end)
-    ));
-    if (clash) {
+    // two blocks at once would both claim "now": say so for each day, and let a deliberate overlap through
+    const ignore = edits.map((x) => x.id);
+    const clashes = (editing ? edits.map((x) => x.day) : adds)
+      .map((d) => ({ day: d, b: clashIn(week[d], s, e, ignore) }))
+      .filter((x): x is { day: DayName; b: PlannerBlock } => !!x.b);
+    if (clashes.length) {
       const answered = () => { busy.current = false; };
+      const all = editing ? edits.length : adds.length;
+      const message = clashes.length === 1
+        ? clashes[0].b.subject + ' runs ' + clock(clashes[0].b.start, hour24) + ' to ' + clock(clashes[0].b.end, hour24) + ' on '
+          + fullDay(clashes[0].day) + '. Save this block anyway?'
+        : clashes.map((c) => c.b.subject + ' on ' + c.day + ', ' + clock(c.b.start, hour24) + ' to ' + clock(c.b.end, hour24)).join('\n')
+          + '\n\nSave this block anyway?';
+      const buttons: { text: string; style?: 'cancel'; onPress: () => void }[] = [
+        { text: 'Cancel', style: 'cancel', onPress: answered },
+      ];
+      // some days are clear: the block can go on those alone
+      if (clashes.length < all) buttons.push({ text: 'Skip those days', onPress: () => save(clashes.map((c) => c.day)) });
+      buttons.push({ text: 'Save anyway', onPress: () => save([]) });
       Alert.alert(
-        'Overlaps ' + clash.subject,
-        clash.subject + ' runs ' + clock(clash.start, hour24) + ' to ' + clock(clash.end, hour24) + ' on ' + fullDay(day)
-          + '. Save this block anyway?',
-        [{ text: 'Cancel', style: 'cancel', onPress: answered }, { text: 'Save anyway', onPress: save }],
-        { cancelable: true, onDismiss: answered },
+        clashes.length === 1 ? 'Overlaps ' + clashes[0].b.subject : 'Overlaps on ' + clashes.length + ' days',
+        message, buttons, { cancelable: true, onDismiss: answered },
       );
       return;
     }
-    save();
+    save([]);
   };
 
+  const n = repeatDays.length;
+  const repeatCaption = lastDay ? 'At least one day' : n === 1 ? 'Only ' + fullDay(DAY_NAMES[repeatDays[0]]) : daysLabel(repeatDays);
   return (
-    <Sheet visible={visible} onClose={onClose} title={editing ? 'Edit block' : 'New block for ' + fullDay(day)}>
-      <Field label="Subject" value={subj} onChangeText={setSubj} placeholder="e.g. Physics" autoFocus maxLength={40} />
+    <Sheet visible={visible} onClose={onClose} onClosed={onClosed} title={editing ? 'Edit block' : 'New block for ' + fullDay(day)}>
+      <Field label="Subject" value={subj} onChangeText={pickSubject} placeholder="e.g. Physics" autoFocus maxLength={40} />
+      {suggestions.length ? (
+        <Row style={st.suggest}>
+          {suggestions.map((name) => (
+            <Chip key={name} small label={name} onPress={() => { tick(); pickSubject(name); }} accessibilityHint="Uses this subject" />
+          ))}
+        </Row>
+      ) : null}
       {/* the end may be midnight, the end of the day; a start never is */}
       <Row style={{ gap: 14, alignItems: 'flex-start' }}>
         <TimeField label="Starts" value={start} onChange={pickStart} placeholder="Pick a time" style={{ flex: 1 }} />
@@ -738,10 +985,32 @@ function BlockSheet({ visible, day, editing, onClose }: {
       </Row>
       <Row style={{ flexWrap: 'wrap', gap: 10, marginBottom: 12, marginTop: 2 }}>
         {BLOCK_COLORS.map((c) => (
-          <Swatch key={c} color={c} active={color === c} onPress={() => { tick(); setColor(c); }} />
+          <Swatch key={c} color={c} active={color === c} onPress={() => { tick(); colorPicked.current = true; setColor(c); }} />
         ))}
       </Row>
-      <PillButton label={editing ? 'Save' : 'Add block'} onPress={submit} />
+      {editing ? (
+        repeats.length ? (
+          <View style={st.everyDay}>
+            <Row>
+              <Text style={[T.body, { flex: 1 }]}>Change it on every day it repeats</Text>
+              <Toggle value={everyDay} onChange={setEveryDay} label="Change it on every day it repeats" />
+            </Row>
+            <Text style={[T.caption, { marginTop: 4 }]}>
+              {'Also on ' + repeats.map((r) => r.day).filter((d, i, a) => a.indexOf(d) === i).join(', ')}
+            </Text>
+          </View>
+        ) : null
+      ) : (
+        <>
+          <Text style={st.repeatLabel} importantForAccessibility="no">Repeat on</Text>
+          <DayToggles value={repeatDays} onToggle={toggleRepeat} label="Repeat on" />
+          <Text style={[T.caption, st.repeatCaption]} accessibilityLiveRegion="polite">{repeatCaption}</Text>
+        </>
+      )}
+      <PillButton
+        label={editing ? 'Save' : n > 1 ? 'Add to ' + n + ' days' : 'Add block'}
+        onPress={submit}
+      />
     </Sheet>
   );
 }
@@ -896,36 +1165,6 @@ function saveHabit(id: string, title: string, remindTime?: string, days?: number
   if ((h.days || []).join() !== (cleanDays(days) || []).join()) s.setHabitDays(id, days);
 }
 
-/** every weekday, Monday first: a habit due every day */
-const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
-
-/**
- * One weekday of a habit's Repeat row, like an alarm clock's: a flat circle, outlined at rest and tinted in the accent
- * when the habit is due that day. 36 across, reaching 44 with its slop.
- */
-function DayToggle({ index, on, onPress }: { index: number; on: boolean; onPress: () => void }) {
-  const theme = useTheme();
-  const level = useAnimLevel();
-  const lit = useSharedValue(on ? 1 : 0);
-  React.useEffect(() => {
-    lit.value = level === 'none' ? (on ? 1 : 0) : withTiming(on ? 1 : 0, CHANGE);
-  }, [on, level]);
-  const litStyle = useAnimatedStyle(() => ({ opacity: lit.value }));
-  const restStyle = useAnimatedStyle(() => ({ opacity: 1 - lit.value }));
-  return (
-    <Pressable
-      onPress={onPress} hitSlop={4} style={({ pressed }) => [st.dayToggle, pressed && { opacity: 0.6 }]}
-      accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={FULL_DAYS[index]}
-    >
-      <Animated.View pointerEvents="none" style={[st.dayToggleEdge, { borderColor: theme === 'minimal' ? MIN.border : C.outline }, restStyle]} />
-      <Animated.View pointerEvents="none" style={[st.dayToggleEdge, { backgroundColor: C.accent + '1F', borderColor: C.accent + '66' }, litStyle]} />
-      <Text style={[st.dayToggleText, on && { color: C.accent, fontFamily: F.smSemi }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>
-        {DAY_NAMES[index][0]}
-      </Text>
-    </Pressable>
-  );
-}
-
 /** A reminder's time from the wheel: a time of day, or nothing ('' is none). */
 const readTime = (picked: string) => {
   const m = toMinutes(picked);
@@ -942,7 +1181,7 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
   const [habitTitle, setHabitTitle] = useState('');
   const [habitTime, setHabitTime] = useState('');
   // the weekdays it is due on; at least one always stays on, and a tap on the last one says so
-  const [days, setDays] = useState<number[]>(ALL_DAYS);
+  const [days, setDays] = useState<number[]>([...ALL_DAYS]);
   const [lastDay, setLastDay] = useState(false);
   // one save per opening: a second tap while the sheet leaves, or Return with the button, never adds the habit twice
   const done = React.useRef(false);
@@ -953,20 +1192,14 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
     done.current = false;
     setHabitTitle(editing ? editing.title : '');
     setHabitTime(editing?.remindTime ?? '');
-    setDays(editing?.days?.length ? [...editing.days] : ALL_DAYS);
+    setDays(editing?.days?.length ? [...editing.days] : [...ALL_DAYS]);
     setLastDay(false);
   }, [visible]);
   const toggleDay = (i: number) => {
     tick();
-    if (days.includes(i)) {
-      if (days.length === 1) {
-        setLastDay(true);
-        return;
-      }
-      setDays(days.filter((d) => d !== i));
-    } else {
-      setDays([...days, i].sort((a, b) => a - b));
-    }
+    const next = toggledDay(days, i);
+    if (!next) { setLastDay(true); return; }
+    setDays(next);
     setLastDay(false);
   };
   const submit = () => {
@@ -1000,11 +1233,7 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
       />
       <TimeField label="Reminder" value={habitTime} onChange={setHabitTime} placeholder="No reminder" clearable />
       <Text style={st.repeatLabel} importantForAccessibility="no">Repeat</Text>
-      <View style={st.repeatRow} accessibilityLabel="Repeat">
-        {ALL_DAYS.map((i) => (
-          <DayToggle key={i} index={i} on={days.includes(i)} onPress={() => toggleDay(i)} />
-        ))}
-      </View>
+      <DayToggles value={days} onToggle={toggleDay} label="Repeat" />
       <Text style={[T.caption, st.repeatCaption]} accessibilityLiveRegion="polite">
         {lastDay ? 'At least one day' : daysLabel(days)}
       </Text>
@@ -1120,9 +1349,14 @@ const st = StyleSheet.create({
   subIcon: { marginRight: 4 },
   // the habit sheet's Repeat row: seven circles spread across the sheet, the field label's look above them
   repeatLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 8, marginTop: 4 },
-  repeatRow: { flexDirection: 'row', justifyContent: 'space-between' },
   repeatCaption: { marginTop: 8, marginBottom: 18, marginLeft: 2 },
-  dayToggle: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  dayToggleEdge: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 18, borderWidth: 1 },
-  dayToggleText: { color: C.textDim, fontFamily: F.smMed, ...oneLine(13), letterSpacing: TRACK.small },
+  // the subjects already in use, under the block's subject: flat chips, nearer the field they fill
+  suggest: { flexWrap: 'wrap', marginTop: -4, marginBottom: 6 },
+  // an edit's "every day it repeats": a switch row with the days under it, a field's gap after
+  everyDay: { marginTop: 2, marginBottom: 18, paddingLeft: 2 },
+  // the line under the wheel: the picked weekday's next date and what falls on it, centred, wrapping between parts
+  dateLine: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', marginTop: 2, paddingHorizontal: 8 },
+  dateText: { ...T.caption },
+  dateDot: { ...T.caption, color: C.textFaint },
+  datePart: { flexShrink: 1 },
 });

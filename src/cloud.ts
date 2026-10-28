@@ -1346,3 +1346,40 @@ export function afterLocalReplace() {
     if (useCloud.getState().status === 'choice') patch({ status: 'idle', reason: null, remote: null });
   }
 }
+
+// ---------- whether the backup needs the user ----------
+
+/**
+ * What the More tab and Today say about the backup: 'lost' when the account was signed out elsewhere (nothing backs up
+ * until the user signs in again), 'paused' when backups wait on the user (a choice between copies, automatic backups
+ * off with changes waiting, or failing for over a day), 'ok' otherwise, and always while the cloud has not looked yet.
+ */
+export type BackupAttention = 'ok' | 'paused' | 'lost';
+
+/** how long backups may keep failing (offline, say) before the user is told */
+const FAILING_FOR_MS = 24 * 60 * 60 * 1000;
+
+/** The words beside the More tab's Settings row, and on Today's slim banner. */
+export const BACKUP_ATTENTION_TEXT: Record<Exclude<BackupAttention, 'ok'>, string> = {
+  paused: 'Backup paused · tap to fix',
+  lost: 'Signed out · tap to back up again',
+};
+
+/** Pure, so it is tested on its own. */
+export function backupAttention(
+  s: Pick<CloudState, 'ready' | 'status' | 'auto' | 'pending' | 'lost' | 'lastSyncedAt'>,
+  now = Date.now(),
+): BackupAttention {
+  if (!s.ready) return 'ok';
+  if (s.lost) return 'lost';
+  if (s.status === 'signed-out') return 'ok';
+  if (s.status === 'choice') return 'paused';
+  if (!s.auto && s.pending) return 'paused';
+  if (s.status === 'error' && (s.lastSyncedAt == null || now - s.lastSyncedAt > FAILING_FOR_MS)) return 'paused';
+  return 'ok';
+}
+
+/** The backup's attention for the screens: re-renders only when it changes. */
+export function useBackupAttention(): BackupAttention {
+  return useCloud((s) => backupAttention(s));
+}

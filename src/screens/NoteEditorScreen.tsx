@@ -11,23 +11,25 @@ import Animated, {
 import * as ImagePicker from 'expo-image-picker';
 import { Image as CachedImage } from 'expo-image';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { C, F, MIN, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU, writingFace } from '../theme';
 import { columnWidth } from '../layout';
 import { useStore, Attachment, Note, flushSaves } from '../store';
-import { fmtClockTime, todayKey, uid, yesterdayKey } from '../utils';
+import { fmtClockTime, todayKey, yesterdayKey } from '../utils';
 import {
-  ScreenBG, Sheet, Chip, Row, IconBtn, NeuIconBtn, PillButton, DotMenu, EmptyState, GateHeader, useTheme, useToolHeader,
+  ScreenBG, Sheet, Chip, Row, IconBtn, NeuIconBtn, PillButton, DotMenu, EmptyState, GateHeader, Field, useTheme, useToolHeader,
 } from '../components/UI';
+import { SubjectSuggest } from '../components/SubjectSuggest';
+import { tick } from '../haptics';
 import { toast } from '../components/Toast';
 import { NoteGate, PinSheet, ToolGate } from '../components/LockGate';
 import { expectAway, markOpen, noteScope, pinStatus } from '../lock';
 import { Bouncy, EASE_OUT, Enter, glide, rowIn, rowOut, useAnimLevel, useBuilt } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ATT_DIR } from '../attachments';
+import { NOT_KEPT, keepFile } from '../attachments';
+
 import { toastTrashed } from '../trashToast';
 import { useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
@@ -47,22 +49,8 @@ const countWords = (text: string) => {
   return t ? t.split(/\s+/).length : 0;
 };
 
-/**
- * Copies a picked file into the app's own attachments folder, where Android never clears it. When the copy fails (a
- * full phone, usually) the note keeps the picker's copy for now and `kept` is false, so the user is told to re-attach
- * it once there is room: the picker's copy lives in a cache Android may clear.
- */
-async function persistFile(uri: string, name: string): Promise<{ uri: string; kept: boolean }> {
-  try {
-    await FileSystem.makeDirectoryAsync(ATT_DIR, { intermediates: true }).catch(() => {});
-    const dest = ATT_DIR + uid() + '-' + name.replace(/[^\w.\-]/g, '_');
-    await FileSystem.copyAsync({ from: uri, to: dest });
-    return { uri: dest, kept: true };
-  } catch {
-    return { uri, kept: false };
-  }
-}
-const NOT_KEPT = 'Attached, but the phone is too full to keep a copy. Free some space and attach it again.';
+// a picked file is kept in the app's own folder (attachments.ts keepFile), as a shared one is
+const persistFile = keepFile;
 
 /** A line's own mark, as the toolbar writes it: a bullet, an open box or a ticked one, then two spaces. */
 const LINE_MARK = /^([•☐☑✓])[ \t]*/;
@@ -211,6 +199,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   React.useEffect(() => { if (caretTo) setCaretTo(null); }, [caretTo]);
   const [viewing, setViewing] = useState<string | null>(null);
   const [newFolder, setNewFolder] = useState(false);
+  const [metaSheet, setMetaSheet] = useState(false);
   const newFolderNext = useRef(false);
 
   // a dictation still running when the note closes is stopped, never left listening
@@ -658,6 +647,17 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
           <Text style={[T.caption, st.words]}>
             {words ? words + (words === 1 ? ' word' : ' words') : ' '}
           </Text>
+          {/* the note's subject (one list across the app) and its tags: what the search and the subject's page find it by */}
+          <View style={st.meta}>
+            <Chip
+              small icon="school-outline" label={note.subject || 'Subject'} active={!!note.subject}
+              onPress={() => setMetaSheet(true)} accessibilityLabel={note.subject ? 'Subject, ' + note.subject : 'Add a subject'}
+            />
+            {(note.tags || []).map((t) => (
+              <Chip key={t} small label={'#' + t} onPress={() => setMetaSheet(true)} accessibilityLabel={'Tag ' + t} />
+            ))}
+            <Chip small icon="pricetag-outline" label={note.tags?.length ? '' : 'Tag'} onPress={() => setMetaSheet(true)} accessibilityLabel="Add a tag" />
+          </View>
 
           {note.attachments.length > 0 && (
             <Attachments items={note.attachments} width={mediaW} onRemove={removeOne} onView={viewPhoto} live={built.current} />
@@ -769,6 +769,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
           setNewFolder(false);
         }}
       />
+      <NoteMetaSheet visible={metaSheet} onClose={() => setMetaSheet(false)} note={note} />
       <DotMenu visible={toolMenu} onClose={() => setToolMenu(false)} items={menuItems} />
       <PhotoViewer uri={viewing} onClose={() => setViewing(null)} />
 
@@ -1031,7 +1032,74 @@ function InlineVideo({ uri, width }: { uri: string; width: number }) {
   );
 }
 
+/** a tag as kept: one word or a few, no leading #, at most 30 characters */
+const cleanTag = (raw: string) => raw.replace(/^#+/, '').replace(/\s+/g, ' ').trim().slice(0, 30);
+
+/**
+ * A note's subject and tags, in a sheet of their own so typing in it re-renders the sheet and not the note. The subject
+ * offers the ones the app already knows (src/subjects.ts); a tag goes on with Enter and comes off with a tap. Both are
+ * written as they change, without touching the note's edited time.
+ */
+function NoteMetaSheet({ visible, onClose, note }: { visible: boolean; onClose: () => void; note: Note }) {
+  const updateNote = useStore((s) => s.updateNote);
+  const [subject, setSubject] = useState(note.subject || '');
+  const [tag, setTag] = useState('');
+  React.useEffect(() => {
+    if (!visible) return;
+    setSubject(note.subject || '');
+    setTag('');
+  }, [visible]);
+  const tags = note.tags || [];
+  const saveSubject = (v: string) => {
+    const name = v.replace(/\s+/g, ' ').trim();
+    if (name === (note.subject || '')) return;
+    updateNote(note.id, { subject: name || undefined }, { touch: false });
+  };
+  const addTag = () => {
+    const t = cleanTag(tag);
+    setTag('');
+    if (!t || tags.some((x) => x.toLowerCase() === t.toLowerCase())) return;
+    tick();
+    updateNote(note.id, { tags: [...tags, t] }, { touch: false });
+  };
+  const close = () => {
+    saveSubject(subject);
+    const t = cleanTag(tag);
+    if (t && !tags.some((x) => x.toLowerCase() === t.toLowerCase())) updateNote(note.id, { tags: [...tags, t] }, { touch: false });
+    onClose();
+  };
+  return (
+    <Sheet visible={visible} onClose={close} title="Subject and tags">
+      <Field
+        label="Subject" value={subject} onChangeText={setSubject} placeholder="Like Physics" maxLength={60}
+        returnKeyType="done" onSubmitEditing={() => saveSubject(subject)} onBlur={() => saveSubject(subject)}
+        style={{ marginBottom: 0 }}
+      />
+      <SubjectSuggest value={subject} max={6} onPick={(n) => { setSubject(n); saveSubject(n); }} style={{ marginTop: 10 }} />
+      <Field
+        label="Tags" value={tag} onChangeText={setTag} placeholder="Add a tag" maxLength={30} autoCapitalize="none"
+        returnKeyType="done" submitBehavior="submit" onSubmitEditing={addTag} style={{ marginTop: 22, marginBottom: 0 }}
+      />
+      {tags.length ? (
+        <View style={[st.meta, { marginTop: 12 }]}>
+          {tags.map((t) => (
+            <Chip
+              key={t} small icon="close" label={'#' + t} accessibilityLabel={'Take off the tag ' + t}
+              onPress={() => { tick(); updateNote(note.id, { tags: tags.filter((x) => x !== t) }, { touch: false }); }}
+            />
+          ))}
+        </View>
+      ) : (
+        <Text style={[T.caption, { marginTop: 10 }]}>Tags help the search find the note.</Text>
+      )}
+      <PillButton label="Done" onPress={close} style={{ marginTop: 22 }} />
+    </Sheet>
+  );
+}
+
 const st = StyleSheet.create({
+  meta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: -4, marginBottom: 12 },
+
   // Source Serif's line box is tall (1.036 / -0.335 em): a 38 line keeps its ascenders clear on Android
   title: { color: C.text, fontFamily: F.head, fontSize: 30, lineHeight: 38, letterSpacing: TRACK.display, paddingVertical: 6 },
   // the face, size, line and tracking come from the Writing font (writingFace); these stand until it applies

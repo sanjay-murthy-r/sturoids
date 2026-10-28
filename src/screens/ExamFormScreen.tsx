@@ -7,9 +7,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import {
-  ScoreIndex, ScoreNode, ScoreResult, ScoreTag, categoriesOf, categoryOf, combineParts, fmtExamDate, fmtMark, fmtPct,
-  indexScores, marksProblem, nextTitle, parseMark, resultOf, topExams, whenOf,
+  ExamRemind, ScoreIndex, ScoreNode, ScoreResult, ScoreTag, categoriesOf, categoryOf, cleanExamRemind, combineParts, fmtExamDate,
+  fmtMark, fmtPct, indexScores, marksProblem, nextTitle, parseMark, resultOf, topExams, whenOf,
 } from '../scores';
+import { turnOnReminders } from '../notifications';
+import { SubjectSuggest } from '../components/SubjectSuggest';
 import { todayKey } from '../utils';
 import { shiftKey } from '../journal';
 import { ScreenBG, Card, Chip, Field, Hairline, IconBtn, PillButton, Row, SectionTitle, Toggle, useToolHeader, contextLine } from '../components/UI';
@@ -52,6 +54,11 @@ interface Draft {
   percentile: string;
   grade: string;
   note: string;
+  /**
+   * the exam's own reminders, a week before and the evening before; null while it has none of its own, so the global
+   * switch (the evening before) decides
+   */
+  remind: ExamRemind[] | null;
 }
 
 interface Template { id: string; title: string }
@@ -121,6 +128,7 @@ function initialDraft(params: { id?: string; parent?: string; subject?: string }
       percentile: num(editing.percentile),
       grade: editing.grade || '',
       note: editing.note || '',
+      remind: cleanExamRemind(editing.remind) ?? null,
     };
     return {
       draft, editId: editing.id, parentId: editing.parentId, template: null as Template | null, suggestion: null as string | null,
@@ -135,7 +143,7 @@ function initialDraft(params: { id?: string; parent?: string; subject?: string }
   const t = templateFor(ix, scoreTags, category, parentId);
   const draft: Draft = {
     title: '', date: todayKey(), category, tags: [], score: '', outOf: t.rows.length ? '' : t.outOf, ownMarks: false,
-    combine: t.combine, subjects: t.rows, target: t.target, rank: '', percentile: '', grade: '', note: '',
+    combine: t.combine, subjects: t.rows, target: t.target, rank: '', percentile: '', grade: '', note: '', remind: null,
   };
   return { draft, editId: null as string | null, parentId, template: t.template, suggestion: t.suggestion, originalIds: [] as string[], focusKey: null };
 }
@@ -177,6 +185,10 @@ export function ExamFormScreen() {
   });
   const [newCat, setNewCat] = React.useState<string | null>(null);
   const [problems, setProblems] = React.useState<Problems>({ rows: {} });
+  // the subject row being typed in, which the known subjects are offered under
+  const [typingRow, setTypingRow] = React.useState<string | null>(null);
+  const examReminders = useStore((s) => s.settings.examReminders);
+  const hour24 = useStore((s) => s.settings.hour24);
   // rows present when the screen opened come in with it; a row added later fades in on its own
   const firstRows = React.useRef(new Set(init.draft.subjects.map((r) => r.key))).current;
 
@@ -340,6 +352,8 @@ export function ExamFormScreen() {
         grade: d.grade.trim() || undefined,
         note: d.note.trim() || undefined,
         tags: allTags.length ? allTags : undefined,
+        // its own choice once one was made here (even none); otherwise the global switch keeps deciding
+        remind: d.remind ?? undefined,
       },
       subjects,
       removeIds,
@@ -382,6 +396,19 @@ export function ExamFormScreen() {
   const weighted = d.combine === 'weighted';
   const rowError = (key: string) => problems.rows[key];
 
+  // A dated exam still ahead rings at 7 pm a week before and the evening before, as picked here. Until a chip is
+  // tapped the exam follows the global switch (the evening before), and the chips say so; a reminder whose evening has
+  // already gone is not offered
+  const remindNow: ExamRemind[] = d.remind ?? (examReminders ? ['eve'] : []);
+  const canWeek = !!d.date && shiftKey(d.date, -7) >= today;
+  const canEve = !!d.date && d.date > today;
+  const toggleRemind = (k: ExamRemind) => {
+    tick();
+    const on = remindNow.includes(k);
+    const next = (['week', 'eve'] as ExamRemind[]).filter((x) => (x === k ? !on : remindNow.includes(x)));
+    set({ remind: next });
+    if (!on && !useStore.getState().settings.remindersEnabled) void turnOnReminders();
+  };
   return (
     <ScreenBG>
       {header.bar}
@@ -452,6 +479,20 @@ export function ExamFormScreen() {
               <JournalCalendar value={d.date} onPick={(k) => { set({ date: k }); setCalendar(false); }} />
             </Animated.View>
           ) : null}
+          {canWeek || canEve ? (
+            <Animated.View entering={popIn} style={{ marginTop: 16 }}>
+              <Text style={st.label}>Remind me</Text>
+              <View style={st.chips}>
+                {canWeek ? (
+                  <Chip small icon="notifications-outline" label="A week before" active={remindNow.includes('week')} onPress={() => toggleRemind('week')} />
+                ) : null}
+                {canEve ? (
+                  <Chip small icon="moon-outline" label="The evening before" active={remindNow.includes('eve')} onPress={() => toggleRemind('eve')} />
+                ) : null}
+              </View>
+              <Text style={st.hint}>Rings at {hour24 ? '19:00' : '7 pm'}.</Text>
+            </Animated.View>
+          ) : null}
         </Enter>
 
         <Enter index={3}>
@@ -500,6 +541,8 @@ export function ExamFormScreen() {
                           value={r.title} onChangeText={(v) => setRow(r.key, { title: v })} placeholder={i === 0 ? 'Physics' : 'Subject'}
                           maxLength={60} autoFocus={r.key === init.focusKey || (!firstRows.has(r.key) && !r.title)}
                           style={{ flex: 1, marginBottom: 0 }}
+                          onFocus={() => setTypingRow(r.key)}
+                          onBlur={() => setTypingRow((k) => (k === r.key ? null : k))}
                         />
                         {r.locked ? (
                           <Text style={[st.lockedPct, { width: 56 * 2 + 16 }]} numberOfLines={1}>
@@ -534,6 +577,13 @@ export function ExamFormScreen() {
                             accessibilityLabel={(r.title || 'Subject') + ' weight'}
                           />
                         </Animated.View>
+                      ) : null}
+                      {typingRow === r.key && !r.locked ? (
+                        <SubjectSuggest
+                          value={r.title} max={4} style={{ marginTop: 8 }}
+                          exclude={d.subjects.filter((x) => x.key !== r.key).map((x) => x.title)}
+                          onPick={(name) => setRow(r.key, { title: name })}
+                        />
                       ) : null}
                       {r.locked ? <Text style={st.hint}>Has subjects of its own. Its marks are theirs; change them on its page.</Text> : null}
                       {rowError(r.key) ? <Text style={st.problem}>{rowError(r.key)}</Text> : null}

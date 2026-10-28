@@ -58,7 +58,10 @@ function rootStack(): any {
  * two copies and Back would land on the second; a singular push brings the page already open to the top instead.
  */
 export function openPage(href: string, params?: Record<string, string>) {
-  router.push(params ? { pathname: href, params } : href, { dangerouslySingular: true });
+  // a link to a row (Settings' &row=) carries a new nonce each time, so the page already open sees it as a new ask and
+  // brings the row into view and pulses it again
+  const p = params && params.row && !params.n ? { ...params, n: Date.now().toString(36) } : params;
+  router.push(p ? { pathname: href, params: p } : href, { dangerouslySingular: true });
 }
 
 /**

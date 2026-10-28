@@ -8,7 +8,9 @@ import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T, TRACK, NEU } from '../theme';
 import { useStore, VaultVideo, VaultFolder, TimedNote, Bookmark } from '../store';
-import { parseYouTubeId, fmtMediaTime } from '../utils';
+import { fmtMediaTime } from '../utils';
+import { PLAYLIST_SAID, videosIn } from '../toolLogic';
+import { VideoOfferSheet } from '../shareIntake';
 import {
   ScreenBG, Card, Field, EmptyState, ListCard, ListRow, ListSlice, Row, Chip, Sheet, PillButton, IconBtn, NeuIconBtn, DotMenu,
   ScrollEdge, edgeStrength, useToolHeader, contextLine,
@@ -204,26 +206,36 @@ const NoteRow = React.memo(function NoteRow({ video, item, isBookmark, onOpen, o
  * The link field and its add key. It keeps the link being typed or pasted to itself, so a keystroke re-renders this
  * card and not the three pages under it.
  */
-const AddCard = React.memo(function AddCard({ cwd, folderName, onAdded }: {
+const AddCard = React.memo(function AddCard({ cwd, folderName, onAdded, onMany }: {
   cwd: string | null; folderName?: string; onAdded: (id: string) => void;
+  /** a paste with several new videos in it: they are offered together, in a sheet */
+  onMany: (list: { url: string; videoId: string }[]) => void;
 }) {
   const addVideo = useStore((s) => s.addVideo);
   const [url, setUrl] = useState('');
   const [adding, setAdding] = useState(false);
   // one add at a time: Enter and the add key pressed together must not add the same video twice
   const addingRef = useRef(false);
+  // Every YouTube link in what was pasted or typed: one new video is added at once, several are offered together, and
+  // each is kept as its clean watch link rather than the text around it. A playlist says it cannot be added yet
   const submit = async (raw: string) => {
     if (addingRef.current) return;
-    const id = parseYouTubeId(raw);
-    if (!id) { toast('That is not a YouTube link. Paste the full video link.'); return; }
-    if (useStore.getState().vaultVideos.some((v) => v.videoId === id)) { toast('That video is already in the Vault.'); return; }
+    const found = videosIn(raw, (vid) => useStore.getState().vaultVideos.some((v) => v.videoId === vid));
+    if (!found.fresh.length) {
+      if (found.have) toast(found.have === 1 ? 'That video is already in the Vault.' : 'Those videos are already in the Vault.');
+      else if (found.playlist) toast(PLAYLIST_SAID);
+      else toast('That is not a YouTube link. Paste the full video link.');
+      return;
+    }
+    if (found.fresh.length > 1) { setUrl(''); onMany(found.fresh); return; }
+    const { videoId: id, url: clean } = found.fresh[0];
     addingRef.current = true;
     setAdding(true);
     try {
       const { title, found } = await fetchTitle(id);
       // it may have been added from elsewhere while the title was on its way
       if (useStore.getState().vaultVideos.some((v) => v.videoId === id)) { toast('That video is already in the Vault.'); return; }
-      const vid = addVideo({ url: raw.trim(), videoId: id, title, folderId: cwd });
+      const vid = addVideo({ url: clean, videoId: id, title, folderId: cwd });
       setUrl('');
       // the player asks for the title again whenever the video is opened, and its menu can rename it
       if (!found) toast('Added without its title, as YouTube did not answer. Opening the video tries again.');
@@ -522,6 +534,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }, []);
   const openAt = useCallback((videoDbId: string, time: number) => once(() => nav.openVideo(videoDbId, time)), [nav, once]);
   const openVideo = useCallback((id: string) => once(() => nav.openVideo(id)), [nav, once]);
+  // a paste of several links, offered in one sheet
+  const [many, setMany] = useState<{ url: string; videoId: string }[] | null>(null);
+
   // the preview sheet is a window of its own: the video opens once it has gone, never under it
   const openAfterPreview = useRef<NoteHit | null>(null);
   const recentCount = recentVideos.length;
@@ -604,7 +619,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <Enter index={0}>
           <View style={{ paddingHorizontal: S.pad, paddingTop: typing ? header.barH + 12 : header.padTop }}>
             {typing ? null : header.hero}
-            <AddCard cwd={cwd} folderName={cwdFolder?.name} onAdded={openVideo} />
+            <AddCard cwd={cwd} folderName={cwdFolder?.name} onAdded={openVideo} onMany={setMany} />
 
             <SearchField onQuery={setQ} />
 
@@ -716,6 +731,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         </Enter>
       </View>
 
+      <VideoOfferSheet videos={many} onClose={() => setMany(null)} folderId={cwd} />
       <DraftSheet
         visible={!!folderSheet}
         onClose={() => setFolderSheet(null)}

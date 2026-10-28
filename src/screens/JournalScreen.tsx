@@ -1,7 +1,7 @@
 import React from 'react';
 import { Alert, AppState, Platform, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
@@ -19,6 +19,7 @@ import { Wheel } from '../components/Wheel';
 import { toast } from '../components/Toast';
 import { Bouncy, EASE_OUT, Enter, FadeSwap, shiftIn, useAnimLevel } from '../components/Motion';
 import { PinSheet, ToolGate } from '../components/LockGate';
+import { ExportButton } from '../reports';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, countWords, dayFacts, dayRecord, deleteEntry, formatJournalDate, journalDateParts, journalDayFor,
@@ -104,6 +105,15 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   const [tagSheet, setTagSheet] = React.useState(false);
   const [prefs, setPrefs] = React.useState(false);
   const [pinFlow, setPinFlow] = React.useState(false);
+  // Arrivals: Sift opens the journal's settings sheet (`sheet=settings`). The param is cleared once followed, so the
+  // same link works again
+  const router = useRouter();
+  const params = useLocalSearchParams<{ sheet?: string }>();
+  useFocusEffect(React.useCallback(() => {
+    if (params.sheet !== 'settings') return;
+    setPrefs(true);
+    router.setParams({ sheet: undefined } as any);
+  }, [params.sheet]));
   // each page loaded is a new page: it counts up so the page can arrive with its own entrance
   const [page, setPage] = React.useState(0);
   const turnDir = React.useRef<0 | 1 | -1>(0);
@@ -679,7 +689,10 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     // the bar recedes while typing, as the footer does, and comes back when the writing pauses. Only what it holds
     // recedes: on a tab it lies over the page, and a ground gone faint would let the writing show through it
     contentStyle: headStyle,
+    // the page is being written in: a drag on its header never opens Sift here
+    pull: false,
   });
+
   // the bar and the hero are kept while their inputs hold, so a keystroke never rebuilds them
   const toolBar = React.useMemo(() => tool.bar, [actions, tabMode, headStyle]);
   const toolHero = React.useMemo(() => tool.hero, [lineHeld, tabMode]);
@@ -947,6 +960,7 @@ function DaySheet({ visible, onClose, dateKey, record, habits, canTick }: {
   return (
     <Sheet visible={visible} onClose={onClose} title={title}>
       {sections.map((sec, i) => (i === 0 ? sec : <View key={'gap' + i} style={st.daySectionGap}>{sec}</View>))}
+      {sections.length ? <ExportButton inline kind="day" opts={{ from: dateKey }} label="Export this day" /> : null}
     </Sheet>
   );
 }

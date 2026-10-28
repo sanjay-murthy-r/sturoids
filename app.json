@@ -84,11 +84,331 @@
         {
           "disableIOS": true,
           "androidIntentFilters": [
-            "text/*"
+            "text/*",
+            "image/*",
+            "application/pdf"
+          ],
+          "androidMultiIntentFilters": [
+            "image/*",
+            "application/pdf"
           ]
         }
       ],
-      "./plugins/withAsyncStorageSize.js"
+      "./plugins/withAsyncStorageSize.js",
+      "./plugins/withAppShortcuts.js",
+      [
+        "react-native-android-widget",
+        {
+          "fonts": [
+            "./node_modules/@expo-google-fonts/inter-tight/400Regular/InterTight_400Regular.ttf",
+            "./node_modules/@expo-google-fonts/inter-tight/500Medium/InterTight_500Medium.ttf",
+            "./node_modules/@expo-google-fonts/inter-tight/600SemiBold/InterTight_600SemiBold.ttf",
+            "./node_modules/@expo-google-fonts/inter-tight/300Light/InterTight_300Light.ttf",
+            "./node_modules/@expo-google-fonts/schibsted-grotesk/400Regular/SchibstedGrotesk_400Regular.ttf",
+            "./node_modules/@expo-google-fonts/schibsted-grotesk/500Medium/SchibstedGrotesk_500Medium.ttf",
+            "./node_modules/@expo-google-fonts/source-serif-4/500Medium/SourceSerif4_500Medium.ttf"
+          ],
+          "widgets": [
+            {
+              "name": "DayRing",
+              "label": "Day ring",
+              "description": "ToDos done and focus minutes, as two rings",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "AtAGlance",
+              "label": "At a glance",
+              "description": "The next block, three open ToDos and your habits",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Agenda",
+              "label": "Agenda",
+              "description": "Today as a timeline, with a line for now",
+              "minWidth": "250dp",
+              "minHeight": "250dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 4,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Clock",
+              "label": "Clock",
+              "description": "The time, the date, what is next and the day so far",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Search",
+              "label": "Search",
+              "description": "Sift through everything",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "NextUp",
+              "label": "Next up",
+              "description": "The most urgent ToDo, with a tick",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Checklist",
+              "label": "Checklist",
+              "description": "Four open ToDos, ticked in place",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Deadlines",
+              "label": "Deadlines",
+              "description": "Long-term tasks and their days left",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "QuickStart",
+              "label": "Quick start",
+              "description": "Start Deep Work in one tap",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Session",
+              "label": "Session",
+              "description": "The running session, or presets and today against the goal",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "FocusWeek",
+              "label": "Focus week",
+              "description": "Seven days of focus by subject",
+              "minWidth": "250dp",
+              "minHeight": "250dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 4,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "NowNext",
+              "label": "Now and next",
+              "description": "The block on now and the time left",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "TodaysBlocks",
+              "label": "Today's blocks",
+              "description": "Today's Planner blocks on a line",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "HabitGrid",
+              "label": "Habit grid",
+              "description": "Habits over the last seven days",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Streak",
+              "label": "Streak",
+              "description": "Your longest live streak",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "NewNote",
+              "label": "New note",
+              "description": "Start a note in one tap",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Pinned",
+              "label": "Pinned notes",
+              "description": "Up to three pinned notes",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "RecentNotes",
+              "label": "Recent notes",
+              "description": "Five recent notes",
+              "minWidth": "250dp",
+              "minHeight": "250dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 4,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "WriteToday",
+              "label": "Write today",
+              "description": "Today's journal page",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "MoodStrip",
+              "label": "Mood strip",
+              "description": "Fourteen days of moods and ratings",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "OnThisDay",
+              "label": "On this day",
+              "description": "What you wrote on this date before",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Countdown",
+              "label": "Countdown",
+              "description": "Days to the next exam",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Results",
+              "label": "Results",
+              "description": "Your last three results",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "SubjectTrend",
+              "label": "Subject trend",
+              "description": "One subject's marks over time",
+              "minWidth": "250dp",
+              "minHeight": "250dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 4,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "ContinueWatching",
+              "label": "Continue watching",
+              "description": "The video you were watching",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "WatchList",
+              "label": "Watch list",
+              "description": "Three recent videos",
+              "minWidth": "250dp",
+              "minHeight": "250dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 4,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "AiDock",
+              "label": "AI dock",
+              "description": "Your AI links, one tap each",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            }
+          ]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

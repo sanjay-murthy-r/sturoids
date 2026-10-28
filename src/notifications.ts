@@ -1,11 +1,11 @@
 import { Alert, AppState, Linking, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { useStore } from './store';
-import { dayName, fmtClockTime, habitDueOn, toMinutes, todayKey } from './utils';
+import { dayName, fmtClockTime, habitDueOn, todoDueOn, toMinutes, todayKey } from './utils';
 import { COUNTDOWN_NOTIF_ID, FINISH_NOTIF_ID } from './deepWork';
 import { openTool } from './toolNav';
 import { ToolKey, toolByKey } from './tools';
-import { categoryOf, indexScores, resultOf, topExams } from './scores';
+import { ExamRemind, categoryOf, examRemindsOf, indexScores, resultOf, topExams } from './scores';
 import { toast } from './components/Toast';
 
 type Data = ReturnType<typeof useStore.getState>;
@@ -93,6 +93,20 @@ export async function initNotifications() {
   }
 }
 
+/**
+ * Whether this phone lets the app post notifications, without asking: 'granted', 'denied' (refused, or blocked in the
+ * phone's settings), or 'undetermined' (never asked). 'denied' where there is no notification service to ask.
+ */
+export async function notificationPermission(): Promise<'granted' | 'denied' | 'undetermined'> {
+  try {
+    const cur = await Notifications.getPermissionsAsync();
+    if (cur.granted) return 'granted';
+    return cur.status === 'undetermined' && cur.canAskAgain !== false ? 'undetermined' : 'denied';
+  } catch {
+    return 'denied';
+  }
+}
+
 export async function ensurePermission(): Promise<boolean> {
   try {
     const cur = await Notifications.getPermissionsAsync();
@@ -156,27 +170,35 @@ const dueOf = (hhmm: string | undefined) => toMinutes(hhmm || '');
 /** ToDos with a time and a reminder on it. */
 const timedTasks = (s: Data) => s.dailyTasks.filter((t) => !!t.remind && dueOf(t.time) >= 0);
 
-/** Long-term tasks still open with a reminder on their deadline day. */
-const timedMissions = (s: Data) => s.missions.filter((m) => !m.done && !!m.remind && /^\d{4}-\d{2}-\d{2}$/.test(m.deadline || ''));
+/** Long-term tasks still open with a reminder: on their deadline day, or early, days before it. */
+const timedMissions = (s: Data) =>
+  s.missions.filter((m) => !m.done && (!!m.remind || !!m.early?.length) && /^\d{4}-\d{2}-\d{2}$/.test(m.deadline || ''));
 
-/** The day before a day, as a key. */
-function dayBefore(key: string): string {
+/** A day `days` from a day, as a key. */
+function daysFrom(key: string, days: number): string {
   const [y, m, d] = key.split('-').map(Number);
-  return todayKey(new Date(y, m - 1, d - 1));
+  return todayKey(new Date(y, m - 1, d + days));
 }
 
+/** One exam reminder: the exam, what the reminder says under its name, and the day it rings (at 7 pm). */
+interface ExamAlert { id: string; title: string; body: string; kind: ExamRemind; on: string }
+
 /**
- * Exams to be reminded of the evening before: every dated exam still unmarked, from tomorrow on, with what the
- * reminder says under its name (its category, or the group it sits in).
+ * Exam reminders: every dated exam still unmarked, from tomorrow on, a week before and the evening before as it asks
+ * (its own choice, or the evening before while the global switch is on), with what the reminder says under its name
+ * (its category, or the group it sits in).
  */
-function examAlerts(s: Data, today: string): { id: string; title: string; body: string; eve: string }[] {
+function examAlerts(s: Data, today: string): ExamAlert[] {
   const ix = indexScores(s.scores);
-  const out: { id: string; title: string; body: string; eve: string }[] = [];
+  const out: ExamAlert[] = [];
   for (const n of topExams(ix)) {
     if (!n.date || !/^\d{4}-\d{2}-\d{2}$/.test(n.date) || n.date <= today || resultOf(n, ix)) continue;
+    const kinds = examRemindsOf(n, !!s.settings.examReminders);
+    if (!kinds.length) continue;
     const parent = n.parentId ? ix.byId.get(n.parentId) : undefined;
     const body = categoryOf(n, s.scoreTags)?.label || (parent?.kind === 'group' ? parent.title.trim() : '');
-    out.push({ id: n.id, title: n.title.trim() || 'Exam', body, eve: dayBefore(n.date) });
+    const title = n.title.trim() || 'Exam';
+    for (const kind of kinds) out.push({ id: n.id, title, body, kind, on: daysFrom(n.date, kind === 'week' ? -7 : -1) });
   }
   return out;
 }
@@ -187,7 +209,7 @@ function anyReminderSet(s: Data) {
   return (!paused.has('planner') && (s.habits.some((h) => !!h.remindTime) || (st.blockAlerts && Object.values(s.planner).some((d) => d.length > 0))))
     || (!paused.has('tasks') && (st.todoReminderEnabled || s.todoReminders.length > 0 || timedTasks(s).length > 0 || timedMissions(s).length > 0))
     || (!paused.has('journal') && !!st.journalReminderTime)
-    || (!paused.has('scores') && st.examReminders && s.scores.some((n) => !!n.date));
+    || (!paused.has('scores') && examAlerts(s, todayKey()).length > 0);
 }
 
 /**
@@ -200,15 +222,17 @@ function reminderInputs(s: Data) {
   // its weekdays too: a habit moved to other days rings on those
   const timed = s.habits.filter((h) => h.remindTime)
     .map((h) => [h.id, h.title, h.remindTime, h.doneDates.includes(today) ? 1 : 0, (h.days || []).join('.')].join('|'));
-  // a check-in's count only matters while there are check-ins
-  const open = s.todoReminders.length ? s.dailyTasks.filter((t) => t.doneOn !== today).length + '/' + s.dailyTasks.length : '';
-  const tasks = timedTasks(s).map((t) => [t.id, t.title, t.time, t.remind, t.repeat || '', t.doneOn === today ? 1 : 0].join('|'));
-  const missions = timedMissions(s).map((m) => [m.id, m.title, m.deadline, m.time || '', m.remind].join('|'));
+  // a check-in's count only matters while there are check-ins; it counts today's ToDos, a weekly one only on its days
+  const dueToday = s.dailyTasks.filter((t) => todoDueOn(t));
+  const open = s.todoReminders.length ? dueToday.filter((t) => t.doneOn !== today).length + '/' + dueToday.length : '';
+  const tasks = timedTasks(s).map((t) => [t.id, t.title, t.time, t.remind, t.repeat || '', (t.days || []).join('.'), t.doneOn === today ? 1 : 0].join('|'));
+  const missions = timedMissions(s).map((m) => [m.id, m.title, m.deadline, m.time || '', m.remind || '', (m.early || []).join('.')].join('|'));
   // only while the alerts are on: a block edited with them off lays nothing out
   const blocks = st.blockAlerts
     ? Object.entries(s.planner).map(([d, list]) => d + ':' + list.map((b) => [b.id, b.subject, b.start, b.end].join('|')).join(',')).join(';')
     : '';
-  const exams = st.examReminders ? examAlerts(s, today).map((e) => [e.id, e.title, e.body, e.eve].join('|')).join() : '';
+  // each exam's own choice, or the global switch's evening before
+  const exams = examAlerts(s, today).map((e) => [e.id, e.title, e.body, e.kind, e.on].join('|')).join();
   return [
     st.remindersEnabled, st.todoReminderEnabled, st.todoReminderTime, st.journalReminderTime, (st.archivedTools || []).join(),
     timed.join(), s.todoReminders.map((r) => r.id + r.time + r.label).join(), open,
@@ -379,8 +403,10 @@ const WINDOW_DAYS = 14;
 const DATED_MAX = 280;
 /** the morning reminder of a task's day */
 const MORNING_MIN = 8 * 60;
-/** an exam's reminder, the evening before */
+/** an exam's reminders, a week before and the evening before */
 const EXAM_EVE_MIN = 19 * 60;
+/** a long-term task's early reminders, three days and one day before */
+const EARLY_MIN = 18 * 60;
 /** a long-term task with a reminder and no time is due by the end of its day */
 const END_OF_DAY_MIN = 23 * 60 + 59;
 
@@ -436,9 +462,11 @@ async function layOutReminders() {
     const tasks = paused.has('tasks') ? [] : timedTasks(s);
     const missions = paused.has('tasks') ? [] : timedMissions(s);
     const blocksOn = s.settings.blockAlerts && !paused.has('planner');
-    const exams = s.settings.examReminders && !paused.has('scores') ? examAlerts(s, today) : [];
-    const open = s.dailyTasks.filter((t) => t.doneOn !== today).length;
-    const listDone = s.dailyTasks.length > 0 && open === 0;
+    const exams = paused.has('scores') ? [] : examAlerts(s, today);
+    // today's list: a ToDo kept on some weekdays only is on it only on those days
+    const todays = s.dailyTasks.filter((t) => todoDueOn(t, now));
+    const open = todays.filter((t) => t.doneOn !== today).length;
+    const listDone = todays.length > 0 && open === 0;
     // every dated reminder, day by day; a moment already gone is left out (a past date would ring at once)
     const days: Dated[][] = [];
     for (let d = 0; d < WINDOW_DAYS; d++) {
@@ -479,19 +507,27 @@ async function layOutReminders() {
       // ticked today is gone by then
       for (const t of tasks) {
         if (t.doneOn === today && (d === 0 || t.repeat !== 'daily')) continue;
+        // a weekly ToDo rings only on its days
+        if (!todoDueOn(t, day)) continue;
         const due = dueOf(t.time);
         if (t.remind === 'morning' && !(MORNING_MIN < due)) continue;
         add(`task:${t.id}:${key}`, t.remind === 'hour' ? due - 60 : MORNING_MIN, String(t.title || '').trim() || 'ToDo', 'Due by ' + fmtClockTime(due, hour24), 'tasks');
       }
       for (const m of missions) {
-        if (m.deadline !== key) continue;
+        // early, at 6 pm three days and one day before, with or without a time
+        const title = String(m.title || '').trim() || 'Long-term task';
+        if (m.early?.includes('3d') && daysFrom(m.deadline, -3) === key) add(`mission3d:${m.id}:${key}`, EARLY_MIN, title, 'Due in 3 days', 'tasks');
+        if (m.early?.includes('1d') && daysFrom(m.deadline, -1) === key) add(`mission1d:${m.id}:${key}`, EARLY_MIN, title, 'Due tomorrow', 'tasks');
+        if (m.deadline !== key || !m.remind) continue;
         const due = dueOf(m.time) >= 0 ? dueOf(m.time) : END_OF_DAY_MIN;
         if (m.remind === 'morning' && !(MORNING_MIN < due)) continue;
         const body = m.time ? 'Due today by ' + fmtClockTime(due, hour24) : 'Due today';
-        add(`mission:${m.id}:${key}`, m.remind === 'hour' ? due - 60 : MORNING_MIN, String(m.title || '').trim() || 'Long-term task', body, 'tasks');
+        add(`mission:${m.id}:${key}`, m.remind === 'hour' ? due - 60 : MORNING_MIN, title, body, 'tasks');
       }
       for (const e of exams) {
-        if (e.eve === key) add(`exam:${e.id}:${key}`, EXAM_EVE_MIN, 'Tomorrow: ' + e.title, e.body, 'scores');
+        if (e.on !== key) continue;
+        if (e.kind === 'eve') add(`exam:${e.id}:${key}`, EXAM_EVE_MIN, 'Tomorrow: ' + e.title, e.body, 'scores');
+        else add(`examweek:${e.id}:${key}`, EXAM_EVE_MIN, 'In a week: ' + e.title, e.body, 'scores');
       }
       days.push(list);
     }

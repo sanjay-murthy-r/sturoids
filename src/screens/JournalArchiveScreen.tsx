@@ -1,7 +1,7 @@
 import React from 'react';
 import { Alert, Pressable, ScrollView, SectionList, Share, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
@@ -12,12 +12,14 @@ import {
   Card, Chip, DotMenu, EmptyState, Field, GateHeader, Hairline, ListRow, ListSlice, PillButton, Row, ScreenBG, Sheet, useTheme,
   useToolHeader, contextLine,
 } from '../components/UI';
+import { monthRange, useExport } from '../reports';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { ToolGate } from '../components/LockGate';
 import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, PROMPTS, clearJournalOpenRequest, dayFacts, dayRecord, entryMatches, formatJournalDate, journalDayFor,
-  journalStats, keyToDate, loadBodies, onThisDay, readBody, requestJournalOpen, searchTokens, shiftKey,
+  journalStats, keyToDate, loadBodies, moodFocusLink, moodSeries, onThisDay, readBody, requestJournalOpen, searchTokens,
+  shiftKey,
 } from '../journal';
 import { openTool } from '../toolNav';
 import { expectAway } from '../lock';
@@ -179,6 +181,17 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   const [menu, setMenu] = React.useState<JournalEntry | null>(null);
   const [moveEntry, setMoveEntry] = React.useState<JournalEntry | null>(null);
 
+  // Arrivals: Sift opens the archive on one tag (`tag`), as the only filter. The param is cleared once followed, so the
+  // same link works again
+  const params = useLocalSearchParams<{ tag?: string }>();
+  useFocusEffect(React.useCallback(() => {
+    const t = params.tag;
+    if (!t) return;
+    setMonth(null); setMoods([]); setRatings([]); setPinnedOnly(false); setQ('');
+    setTags(useStore.getState().journalTags.includes(t) ? [t] : []);
+    router.setParams({ tag: undefined } as any);
+  }, [params.tag]));
+
   // the first screenful rises as one card; rows that mount later (scrolling, filtering) appear at once
   const firstPaint = React.useRef(true);
   React.useEffect(() => { firstPaint.current = false; }, []);
@@ -325,15 +338,34 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   const marked = React.useMemo(() => new Set(journal.map((e) => e.dateKey)), [journal]);
   // a stat of zero says nothing, so it is left out rather than shown as a nought
   const glances = [
-    { value: s.entries, label: 'entries' },
+    { value: s.days, label: s.days === 1 ? 'day' : 'days' },
     { value: s.current, label: 'day streak' },
+    { value: s.best, label: 'best streak' },
     { value: s.words, label: 'words' },
   ].filter((g) => g.value > 0);
+  // the last 30 days, each with its mood and its rating, for the strip; built only while the stats are open
+  const series = React.useMemo(() => (stats ? moodSeries(journal, 30, today) : []), [stats, journal, today]);
+  const anyMood = series.some((d) => d.mood != null || d.rating != null);
+  // one line on good days and focus, once there are enough of each to say it honestly (and Deep Work is in use)
+  const focusOff = (archivedTools || []).includes('focus');
+  const link = React.useMemo(
+    () => (stats && !focusOff ? moodFocusLink(journal, sessions, 60, today) : null),
+    [stats, focusOff, journal, sessions, today],
+  );
+  const linkLine = link
+    ? link.goodMin - link.otherMin >= 10
+      ? 'On your best days you focused about ' + link.goodMin + ' min, against ' + link.otherMin + ' on the others.'
+      : link.otherMin - link.goodMin >= 10
+        ? 'Your best days came with less focus: about ' + link.goodMin + ' min, against ' + link.otherMin + ' on the others.'
+        : 'You focused about as much on your best days as on the others.'
+    : '';
 
   // what is in the archive, or in the month picked: the search and the other filters are said under the chips, so the
   // header's count does not change with every letter typed. No entries, no line
   const inMonth = React.useMemo(() => (month ? journal.filter((e) => e.dateKey.startsWith(month)).length : 0), [journal, month]);
   const counted = month ? inMonth : journal.length;
+  // the month picked, or the whole archive
+  const exp = useExport('journal', () => (month ? { range: 'custom', ...monthRange(month, todayKey()) } : { range: 'all' }));
   const tool = useToolHeader({
     title: 'Journal',
     mode: 'page',
@@ -347,7 +379,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
       label: stats ? 'Hide stats' : 'Show stats',
       color: stats ? C.gold : undefined,
       onPress: () => setStats(!stats),
-    }] : undefined,
+    }, exp.action] : undefined,
   });
 
   const listHead = (
@@ -389,6 +421,31 @@ function Archive({ tabMode }: { tabMode: boolean }) {
               Average day {s.avgRating.toFixed(1)} of 5  ·  {s.ratedDays} rated {s.ratedDays === 1 ? 'day' : 'days'}
             </Text>
           ) : null}
+          {anyMood ? (
+            <View style={{ marginTop: 16 }} accessible accessibilityLabel="Mood and rating over the last 30 days">
+              <Text style={T.kicker}>Last 30 days</Text>
+              <View style={st.strip}>
+                {series.map((d) => {
+                  const v = d.rating ?? d.mood;
+                  return (
+                    <View key={d.dateKey} style={st.stripCol}>
+                      {v != null ? (
+                        <View
+                          style={[st.stripBar, {
+                            height: 6 + (v - 1) * 6, backgroundColor: C.gold, opacity: d.rating != null ? 0.35 + v * 0.13 : 0.3,
+                          }]}
+                        />
+                      ) : (
+                        <View style={[st.stripDot, { backgroundColor: theme === 'minimal' ? MIN.hairline : C.hairline }]} />
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+              <Text style={[T.caption, { marginTop: 6 }]}>Taller for a better day; fainter where only a mood was set</Text>
+            </View>
+          ) : null}
+          {linkLine ? <Text style={[T.caption, { marginTop: 12, color: C.textDim }]}>{linkLine}</Text> : null}
           <View style={st.heat}>
             {heat.map((week, w) => (
               <View key={w} style={{ gap: 3 }}>
@@ -528,6 +585,7 @@ function Archive({ tabMode }: { tabMode: boolean }) {
           />
         ) : null}
       </Sheet>
+      {exp.sheet}
     </ScreenBG>
   );
 }
@@ -563,6 +621,12 @@ const st = StyleSheet.create({
   glanceLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 11, marginTop: 3, letterSpacing: TRACK.fine },
   heat: { flexDirection: 'row', gap: 3, justifyContent: 'center', marginTop: 16 },
   heatCell: { width: 12, height: 12, borderRadius: 3 },
+  // 30 thin columns sharing the card's width, bars standing on one base line
+  strip: { flexDirection: 'row', alignItems: 'flex-end', height: 32, marginTop: 10, gap: 2 },
+  stripCol: { flex: 1, alignItems: 'center', justifyContent: 'flex-end', height: 32 },
+  stripBar: { width: '100%', maxWidth: 7, borderRadius: 2 },
+  stripDot: { width: 4, height: 4, borderRadius: 2 },
+
   echo: { color: C.textDim, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small },
   echoRow: { minHeight: 44, justifyContent: 'center' },
   sheetLabel: { ...T.label, marginTop: 10, marginBottom: 8 },

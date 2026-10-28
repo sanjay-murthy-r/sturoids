@@ -29,3 +29,22 @@ export function deleteAttachmentLater(a: Attachment): { cancel: () => void } {
   const timer = setTimeout(() => deleteAttachmentFiles(a), UNDO_WINDOW_MS);
   return { cancel: () => clearTimeout(timer) };
 }
+
+/**
+ * Copies a picked or shared file into the app's own attachments folder, where Android never clears it. When the copy
+ * fails (a full phone, usually) the note keeps the picker's copy for now and `kept` is false, so the user is told to
+ * attach it again once there is room: the picker's copy lives in a cache Android may clear.
+ */
+export async function keepFile(uri: string, name: string): Promise<{ uri: string; kept: boolean }> {
+  try {
+    await FileSystem.makeDirectoryAsync(ATT_DIR, { intermediates: true }).catch(() => {});
+    const dest = ATT_DIR + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + '-' + name.replace(/[^\w.\-]/g, '_');
+    await FileSystem.copyAsync({ from: uri, to: dest });
+    return { uri: dest, kept: true };
+  } catch {
+    return { uri, kept: false };
+  }
+}
+
+/** What a note says when a file was attached but no copy of it could be kept. */
+export const NOT_KEPT = 'Attached, but the phone is too full to keep a copy. Free some space and attach it again.';

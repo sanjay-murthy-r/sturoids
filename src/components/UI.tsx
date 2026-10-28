@@ -24,6 +24,7 @@ import {
 import { tap, tick } from '../haptics';
 import { stepTab } from '../toolNav';
 import { READ_MAX, WIDE_AT } from '../layout';
+import { openSift, siftPull } from '../search/store';
 import { TimeWheel, defaultTime, isTime, timeLabel } from './TimeWheel';
 
 export { TimeWheel } from './TimeWheel';
@@ -118,6 +119,11 @@ export interface ToolHeaderOptions {
    * chrome stands back while the page is written in can fade and move it without the page showing through the ground.
    */
   contentStyle?: React.ComponentProps<typeof Animated.View>['style'];
+  /**
+   * Tab mode only: a one-finger drag down from inside the bar opens Sift (useHeaderPull). On by default in tab mode;
+   * a screen that is not calm right now (Deep Work running, the journal's page, an edit mode) passes false.
+   */
+  pull?: boolean;
 }
 
 /** The compact title and the context line, set as the Header Lab drew them. */
@@ -217,7 +223,7 @@ const partsOf = (context: ToolHeaderOptions['context']): ContextPart[] | null =>
  * re-render on the minute: useNow does that, only while the screen is in front.
  */
 export function useToolHeader({
-  title, mode = 'page', context, live = false, covered = false, actions, right, onBack, contentStyle,
+  title, mode = 'page', context, live = false, covered = false, actions, right, onBack, contentStyle, pull = true,
 }: ToolHeaderOptions) {
   const insets = useSafeAreaInsets();
   const scrollY = useSharedValue(0);
@@ -233,7 +239,7 @@ export function useToolHeader({
     bar: (
       <ToolBar
         title={title} back={!tab} onBack={onBack} actions={actions} right={right} scrollY={scrollY} overlay={tab}
-        contentStyle={contentStyle}
+        contentStyle={contentStyle} pull={tab && pull}
       />
     ),
     hero: <ToolHero title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} reserve={tab ? reserve : 0} />,
@@ -270,7 +276,7 @@ function TrayButton({ action }: { action: ToolAction }) {
   );
 }
 
-function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false, contentStyle }: {
+function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false, contentStyle, pull = false }: {
   title: string; back: boolean; onBack?: () => void; actions?: ToolAction[]; right?: React.ReactNode;
   /** the offset the edge follows; without it (the older NeuHeader) the bar has no hairline or shade */
   scrollY?: SharedValue<number>;
@@ -278,11 +284,17 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
       a compact title that waits for it, instead of an opaque bar above the scroll that always shows its title */
   overlay?: boolean;
   contentStyle?: ToolHeaderOptions['contentStyle'];
+  /** a drag down from inside the bar opens Sift (tab mode, calm screens) */
+  pull?: boolean;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const headerPull = useHeaderPull(pull && overlay);
+  const pullRow = useAnimatedStyle(() => ({
+    transform: [{ translateY: level === 'full' ? 6 * Math.min(1.3, headerPull.progress.value) : 0 }],
+  }));
   const [overflow, setOverflow] = React.useState(false);
   const own = useSharedValue(0);
   const y = scrollY ?? own;
@@ -338,7 +350,14 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
           pointerEvents={solid ? 'auto' : 'none'} style={[StyleSheet.absoluteFill, { backgroundColor: bgFor(theme) }, groundStyle]}
         />
       ) : null}
-      <Animated.View pointerEvents={through} style={[hdr.row, contentStyle]}>
+      {/* the header band takes a one-finger drag down (Sift): from under the status bar, which is the phone's shade, to
+          the bar's lower rim; the tray's buttons sit above it and keep their taps */}
+      {pull && overlay ? (
+        <GestureDetector gesture={headerPull.gesture}>
+          <Animated.View collapsable={false} style={[StyleSheet.absoluteFill, { top: insets.top }]} />
+        </GestureDetector>
+      ) : null}
+      <Animated.View pointerEvents={through} style={[hdr.row, contentStyle, pull && overlay && !contentStyle ? pullRow : null]}>
         {back ? (
           <Bouncy
             onPress={onBack || (() => router.back())} scaleTo={1} sink={false} radius={BACK_W / 2} hitSlop={4}
@@ -380,6 +399,7 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
         ) : null}
       </Animated.View>
       {scrollY ? <ScrollEdge at={edge} style={hdr.under} /> : null}
+      {pull && overlay ? <PullPill progress={headerPull.progress} /> : null}
       {rest.length ? <DotMenu visible={overflow} onClose={() => setOverflow(false)} items={rest} /> : null}
     </View>
   );
@@ -509,7 +529,146 @@ const hdr = StyleSheet.create({
   ctx: { flexShrink: 1, color: C.textFaint, fontFamily: F.smMed, fontSize: CTX_SIZE, lineHeight: 17, letterSpacing: TRACK.fine },
   em: { color: C.textDim },
   dot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
+  // the pull's pill hangs just under the bar, centred
+  pillRoom: { position: 'absolute', top: '100%', left: 0, right: 0, alignItems: 'center', marginTop: 6 },
+  pill: { height: 34, paddingHorizontal: 16, borderRadius: 999, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  pillInk: { justifyContent: 'center' },
+  pillLayer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  pillText: { fontFamily: F.smMed, ...oneLine(13), letterSpacing: TRACK.small },
 });
+
+/* ---------------------------------------------------------------- Sift: the header pull, the arrival pulse */
+
+/** How far down a header pull must go to open Sift, in dp. */
+export const PULL_OPEN = 64;
+
+/**
+ * The pull that opens Sift from a header band: one finger, dragged down 64 dp or more from inside the header, and let go.
+ * An RNGH Pan that wakes only on a downward drag (10 dp) and gives way to a sideways one (16 dp) or an upward one, so a
+ * fling between tabs and the scroll below are never taken. `progress` runs 0 to 1 up to the threshold (a little past
+ * it with resistance) on the UI thread, for a pill under the header; a tick marks the threshold, and letting go past
+ * it opens Sift with its field morphing out of the header. `enabled` false (an edit mode, a running session) turns
+ * it off. Put the gesture on the header band's own view (a GestureDetector around it), never on scrolling content.
+ */
+export function useHeaderPull(enabled: boolean) {
+  const progress = useSharedValue(0);
+  const armed = useSharedValue(false);
+  const gesture = React.useMemo(() => Gesture.Pan()
+    .enabled(enabled)
+    .maxPointers(1)
+    .activeOffsetY(10)
+    .failOffsetY(-10)
+    .failOffsetX([-16, 16])
+    .onStart(() => { armed.value = false; })
+    .onUpdate((e) => {
+      const ty = Math.max(0, e.translationY);
+      // up to the threshold it follows the finger; past it, it gives a little, as a rubber band does
+      const p = ty <= PULL_OPEN ? ty / PULL_OPEN : 1 + ((ty - PULL_OPEN) / PULL_OPEN) * 0.35;
+      progress.value = p;
+      siftPull.value = Math.min(1, p);
+      const over = ty >= PULL_OPEN;
+      if (over !== armed.value) {
+        armed.value = over;
+        if (over) runOnJS(tick)();
+      }
+    })
+    .onEnd((e, success) => {
+      // a cancelled drag (a call, the shade) never opens it
+      if (success && e.translationY >= PULL_OPEN) {
+        siftPull.value = 1;
+        runOnJS(openSift)('pull');
+        // the pill hands over to Sift's field, which takes its place
+        progress.value = withTiming(0, { duration: 200, easing: EASE_OUT });
+      } else {
+        progress.value = withTiming(0, { duration: 180, easing: EASE_OUT });
+        siftPull.value = withTiming(0, { duration: 180, easing: EASE_OUT });
+      }
+    })
+    .onFinalize(() => {
+      armed.value = false;
+      if (progress.value > 0 && progress.value < 1) progress.value = withTiming(0, { duration: 180, easing: EASE_OUT });
+      else if (progress.value > 1 && siftPull.value < 1) progress.value = withTiming(0, { duration: 180, easing: EASE_OUT });
+    }), [enabled]);
+  return { gesture, progress };
+}
+
+/**
+ * The pill a header pull draws out from under the bar: a carved well with the search glyph and Sift's name, growing with
+ * the pull; at the threshold its glyph and name take the accent ("let go to open"). Fades only with some motion; a
+ * step with none.
+ */
+export function PullPill({ progress }: { progress: SharedValue<number> }) {
+  const theme = useTheme();
+  const level = useAnimLevel();
+  const box = useAnimatedStyle(() => {
+    const p = Math.min(1, progress.value);
+    if (level === 'none') return { opacity: p > 0.15 ? 1 : 0 };
+    const opacity = interpolate(p, [0.08, 0.45], [0, 1], Extrapolation.CLAMP);
+    if (level === 'some') return { opacity };
+    return {
+      opacity,
+      transform: [
+        { translateY: -10 * (1 - p) + 4 * Math.max(0, progress.value - 1) },
+        { scale: 0.7 + 0.3 * p },
+      ] as const,
+    };
+  });
+  const lit = useAnimatedStyle(() => ({ opacity: progress.value >= 1 ? 1 : 0 }));
+  const unlit = useAnimatedStyle(() => ({ opacity: progress.value >= 1 ? 0 : 1 }));
+  const well = theme === 'minimal'
+    ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
+    : { backgroundColor: C.inset, ...neuInset('hairline') };
+  return (
+    <View pointerEvents="none" style={hdr.pillRoom} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+      <Animated.View style={[hdr.pill, well, box]}>
+        <View style={hdr.pillInk}>
+          <Animated.View style={[hdr.pillLayer, unlit]}>
+            <Ionicons name="search" size={15} color={C.textDim} />
+            <Text style={[hdr.pillText, { color: C.textDim }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Sift</Text>
+          </Animated.View>
+          <Animated.View style={[hdr.pillLayer, StyleSheet.absoluteFill, lit]}>
+            <Ionicons name="search" size={15} color={C.accent} />
+            <Text style={[hdr.pillText, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Sift</Text>
+          </Animated.View>
+        </View>
+      </Animated.View>
+    </View>
+  );
+}
+
+/**
+ * The one pulse an item gives when something opens it (Sift, a link): a soft wash of the accent comes up over it and
+ * fades away, once, each time `active` turns true. It waits `delay` ms (250) so a scroll that brings the item into view
+ * has settled first. Returns the style for an overlay laid over the item:
+ *
+ *   const pulse = useArrivalPulse(id === params.item);
+ *   <View>{row}<Animated.View pointerEvents="none" style={[pulse, { borderRadius: 14 }]} /></View>
+ *
+ * or use <ArrivalPulse active radius /> as the item's last child. With motion off the wash shows and goes in a step.
+ */
+export function useArrivalPulse(active: boolean, delay = 250) {
+  useTheme(); // the wash is the accent, so it follows a new one
+  const level = useAnimLevel();
+  const a = useSharedValue(0);
+  React.useEffect(() => {
+    if (!active) return;
+    a.value = 0;
+    a.value = level === 'none'
+      ? withDelay(delay, withSequence(withTiming(1, { duration: 0 }), withDelay(900, withTiming(0, { duration: 0 }))))
+      : withDelay(delay, withSequence(
+        withTiming(1, { duration: 200, easing: EASE_OUT }),
+        withDelay(260, withTiming(0, { duration: 760, easing: Easing.inOut(Easing.quad) })),
+      ));
+  }, [active, level]);
+  const fade = useAnimatedStyle(() => ({ opacity: 0.16 * a.value }));
+  return [StyleSheet.absoluteFill, { backgroundColor: C.accent }, fade];
+}
+
+/** The arrival pulse as an overlay: put it last inside the item, which must not clip it away (radius matches the item). */
+export function ArrivalPulse({ active, radius = 0, delay }: { active: boolean; radius?: number; delay?: number }) {
+  const pulse = useArrivalPulse(active, delay);
+  return <Animated.View pointerEvents="none" style={[pulse, { borderRadius: radius }]} />;
+}
 
 /** Small ⓘ that floats a short feature description in a raised dialog. */
 export function InfoDot({ text, size = 15, label = 'About this' }: {

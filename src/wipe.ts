@@ -71,8 +71,9 @@ export async function eraseThisPhone() {
   await removePin();
   closeAllLocks();
   await Promise.all([emptyFolder(JOURNAL_DIR), emptyFolder(ATT_DIR), deleteRecoveryCopy().catch(() => {}), clearCache()]);
-  // with other profiles on the phone this one stays itself: its name and colour survive, so it is never "Unnamed"
-  const { name, accent } = useStore.getState().settings;
+  // with other profiles on the phone this one stays itself: its name, colour and photo survive, so it is never
+  // "Unnamed" and the switcher still shows who it is
+  const { name, accent, avatar } = useStore.getState().settings;
   let keepWho = false;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -83,7 +84,7 @@ export async function eraseThisPhone() {
   // every saved row goes, a collection that could not be loaded this launch included, and saving starts over
   await clearSavedData();
   const fresh = initialData();
-  if (keepWho) fresh.settings = { ...fresh.settings, name, accent };
+  if (keepWho) fresh.settings = { ...fresh.settings, name, accent, avatar };
   useStore.getState().replaceAll(fresh);
   flushSaves();
   rescheduleAllReminders().catch(() => {});

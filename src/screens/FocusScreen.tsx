@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Alert, AppState, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Alert, AppState, Dimensions, Linking, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
@@ -8,7 +8,8 @@ import * as Notifications from 'expo-notifications';
 import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
-import { todayKey, yesterdayKey, uid, toMinutes, fmtClockTime, dayName } from '../utils';
+import { todayKey, yesterdayKey, uid, toMinutes, fmtClockTime, dayName, todoDueOn } from '../utils';
+import { subjectKey, useSubjects } from '../subjects';
 import {
   ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, ProgressBar,
   ListCard, ListRow, StrikeText, TimeWheel, useToolHeader, contextLine,
@@ -22,7 +23,8 @@ import { swapIn, useSwapIn } from '../components/Swap';
 import { Wheel } from '../components/Wheel';
 import { tick as haptic } from '../haptics';
 import {
-  NOTIF_CHANNEL_ID, cancelBreakEnd, cancelCountdownEnd, ensurePermission, scheduleBreakEnd, scheduleCountdownEnd,
+  NOTIF_CHANNEL_ID, cancelBreakEnd, cancelCountdownEnd, ensurePermission, notificationPermission, scheduleBreakEnd,
+  scheduleCountdownEnd,
 } from '../notifications';
 import { playSessionEnd } from '../chime';
 import { FINISH_NOTIF_ID, TimerState, displayOf, elapsedOf } from '../deepWork';
@@ -388,6 +390,35 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setRunning(true);
     // the finish line's heads-up is for a session under way, so it is set here rather than with the line
     if (finishAt != null && finishAt > Date.now()) void noticeFinish(finishAt);
+    // a block that ends by itself is heard ending only with notifications allowed: say so once, quietly, if they are not
+    if (timerMode === 'countdown' || finishAt != null) checkSilent();
+  };
+
+  // "You won't hear when this block ends": shown while a block or a break runs without notification permission, until
+  // it is allowed or dismissed (then never again on this phone: settings.focusAlertAsked)
+  const alertAsked = useStore((s) => s.settings.focusAlertAsked);
+  const [silent, setSilent] = useState(false);
+  const checkSilent = () => {
+    if (useStore.getState().settings.focusAlertAsked) return;
+    notificationPermission().then((p) => { if (mountedRef.current) setSilent(p !== 'granted'); }).catch(() => {});
+  };
+  const allowAlerts = async () => {
+    haptic();
+    const ok = await ensurePermission();
+    if (!mountedRef.current) return;
+    if (ok) {
+      setSilent(false);
+      // the block's end is told again, now that it can be
+      renewEndNotice();
+      return;
+    }
+    // refused, or blocked in the phone's settings, where Android stops asking: the settings are the way to allow them
+    Linking.openSettings().catch(() => {});
+  };
+  const dismissAlert = () => {
+    haptic();
+    setSilent(false);
+    useStore.getState().setSetting('focusAlertAsked', true);
   };
   const pause = () => {
     // the block has run out and is wrapping up: pausing now would only stall the wrap-up
@@ -735,7 +766,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
     return done === a.done ? a : { ...a, done };
   });
-  const pickableDaily = dailyTasks.filter((t) => t.doneOn !== today && !attached.some((a) => a.refId === t.id));
+  // today's ToDos only: one that repeats on some weekdays is offered on those days
+  const pickableDaily = dailyTasks.filter((t) => t.doneOn !== today && todoDueOn(t, today) && !attached.some((a) => a.refId === t.id));
   const pickableMissions = missions.filter((m) => !m.done && !attached.some((a) => a.refId === m.id));
   const currentTask = live.find((a) => !a.done);
 
@@ -751,17 +783,32 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
     return { todays, onNow, next: todays.find((b) => toMinutes(b.start) > nowMin) };
   }, [planner, now]);
-  // subjects to tap instead of typing: today's planned ones first, then those of recent sessions; four at most
+  // subjects to tap instead of typing: today's planned ones first, then those of recent sessions, then the rest of the
+  // app's one subject list (src/subjects.ts); four at most. While a subject is being typed that none of them is yet,
+  // the ones that start with (then contain) what is typed
+  const knownSubjects = useSubjects();
   const subjectPicks = React.useMemo(() => {
+    const pool: string[] = [];
+    blocks.todays.forEach((b) => pool.push(b.subject));
+    for (let i = sessions.length - 1; i >= 0 && pool.length < 40; i--) pool.push(sessions[i].subject || '');
+    pool.push(...knownSubjects);
+    const typed = subjectKey(subject);
+    const exact = !!typed && pool.some((n) => subjectKey(n || '') === typed);
     const out: string[] = [];
-    const add = (name?: string) => {
-      const t = (name || '').trim();
-      if (t && out.length < 4 && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t);
+    const add = (pred: (k: string) => boolean) => {
+      for (const name of pool) {
+        const t = (name || '').trim();
+        const k = subjectKey(t);
+        if (out.length >= 4) return;
+        if (t && pred(k) && !out.some((x) => subjectKey(x) === k)) out.push(t);
+      }
     };
-    blocks.todays.forEach((b) => add(b.subject));
-    for (let i = sessions.length - 1; i >= 0 && out.length < 4; i--) add(sessions[i].subject);
+    if (typed && !exact) {
+      add((k) => k.startsWith(typed));
+      add((k) => k.includes(typed));
+    } else add(() => true);
     return out;
-  }, [blocks.todays, sessions]);
+  }, [blocks.todays, sessions, knownSubjects, subject]);
 
   const todayFocusMin = React.useMemo(
     () => Math.round(sessions.filter((s) => s.dateKey === today).reduce((a, s) => a + s.netSeconds, 0) / 60),
@@ -832,6 +879,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     live: started && running,
     // the ambient screen covers this one: the dot rests until it is gone
     covered: ambient,
+    // Sift's pull only while nothing is under way: a session running (or being reviewed) keeps its header to itself
+    pull: !started && !review,
   });
 
   // The subject field tapped half under the tab-mode bar: Android brings a focused field into view only when it is
@@ -899,6 +948,20 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // "Physics · 50 min", under "Start the next block"
   const nextDetail = gap ? [nextName, fmtMins(gap.next.min)].filter(Boolean).join(' · ') : '';
 
+  // the quiet line under a block or a break that will end unheard
+  const silentLine = (what: 'block' | 'break') => (silent && !alertAsked ? (
+    <Animated.View entering={modeIn} style={st.silent}>
+      <Ionicons name="notifications-off-outline" size={15} color={C.textFaint} />
+      <Text style={[T.caption, { flex: 1, marginLeft: 8 }]}>
+        {what === 'break' ? "You won't hear when this break ends" : "You won't hear when this block ends"}
+      </Text>
+      <Pressable onPress={() => { void allowAlerts(); }} hitSlop={{ top: 13, bottom: 13, left: 8, right: 8 }} accessibilityRole="button">
+        <Text style={st.silentAllow}>Allow</Text>
+      </Pressable>
+      <IconBtn name="close" size={15} color={C.textFaint} pad={6} style={{ marginLeft: 6 }} onPress={dismissAlert} accessibilityLabel="Dismiss" />
+    </Animated.View>
+  ) : null);
+
   const stageBlock = (
     <Enter index={0}>
       {idle && gap ? (
@@ -911,12 +974,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             lengths={BREAK_LENGTHS}
             nextDetail={nextDetail}
             hour24={hour24}
-            onBreak={startBreak}
+            onBreak={(min: number) => { startBreak(min); checkSilent(); }}
             onSkip={skipBreak}
             onNext={startNext}
             onDismiss={clearBetween}
             hold={!focused || !appActive}
           />
+          {gap.stage === 'break' ? silentLine('break') : null}
         </Animated.View>
       ) : idle ? (
         <Animated.View key="idle" entering={switchIn}>
@@ -1009,6 +1073,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             clockStyle={pulseStyle}
             hold={ambient || !focused || !appActive}
           />
+          {timerMode === 'countdown' || finishAt != null ? silentLine('block') : null}
         </Animated.View>
       )}
     </Enter>
@@ -1071,7 +1136,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           ) : (
             <ListCard>
               {recent.map((s) => (
-                <ListRow key={s.id} style={{ paddingVertical: 12 }}>
+                <ListRow
+                  key={s.id} style={{ paddingVertical: 12 }} onPress={() => openPage('/focus-history', { session: s.id })}
+                  accessibilityHint="Opens it in the history, to change its subject or length"
+                >
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: C.text, fontFamily: F.semi, fontSize: 14, letterSpacing: TRACK.small }} numberOfLines={1}>
                       {sessionLength(s.netSeconds)}{s.subject ? ` · ${s.subject}` : ''}
@@ -1365,6 +1433,9 @@ function toastWhenSeen(message: string, action: ToastAction, still: () => boolea
 
 const st = StyleSheet.create({
   barLayer: { zIndex: 2 },
+  silent: { flexDirection: 'row', alignItems: 'center', marginTop: 14, paddingHorizontal: 4 },
+  silentAllow: { color: C.accent, fontFamily: F.smSemi, fontSize: 12, letterSpacing: TRACK.fine },
+
   clockSlot:{ height: CLOCK_SLOT_H, alignItems: 'center', justifyContent: 'center' },
   wheelBox: { alignSelf: 'stretch' },
   wheelText: { ...T.numWheel },

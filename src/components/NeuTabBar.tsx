@@ -15,6 +15,11 @@ import { useIntro } from '../intro';
 import { tick } from '../haptics';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { RAIL_W } from '../layout';
+import { openSift } from '../search/store';
+import { useBackupAttention } from '../cloud';
+
+/** a second tap on the tab you are on within this many ms opens Sift (the first still does what it always did) */
+const DOUBLE_TAP_MS = 280;
 
 interface ItemMeta {
   /** full name, read by screen readers */
@@ -54,10 +59,12 @@ const railDotInItem = (labelH: number) => (RAIL_ITEM_H - (ICON + GAP + labelH + 
  * beneath it. The two icon colours crossfade, so nothing snaps. The dot under the name belongs to the bar, which
  * glides it from tab to tab; each tab keeps the dot's room so nothing moves.
  */
-function TabItem({ meta, focused, onPress, vertical, labelH }: {
+function TabItem({ meta, focused, onPress, vertical, labelH, badge = false }: {
   meta: ItemMeta; focused: boolean; onPress: () => void; vertical: boolean;
   /** the name's room at the phone's font size (see LABEL_H) */
   labelH: number;
+  /** a small amber dot on the icon: something behind this tab needs a look (the backup, on More) */
+  badge?: boolean;
 }) {
   const level = useAnimLevel();
   const press = useSharedValue(0);
@@ -82,7 +89,7 @@ function TabItem({ meta, focused, onPress, vertical, labelH }: {
       style={vertical ? st.railItem : st.item}
       accessibilityRole="tab"
       accessibilityState={{ selected: focused }}
-      accessibilityLabel={meta.label}
+      accessibilityLabel={badge ? meta.label + ', backup needs attention' : meta.label}
     >
       <Animated.View style={[st.icon, sink]}>
         <Animated.View style={[st.glyph, unlit]}>
@@ -91,6 +98,7 @@ function TabItem({ meta, focused, onPress, vertical, labelH }: {
         <Animated.View style={[st.glyph, lit]}>
           <Ionicons name={meta.icon as any} size={ICON} color={C.accent} />
         </Animated.View>
+        {badge ? <View style={[st.badge, { backgroundColor: C.amber }]} /> : null}
       </Animated.View>
       <Animated.Text
         numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX} style={[st.label, { height: labelH, color: C.accent }, nameStyle]}
@@ -126,6 +134,10 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
 
   const routeNames = TAB_ROUTES as readonly string[];
   const focusedName = state.routes[state.index]?.name;
+  // the backup paused or lost puts a dot on More (its Settings row says what to do)
+  const backupDot = useBackupAttention() !== 'ok';
+  // the last tap on the tab already open, for the double tap that opens Sift
+  const lastTap = React.useRef<{ name: string; at: number } | null>(null);
 
   // While the keyboard is up the bar leaves the layout at once, so the screen takes the room, and slides below
   // the edge. When the keyboard closes the bar takes its room back and slides up into it. It stays mounted
@@ -224,10 +236,21 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
           const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
           if (event.defaultPrevented) return;
           if (!focused) {
+            lastTap.current = null;
             tick();
             navigation.navigate(route.name as never);
             return;
           }
+          // a second tap on the tab you are on opens Sift (the quiet way in, beside the header pull)
+          const now = Date.now();
+          const prev = lastTap.current;
+          if (prev && prev.name === name && now - prev.at <= DOUBLE_TAP_MS) {
+            lastTap.current = null;
+            tick();
+            openSift('tab');
+            return;
+          }
+          lastTap.current = { name, at: now };
           // already here: a slot with pages open (a note, a video) goes back to its tool
           const nested: any = route.state;
           if (nested?.key && (nested.index ?? 0) > 0) {
@@ -235,7 +258,12 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
             navigation.dispatch({ ...StackActions.popToTop(), target: nested.key });
           }
         };
-        return <TabItem key={name} meta={metaFor(name)} focused={focused} onPress={onPress} vertical={vertical} labelH={labelH} />;
+        return (
+          <TabItem
+            key={name} meta={metaFor(name)} focused={focused} onPress={onPress} vertical={vertical} labelH={labelH}
+            badge={name === 'more' && backupDot}
+          />
+        );
       })}
       {vertical && focusIndex >= 0 ? (
         <Animated.View pointerEvents="none" style={[st.railDot, { top: insets.top + RAIL_PAD_TOP + railDotInItem(labelH) }, dotStyle]}>
@@ -268,4 +296,5 @@ const st = StyleSheet.create({
   railItem: { height: RAIL_ITEM_H, marginBottom: RAIL_GAP, alignItems: 'center', justifyContent: 'center' },
   railDot: { position: 'absolute', left: 0, width: RAIL_W, height: DOT, alignItems: 'center' },
   dot: { width: DOT, height: DOT, borderRadius: DOT / 2 },
+  badge: { position: 'absolute', top: -1, right: -3, width: 7, height: 7, borderRadius: 3.5 },
 });

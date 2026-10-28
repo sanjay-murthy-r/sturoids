@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useScrollToTop } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +11,9 @@ import { toast } from '../../src/components/Toast';
 import { useStore } from '../../src/store';
 import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots } from '../../src/tools';
 import { openPage, openTool } from '../../src/toolNav';
+import { openReport } from '../../src/reports';
+import { openSift } from '../../src/search/store';
+import { BACKUP_ATTENTION_TEXT, useBackupAttention } from '../../src/cloud';
 
 /** what a tool's count is of, so a screen reader hears "12 notes" rather than a bare number */
 const COUNT_OF: Partial<Record<ToolKey, [string, string]>> = {
@@ -114,6 +117,8 @@ export default function More() {
   const openArchive = React.useCallback(() => setArchiveSheet(true), []);
   // the page is a list: its header is the big title alone, with no line of context and nothing live
   const header = useToolHeader({ title: 'More', mode: 'tab' });
+  // the backup paused or lost: the Settings row says so in amber, and opens Account straight away
+  const attention = useBackupAttention();
 
   // an archive can be undone from its toast; Archived, at the end of the list, keeps it otherwise
   const archive = (t: Tool) => {
@@ -134,6 +139,7 @@ export default function More() {
             into the card, and the rows after it glide (ListCard) */}
         <Enter index={0}>
           {header.hero}
+          <SiftField theme={theme} />
           <ListCard>
             {tools.map((t) => (
               <ToolRow
@@ -154,13 +160,35 @@ export default function More() {
         <Enter index={1}>
           <SectionTitle>System</SectionTitle>
           <ListCard>
-            <ListRow key="settings" onPress={() => openPage('/settings')} style={st.row}>
+            <ListRow
+              key="settings" style={st.row}
+              onPress={() => (attention === 'ok' ? openPage('/settings') : openPage('/settings', { page: 'account' }))}
+            >
               <View style={[st.iconWell, wellFor(theme)]}>
                 <Ionicons name="settings-outline" size={21} color={C.accent} />
               </View>
               <View style={{ flex: 1, marginLeft: 14 }}>
                 <Text style={st.title}>Settings</Text>
-                <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>Theme, tools, reminders and backup</Text>
+                <FadeSwap swapKey={attention} style={{ marginTop: 2 }}>
+                  {attention === 'ok' ? (
+                    <Text style={T.caption} numberOfLines={1}>Theme, tools, reminders and backup</Text>
+                  ) : (
+                    <View style={st.attnRow}>
+                      <View style={[st.attnDot, { backgroundColor: C.amber }]} />
+                      <Text style={[T.caption, { color: C.amber, flexShrink: 1 }]} numberOfLines={1}>{BACKUP_ATTENTION_TEXT[attention]}</Text>
+                    </View>
+                  )}
+                </FadeSwap>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+            </ListRow>
+            <ListRow key="report" style={st.row} onPress={openReport}>
+              <View style={[st.iconWell, wellFor(theme)]}>
+                <Ionicons name="document-text-outline" size={21} color={C.accent} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <Text style={st.title}>Reports & exports</Text>
+                <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>One summary, or the full progress report, as PDF or CSV</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
             </ListRow>
@@ -181,8 +209,34 @@ export default function More() {
   );
 }
 
+/**
+ * What looks like a search field at the top of the list: a carved well with the glyph and Sift's own words. A tap opens
+ * Sift over the app (every scope), where the real field takes the keyboard.
+ */
+function SiftField({ theme }: { theme: ThemeMode }) {
+  return (
+    <Pressable
+      onPress={() => openSift('more')}
+      accessibilityRole="search"
+      accessibilityLabel="Sift through everything"
+      accessibilityHint="Opens Sift, the search across the whole app"
+      style={({ pressed }) => [st.sift, wellFor(theme), pressed && { opacity: 0.8 }]}
+    >
+      <Ionicons name="search" size={18} color={C.textFaint} />
+      <Text style={st.siftText} numberOfLines={1}>Sift through everything</Text>
+    </Pressable>
+  );
+}
+
 const st = StyleSheet.create({
   row: { paddingVertical: 12 },
+  sift: {
+    height: 48, borderRadius: 16, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 10,
+    marginBottom: S.gap + 4,
+  },
+  siftText: { flex: 1, color: C.textFaint, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body },
+  attnRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  attnDot: { width: 6, height: 6, borderRadius: 3 },
   iconWell: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   title: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title },
   count: { color: C.textFaint, fontFamily: F.med, fontSize: 13, letterSpacing: TRACK.small, marginRight: 8, fontVariant: ['tabular-nums'] },

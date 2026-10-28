@@ -3,7 +3,10 @@ import { Alert, FlatList, Text, ScrollView, StyleSheet, View } from 'react-nativ
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useToolNav } from '../toolNav';
+import { NoteHit, matchNote, splitRanges } from '../toolLogic';
+import type { Range } from '../search/engine';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, Note } from '../store';
@@ -123,13 +126,26 @@ export function FolderNameSheet({ visible, onClose, title, initial, label, check
   );
 }
 
+/** Text with the words a search matched in the accent, at the same weight. */
+function Marked({ text, ranges, style, lines }: { text: string; ranges: readonly Range[]; style: any; lines?: number }) {
+  useTheme(); // the accent of the matches follows a new one
+  if (!ranges.length) return <Text style={style} numberOfLines={lines}>{text}</Text>;
+  return (
+    <Text style={style} numberOfLines={lines}>
+      {splitRanges(text, ranges).map((r, i) => (r.on ? <Text key={i} style={{ color: C.accent }}>{r.text}</Text> : r.text))}
+    </Text>
+  );
+}
+
 /** One note in the list, memoised: a change to one note re-renders its own row, not the screenful. */
-const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, showFolder, today, hour24, onOpen, onMenu }: {
+const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, showFolder, today, hour24, onOpen, onMenu, hit }: {
   note: Note; first: boolean; last: boolean; dip: SharedValue<number>;
   /** off while the list shows one folder, whose name every row would only repeat */
   showFolder: boolean;
   today: string; hour24: boolean;
   onOpen: (id: string) => void; onMenu: (n: Note) => void;
+  /** while searching: where the words matched, drawn in the accent, and the text around the first match */
+  hit?: NoteHit;
 }) {
   const dipStyle = useAnimatedStyle(() => ({ opacity: dip.value }));
   const meta = [showFolder ? n.folder : '', n.subject ?? '', rowWhen(n.updatedAt, today, hour24)].filter(Boolean).join(' · ');
@@ -139,12 +155,20 @@ const NoteRow = React.memo(function NoteRow({ note: n, first, last, dip, showFol
         <ListRow onPress={() => onOpen(n.id)} onLongPress={() => onMenu(n)} style={st.note}>
           <View style={{ flex: 1 }}>
             <Row>
-              <Text style={st.noteTitle} numberOfLines={1}>{n.title || 'Untitled'}</Text>
+              {hit && n.title ? (
+                <Marked text={n.title} ranges={hit.titleRanges} style={st.noteTitle} lines={1} />
+              ) : (
+                <Text style={st.noteTitle} numberOfLines={1}>{n.title || 'Untitled'}</Text>
+              )}
               {n.pinned && <Ionicons name="pin" size={14} color={C.amber} style={{ marginLeft: 6 }} />}
               {n.locked && <Ionicons name="lock-closed" size={13} color={C.textFaint} style={{ marginLeft: 6 }} />}
             </Row>
             {/* two lines show, so a long pasted note never has its whole text laid out for them */}
-            {!!n.body && !n.locked && <Text style={st.noteBody} numberOfLines={2}>{n.body.slice(0, 240)}</Text>}
+            {hit?.snippet ? (
+              <Marked text={hit.snippet.text} ranges={hit.snippet.ranges} style={st.noteBody} lines={2} />
+            ) : !!n.body && !n.locked ? (
+              <Text style={st.noteBody} numberOfLines={2}>{n.body.slice(0, 240)}</Text>
+            ) : null}
             {meta ? <Text style={st.noteMeta} numberOfLines={1}>{meta}</Text> : null}
           </View>
         </ListRow>
@@ -178,31 +202,39 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const heldFolder = useHeld(folderMenu);
   const heldRenaming = useHeld(renaming);
 
+  // Arrivals: Sift opens a folder (`folder`). The param is cleared once followed, so the same link works again
+  const router = useRouter();
+  const params = useLocalSearchParams<{ folder?: string }>();
+  useFocusEffect(React.useCallback(() => {
+    const f = params.folder;
+    if (!f) return;
+    if (useStore.getState().noteFolders.includes(f)) { setQ(''); setFolder(f); }
+    router.setParams({ folder: undefined } as any);
+  }, [params.folder]));
+
   // typing stays immediate; the search over every note runs on the settled text
   const settledQ = React.useDeferredValue(q);
-  // each note's words in lower case, kept until the note changes, so a search lowercases only what changed since the
-  // last one and never every long pasted note again
-  const lowered = React.useRef(new Map<string, { at: number; title: string; body: string }>());
-  const filtered = useMemo(() => {
-    const ql = settledQ.trim().toLowerCase();
-    let index = lowered.current;
-    if (ql) {
-      const next = new Map<string, { at: number; title: string; body: string }>();
-      for (const n of notes) {
-        const old = index.get(n.id);
-        next.set(n.id, old && old.at === n.updatedAt ? old : { at: n.updatedAt, title: n.title.toLowerCase(), body: n.body.toLowerCase() });
+  // Every word of the search, in any order, across the title, the text, the tags, the subject and the folder, each as
+  // forgiving as Sift is (toolLogic.matchNote). A locked note is found by everything but its text, which never surfaces
+  // outside the note. Each note's hit is kept while the note and the search hold, so only what changed is read again
+  const hitCache = React.useRef({ q: '', map: new Map<string, { at: number; locked: boolean; hit: NoteHit | null }>() });
+  const { filtered, hits } = useMemo(() => {
+    const query = settledQ.trim();
+    const inFolder = notes.filter((n) => (folder ? n.folder === folder : true));
+    const byPin = (a: Note, b: Note) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt;
+    if (!query) return { filtered: inFolder.sort(byPin), hits: null as Map<string, NoteHit> | null };
+    if (hitCache.current.q !== query) hitCache.current = { q: query, map: new Map() };
+    const cache = hitCache.current.map;
+    const found = new Map<string, NoteHit>();
+    for (const n of inFolder) {
+      let c = cache.get(n.id);
+      if (!c || c.at !== n.updatedAt || c.locked !== !!n.locked) {
+        c = { at: n.updatedAt, locked: !!n.locked, hit: matchNote(n, query) };
+        cache.set(n.id, c);
       }
-      lowered.current = index = next;
+      if (c.hit) found.set(n.id, c.hit);
     }
-    return notes
-      .filter((n) => (folder ? n.folder === folder : true))
-      // a locked note is found by its title only: its text never surfaces outside the note
-      .filter((n) => {
-        if (!ql) return true;
-        const l = index.get(n.id);
-        return !!l && (l.title.includes(ql) || (!n.locked && l.body.includes(ql)));
-      })
-      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+    return { filtered: inFolder.filter((n) => found.has(n.id)).sort(byPin), hits: found };
   }, [notes, settledQ, folder]);
 
   // a folder that is gone (a restored backup, an import) lets go of the filter, never leaving an empty list with no chip lit
@@ -287,8 +319,9 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
     <NoteRow
       note={item} first={index === 0} last={index === count - 1}
       dip={dip} showFolder={showFolder} today={today} hour24={hour24} onOpen={openNote} onMenu={openMenu}
+      hit={hits?.get(item.id)}
     />
-  ), [count, showFolder, today, hour24, openNote, openMenu]);
+  ), [count, showFolder, today, hour24, openNote, openMenu, hits]);
 
   return (
     <ScreenBG guard={tabMode}>
@@ -335,7 +368,8 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
           ListEmptyComponent={
             settledQ.trim() ? (
               // a search that finds nothing says so, instead of offering a new note as if the folder were empty
-              <EmptyState icon="search-outline" title="No notes match that search" body="Search looks through titles, and through the text of notes that are not locked." />
+              <EmptyState icon="search-outline" title="No notes match that search" body="Search looks through titles, text, tags, subjects and folders. A locked note's text is never searched." />
+
             ) : (
               <EmptyState icon="document-text-outline" title="No notes here yet" body="Photos, files, voice and checklists live inside a note." actionLabel="New note" onAction={newNote} />
             )

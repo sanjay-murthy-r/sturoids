@@ -16,6 +16,10 @@
  *     30 days deletes the files too
  *   - 1.8: habit weekdays (streaks that pass rest days, the same count as before for every day), the day's record of
  *     ticks (logged, unlogged, pruned at 400 days, cleaned), the writing font and the parts of a written date
+ *   - 2.0: ToDo weekdays, early task reminders, logged sessions, quick actions, Today's board and the new settings
+ *     cleaned on load and import; habits, long-term tasks and exams through Recently deleted; this phone's own notes
+ *     kept through a restore; the reminders they ring (early, a week before, weekly ToDos); and the pure helpers the
+ *     widgets read (weekdays, YouTube links, focus streaks, moods, subjects, the focus week, the backup card)
  * Usage: node scripts/test-store.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -39,7 +43,7 @@ const DAY = 24 * 60 * 60 * 1000;
  * `unreadable` keys throw on read (a row Android cannot read back), `writesFail` makes every write throw. `writes`
  * records the keys of every multiSet, and `deleted` every file the app deleted.
  */
-function boot(seed = {}, { gate, faults = {}, storage: shared } = {}) {
+function boot(seed = {}, { gate, faults = {}, storage: shared, stubs = {} } = {}) {
   const storage = shared || new Map(Object.entries(seed));
   const writes = [];
   const deleted = [];
@@ -86,6 +90,7 @@ function boot(seed = {}, { gate, faults = {}, storage: shared } = {}) {
     const mod = { exports: {} };
     registry.set(file, mod);
     const req = (spec) => {
+      if (Object.prototype.hasOwnProperty.call(stubs, spec)) return stubs[spec];
       if (spec === '@react-native-async-storage/async-storage') return { __esModule: true, default: asyncStorage };
       if (spec === 'react-native') return {};
       if (spec === 'expo-file-system') return fileSystem;
@@ -107,6 +112,8 @@ function boot(seed = {}, { gate, faults = {}, storage: shared } = {}) {
   const utils = load(path.join(ROOT, 'src', 'utils.ts'));
   return {
     store, utils, storage, notices, named, writes, deleted, state: () => store.useStore.getState(),
+    /** loads another module of the app into this copy (with the same store and storage) */
+    load: (rel) => load(path.join(ROOT, rel)),
     /** a collection's row as saved, parsed */
     row: (k) => (storage.has(ROW(k)) ? JSON.parse(storage.get(ROW(k))) : undefined),
     meta: () => (storage.has(META) ? JSON.parse(storage.get(META)) : undefined),
@@ -1123,6 +1130,420 @@ const scenarios = {
     assert.ok(!('parts' in sig(undefined).date));
     assert.deepEqual(sig(['dd', 'mm', 'yy']).date.parts, ['dd', 'mm', 'yy']);
     assert.deepEqual(sanitizeSignature(sig(['mm'])), sig(['mm']), 'a second pass changes nothing');
+  },
+
+  // ---------- 2.0 ----------
+
+  async '2.0: the new fields are cleaned on load and on import'() {
+    const app = boot();
+    await settled(app);
+    const s0 = app.state().settings;
+    assert.equal(s0.focusGoalMin, 0, 'no focus goal by default');
+    assert.equal(s0.focusAlertAsked, false);
+    assert.equal(s0.backupNudgeAt, 0);
+    assert.equal(app.state().todayLayout, null, "Today's board starts on its default arrangement");
+    const saved = {
+      ...V4,
+      settings: { ...V4.settings, focusGoalMin: 90, focusAlertAsked: 'yes', backupNudgeAt: -5 },
+      dailyTasks: [
+        { id: 'w', title: 'Gym', doneOn: null, createdAt: 1, repeat: 'daily', days: [4, 0, 0, 9, 2] },
+        { id: 'o', title: 'One-off', doneOn: null, createdAt: 1, days: [1] },
+        { id: 'all', title: 'All', doneOn: null, createdAt: 1, repeat: 'daily', days: [0, 1, 2, 3, 4, 5, 6] },
+      ],
+      missions: [
+        { id: 'm1', title: 'Essay', deadline: '2030-01-10', done: false, subtasks: [], early: ['1d', 'x', '3d', '1d'], remind: 'morning' },
+        { id: 'm2', title: 'Lab', deadline: '2030-01-10', done: false, subtasks: [], early: [], remind: 'hour' },
+      ],
+      sessions: [
+        { id: 's1', dateKey: '2026-10-01', endedAt: 5, netSeconds: 600, taskTitles: [], manual: true, subject: 'Physics' },
+        { id: 's2', dateKey: '2026-10-01', endedAt: 6, netSeconds: 600, taskTitles: [], manual: 'yes', subject: 4 },
+      ],
+      todayLayout: [
+        { id: 'a', type: 'dayRing', size: 'S' },
+        { id: 'a', type: 'twice', size: 'M' },
+        { id: 'b', type: 'checklist', size: 'XL', config: { n: 4 } },
+        { type: 'no-id' }, null, 'junk',
+      ],
+    };
+    const check = (d, where) => {
+      const task = (id) => d.dailyTasks.find((t) => t.id === id);
+      assert.deepEqual(task('w').days, [0, 2, 4], 'weekdays sorted, once each, ' + where);
+      assert.ok(!('days' in task('o')), 'a one-off has no weekdays, ' + where);
+      assert.ok(!('days' in task('all')), 'all seven is every day, ' + where);
+      assert.deepEqual(d.missions[0].early, ['3d', '1d'], where);
+      assert.equal(d.missions[0].remind, 'morning', 'the morning of needs no time, ' + where);
+      assert.ok(!('early' in d.missions[1]), where);
+      assert.ok(!('remind' in d.missions[1]), 'an hour before needs a time, ' + where);
+      assert.equal(d.sessions[0].manual, true, where);
+      assert.equal(d.sessions[0].subject, 'Physics', where);
+      assert.ok(!('manual' in d.sessions[1]) && !('subject' in d.sessions[1]), where);
+      assert.deepEqual(d.todayLayout, [
+        { id: 'a', type: 'dayRing', size: 'S' },
+        { id: 'b', type: 'checklist', size: 'M', config: { n: 4 } },
+      ], where);
+      assert.equal(d.settings.focusGoalMin, 90, where);
+      assert.equal(d.settings.focusAlertAsked, false, where);
+      assert.equal(d.settings.backupNudgeAt, 0, where);
+    };
+    const next = boot({ [KEY]: JSON.stringify({ state: saved, version: 6 }) });
+    await settled(next);
+    check(next.state(), 'on load');
+    const read = app.store.readSnapshot(JSON.stringify({ _app: 'student-hub', _v: 4, ...saved }));
+    check(read.data, 'on import');
+    assert.deepEqual(app.store.sanitizeV6(read.data), read.data, 'a second pass changes nothing');
+    // quick action tiles come through an import; one with no action is dropped
+    const q = app.store.readSnapshot(JSON.stringify({
+      _app: 'student-hub', _v: 4,
+      quickAccess: [
+        { id: 'q1', label: 'New note', icon: 'create-outline', color: 'amber', kind: 'action', target: 'new-note' },
+        { id: 'q2', label: 'Nothing', icon: 'ellipse', color: 'amber', kind: 'action', target: '' },
+      ],
+    }));
+    assert.deepEqual(q.data.quickAccess.map((x) => x.target), ['new-note']);
+    // the board: known types only when the registry is asked, null for anything that is not a list
+    const { cleanTodayLayout } = app.store;
+    assert.deepEqual(cleanTodayLayout([{ id: 'a', type: 'dayRing', size: 'S' }, { id: 'b', type: 'gone', size: 'S' }], ['dayRing']).map((w) => w.id), ['a']);
+    assert.equal(cleanTodayLayout('x'), null);
+    assert.deepEqual(cleanTodayLayout([]), [], 'an empty board is kept: everything removed');
+    const st = app.state;
+    st().setTodayLayout([{ id: 'x', type: 'clock', size: 'L' }, { id: 'x', type: 'clock', size: 'S' }]);
+    assert.deepEqual(st().todayLayout, [{ id: 'x', type: 'clock', size: 'L' }]);
+    st().setTodayLayout(null);
+    assert.equal(st().todayLayout, null);
+    // a weekly ToDo, and its weekdays going when it is made a one-off
+    const id = st().addDaily('Swim', { repeat: 'daily', days: [5, 6, 5] });
+    assert.deepEqual(st().dailyTasks.find((t) => t.id === id).days, [5, 6]);
+    st().updateDaily(id, { days: null });
+    assert.ok(!('days' in st().dailyTasks.find((t) => t.id === id)), 'every day again');
+    st().updateDaily(id, { days: [1] });
+    st().updateDaily(id, { repeat: null });
+    assert.ok(!('days' in st().dailyTasks.find((t) => t.id === id)), 'made a one-off, its weekdays go');
+    const m = st().addMission('Essay', '2030-01-01');
+    st().updateMission(m, { early: ['1d', '3d'], remind: 'hour' });
+    assert.deepEqual(st().missions.find((x) => x.id === m).early, ['3d', '1d']);
+    assert.ok(!('remind' in st().missions.find((x) => x.id === m)), 'an hour before with no time goes');
+    st().updateMission(m, { early: null });
+    assert.ok(!('early' in st().missions.find((x) => x.id === m)));
+  },
+
+  async '2.0: habits, long-term tasks and exams go to Recently deleted and come back in their place'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    st().addHabit('Walk');
+    st().addHabit('Read');
+    const [h1, h2] = st().habits;
+    st().toggleHabitToday(h1.id);
+    const t1 = st().trashHabit(h1.id);
+    assert.ok(t1);
+    assert.deepEqual(st().habits.map((h) => h.id), [h2.id]);
+    assert.equal(st().trash[0].kind, 'habit');
+    assert.equal(st().trash[0].title, 'Walk');
+    assert.equal(st().trash[0].locked, false);
+    assert.equal(st().restoreFromTrash(t1), 'ok');
+    assert.deepEqual(st().habits.map((h) => h.id), [h1.id, h2.id], 'back in its place');
+    assert.equal(st().habits[0].doneDates.length, 1, 'streak and all');
+    assert.equal(st().trash.length, 0);
+    assert.equal(st().trashHabit('nope'), null);
+
+    const m1 = st().addMission('Essay', '2030-01-01');
+    const m2 = st().addMission('Lab', '2030-01-02');
+    st().addSubtask(m1, 'Outline');
+    st().toggleMission(m1);
+    const t2 = st().trashMission(m1);
+    assert.deepEqual(st().missions.map((m) => m.id), [m2]);
+    assert.ok(st().doneLog[app.utils.todayKey()].tasks.some((x) => x.id === m1), "the day's record keeps the tick");
+    assert.equal(st().restoreFromTrash(t2), 'ok');
+    assert.deepEqual(st().missions.map((m) => m.id), [m1, m2]);
+    assert.equal(st().missions[0].subtasks.length, 1);
+    assert.equal(st().missions[0].done, true);
+
+    const g = st().addScoreNode({ kind: 'group', parentId: null, title: 'Term 1' });
+    const tag = st().addScoreTag('Hard');
+    const { id: ex } = st().saveExam({
+      parentId: g, fields: { title: 'Mock', date: '2030-02-01', tags: [tag] }, subjects: [{ title: 'Physics', score: 40, outOf: 50 }], removeIds: [],
+    });
+    const sub = st().scores.find((n) => n.parentId === ex);
+    st().addLearning({ nodeId: sub.id, text: 'Units', tags: [tag] });
+    const t3 = st().trashExam(ex);
+    assert.deepEqual(st().scores.map((n) => n.id), [g], 'only the group stays');
+    assert.equal(st().learnings.length, 0, 'its learnings go with it');
+    const item = st().trash.find((t) => t.id === t3);
+    assert.equal(item.kind, 'exam');
+    assert.equal(item.title, 'Mock');
+    assert.equal(item.data.nodes.length, 2);
+    assert.equal(st().restoreFromTrash(t3), 'ok');
+    assert.equal(st().scores.length, 3);
+    assert.equal(st().scores.find((n) => n.id === ex).parentId, g, 'back in its group');
+    assert.equal(st().learnings.length, 1);
+    assert.equal(st().restoreFromTrash(t3), 'ok', 'an Undo tapped twice');
+    assert.equal(st().scores.length, 3, 'nothing comes in twice');
+
+    // its group and a tag deleted meanwhile: it comes back at the top level, without the tag
+    const t4 = st().trashExam(ex);
+    st().removeScoreNode(g);
+    st().removeScoreTag(tag);
+    assert.equal(st().restoreFromTrash(t4), 'ok');
+    const back = st().scores.find((n) => n.id === ex);
+    assert.equal(back.parentId, null);
+    assert.ok(!back.tags || !back.tags.includes(tag));
+    assert.deepEqual(st().learnings[0].tags, []);
+
+    // saved and loaded again, every new kind is still a trash item
+    st().trashHabit(h2.id);
+    st().trashMission(m2);
+    st().trashExam(ex);
+    await flush(app);
+    const again = boot({}, { storage: app.storage });
+    await settled(again);
+    const kinds = again.state().trash.map((t) => t.kind).sort();
+    assert.deepEqual(kinds, ['exam', 'habit', 'mission']);
+    for (const t of again.state().trash) assert.equal(again.state().restoreFromTrash(t.id), 'ok');
+    assert.ok(again.state().habits.some((h) => h.id === h2.id));
+    assert.ok(again.state().missions.some((m) => m.id === m2));
+    assert.ok(again.state().scores.some((n) => n.id === ex));
+    // an exam item that lost its own node is no item at all
+    const junk = again.store.sanitizeV6({ trash: [{ id: 'z', kind: 'exam', deletedAt: 1, title: 'x', locked: false, data: { id: 'e', nodes: [{ id: 'f' }] } }] });
+    assert.deepEqual(junk.trash, []);
+    // gone for good after 30 days
+    again.state().trashHabit(h2.id);
+    again.state().purgeTrash(Date.now() + 32 * DAY);
+    assert.equal(again.state().trash.length, 0);
+  },
+
+  async '2.0: sessions are logged and edited by hand'() {
+    const app = boot();
+    await settled(app);
+    const st = app.state;
+    const today = app.utils.todayKey();
+    st().logSession({ dateKey: today, endedAt: Date.now() - 1000, netSeconds: 300, taskTitles: [] });
+    const id = st().addManualSession({ dateKey: dayKey(app.utils, -1), minutes: 45, subject: '  Chem  lab ' });
+    assert.ok(id);
+    assert.equal(st().sessions[0].id, id, "yesterday's goes before today's");
+    assert.equal(st().sessions[0].manual, true);
+    assert.equal(st().sessions[0].netSeconds, 2700);
+    assert.equal(st().sessions[0].subject, 'Chem lab');
+    assert.equal(st().addManualSession({ dateKey: dayKey(app.utils, 1), minutes: 10 }), null, 'never a day to come');
+    assert.equal(st().addManualSession({ dateKey: today, minutes: 0 }), null);
+    assert.equal(st().addManualSession({ dateKey: today, minutes: 721 }), null);
+    assert.equal(st().addManualSession({ dateKey: 'soon', minutes: 10 }), null);
+    const now = st().addManualSession({ dateKey: today, minutes: 20 });
+    assert.equal(st().sessions[st().sessions.length - 1].id, now, "today's ends now");
+    assert.ok(!('subject' in st().sessions[st().sessions.length - 1]));
+    assert.equal(st().updateSession(id, { subject: '', minutes: 50 }), true);
+    const edited = st().sessions.find((x) => x.id === id);
+    assert.ok(!('subject' in edited));
+    assert.equal(edited.netSeconds, 3000);
+    assert.equal(st().updateSession('nope', { minutes: 5 }), false);
+    const before = st().sessions;
+    assert.equal(st().updateSession(id, { minutes: 50 }), true);
+    assert.equal(st().sessions, before, 'no change, no new list');
+    st().updateSession(id, { minutes: 9999 });
+    assert.equal(st().sessions.find((x) => x.id === id).netSeconds, 3000, 'minutes out of range are refused');
+  },
+
+  async "2.0: a restore keeps this phone's own answers to its one-time notes"() {
+    const app = boot();
+    await settled(app);
+    app.state().setSetting('backupNudgeAt', 1234);
+    app.state().setSetting('focusAlertAsked', true);
+    const snap = app.store.exportSnapshot();
+    assert.deepEqual(snap.todayLayout, null, "Today's board travels in a backup");
+    const other = { ...snap, settings: { ...snap.settings, backupNudgeAt: 0, focusAlertAsked: false, focusGoalMin: 60 } };
+    app.store.applySnapshot(app.store.readSnapshot(JSON.stringify(other)));
+    const s = app.state().settings;
+    assert.equal(s.backupNudgeAt, 1234);
+    assert.equal(s.focusAlertAsked, true);
+    assert.equal(s.focusGoalMin, 60, 'the goal is data and comes with the backup');
+    const prev = app.state();
+    app.state().setSetting('backupNudgeAt', 99);
+    assert.equal(app.store.isDeviceOnlyChange(app.state(), prev), true, 'answering the card is no change to back up');
+  },
+
+  async '2.0: the reminders ring early, a week before, and on a weekly ToDo\'s days only'() {
+    const scheduled = [];
+    const N = {
+      setNotificationHandler() {},
+      async setNotificationChannelAsync() {},
+      async getPermissionsAsync() { return { granted: true, status: 'granted', canAskAgain: true }; },
+      async requestPermissionsAsync() { return { granted: true }; },
+      async getAllScheduledNotificationsAsync() { return []; },
+      async cancelScheduledNotificationAsync() {},
+      async scheduleNotificationAsync(req) { scheduled.push(req); },
+      addNotificationResponseReceivedListener() {},
+      async getLastNotificationResponseAsync() { return null; },
+      async clearLastNotificationResponseAsync() {},
+      SchedulableTriggerInputTypes: { DAILY: 'daily', DATE: 'date' },
+      AndroidImportance: { DEFAULT: 3, HIGH: 4 },
+      DEFAULT_ACTION_IDENTIFIER: 'default',
+    };
+    const RN = { Platform: { OS: 'ios' }, AppState: { currentState: 'active', addEventListener() {} }, Alert: { alert() {} }, Linking: {} };
+    const app = boot({}, {
+      stubs: {
+        'expo-notifications': N, 'react-native': RN,
+        './deepWork': { COUNTDOWN_NOTIF_ID: 'c', FINISH_NOTIF_ID: 'f' },
+        './toolNav': { openTool() {} },
+        './components/Toast': { toast() {} },
+      },
+    });
+    await settled(app);
+    const notif = app.load('src/notifications.ts');
+    assert.equal(await notif.notificationPermission(), 'granted');
+    const st = app.state;
+    const u = app.utils;
+    const k = (n) => dayKey(u, n);
+    const weekday = (n) => u.weekdayIndex(new Date(k(n) + 'T00:00:00'));
+    st().setSetting('remindersEnabled', true);
+    const m = st().addMission('Essay', k(5));
+    st().updateMission(m, { early: ['3d', '1d'], remind: 'morning' });
+    const e1 = st().saveExam({ parentId: null, fields: { title: 'Chem mock', date: k(9), remind: ['week', 'eve'] }, subjects: [], removeIds: [] }).id;
+    const e2 = st().saveExam({ parentId: null, fields: { title: 'Bio', date: k(4) }, subjects: [], removeIds: [] }).id;
+    const e3 = st().saveExam({ parentId: null, fields: { title: 'Maths', date: k(6), remind: [] }, subjects: [], removeIds: [] }).id;
+    const t = st().addDaily('Gym', { repeat: 'daily', days: [weekday(2)], time: '20:00', remind: 'hour' });
+    const run = async () => {
+      scheduled.length = 0;
+      await notif.rescheduleAllReminders();
+      return scheduled.map((r) => ({ id: r.identifier.replace('sturoids-reminder:', ''), at: r.trigger.date, title: r.content.title, body: r.content.body }));
+    };
+    let got = await run();
+    const find = (id) => got.find((r) => r.id === id);
+    const r3 = find(`mission3d:${m}:${k(2)}`);
+    assert.ok(r3, 'three days before');
+    assert.equal(r3.body, 'Due in 3 days');
+    assert.equal(r3.at.getHours(), 18);
+    assert.equal(find(`mission1d:${m}:${k(4)}`).body, 'Due tomorrow');
+    assert.equal(find(`mission:${m}:${k(5)}`).at.getHours(), 8, 'the morning of, with no time');
+    assert.equal(find(`examweek:${e1}:${k(2)}`).title, 'In a week: Chem mock');
+    assert.equal(find(`examweek:${e1}:${k(2)}`).at.getHours(), 19);
+    assert.ok(find(`exam:${e1}:${k(8)}`), 'and the evening before');
+    assert.ok(!got.some((r) => r.id.includes(e2)), 'the switch off, an exam of its own choosing nothing rings nothing');
+    const gym = got.filter((r) => r.id.startsWith(`task:${t}:`));
+    assert.ok(gym.length >= 2, 'its day this week and next');
+    for (const r of gym) assert.equal(u.weekdayIndex(r.at), weekday(2), 'a weekly ToDo rings on its days only');
+    st().setSetting('examReminders', true);
+    got = await run();
+    assert.ok(find(`exam:${e2}:${k(3)}`), 'the switch on: the evening before');
+    assert.ok(!got.some((r) => r.id.includes(e3)), "an exam's own choice of none wins over the switch");
+    assert.ok(!got.some((r) => r.id === `examweek:${e2}:${k(-3)}`));
+  },
+
+  async '2.0: the pure helpers the widgets read'() {
+    const app = boot();
+    await settled(app);
+    const u = app.utils;
+    const mon = new Date(2024, 0, 1); // a Monday
+    assert.equal(u.weekdayIndex(mon), 0);
+    assert.equal(u.todoDueOn({ repeat: 'daily', days: [0] }, mon), true);
+    assert.equal(u.todoDueOn({ repeat: 'daily', days: [1] }, '2024-01-01'), false);
+    assert.equal(u.todoDueOn({ days: [1] }, mon), true, 'a one-off shows every day');
+    assert.equal(u.todoDueOn({ repeat: 'daily' }, mon), true);
+
+    const clean = (id) => ({ videoId: id, url: 'https://www.youtube.com/watch?v=' + id });
+    const text = 'Watch https://youtu.be/dQw4w9WgXcQ?si=abc. and https://www.youtube.com/watch?v=9bZkp7q19f0&list=PL123&t=30s, again youtu.be/dQw4w9WgXcQ';
+    assert.deepEqual(u.youTubeLinksIn(text), [clean('dQw4w9WgXcQ'), clean('9bZkp7q19f0')]);
+    assert.equal(u.isYouTubePlaylist(text), false, 'a video in a playlist is a video');
+    assert.equal(u.isYouTubePlaylist('https://youtube.com/playlist?list=PLabc_12'), true);
+    assert.deepEqual(u.youTubeLinksIn('https://youtube.com/playlist?list=PLabc_12'), []);
+    assert.deepEqual(u.youTubeLinksIn('no links here'), []);
+    assert.equal(u.isYouTubePlaylist('no links here'), false);
+    assert.deepEqual(u.youTubeLinksIn(' dQw4w9WgXcQ '), [clean('dQw4w9WgXcQ')], 'a bare id, as before');
+    assert.deepEqual(u.youTubeLinksIn('(https://m.youtube.com/shorts/9bZkp7q19f0)'), [clean('9bZkp7q19f0')]);
+
+    const k = (n) => dayKey(u, n);
+    const sess = [
+      { dateKey: k(0), netSeconds: 1800 }, { dateKey: k(-1), netSeconds: 600 }, { dateKey: k(-1), netSeconds: 1200 },
+      { dateKey: k(-2), netSeconds: 300 }, { dateKey: k(-4), netSeconds: 3600 },
+    ];
+    assert.deepEqual(u.focusStreak(sess), { current: 3, best: 3 });
+    assert.deepEqual(u.focusStreak(sess, 30), { current: 2, best: 2 }, 'with a goal, a short day ends the run');
+    assert.deepEqual(u.focusStreak([]), { current: 0, best: 0 });
+
+    // moods, and focus on good days
+    const jc = app.load('src/journalCore.ts');
+    const entry = (id, dateKey, extra) => ({ id, dateKey, title: '', excerpt: '', tags: [], wordCount: 10, pinned: false, createdAt: 1, updatedAt: 1, ...extra });
+    const end = '2026-03-10';
+    const series = jc.moodSeries([
+      entry('a', '2026-03-10', { mood: 4, rating: 5 }), entry('b', '2026-03-10', { mood: 5 }),
+      entry('c', '2026-03-08', { rating: 2 }), entry('d', '2026-02-01', { mood: 1 }),
+    ], 3, end);
+    assert.deepEqual(series.map((d) => d.dateKey), ['2026-03-08', '2026-03-09', '2026-03-10']);
+    assert.deepEqual(series[2], { dateKey: '2026-03-10', mood: 5, rating: 5, words: 20, entries: 2 });
+    assert.deepEqual(series[1], { dateKey: '2026-03-09', mood: null, rating: null, words: 0, entries: 0 });
+    assert.equal(series[0].rating, 2);
+    assert.equal(series[0].mood, null);
+    const ents = [];
+    const ss = [];
+    for (let i = 0; i < 10; i++) {
+      const key = jc.shiftKey(end, -i);
+      ents.push(entry('x' + i, key, { rating: i < 5 ? 5 : 2 }));
+      ss.push({ dateKey: key, netSeconds: i < 5 ? 3600 : 600 });
+    }
+    assert.deepEqual(jc.moodFocusLink(ents, ss, 60, end), { goodDays: 5, otherDays: 5, goodMin: 60, otherMin: 10 });
+    assert.equal(jc.moodFocusLink(ents.slice(0, 7), ss, 60, end), null, 'too few other days to say anything');
+    const journal = app.load('src/journal.ts');
+    assert.equal(journal.moodSeries, jc.moodSeries, 'the journal module still gives every helper');
+    assert.equal(journal.journalStreak, jc.journalStreak);
+
+    // subjects
+    const sj = app.load('src/subjects.ts');
+    const now = new Date(2026, 2, 10, 12, 0);
+    const planner = Object.fromEntries(u.DAY_NAMES.map((d) => [d, []]));
+    planner[u.dayName(now)] = [
+      { id: 'b1', subject: 'Physics', start: '09:00', end: '10:00', color: '#fff' },
+      { id: 'b2', subject: 'physics', start: '15:00', end: '16:00', color: '#fff' },
+    ];
+    const s = (id, dateKey, mins, subject) => ({ id, dateKey, endedAt: 1, netSeconds: mins * 60, taskTitles: [], subject });
+    const node = (id, parentId, title, extra) => ({ id, parentId, kind: 'exam', title, createdAt: 1, updatedAt: 1, ...extra });
+    const note = (id, subject, updatedAt) => ({ id, title: id, body: '', folder: 'General', tags: [], pinned: false, createdAt: 1, updatedAt, subject, attachments: [] });
+    const data = {
+      sessions: [s('1', '2026-03-10', 30, 'Physics'), s('2', '2026-03-04', 10, ' physics '), s('3', '2026-02-01', 10, 'Physics'), s('4', '2026-03-10', 15, 'Chem')],
+      notes: [note('n1', 'Physics', 5), note('n2', 'PHYSICS', 9), note('n3', 'Chem', 1)],
+      planner,
+      scores: [
+        node('e1', null, 'Mock 1', { date: '2026-01-10' }), node('p1', 'e1', 'Physics', { score: 30, outOf: 50 }),
+        node('e2', null, 'Mock 2', { date: '2026-02-10' }), node('p2', 'e2', 'physics', { score: 40, outOf: 50 }),
+        node('e3', null, 'Final', { date: '2026-04-01' }), node('p3', 'e3', 'Physics'),
+      ],
+    };
+    const list = sj.subjectsOf(data);
+    assert.equal(list[0].name, 'Physics');
+    assert.equal(list[0].uses, 10);
+    assert.deepEqual(list[0].from, ['focus', 'notes', 'planner', 'scores']);
+    assert.deepEqual(list.map((x) => x.key), ['physics', 'chem']);
+    const sum = sj.subjectSummary(data, 'PHYSICS', now);
+    assert.equal(sum.name, 'Physics');
+    assert.equal(sum.weekMin, 40);
+    assert.equal(sum.spark.length, 30);
+    assert.equal(sum.spark[29], 30);
+    assert.equal(sum.totalMin, 50);
+    assert.deepEqual(sum.trend.map((r) => Math.round(r.pct)), [60, 80]);
+    assert.equal(Math.round(sum.lastDelta), 20);
+    assert.equal(sum.nextClass.block.id, 'b2', 'the next to start, the morning one being over');
+    assert.equal(sum.nextClass.inDays, 0);
+    assert.equal(sum.nextClass.onNow, false);
+    assert.deepEqual([sum.nextExam.id, sum.nextExam.inDays], ['e3', 22]);
+    assert.deepEqual(sum.notes.map((n) => n.id), ['n2', 'n1']);
+    const hidden = sj.subjectSummary({ ...data, settings: { notesLocked: true } }, 'physics', now);
+    assert.deepEqual([hidden.notes, hidden.notesHidden], [[], true]);
+    const week = sj.focusWeek(data.sessions, '2026-03-10');
+    assert.equal(week.days.length, 7);
+    assert.equal(week.days[6].min, 45);
+    assert.deepEqual(week.days[6].bySubject.map((x) => [x.name, x.min]), [['Physics', 30], ['Chem', 15]]);
+    assert.equal(week.best.dateKey, '2026-03-10');
+    assert.equal(week.totalMin, 55);
+
+    // the backup card
+    const bn = app.load('src/backupNudge.ts');
+    const t0 = Date.UTC(2026, 9, 1);
+    const base = { firstOpenedAt: t0 - 8 * DAY, backupNudgeAt: 0, signedIn: false, lastExportAt: null, hasData: true, now: t0 };
+    assert.equal(bn.shouldNudgeBackup(base), true);
+    assert.equal(bn.shouldNudgeBackup({ ...base, firstOpenedAt: t0 - 3 * DAY }), false, 'not in the first week');
+    assert.equal(bn.shouldNudgeBackup({ ...base, firstOpenedAt: undefined }), false);
+    assert.equal(bn.shouldNudgeBackup({ ...base, signedIn: true }), false);
+    assert.equal(bn.shouldNudgeBackup({ ...base, lastExportAt: t0 - 2 * DAY }), false);
+    assert.equal(bn.shouldNudgeBackup({ ...base, lastExportAt: t0 - 20 * DAY }), true);
+    assert.equal(bn.shouldNudgeBackup({ ...base, backupNudgeAt: 5 }), false, 'once only');
+    assert.equal(bn.shouldNudgeBackup({ ...base, hasData: false }), false);
   },
 };
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Alert, Dimensions, InteractionManager, Platform, View } from 'react-native';
@@ -30,12 +30,15 @@ import {
 } from '../src/store';
 import type { LoadNotice } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
-import { setIntroPhase } from '../src/intro';
+import { markAppDrawn, noteAppFonts, setIntroPhase } from '../src/intro';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
-import { ToastHost, toast } from '../src/components/Toast';
-import { activeProfile, loadProfiles, profileName, takeArrival, useProfiles } from '../src/profiles';
-import { SwitchingOverlay } from '../src/components/ProfileSwitcher';
+import { ToastHost } from '../src/components/Toast';
+import { loadProfiles, takeArrival, useProfiles } from '../src/profiles';
+import { ArrivalMoment, SwitchingOverlay } from '../src/components/ProfileSwitcher';
+import { AppFrame, SearchOverlay } from '../src/components/SearchOverlay';
+import { QuickAddHost } from '../src/components/QuickAddHost';
+import { appIsUp } from '../src/actions';
 import { ShareIntake } from '../src/shareIntake';
 import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
 
@@ -186,6 +189,8 @@ export default function RootLayout() {
   });
   const introFonts = introLoaded || !!introError;
   const appFonts = appLoaded || !!appError;
+  // a skipped intro may wait a little longer for the app to draw while its faces are still loading (src/intro.ts)
+  useEffect(() => { if (appFonts) noteAppFonts(); }, [appFonts]);
   const splashHidden = useRef(false);
   // whether this launch is the one a profile switch started (null until the note has been read)
   const [arrived, setArrived] = useState<boolean | null>(null);
@@ -209,20 +214,29 @@ export default function RootLayout() {
   const instant = level === 'none' || arrived === true;
   const showApp = (revealed || instant) && appFonts;
 
-  // arriving from a switch: no intro, the app is revealed at once, and once it shows it says which profile it opened
+  // arriving from a switch: no intro, the app is built at once beneath the arrival moment (the profile's photo and
+  // name), which then fades into Today's entrance and ends the intro
   useEffect(() => {
     if (arrived !== true) return;
     setRevealed(true);
-    setIntroDone(true);
   }, [arrived]);
-  useEffect(() => {
-    if (arrived !== true || !showApp) return undefined;
-    const t = setTimeout(() => {
-      const me = useProfiles.getState().list.find((p) => p.id === activeProfile);
-      toast('Switched to ' + profileName({ name: useStore.getState().settings.name.trim() || me?.name || '' }));
-    }, 600);
-    return () => clearTimeout(t);
-  }, [arrived, showApp]);
+
+  // stable, so a root re-render (fonts, revealed, profiles) never re-renders the intro while it plays or skips
+  const onReveal = useCallback(() => setRevealed(true), []);
+  const onIntroDone = useCallback(() => setIntroDone(true), []);
+
+  // The app has drawn once its navigator's container has laid out and two frames have painted: a skipped intro (and
+  // the arrival moment) waits for this before it clears, so it never fades onto a page still being built. With motion
+  // off (or after a switch) the splash goes from this first layout too.
+  const instantRef = useRef(false);
+  const hideSplashRef = useRef<() => void>(() => {});
+  const drawnAsked = useRef(false);
+  const onAppLayout = useCallback(() => {
+    if (instantRef.current) hideSplashRef.current();
+    if (drawnAsked.current) return;
+    drawnAsked.current = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => markAppDrawn()));
+  }, []);
 
   // notifications and reminder rescheduling never compete with the intro
   useEffect(() => {
@@ -246,9 +260,12 @@ export default function RootLayout() {
     return () => { offLoad(); offSave(); };
   }, [introDone]);
 
-  // however the intro ended, the app's entrance never waits on it
+  // however the intro ended, the app's entrance never waits on it; and a link that opened the app (an app shortcut, a
+  // phone widget) is carried out now
   useEffect(() => {
-    if (introDone) setIntroPhase('done');
+    if (!introDone) return;
+    setIntroPhase('done');
+    appIsUp();
   }, [introDone]);
 
   // the system navigation bar follows the theme's material (app.json only sets the launch colour)
@@ -269,6 +286,8 @@ export default function RootLayout() {
     splashHidden.current = true;
     SplashScreen.hideAsync().catch(() => {});
   };
+  instantRef.current = instant;
+  hideSplashRef.current = hideSplash;
 
   // the splash goes from the first real frame: the intro's (it paints with the root), or with motion off the app's own
   return (
@@ -276,7 +295,8 @@ export default function RootLayout() {
       <StatusBar style="light" />
       <ReduceMotionSync />
       {showApp && (
-        <View style={{ flex: 1 }} onLayout={instant ? hideSplash : undefined}>
+        <AppFrame>
+        <View style={{ flex: 1 }} onLayout={onAppLayout}>
           <ErrorBoundary>
           <Stack
             screenListeners={noteTransitionStart}
@@ -291,15 +311,19 @@ export default function RootLayout() {
           />
           </ErrorBoundary>
         </View>
+        </AppFrame>
       )}
+      {/* Sift, the app-wide search, over the tabs and every page; and the app-wide "Add a task" sheet */}
+      {showApp && <SearchOverlay />}
+      {showApp && <QuickAddHost />}
       {showApp && <ToastHost />}
       {/* covers everything while the app restarts into another profile */}
       <SwitchingOverlay />
       {/* a YouTube link shared to the app is offered to YT Vault, once the intro is over */}
       {showApp && <ShareIntake />}
-      {!introDone && !arrived && (
-        <StartScreen onReveal={() => setRevealed(true)} onDone={() => setIntroDone(true)} />
-      )}
+      {/* after a switch's restart: who the app opened as, held a moment, then into Today */}
+      {showApp && arrived === true && !introDone && <ArrivalMoment onDone={onIntroDone} />}
+      {!introDone && !arrived && <StartScreen onReveal={onReveal} onDone={onIntroDone} />}
     </GestureHandlerRootView>
   );
 }

@@ -3,7 +3,7 @@ import { View, Text, TextInput, StyleSheet, ScrollView, InteractionManager, useW
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
-import { create, all } from 'mathjs';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { C, F, MIN, NEU, S, T, TRACK, neuPressedInner, neuRaised, oneLine } from '../theme';
 import { useStore } from '../store';
@@ -14,101 +14,12 @@ import {
   ARRIVE, Bouncy, EASE_EXIT, EASE_OUT, FadeSwap, RISE_OUT, SINK_IN, glide, rowIn, rowOut, useAnimLevel, useBuilt,
 } from '../components/Motion';
 import { tick } from '../haptics';
+import { M, closeBrackets, fmt, makeScope, math, shown, toEngine } from '../calcEngine';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RAIL_W, TWO_COL_AT, WIDE_AT, WIDE_MAX } from '../layout';
 
-// Precise engine: BigNumber arithmetic — 0.1 + 0.2 is exactly 0.3 here.
-const math = create(all, { number: 'BigNumber', precision: 40 });
-
-const M = math as any;
-
-/** the largest factorial worked out: 10000! takes a few milliseconds, a million would hold the screen for seconds */
-const MAX_FACTORIAL = 10000;
-
-/** A sum the engine can read but the calculator will not answer: a factorial too large, or tan where it has no value. */
-const unfit = (kind: 'large' | 'undefined') => Object.assign(new Error(kind), { unfit: kind });
-
-// Built on first use, not when the module loads: the module loads with the app (a tab slot can hold the calculator),
-// and the first evaluation builds mathjs's parser, which would add to every cold start.
-let engine: { d2r: any; r2d: any; tiny: any } | null = null;
-function ready() {
-  if (engine) return engine;
-  const factorial = M.factorial;
-  // the ! operator reads the engine's own factorial, so the limit sits there and covers (5000+6000)! as well
-  math.import({
-    factorial: (x: any) => {
-      if (M.isBigNumber(x) ? x.gt(MAX_FACTORIAL) : x > MAX_FACTORIAL) throw unfit('large');
-      return factorial(x);
-    },
-  }, { override: true });
-  engine = { d2r: math.evaluate('pi / 180'), r2d: math.evaluate('180 / pi'), tiny: M.bignumber('1e-30') };
-  return engine;
-}
-
-/**
- * sin, cos and tan of an exact angle land on 0 rather than on what the 40-digit pi leaves over (sin 180 is 0, not
- * 1.7e-40). Compared with decimal.js itself: mathjs's own comparisons count anything within 1e-15 as equal.
- */
-function snap(v: any) {
-  return M.isBigNumber(v) && v.abs().lt(ready().tiny) ? M.bignumber(0) : v;
-}
-
-function makeScope(deg: boolean, ans: any) {
-  const { d2r, r2d } = ready();
-  const rad = (x: any) => (deg ? M.multiply(x, d2r) : x);
-  const scope: Record<string, any> = {
-    Ans: ans ?? 0,
-    sin: (x: any) => snap(M.sin(rad(x))),
-    cos: (x: any) => snap(M.cos(rad(x))),
-    // tan 90 has no value: its cos is 0 there, where the engine would give a huge number instead
-    tan: (x: any) => {
-      const r = rad(x);
-      const c = snap(M.cos(r));
-      if (M.isBigNumber(c) && c.isZero()) throw unfit('undefined');
-      return snap(M.tan(r));
-    },
-  };
-  if (deg) {
-    scope.asin = (x: any) => M.multiply(M.asin(x), r2d);
-    scope.acos = (x: any) => M.multiply(M.acos(x), r2d);
-    scope.atan = (x: any) => M.multiply(M.atan(x), r2d);
-  }
-  return scope;
-}
-
-function toEngine(expr: string): string {
-  return expr
-    // ×10^ makes one number, as on any scientific calculator: 1÷6.02×10^23 divides by the whole of 6.02×10^23
-    .replace(/(\d+(?:\.\d*)?|\.\d+)×10\^([−-]?\d+)/g, (_, m: string, x: string) => '(' + m + 'e' + x.replace('−', '-') + ')')
-    .replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-')
-    .replace(/π/g, 'pi').replace(/√\(/g, 'sqrt(');
-}
-
-/** Every bracket a sum leaves open is closed at its end: each function key types its own, as on a scientific calculator. */
-function closeBrackets(s: string): string {
-  let open = 0;
-  for (const ch of s) {
-    if (ch === '(') open++;
-    else if (ch === ')' && open > 0) open--;
-  }
-  return open > 0 ? s + ')'.repeat(open) : s;
-}
-
 /** A sum that is only a number: it has nothing to preview, and "=" on it has nothing to answer. */
 const BARE = /^[−-]?(\d+\.?\d*|\.\d+)(×10\^[−-]?\d+)?$/;
-
-/** An answer from the engine, in plain digits and e-notation (what is copied). Big and small answers only go to e-notation past 10^14 and 10^-9. */
-function fmt(v: any, sciNotation: boolean): string {
-  return sciNotation
-    // 1.2e+5, not 1.20000000000e+5
-    ? math.format(v, { notation: 'exponential', precision: 12 }).replace(/\.?0+e/, 'e')
-    : math.format(v, { precision: 14, lowerExp: -9, upperExp: 14 });
-}
-
-/** An answer as the keypad writes it: its minus sign and its ×10^, not a hyphen and e-notation. */
-function shown(ascii: string): string {
-  return ascii.replace(/-/g, '−').replace(/e\+?(−?\d+)$/, '×10^$1');
-}
 
 /** A sum or an answer as a screen reader says it: the keypad's signs read as words. */
 function spoken(s: string): string {
@@ -312,6 +223,20 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setJustEvaluated(evaluated);
     if (caret != null) placeCaret(caret);
   }, [placeCaret]);
+
+  // Sift's inline maths opens the calculator with its sum (?expr=): the sum is written in, untapped, its answer shown in
+  // the preview, and the param is cleared after, so the same link works again
+  const params = useLocalSearchParams<{ expr?: string }>();
+  const router = useRouter();
+  useFocusEffect(useCallback(() => {
+    const raw = typeof params.expr === 'string' ? params.expr : '';
+    if (!raw) return;
+    const sum = raw.replace(/[^\S ]+/g, '').replace(/\*/g, '×').replace(/\//g, '÷').replace(/-/g, '−').slice(0, 200);
+    focusedRef.current = false;
+    setEvalError(null);
+    write(sum, false, false);
+    router.setParams({ expr: undefined });
+  }, [params.expr, write]));
 
   const evalExpr = (raw: string) => {
     const s = live.current;

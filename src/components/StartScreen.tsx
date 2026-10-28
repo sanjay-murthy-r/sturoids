@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { GestureType } from 'react-native-gesture-handler';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, {
   Easing, Extrapolation, cancelAnimation, interpolate, runOnJS, useAnimatedProps, useAnimatedStyle, useSharedValue,
@@ -9,10 +10,10 @@ import Svg, { Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { C, F, LX, LY, NEU, bgFor, darkSh, liteSh } from '../theme';
 import { useStore } from '../store';
-import { setIntroPhase, useIntro } from '../intro';
+import { SKIP_WAIT_MS, SKIP_WAIT_NO_FONTS_MS, setIntroPhase, useIntro } from '../intro';
 import { SIG_SIZE, SIG_SPEED } from '../signature';
 import { dateDigits } from '../sigModel';
-import { useAnimLevel } from './Motion';
+import { EASE_OUT, useAnimLevel } from './Motion';
 import { WIDE_AT } from '../layout';
 import { DATE_SPEED, SHINE_SKEW, Signature, SignatureStill, inkExtent, layoutDate, useIntroSignature } from './Signature';
 
@@ -176,8 +177,13 @@ const HAND = { clear: 300, clearDur: 260, done: 860 };
 // 'some': the composed end state fades in, the app is built beneath it, the scene settles back and hands over
 const SOME = { fade: 320, reveal: 360, leave: 900, handoff: 1080, done: 1440 };
 
-/** Tap to skip: the pen runs on to the end of what it is writing this quickly, then the hand-over starts from there. */
-const SKIP_PEN = 250;
+/**
+ * Tap to skip: every value still on its way is retargeted to where the composed scene has it, in one short ease out (the
+ * pens finish their strokes in the same time); then, once the app beneath has drawn, the overlay clears in one motion
+ * while the column lifts a touch. About 550 ms from the tap to Today.
+ */
+const SKIP_SETTLE = 220;
+const SKIP_EXIT = 320;
 
 /** Today as the phone keeps it: day, month and two-digit year, read at the moment it is needed. */
 const todayDigits = () => dateDigits(new Date());
@@ -229,11 +235,11 @@ function PlateSheen({ glint }: { glint: SharedValue<number> }) {
  * theme keeps its own background; the plate keeps the default material (brand exception).
  *
  * The overlay takes every touch until the hand-over, so nothing in the app built beneath it can be
- * pressed unseen. With "Tap to skip" on, a tap ends the intro early: the pen runs on to the end of
- * what it is writing, quickly, the app is built if it is not yet, and the usual hand-over plays
- * from wherever the scene is.
+ * pressed unseen. With "Tap to skip" on, a tap ends the intro early: whatever is still moving
+ * settles into the composed scene in 220 ms (the pens finish their strokes), the app is built
+ * beneath it, and once the app has drawn the overlay clears in 320 ms as the column lifts.
  */
-export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone: () => void }) {
+export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone: () => void }) {
   const liveTheme = useStore((s) => s.settings.theme);
   const liveLevel = useAnimLevel();
   // _layout mounts the intro only after hydration, so these are the user's settings; the intro
@@ -257,8 +263,13 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
   const L = useMemo(() => logoBeats(model.total, dateMs, late, dated), []);
   const callbacks = useRef({ onReveal, onDone });
   callbacks.current = { onReveal, onDone };
-  /** what a tap does while the intro plays: set by the timeline once it runs, when tap to skip is on */
-  const skipRef = useRef<(() => void) | null>(null);
+  /**
+   * What a skip does on the JS side once the tap has started it on the UI thread: set by the timeline when it runs (tap to
+   * skip on). `start` drops the timeline and builds the app; `settled` says the retarget has finished.
+   */
+  const skipJs = useRef<{ start: () => void; settled: () => void }>({ start: () => {}, settled: () => {} });
+  const skipStart = useCallback(() => { skipJs.current.start(); }, []);
+  const skipSettled = useCallback(() => { skipJs.current.settled(); }, []);
 
   const full = level === 'full';
   const overlay = useSharedValue(1);
@@ -276,6 +287,14 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
   const leaveWords = useSharedValue(0);
   const leavePlate = useSharedValue(0);
   const leaveSig = useSharedValue(0);
+  /** the skip's own exit: the column lifts as the overlay clears */
+  const lift = useSharedValue(0);
+  /** 1 while a tap may skip, 2 once one has, 0 when it may not (off, or the hand-over has begun) */
+  const armed = useSharedValue(0);
+  /** the date's pen's end, kept current when the date is read again, so the UI thread can finish it */
+  const dateEnd = useSharedValue(hand ? layoutDate(date, hand).total : 0);
+  /** times the retarget, so its end is told back to JS */
+  const skipClock = useSharedValue(0);
 
   useEffect(() => {
     if (level === 'none') {
@@ -308,7 +327,7 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
 
     /** Beat 4 from `start` ms on: the scene settles back, one layer after another, and the material clears for the app. */
     const handOver = (start: number) => {
-      at(start, () => { leaving = true; });
+      at(start, () => { leaving = true; armed.value = 0; });
       const settle = { duration: RECEDE.dur, easing: cubicOut };
       leaveWords.value = withDelay(start + RECEDE.words, withTiming(1, settle));
       leavePlate.value = withDelay(start + RECEDE.plate, withTiming(1, settle));
@@ -319,7 +338,7 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
     };
     /** The same at some motion: quicker, and closer together. */
     const handOverSome = (start: number) => {
-      at(start, () => { leaving = true; });
+      at(start, () => { leaving = true; armed.value = 0; });
       const quick = { duration: 280, easing: cubicOut };
       leaveWords.value = withDelay(start, withTiming(1, quick));
       leavePlate.value = withDelay(start + 40, withTiming(1, quick));
@@ -343,6 +362,7 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
         const now = todayDigits();
         if (now === dateRef.current) return;
         dateRef.current = now;
+        dateEnd.value = layoutDate(now, hand).total;
         setDate(now);
         cancelAnimation(dateTau);
         dateTau.value = 0;
@@ -409,37 +429,56 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
       at(B.REVEAL, reveal);
     }
 
-    // Tap to skip: everything stops where it is and only the pens run on, quickly, to the end of what they are writing
-    // (a date still to come at the end is left unwritten). The app is built then if it is not yet, and one frame later
-    // the usual hand-over starts from the scene as it stands. No cut: whatever is showing settles back as it always does.
+    // Tap to skip. The tap itself retargets the scene on the UI thread (see `skipGesture` below), with no freeze: every
+    // value on its way finishes in one short ease out. Here, on JS: the timeline's timers go, the app is built beneath
+    // the still-opaque overlay, and once both the retarget is over and the app has drawn (or a cap has passed), the
+    // overlay clears in one UI-thread motion. The phase and the end come from that motion's callbacks, not timers.
+    let unsubDrawn: (() => void) | null = null;
+    let capTimer: ReturnType<typeof setTimeout> | null = null;
     if (tapSkip) {
-      skipRef.current = () => {
-        if (leaving) return;
-        leaving = true;
-        skipRef.current = null;
-        timers.forEach(clearTimeout);
-        timers.length = 0;
-        animated.forEach(cancelAnimation);
-        const go = () => {
-          reveal();
-          frames.push(requestAnimationFrame(() => (full ? handOver(0) : handOverSome(0))));
-        };
-        if (!full) {
-          go();
-          return;
-        }
-        const quick = { duration: SKIP_PEN, easing: Easing.out(Easing.quad) };
-        if (tau.value < model.total) tau.value = withTiming(model.total, quick);
-        if (hand && (!late || dateTau.value > 0)) {
-          const total = layoutDate(dateRef.current, hand).total;
-          if (dateTau.value < total) dateTau.value = withTiming(total, quick);
-        }
-        at(SKIP_PEN, go);
+      let settled = false;
+      let capped = false;
+      let exiting = false;
+      const exit = () => {
+        if (exiting) return;
+        exiting = true;
+        unsubDrawn?.();
+        unsubDrawn = null;
+        if (capTimer) clearTimeout(capTimer);
+        capTimer = null;
+        setIntroPhase('leaving');
+        const ease = { duration: SKIP_EXIT, easing: EASE_OUT };
+        if (full) lift.value = withTiming(1, ease);
+        overlay.value = withTiming(0, ease, (fin) => { if (fin) runOnJS(finish)(); });
       };
+      const tryExit = () => {
+        if (settled && (capped || useIntro.getState().appDrawn)) exit();
+      };
+      skipJs.current = {
+        start: () => {
+          if (exiting || capTimer) return;
+          leaving = true;
+          timers.forEach(clearTimeout);
+          timers.length = 0;
+          frames.forEach(cancelAnimationFrame);
+          frames.length = 0;
+          reveal();
+          // the app cannot draw before its faces are in: only then may the scene hold a little longer for it
+          capTimer = setTimeout(() => { capped = true; tryExit(); },
+            useIntro.getState().appFonts ? SKIP_WAIT_MS : SKIP_WAIT_NO_FONTS_MS);
+          unsubDrawn = useIntro.subscribe((now) => { if (now.appDrawn) tryExit(); });
+          tryExit();
+        },
+        settled: () => { settled = true; tryExit(); },
+      };
+      armed.value = 1;
     }
 
     return () => {
-      skipRef.current = null;
+      armed.value = 0;
+      skipJs.current = { start: () => {}, settled: () => {} };
+      unsubDrawn?.();
+      if (capTimer) clearTimeout(capTimer);
       timers.forEach(clearTimeout);
       frames.forEach(cancelAnimationFrame);
       animated.forEach(cancelAnimation);
@@ -450,7 +489,7 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
   const columnStyle = useAnimatedStyle(() => ({
     opacity: content.value,
     // the whole column lifts a touch as it settles back, so the day below seems to take its place
-    transform: [{ translateY: -10 * leaveSig.value }],
+    transform: [{ translateY: -10 * (leaveSig.value + lift.value) }],
   }));
   const plateStyle = useAnimatedStyle(() => ({
     opacity: 1 - leavePlate.value,
@@ -486,6 +525,45 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
     opacity: 1 - leaveSig.value,
     transform: [{ scale: 1 - 0.03 * leaveSig.value }],
   }));
+
+  // The skip, started on the UI thread by the tap: nothing freezes; what is still moving is retargeted to the composed
+  // end in one ease out, and the delayed hand-over that was waiting is dropped (the skip makes its own exit). A tap once
+  // the hand-over has begun changes nothing; only the first tap counts.
+  const modelTotal = model.total;
+  const skipGesture = useMemo(() => Gesture.Tap().onEnd((_e, success) => {
+    'worklet';
+    if (!success || armed.value !== 1) return;
+    if (overlay.value < 1 || leaveWords.value > 0 || leavePlate.value > 0 || leaveSig.value > 0) {
+      armed.value = 0;
+      return;
+    }
+    armed.value = 2;
+    cancelAnimation(overlay);
+    cancelAnimation(leaveWords);
+    cancelAnimation(leavePlate);
+    cancelAnimation(leaveSig);
+    const q = { duration: SKIP_SETTLE, easing: EASE_OUT };
+    content.value = withTiming(1, q);
+    if (full) {
+      tau.value = withTiming(modelTotal, q);
+      // a date still to come at the end is left unwritten; one on its way finishes with the signature
+      if (dated && (!late || dateTau.value > 0)) dateTau.value = withTiming(dateEnd.value, q);
+      else cancelAnimation(dateTau);
+      travel.value = withTiming(1, q);
+      ink.value = withTiming(0, q);
+      carve.value = withTiming(1, q);
+      rise.value = withTiming(1, q);
+      grooves.value = withTiming(1, q);
+      word.value = withTiming(1, q);
+      caption.value = withTiming(CAPTION_OPACITY, q);
+      // a shine already crossing finishes its pass; one not begun never starts
+      if (glint.value > 0) glint.value = withTiming(1, q);
+      else cancelAnimation(glint);
+    }
+    skipClock.value = 0;
+    skipClock.value = withTiming(1, { duration: SKIP_SETTLE }, (fin) => { if (fin) runOnJS(skipSettled)(); });
+    runOnJS(skipStart)();
+  }), []);
 
   if (level === 'none' || gone) return null;
 
@@ -570,10 +648,10 @@ export function StartScreen({ onReveal, onDone }: { onReveal: () => void; onDone
           </Animated.View>
         </Animated.View>
       </View>
-      <TouchShield onTap={skipRef} />
+      <TouchShield gesture={skipGesture} />
     </Animated.View>
   );
-}
+});
 
 const WORD = 'STUROIDS'.split('');
 
@@ -589,17 +667,11 @@ function WordLetter({ ch, index, word }: { ch: string; index: number; word: Shar
 
 /**
  * Takes every touch while the intro plays, so nothing in the app built beneath it can be pressed unseen, and lets
- * them through from the hand-over on. It holds a gesture of its own, which is what keeps the gesture handlers of the
- * screens beneath from claiming a touch too. A tap calls whatever `onTap` holds then (tap to skip, when it is on).
+ * them through from the hand-over on. It holds a gesture of its own (the skip's tap, which does nothing while tap to
+ * skip is off), which is what keeps the gesture handlers of the screens beneath from claiming a touch too.
  */
-function TouchShield({ onTap }: { onTap: React.MutableRefObject<(() => void) | null> }) {
+function TouchShield({ gesture }: { gesture: GestureType }) {
   const playing = useIntro((s) => s.phase === 'playing');
-  // the ref itself never goes to the UI thread (a worklet would freeze it): only this function, called back on JS
-  const fire = useCallback(() => { onTap.current?.(); }, [onTap]);
-  const gesture = useMemo(() => Gesture.Tap().onEnd((_e, success) => {
-    'worklet';
-    if (success) runOnJS(fire)();
-  }), [fire]);
   return (
     <GestureDetector gesture={gesture}>
       <View style={StyleSheet.absoluteFill} pointerEvents={playing ? 'auto' : 'none'} collapsable={false} />
