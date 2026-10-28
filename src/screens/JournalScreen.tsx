@@ -24,7 +24,7 @@ import { JournalCalendar } from '../components/JournalCalendar';
 import {
   MOODS, countWords, dayFacts, dayRecord, deleteEntry, formatJournalDate, journalDateParts, journalDayFor,
   journalDayIsYesterday, journalStreak, promptFor, readBody, relativeDay, saveEntry, shiftKey, takeJournalOpenRequest,
-  onBodiesRestored,
+  onBodiesRestored, onJournalOpenRequest,
 } from '../journal';
 import type { DayFact, DayHabit, DayRecord } from '../journal';
 import { useToolNav } from '../toolNav';
@@ -287,7 +287,14 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       catchUp();
     }
     booted.current = true;
-    return () => { flush(); };
+    // a request made while the Journal is already in front raises no focus event: it is followed as it is made
+    const off = onJournalOpenRequest(() => {
+      const asked = takeJournalOpenRequest();
+      if (!asked) return;
+      chose(asked.dateKey);
+      openDay(asked.dateKey, asked.entryId ?? undefined);
+    });
+    return () => { off(); flush(); };
   }, [openDay, flush, chose, catchUp]));
 
   // leaving the app saves; coming back on a new journal day moves an untouched page along

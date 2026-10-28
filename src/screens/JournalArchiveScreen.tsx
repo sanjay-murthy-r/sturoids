@@ -183,7 +183,8 @@ function Archive({ tabMode }: { tabMode: boolean }) {
 
   // Arrivals: Sift opens the archive on one tag (`tag`), as the only filter. The param is cleared once followed, so the
   // same link works again
-  const params = useLocalSearchParams<{ tag?: string }>();
+  const params = useLocalSearchParams<{ tag?: string; from?: string }>();
+  const fromJournal = params.from === 'journal';
   useFocusEffect(React.useCallback(() => {
     const t = params.tag;
     if (!t) return;
@@ -267,9 +268,11 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     if (sent.current) return;
     tick();
     sent.current = requestJournalOpen(dateKey, id);
-    if (router.canGoBack()) router.back();
+    // back only when the Journal is the page underneath (it opened the archive); from Sift or a link the archive stands
+    // alone, and back would land somewhere else
+    if (fromJournal && router.canGoBack()) router.back();
     else openTool('journal');
-  }, [router]);
+  }, [router, fromJournal]);
   React.useEffect(() => () => {
     const req = sent.current;
     if (req) setTimeout(() => clearJournalOpenRequest(req), 1500);

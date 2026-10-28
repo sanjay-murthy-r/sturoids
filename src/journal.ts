@@ -180,18 +180,33 @@ export async function restoreBodies(items: unknown): Promise<void> {
 // The archive picks an entry, then returns to the writing space, which takes the request on focus. The same
 // path works in a tab slot and on a full page.
 
-type OpenRequest = { dateKey: string; entryId?: string };
+type OpenRequest = { dateKey: string; entryId?: string; at: number };
 let pendingOpen: OpenRequest | null = null;
+const openListeners = new Set<() => void>();
+
+/** A request older than this was never taken and is no longer wanted. */
+const OPEN_REQUEST_TTL_MS = 10_000;
 
 export function requestJournalOpen(dateKey: string, entryId?: string): OpenRequest {
-  pendingOpen = { dateKey, entryId };
+  pendingOpen = { dateKey, entryId, at: Date.now() };
+  openListeners.forEach((fn) => fn());
   return pendingOpen;
 }
 
 export function takeJournalOpenRequest() {
   const p = pendingOpen;
   pendingOpen = null;
-  return p;
+  // a request nobody took long ago must not take over the Journal now
+  return p && Date.now() - p.at <= OPEN_REQUEST_TTL_MS ? p : null;
+}
+
+/**
+ * Called when a request is made, so a Journal that is already in front (no focus event to take it) follows it at once.
+ * Returns the unsubscribe.
+ */
+export function onJournalOpenRequest(fn: () => void): () => void {
+  openListeners.add(fn);
+  return () => { openListeners.delete(fn); };
 }
 
 /** Drops a request if nothing took it, so it never takes over the Journal the next time it is opened, days later. */

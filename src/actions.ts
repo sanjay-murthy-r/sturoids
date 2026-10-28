@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { router } from 'expo-router';
 import { useStore } from './store';
-import { openTool } from './toolNav';
+import { navReady, openTool } from './toolNav';
+import { markFreshNote } from './freshNotes';
 import { openSift } from './search/store';
 import { toolByKey } from './tools';
 import { requestJournalOpen } from './journal';
@@ -55,6 +56,8 @@ export function closeQuickAdd() {
 /** A new empty note, opened. */
 function newNote() {
   const id = useStore.getState().addNote({ title: '' });
+  // a note nobody writes in goes again when its page closes
+  markFreshNote(id);
   router.push({ pathname: '/notes/[id]', params: { id } }, { dangerouslySingular: true });
 }
 
@@ -106,7 +109,7 @@ export function runAppLink(link: AppLink) {
       return;
     }
     if (tool.key === 'vault') {
-      router.push({ pathname: '/vault/[id]', params: rest.t ? { id: item, t: rest.t } : { id: item } }, { dangerouslySingular: true });
+      router.push({ pathname: '/vault/[id]', params: rest.t ? { id: item, t: rest.t, n: Date.now().toString(36) } : { id: item } }, { dangerouslySingular: true });
       return;
     }
     if (tool.key === 'journal' && /^\d{4}-\d{2}-\d{2}$/.test(item)) {
@@ -137,11 +140,29 @@ export function queueAppLink(link: AppLink) {
   pendingLink = link;
 }
 
-/** The root layout says the app is up (its intro gone): a link waiting since the launch is carried out now. */
+/**
+ * The root layout says the app is up (its intro gone and its navigator built): a link waiting since the launch is
+ * carried out now. The router throws when asked to go anywhere before the navigation container has mounted, so the link
+ * waits for it (looked at every 50 ms, for about 5 s) and then goes anyway, a failure caught rather than left to crash.
+ */
 export function appIsUp() {
   if (appUp) return;
   appUp = true;
   const link = pendingLink;
   pendingLink = null;
-  if (link) setTimeout(() => runAppLink(link), 0);
+  if (!link) return;
+  let waited = 0;
+  const go = () => {
+    if (!navReady() && waited < 5000) {
+      waited += 50;
+      setTimeout(go, 50);
+      return;
+    }
+    try {
+      runAppLink(link);
+    } catch {
+      // the app stays where it is
+    }
+  };
+  setTimeout(go, 0);
 }

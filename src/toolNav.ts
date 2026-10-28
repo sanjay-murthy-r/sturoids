@@ -42,6 +42,9 @@ function stringParams(params?: ToolParams): Record<string, string> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+/** Whether the navigation container has mounted, so a router call will not throw. */
+export const navReady = () => !!containerRef?.isReady();
+
 /** The root layout's Stack, once the container is ready and the tabs belong to it. */
 function rootStack(): any {
   if (!containerRef?.isReady()) return undefined;
@@ -58,9 +61,9 @@ function rootStack(): any {
  * two copies and Back would land on the second; a singular push brings the page already open to the top instead.
  */
 export function openPage(href: string, params?: Record<string, string>) {
-  // a link to a row (Settings' &row=) carries a new nonce each time, so the page already open sees it as a new ask and
-  // brings the row into view and pulses it again
-  const p = params && params.row && !params.n ? { ...params, n: Date.now().toString(36) } : params;
+  // a link to a row (Settings' &row=) or to a Settings page carries a new nonce each time, so the page already open sees
+  // it as a new ask: it opens the page again, or brings the row into view and pulses it again
+  const p = params && (params.row || params.page) && !params.n ? { ...params, n: Date.now().toString(36) } : params;
   router.push(p ? { pathname: href, params: p } : href, { dangerouslySingular: true });
 }
 
@@ -148,7 +151,10 @@ export function useToolNav() {
           params: atSec != null ? { id, t: String(Math.floor(atSec)) } : { id },
         }, { dangerouslySingular: true }),
       /** the journal archive (its routes arrive with the Journal tool) */
-      openArchive: () => router.push(inSlot ? `${base}/journal/archive` : '/journal/archive', { dangerouslySingular: true }),
+      openArchive: () => router.push(
+        { pathname: inSlot ? `${base}/journal/archive` : '/journal/archive', params: { from: 'journal' } },
+        { dangerouslySingular: true },
+      ),
     };
   }, [slot]);
 }

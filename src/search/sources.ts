@@ -4,6 +4,8 @@ import { router } from 'expo-router';
 import { useStore, DailyTask, Mission, PlannerBlock, Habit, Note, JournalEntry, VaultVideo, FocusSession, AiLink, CalcEntry, TrashItem } from '../store';
 import { TOOLS, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../tools';
 import { openPage, openTool } from '../toolNav';
+import { runAction } from '../actions';
+import { markFreshNote } from '../freshNotes';
 import { openReport } from '../reports';
 import { openScoreNode } from '../scoresNav';
 import { DAY_NAMES, DayName, daysLabel, fmtClockTime, fmtMediaTime, fmtShortDate, toMinutes } from '../utils';
@@ -73,35 +75,35 @@ const TRASH_LABEL: Record<string, [string, string, string]> = {
 
 /* ---------------------------------------------------------------- the static documents */
 
-const toolDocs = (): SiftDoc[] => TOOLS.map((t) => ({
+const toolDocs = (archived: ToolKey[]): SiftDoc[] => TOOLS.filter((t) => !archived.includes(t.key)).map((t) => ({
   key: 'tool:' + t.key, kind: 'tool', section: 'Tools', title: t.label, subtitle: t.desc,
   meta: t.shortLabel + ' ' + (TOOL_WORDS[t.key] ?? ''),
   payload: { icon: t.icon, color: colorOf(t.colorKey), open: () => openTool(t.key) },
 }));
 
-/** What can be done from Sift by name. */
-function actionDocs(): SiftDoc[] {
+/** What can be done from Sift by name; an archived tool's actions are left out with it. */
+function actionDocs(archived: ToolKey[]): SiftDoc[] {
   const tool = (key: ToolKey) => toolByKey(key)!;
-  const act = (id: string, title: string, meta: string, icon: string, color: string, open: () => void, subtitle?: string): SiftDoc => ({
+  const act = (id: string, title: string, meta: string, icon: string, color: string, open: () => void, subtitle?: string, of?: ToolKey): SiftDoc | null => (of && archived.includes(of) ? null : {
     key: 'action:' + id, kind: 'action', section: 'Actions', title, subtitle, meta, payload: { icon, color, open },
   });
   return [
-    act('new-note', 'New note', 'write create add note', 'create-outline', colorOf(tool('notes').colorKey), () => newNote(''), 'Notes'),
-    act('add-todo', 'Add a ToDo', 'new task todo create', 'add-circle-outline', colorOf(tool('tasks').colorKey), () => openTool('tasks'), 'Tasks'),
-    act('start-focus', 'Start Deep Work', 'focus session timer begin pomodoro', 'play-outline', colorOf(tool('focus').colorKey), () => openTool('focus'), 'Deep Work'),
-    act('log-session', 'Log a session', 'focus history add manual record', 'add-outline', colorOf(tool('focus').colorKey), () => openPage('/focus-history'), 'Deep Work'),
-    act('focus-history', 'Focus history', 'sessions deep work past streak month', 'stats-chart-outline', colorOf(tool('focus').colorKey), () => openPage('/focus-history'), 'Deep Work'),
-    act('new-exam', 'Add an exam', 'new exam test mock score marks', 'ribbon-outline', colorOf(tool('scores').colorKey), () => openPage('/exam'), 'Scores'),
-    act('write-journal', "Write today's page", 'journal diary today write', 'journal-outline', colorOf(tool('journal').colorKey), () => openTool('journal'), 'Journal'),
-    act('journal-archive', 'Journal archive', 'past entries calendar journal all pages', 'calendar-outline', colorOf(tool('journal').colorKey), () => openPage('/journal/archive'), 'Journal'),
-    act('add-video', 'Add a video', 'youtube vault lecture paste link', 'logo-youtube', colorOf(tool('vault').colorKey), () => openTool('vault'), 'YT Vault'),
+    act('new-note', 'New note', 'write create add note', 'create-outline', colorOf(tool('notes').colorKey), () => newNote(''), 'Notes', 'notes'),
+    act('add-todo', 'Add a ToDo', 'new task todo create', 'add-circle-outline', colorOf(tool('tasks').colorKey), () => runAction('add-todo'), 'Tasks', 'tasks'),
+    act('start-focus', 'Start Deep Work', 'focus session timer begin pomodoro', 'play-outline', colorOf(tool('focus').colorKey), () => runAction('start-focus'), 'Deep Work', 'focus'),
+    act('log-session', 'Log a session', 'focus history add manual record', 'add-outline', colorOf(tool('focus').colorKey), () => openPage('/focus-history'), 'Deep Work', 'focus'),
+    act('focus-history', 'Focus history', 'sessions deep work past streak month', 'stats-chart-outline', colorOf(tool('focus').colorKey), () => openPage('/focus-history'), 'Deep Work', 'focus'),
+    act('new-exam', 'Add an exam', 'new exam test mock score marks', 'ribbon-outline', colorOf(tool('scores').colorKey), () => openPage('/exam'), 'Scores', 'scores'),
+    act('write-journal', "Write today's page", 'journal diary today write', 'journal-outline', colorOf(tool('journal').colorKey), () => openTool('journal'), 'Journal', 'journal'),
+    act('journal-archive', 'Journal archive', 'past entries calendar journal all pages', 'calendar-outline', colorOf(tool('journal').colorKey), () => openPage('/journal/archive'), 'Journal', 'journal'),
+    act('add-video', 'Add a video', 'youtube vault lecture paste link', 'logo-youtube', colorOf(tool('vault').colorKey), () => openTool('vault'), 'YT Vault', 'vault'),
     act('settings', 'Settings', 'preferences options configure', 'settings-outline', colorOf('slate'), () => openPage('/settings')),
     act('progress-report', 'Reports & exports', 'export pdf csv summary report progress share print week month term habits todos deep work scores journal', 'document-text-outline', colorOf('accent'), openReport),
-  ];
+  ].filter((d): d is SiftDoc => d !== null);
 }
 
-/** Settings rows of a tool's own, opened in that tool. */
-function toolSettingDocs(): SiftDoc[] {
+/** Settings rows of a tool's own, opened in that tool; an archived tool's rows are left out. */
+function toolSettingDocs(archived: ToolKey[]): SiftDoc[] {
   const row = (id: string, title: string, under: ToolKey, meta: string, icon: string, open: () => void): SiftDoc => ({
     key: 'setting:' + id, kind: 'setting', section: 'Settings', title, subtitle: toolByKey(under)?.label, meta,
     tags: toolByKey(under)?.label, payload: { icon, color: colorOf(toolByKey(under)?.colorKey), open },
@@ -110,7 +112,7 @@ function toolSettingDocs(): SiftDoc[] {
     row('planner:templates', 'Week templates', 'planner', 'template week save apply timetable', 'albums-outline', () => openTool('planner', { sheet: 'templates' })),
     row('tasks:reminders', 'ToDo reminders', 'tasks', 'todo nudge reminder bell notification', 'notifications-outline', () => openTool('tasks', { sheet: 'reminders' })),
     row('journal:settings', 'Journal settings', 'journal', 'prompts word goal reminder cutoff check-out', 'options-outline', () => openTool('journal', { sheet: 'settings' })),
-  ];
+  ].filter((d) => !archived.some((k) => d.tags === toolByKey(k)?.label));
 }
 
 const settingDoc = (r: SettingRow): SiftDoc => ({
@@ -128,6 +130,8 @@ const settingDoc = (r: SettingRow): SiftDoc => ({
 /** A new note, titled (or empty), opened. */
 export function newNote(title: string) {
   const id = useStore.getState().addNote({ title: title.trim() });
+  // a note nobody writes in goes again when its page closes
+  markFreshNote(id);
   router.push({ pathname: '/notes/[id]', params: { id } }, { dangerouslySingular: true });
 }
 
@@ -143,8 +147,12 @@ export function addTodo(title: string) {
 }
 
 const openNote = (id: string) => router.push({ pathname: '/notes/[id]', params: { id } }, { dangerouslySingular: true });
+// a moment asked for carries a new nonce, so a player already open sees it as a new ask and goes there again
 const openVideo = (id: string, t?: number) =>
-  router.push({ pathname: '/vault/[id]', params: t != null ? { id, t: String(Math.floor(t)) } : { id } }, { dangerouslySingular: true });
+  router.push({
+    pathname: '/vault/[id]',
+    params: t != null ? { id, t: String(Math.floor(t)), n: Date.now().toString(36) } : { id },
+  }, { dangerouslySingular: true });
 const openScores = (id: string) => { openScoreNode(id); openTool('scores'); };
 
 /* ---------------------------------------------------------------- the store's documents */
@@ -345,6 +353,10 @@ const subjectDoc = (s: Subject): SiftDoc => ({
 
 const index = new SearchIndex<SiftPayload>();
 let staticDone = false;
+/** the one source of a collection that is a single list of documents, set again when its version changes */
+const ONE = [0];
+/** the inputs of the subjects, one object replaced only when one of them changes, so the collection holds them once */
+let subjectSrc: { sessions: unknown; notes: unknown; planner: unknown; scores: unknown } | null = null;
 
 /** The keys of the collections a tool's content lives in, which leave the index while it is archived or locked. */
 const TOOL_COLLECTIONS: Partial<Record<ToolKey, string[]>> = {
@@ -436,11 +448,13 @@ export function useSiftSources(active: boolean): SiftSources {
     if (!active) return -1;
     if (!staticDone) {
       staticDone = true;
-      index.setCollection('tools', [0], () => toolDocs());
-      index.setCollection('actions', [0], () => actionDocs());
       index.setCollection('settings', SETTINGS_INDEX, settingDoc);
-      index.setCollection('toolSettings', [0], () => toolSettingDocs());
     }
+    // an archived tool leaves these with it, and comes back when it is restored
+    const gone = archived.join('|');
+    index.setCollection('tools', ONE, () => toolDocs(archived), gone);
+    index.setCollection('actions', ONE, () => actionDocs(archived), gone);
+    index.setCollection('toolSettings', ONE, () => toolSettingDocs(archived), gone);
     const ctx: Ctx = {
       hour24,
       folderName: new Map(vaultFolders.map((f) => [f.id, f.name])),
@@ -467,7 +481,11 @@ export function useSiftSources(active: boolean): SiftSources {
     index.setCollection('scores', scores, (n) => scoreDoc(n, ctx), scoreTags);
     index.setCollection('learnings', learnings, (l) => learningDoc(l, ctx), scores);
     index.setCollection('scoreTags', scoreTags, scoreTagDoc);
-    index.setCollection('subjects', [sessions, notes, planner, scores], () => subjectsOf({ sessions, notes, planner, scores }).map(subjectDoc));
+    if (!subjectSrc || subjectSrc.sessions !== sessions || subjectSrc.notes !== notes || subjectSrc.planner !== planner || subjectSrc.scores !== scores) {
+      subjectSrc = { sessions, notes, planner, scores };
+    }
+    // one source object, so the subjects are listed once (a source of four inputs would list them four times)
+    index.setCollection('subjects', [subjectSrc], (x) => subjectsOf(x as any).map(subjectDoc));
     index.setCollection('sessions', sessions, (x) => sessionDoc(x, ctx), hour24);
     index.setCollection('ai', aiLinks, aiDoc);
     index.setCollection('calc', calc, calcDoc);

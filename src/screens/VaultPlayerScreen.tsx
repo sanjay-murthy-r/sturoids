@@ -31,6 +31,13 @@ const RESUME_BACK_S = 2;
 /** left this close to the end, it counts as watched through, and opens from the start next time */
 const END_MARGIN_S = 10;
 
+/** The moment a link asks for, in seconds (0 included), or null when it asks for none. */
+function momentOf(t: string | undefined): number | null {
+  if (t == null || t === '') return null;
+  const s = parseInt(String(t), 10);
+  return Number.isFinite(s) && s >= 0 ? s : null;
+}
+
 /** The name a video is saved under when its title could not be had. One that still wears it asks again when opened. */
 export const placeholderTitle = (videoId: string) => 'Video ' + videoId;
 
@@ -148,7 +155,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const level = useAnimLevel();
   // what arrives after the first paint (a saved note, a new tag) fades in; what the page is built with is simply there
   const built = useBuilt();
-  const { id, t } = useLocalSearchParams<{ id: string; t?: string }>();
+  const { id, t, n } = useLocalSearchParams<{ id: string; t?: string; n?: string }>();
   const { width, height } = useWindowDimensions();
   // Decided by the screen too, as the root layout decides what may turn: a phone stays a phone while a fullscreen video
   // turns it on its side, so the page under the video keeps its shape and the player is never built again (a rebuilt
@@ -297,15 +304,25 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     playerRef.current?.seekTo(sec, true);
     setPlaying(true);
   }, []);
+  const readyRef = useRef(false);
   const onReady = useCallback(() => {
+    readyRef.current = true;
     readLength();
-    const start = parseInt(String(t || ''), 10);
-    if (!seekDone.current && start > 0) {
+    const start = momentOf(t);
+    if (!seekDone.current && start != null) {
       seekDone.current = true;
       playerRef.current?.seekTo(start, true);
       setPlaying(true);
     }
   }, [t, readLength]);
+  // a link to another moment of the video already open (a bookmark from Sift, say) arrives as new params, with no new
+  // ready: the player goes there now. A first link is followed by onReady above
+  React.useEffect(() => {
+    const at = momentOf(t);
+    if (!readyRef.current || at == null) return;
+    playerRef.current?.seekTo(at, true);
+    setPlaying(true);
+  }, [t, n]);
   const onError = useCallback((e: string) => toast(
     e === 'embed_not_allowed' || e === 'HTML5_error'
       ? 'This video cannot play inside the app. Your notes and bookmarks are still here.'
@@ -338,7 +355,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // end was saved as watched through, and opens from the start
   const opening = useRef<{ start: number } | null>(null);
   if (!opening.current && video) {
-    const linked = parseInt(String(t || ''), 10) > 0;
+    const linked = momentOf(t) != null;
     const back = Math.floor((video.resumeAt ?? 0) - RESUME_BACK_S);
     opening.current = { start: !linked && back > 0 ? back : 0 };
   }

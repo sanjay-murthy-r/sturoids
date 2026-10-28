@@ -205,6 +205,23 @@ test('did you mean, when nothing matches', () => {
 
 /* ---------------------------------------------------------------- incremental collections */
 
+test('a collection made of one source object lists each document once', () => {
+  const lib = new E.SearchIndex();
+  const src = { sessions: [], notes: [], planner: {}, scores: [] };
+  const toDocs = () => [doc('subject:physics', 'Physics'), doc('subject:chemistry', 'Chemistry')];
+  lib.setCollection('subjects', [src], toDocs);
+  assert.equal(lib.size, 2);
+  const r = lib.search('physics');
+  assert.equal(r.total, 1);
+  assert.ok(r.top && r.top.doc.key === 'subject:physics', 'a lone match leads');
+  // the same source and version is not read again; a new version is
+  let calls = 0;
+  lib.setCollection('subjects', [src], () => { calls++; return toDocs(); }, 'x');
+  assert.equal(calls, 1);
+  lib.setCollection('subjects', [src], () => { calls++; return toDocs(); }, 'x');
+  assert.equal(calls, 1);
+});
+
 test('a collection whose source is unchanged is not rebuilt; one changed item is prepared alone', () => {
   const lib = new E.SearchIndex();
   const a = { id: 'a', t: 'Alpha' };
