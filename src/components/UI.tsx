@@ -802,9 +802,16 @@ export function Inset({ children, style, pad = 0 }: { children?: React.ReactNode
   );
 }
 
+/**
+ * True inside a widget that starts a column on a wide board: its section's heading drops the space above it, so the
+ * columns' first things line up along one top edge whether they open with a heading or a card.
+ */
+export const SectionTopTrim = React.createContext(false);
+
 export function SectionTitle({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
+  const trim = React.useContext(SectionTopTrim);
   return (
-    <View style={st.sectionRow}>
+    <View style={[st.sectionRow, trim && { marginTop: 0 }]}>
       <Text style={T.kicker} accessibilityRole="header">{children}</Text>
       {right}
     </View>

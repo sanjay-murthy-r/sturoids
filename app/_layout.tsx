@@ -31,6 +31,7 @@ import {
 import type { LoadNotice } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
 import { markAppDrawn, noteAppFonts, setIntroPhase } from '../src/intro';
+import { useDesktopKeys } from '../src/web/keys';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ToastHost } from '../src/components/Toast';
@@ -191,6 +192,8 @@ export default function RootLayout() {
   const appFonts = appLoaded || !!appError;
   // a skipped intro may wait a little longer for the app to draw while its faces are still loading (src/intro.ts)
   useEffect(() => { if (appFonts) noteAppFonts(); }, [appFonts]);
+  // the PC version's keyboard: Ctrl+K for Sift, Escape to close it or go back (nothing on a phone)
+  useDesktopKeys();
   const splashHidden = useRef(false);
   // whether this launch is the one a profile switch started (null until the note has been read)
   const [arrived, setArrived] = useState<boolean | null>(null);

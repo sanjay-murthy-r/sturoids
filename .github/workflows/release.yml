@@ -1,0 +1,130 @@
+# Publishes a Sturoids release on GitHub: the Android APK (built by Expo's EAS, signed with the same key as the app
+# already on the phone, so it installs over it) and the Windows installer (the web build in Electron). The app's own
+# Settings, Updates finds the release here.
+#
+# Run it from the Actions tab: "Release", "Run workflow", and type the new version (2.0.0). It sets that version (and
+# the next Android versionCode) in app.json, commits it to main with a tag, builds both, and publishes the release.
+# Needs one secret, EXPO_TOKEN (expo.dev, Account settings, Access tokens), under the repo's Settings, Secrets and
+# variables, Actions.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, like 2.0.0'
+        required: true
+      notes:
+        description: 'What is new (optional; GitHub writes notes from the commits otherwise)'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - id: bump
+        name: Set the version in app.json, package.json and the desktop app
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then echo "Version must look like 2.0.0"; exit 1; fi
+          node -e "
+            const fs=require('fs');const v=process.env.VERSION;
+            const a=JSON.parse(fs.readFileSync('app.json','utf8'));
+            a.expo.version=v; a.expo.android.versionCode=(a.expo.android.versionCode||1)+1;
+            fs.writeFileSync('app.json',JSON.stringify(a,null,2)+'\n');
+            for (const f of ['package.json','desktop/package.json']) {
+              const raw=fs.readFileSync(f,'utf8');
+              fs.writeFileSync(f, raw.replace(/(\"version\":\s*\")[^\"]+(\")/, '\$1'+v+'\$2'));
+            }"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release v$VERSION"
+          git tag "v$VERSION"
+          git push origin HEAD:main "v$VERSION"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build the APK on EAS (the app's own signing key)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$EXPO_TOKEN" ]; then echo "Add the EXPO_TOKEN secret first (see the top of this file)."; exit 1; fi
+          npx --yes eas-cli@latest build -p android --profile preview --non-interactive --wait --json > build.json
+          URL=$(node -e "const b=JSON.parse(require('fs').readFileSync('build.json','utf8'));console.log((Array.isArray(b)?b[0]:b).artifacts.buildUrl)")
+          curl -L --fail -o "Sturoids-${{ needs.version.outputs.tag }}.apk" "$URL"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: Sturoids-*.apk
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build the web app into the desktop app
+        run: npx expo export --platform web --output-dir desktop/app
+      - name: Build the Windows installer
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: desktop/dist/*.exe
+
+  publish:
+    needs: [version, android, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          set -e
+          FILES=$(find out -type f \( -name '*.apk' -o -name '*.exe' \))
+          if [ -n "$NOTES" ]; then
+            gh release create "$TAG" $FILES --repo "$GITHUB_REPOSITORY" --title "Sturoids $TAG" --notes "$NOTES"
+          else
+            gh release create "$TAG" $FILES --repo "$GITHUB_REPOSITORY" --title "Sturoids $TAG" --generate-notes
+          fi

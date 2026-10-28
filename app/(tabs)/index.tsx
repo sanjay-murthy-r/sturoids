@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, Pressable, InteractionManager, BackHandler, useWindowDimensions,
+  View, Text, ScrollView, StyleSheet, Pressable, InteractionManager, BackHandler, Platform, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from 'expo-router';
@@ -12,10 +12,12 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, neuInset, oneLine } from '../../src/theme';
-import { useStore, FocusSession, Habit, PlannerWeek, TodayWidget, StoreOverride, hasAnyUserData } from '../../src/store';
+import {
+  useStore, FocusSession, Habit, PlannerWeek, TodayWidget, StoreOverride, hasAnyUserData, todayColumnsKey,
+} from '../../src/store';
 import { makeSampleStore } from '../../src/widgets/sample';
 import { fmtDate, uid } from '../../src/utils';
-import { Card, PillButton, PullPill, ScreenBG, Sheet, useHeaderPull, useTheme } from '../../src/components/UI';
+import { Card, PillButton, PullPill, ScreenBG, SectionTopTrim, Sheet, useHeaderPull, useTheme } from '../../src/components/UI';
 import { Bouncy, EASE_OUT, Enter, FadeSwap, glide, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { toast } from '../../src/components/Toast';
 import { tap, tick } from '../../src/haptics';
@@ -319,6 +321,8 @@ function SystemBanners() {
 
 /* ---------------------------------------------------------------- the board */
 
+/** the PC version (the web build the desktop app wraps): its board keeps an arrangement of its own */
+const ON_PC = Platform.OS === 'web';
 /** a flow section's height before it has been measured (its first frame), for the columns' first layout */
 const FLOW_EST = 200;
 /** how near the top or foot of the screen a dragged widget starts the board scrolling, and how fast at the very edge */
@@ -350,7 +354,9 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
   const level = useAnimLevel();
   const theme = useTheme();
   const saved = useStore((s) => s.todayLayout);
-  const savedCols = useStore((s) => s.todayColumns[String(count)]);
+  // a PC keeps its own arrangement once one is made there; until then it shows the tablet's (the account's, synced)
+  const colKey = todayColumnsKey(count, ON_PC);
+  const savedCols = useStore((s) => s.todayColumns[colKey] ?? (ON_PC ? s.todayColumns[String(count)] : undefined));
   const setTodayLayout = useStore((s) => s.setTodayLayout);
   const setTodayColumns = useStore((s) => s.setTodayColumns);
   const [gallery, setGallery] = useState(false);
@@ -396,9 +402,9 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
   // never deals the others out afresh into different columns.
   useEffect(() => {
     if (count === 1 || savedCols || !allMeasured || !visible.length) return undefined;
-    const t = setTimeout(() => setTodayColumns(count, live.current.columns), 400);
+    const t = setTimeout(() => setTodayColumns(colKey, live.current.columns), 400);
     return () => clearTimeout(t);
-  }, [count, savedCols, allMeasured, visible.length, setTodayColumns]);
+  }, [count, colKey, savedCols, allMeasured, visible.length, setTodayColumns]);
 
   // a drag in progress: the widget and where it would land
   const [drag, setDrag] = useState<{ id: string; col: number; index: number } | null>(null);
@@ -410,8 +416,8 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
   const boardH = Math.max(0, ...heights);
 
   // the latest of each, for the gestures' JS ends and the edge scroll's timer
-  const live = React.useRef({ columns, items, colW, drag, count, layout, savedCols, rects });
-  live.current = { columns, items, colW, drag, count, layout, savedCols, rects };
+  const live = React.useRef({ columns, items, colW, drag, count, colKey, layout, savedCols, rects });
+  live.current = { columns, items, colW, drag, count, colKey, layout, savedCols, rects };
 
   const current = () => fitLayout(useStore.getState().todayLayout ?? DEFAULT_LAYOUT, sizesOf);
   const commit = useCallback((next: TodayWidget[]) => setTodayLayout(next), [setTodayLayout]);
@@ -438,7 +444,7 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
    * its place in its column too.
    */
   const settleDrop = useCallback((id: string, col: number, index: number) => {
-    const { columns: cols, count: n, layout: full, savedCols: kept } = live.current;
+    const { columns: cols, count: n, colKey: key, layout: full, savedCols: kept } = live.current;
     const next = moveInColumns(cols, id, col, index);
     if (n === 1) {
       const order = next[0];
@@ -458,7 +464,7 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
       });
       return out;
     });
-    setTodayColumns(n, merged);
+    setTodayColumns(key, merged);
   }, [commit, setTodayColumns]);
 
   // where the drag would land, worked out from the centre of the widget: where the finger has taken it, and how far the
@@ -531,10 +537,10 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
     const after = addAfter ? full.findIndex((x) => x.id === addAfter) : -1;
     commit(insertWidget(full, w, after >= 0 ? after + 1 : full.length));
     // on a wide board it goes beside the widget it was added after, in that widget's column
-    const { columns: cols, count: n } = live.current;
+    const { columns: cols, count: n, colKey: key } = live.current;
     if (n > 1 && addAfter) {
       const ci = cols.findIndex((c) => c.includes(addAfter));
-      if (ci >= 0) setTodayColumns(n, moveInColumns(cols, w.id, ci, cols[ci].indexOf(addAfter) + 1));
+      if (ci >= 0) setTodayColumns(key, moveInColumns(cols, w.id, ci, cols[ci].indexOf(addAfter) + 1));
     }
     setGallery(false);
   }, [addAfter, commit, setTodayColumns]);
@@ -587,6 +593,7 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
           return (
             <BoardItem
               key={w.id} w={w} def={def} x={r.x} y={r.y} width={r.w} editing={editing} enter={Math.min(6, enterAt++)}
+              topOfColumn={count > 1 && r.y === 0}
               dragging={drag?.id === w.id} scroll={scroll}
               onMeasure={onMeasure} onRemove={remove} onResize={resize} onHold={enterEdit}
               onDragStart={dragStart} onAim={aim} onEdge={edgeAt} onDragEnd={dragEnd} setConfig={setConfig}
@@ -623,10 +630,12 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
  * board, as it scrolls under it) until it is let go, when it glides into the place the board kept for it.
  */
 const BoardItem = React.memo(function BoardItem({
-  w, def, x, y, width, editing, enter, dragging, scroll, onMeasure, onRemove, onResize, onHold, onDragStart, onAim,
-  onEdge, onDragEnd, setConfig,
+  w, def, x, y, width, editing, enter, dragging, topOfColumn, scroll, onMeasure, onRemove, onResize, onHold, onDragStart,
+  onAim, onEdge, onDragEnd, setConfig,
 }: {
   w: TodayWidget; def: WidgetDef; x: number; y: number; width: number; editing: boolean; enter: number; dragging: boolean;
+  /** first in its column on a wide board: a heading at its top drops the space above it */
+  topOfColumn: boolean;
   scroll: BoardScroll;
   onMeasure: (id: string, h: number) => void; onRemove: (id: string) => void; onResize: (id: string) => void;
   onHold: () => void; onDragStart: (id: string, scrollAt: number) => void; onAim: (id: string, cx: number, cy: number) => void;
@@ -759,7 +768,9 @@ const BoardItem = React.memo(function BoardItem({
             />
             <Animated.View style={body} pointerEvents={editing ? 'none' : 'auto'}>
               {editing && def.flow ? <View style={st.flowPad} /> : null}
-              <Component id={w.id} size={w.size} config={w.config} editing={editing} preview={false} setConfig={setOwn} />
+              <SectionTopTrim.Provider value={topOfColumn}>
+                <Component id={w.id} size={w.size} config={w.config} editing={editing} preview={false} setConfig={setOwn} />
+              </SectionTopTrim.Provider>
             </Animated.View>
           </View>
         </GestureDetector>

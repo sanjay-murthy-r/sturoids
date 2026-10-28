@@ -11,3 +11,5 @@ web-build/
 
 # locally built APKs
 *.apk
+.web-build/
+.export-check/

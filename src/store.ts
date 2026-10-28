@@ -104,7 +104,7 @@ export interface QuickItem { id: string; label: string; icon: string; color: str
 export type WidgetSize = 'S' | 'M' | 'L';
 /** One widget on Today's board, in order. `type` names a widget in src/widgets/registry.ts; `config` is its own. */
 export interface TodayWidget { id: string; type: string; size: WidgetSize; config?: Record<string, unknown> }
-/** Today's wide arrangements: by column count ('2', '3'), each column's widget ids from the top. */
+/** Today's wide arrangements: by key ('2', '3'; 'pc2', 'pc3' on a PC), each column's widget ids from the top. */
 export type TodayColumns = Record<string, string[][]>;
 export interface TodoReminder { id: string; time: string; label: string }
 
@@ -688,8 +688,8 @@ export interface AppState {
 
   /** Today's board as edited (cleaned); null goes back to the default arrangement */
   setTodayLayout: (layout: TodayWidget[] | null) => void;
-  /** keeps the arrangement of a wide board of `count` columns (null forgets it: it is laid out afresh) */
-  setTodayColumns: (count: number, columns: string[][] | null) => void;
+  /** keeps the arrangement of a wide board under its key (todayColumnsKey; null forgets it: it is laid out afresh) */
+  setTodayColumns: (key: string, columns: string[][] | null) => void;
 
   /** a TRUE replace: every data key not in `data` goes back to its fresh value */
   replaceAll: (data: Partial<AppState>) => void;
@@ -1095,6 +1095,11 @@ export function cleanTodayLayout(raw: unknown, knownTypes?: readonly string[]): 
 
 /** the column counts a wide board keeps an arrangement for */
 export const TODAY_COLUMN_COUNTS = [2, 3] as const;
+/**
+ * The arrangement's key: its column count on a phone or tablet ('2', '3'), and the same with 'pc' before it on the PC
+ * version ('pc2', 'pc3'), which keeps a board of its own once it is arranged there.
+ */
+export const todayColumnsKey = (count: number, pc: boolean) => (pc ? 'pc' : '') + count;
 
 /**
  * Today's wide arrangements as kept: for each column count it knows, that many columns of ids (each id once across them,
@@ -1103,8 +1108,8 @@ export const TODAY_COLUMN_COUNTS = [2, 3] as const;
 export function cleanTodayColumns(raw: unknown): TodayColumns {
   const out: TodayColumns = {};
   if (!isRecord(raw)) return out;
-  for (const n of TODAY_COLUMN_COUNTS) {
-    const cols = (raw as any)[String(n)];
+  for (const [key, n] of TODAY_COLUMN_COUNTS.flatMap((c) => [[String(c), c], ['pc' + c, c]] as [string, number][])) {
+    const cols = (raw as any)[key];
     if (!Array.isArray(cols) || cols.length !== n) continue;
     const seen = new Set<string>();
     const clean = cols.map((col: unknown) => (Array.isArray(col) ? col : []).filter((id: unknown) => {
@@ -1112,7 +1117,7 @@ export function cleanTodayColumns(raw: unknown): TodayColumns {
       seen.add(id);
       return true;
     }) as string[]);
-    out[String(n)] = clean;
+    out[key] = clean;
   }
   return out;
 }
@@ -2728,11 +2733,11 @@ const appStore = create<AppState>()(
       },
 
       setTodayLayout: (layout) => set({ todayLayout: cleanTodayLayout(layout) }),
-      setTodayColumns: (count, columns) =>
+      setTodayColumns: (key, columns) =>
         set((s) => {
           const next = { ...s.todayColumns };
-          if (columns) next[String(count)] = columns;
-          else delete next[String(count)];
+          if (columns) next[key] = columns;
+          else delete next[key];
           return { todayColumns: cleanTodayColumns(next) };
         }),
 

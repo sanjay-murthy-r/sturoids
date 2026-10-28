@@ -227,6 +227,15 @@ test('recent videos: opened first by when, else by when added', () => {
     assert.equal(heights[0], yS3 + 156 + G + 50);
   });
 
+  test('a section with nothing to show takes no room and no gap', () => {
+    const its = new Map([item('empty', false, 0), item('a', false, 100), item('b', false, 50)]);
+    const { rects, heights } = L.layoutColumns([['empty', 'a', 'b']], its, 400, G);
+    assert.equal(rects.get('empty').h, 0);
+    assert.equal(rects.get('a').y, 0, 'the first thing with something to show starts the column');
+    assert.equal(rects.get('b').y, 100 + G);
+    assert.equal(heights[0], 100 + G + 50);
+  });
+
   test('columns sit side by side, each its own stack', () => {
     const { rects, heights } = L.layoutColumns([['a', 'c'], ['b']], items, 300, G);
     assert.deepEqual(rects.get('b'), { x: 300 + G, y: 0, w: 300, h: 200, col: 1 });

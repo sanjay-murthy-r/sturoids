@@ -28,7 +28,7 @@ import { expectAway, markOpen, noteScope, pinStatus } from '../lock';
 import { Bouncy, EASE_OUT, Enter, glide, rowIn, rowOut, useAnimLevel, useBuilt } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { NOT_KEPT, keepFile } from '../attachments';
+import { NOT_KEPT, keepFile, viewUri } from '../attachments';
 
 import { toastTrashed } from '../trashToast';
 import { useToday } from '../hooks/useNow';
@@ -954,9 +954,9 @@ const Attachments = React.memo(function Attachments({ items, width, onRemove, on
       {items.map((a) => (
         <Animated.View key={a.id} entering={enter} exiting={rowOut(level)} layout={glide(level)}>
           {a.kind === 'image' && (
-            <AttachedImage uri={a.uri} width={width} onPress={() => onView(a.uri)} />
+            <AttachedImage uri={viewUri(a.uri)} width={width} onPress={() => onView(viewUri(a.uri))} />
           )}
-          {a.kind === 'video' && <AttachedVideo uri={a.uri} name={a.name} width={width} />}
+          {a.kind === 'video' && <AttachedVideo uri={viewUri(a.uri)} name={a.name} width={width} />}
           {a.kind === 'file' && (
             <Bouncy onPress={() => openFile(a)} style={[st.fileRow, { borderColor: C.accent + '44', backgroundColor: C.accent + '18' }]}>
               <Ionicons name="document-attach-outline" size={18} color={C.accent} />

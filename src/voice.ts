@@ -10,8 +10,11 @@ try {
   mod = null;
 }
 
+/** The desktop app (Electron) has the page's speech API but no service behind it: no voice there. */
+const inDesktopApp = typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent || '');
+
 export function voiceAvailable(): boolean {
-  return !!(mod && mod.ExpoSpeechRecognitionModule);
+  return !inDesktopApp && !!(mod && mod.ExpoSpeechRecognitionModule);
 }
 
 export interface VoiceSession { stop: () => void }

@@ -99,6 +99,11 @@ export function layoutColumns(
     for (const id of ids) {
       const it = items.get(id);
       if (!it) continue;
+      // a section with nothing to show today (no plan, nothing coming up) takes no room, and no gap either
+      if (!it.half && it.h <= 0) {
+        rects.set(id, { x: x0, y, w: colW, h: 0, col });
+        continue;
+      }
       if (it.half) {
         if (pending) {
           rects.set(id, { x: x0 + halfW + gap, y, w: halfW, h: it.h, col });

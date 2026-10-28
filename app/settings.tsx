@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo, Keyboard, TextInput } from 'react-native';
+import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo, Keyboard, TextInput, Platform } from 'react-native';
 import Animated, {
   FadeIn, FadeOut,
   Easing, LayoutAnimationConfig, runOnJS, useAnimatedRef, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
@@ -1377,6 +1377,13 @@ export default function Settings() {
       });
       if (res.canceled || !res.assets?.[0]) { finish(); return; }
       picked = res.assets[0].uri;
+      // the PC version picks a file the page holds in memory: it is copied into the app's files first, where a backup
+      // is read in pieces as on a phone
+      if (Platform.OS === 'web' && !picked.startsWith('file:')) {
+        const local = (FileSystem.cacheDirectory || '') + 'picked-backup.json';
+        await FileSystem.copyAsync({ from: picked, to: local });
+        picked = local;
+      }
       const backup = await openBackup(picked);
       // parsed once, for the check and the journal's texts alike
       let parsed: any = null;

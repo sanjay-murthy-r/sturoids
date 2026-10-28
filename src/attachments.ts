@@ -48,3 +48,16 @@ export async function keepFile(uri: string, name: string): Promise<{ uri: string
 
 /** What a note says when a file was attached but no copy of it could be kept. */
 export const NOT_KEPT = 'Attached, but the phone is too full to keep a copy. Free some space and attach it again.';
+
+/**
+ * An attachment's address as the screen can show it. On a phone that is its file; on the PC version files live in the
+ * page's database (src/web/shims/fileSystem.ts), so it is a short-lived address made for it there.
+ */
+export function viewUri(uri: string): string {
+  // read here, not at the top: the backup tests load this file in Node, without React Native
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  if ((require('react-native') as typeof import('react-native')).Platform.OS !== 'web') return uri;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const FS = require('expo-file-system') as { displayUrl?: (u: string) => string | null };
+  return FS.displayUrl?.(uri) ?? uri;
+}
