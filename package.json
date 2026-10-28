@@ -5,6 +5,7 @@
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
+    "postinstall": "node scripts/patch-widgets.js",
     "lint:type": "node scripts/lint-type.js",
     "test:store": "node scripts/test-store.js",
     "test:backup": "node scripts/test-backup.js",
