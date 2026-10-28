@@ -31,22 +31,33 @@ const seen = new Map<string, { key: string; name: string; params?: object }[]>()
 let reopening: string | null = null;
 
 /** The stack the user is in now, how deep, and where the tabs stand. */
-interface Where { stackKey: string | null; depth: number; tabIndex: number; atTabRoot: boolean }
+interface Where { stackKey: string | null; depth: number; tabIndex: number; atTabRoot: boolean; rootKey: string | null }
+
+/** the tab open when the state was last read: a page closed over one tab is not reopened from another */
+let lastTab = -1;
 
 function walk(state: any): Where {
-  const none: Where = { stackKey: null, depth: 0, tabIndex: -1, atTabRoot: false };
-  const root = state?.routes?.[0]?.state ?? state;
+  const none: Where = { stackKey: null, depth: 0, tabIndex: -1, atTabRoot: false, rootKey: null };
+  // the app's own stack: the one that holds the tabs (expo-router wraps it in a route of its own)
+  let root = state;
+  while (root && !root.routes?.some((r: any) => r.name === TABS_GROUP)) root = root.routes?.[root.index ?? 0]?.state;
   if (!root?.routes) return none;
+  const rootKey = root.key ?? null;
   const top = root.routes[root.index ?? root.routes.length - 1];
-  if (top?.name !== TABS_GROUP) return { stackKey: root.key, depth: root.routes.length, tabIndex: -1, atTabRoot: false };
+  if (top?.name !== TABS_GROUP) return { stackKey: root.key, depth: root.routes.length, tabIndex: -1, atTabRoot: false, rootKey };
   const tabs = top.state;
   const tabIndex = tabs ? (TAB_ROUTES as readonly string[]).indexOf(tabs.routes?.[tabs.index ?? 0]?.name) : 0;
   const tab = tabs?.routes?.[tabs.index ?? 0];
   const inner = tab?.state;
-  if (inner?.type === 'stack' && inner.routes?.length > 1) {
-    return { stackKey: inner.key, depth: inner.routes.length, tabIndex, atTabRoot: false };
+  if (tabIndex !== lastTab) {
+    // another tab: a full page closed over the last one is no longer ahead
+    if (lastTab >= 0 && rootKey) ahead.delete(rootKey);
+    lastTab = tabIndex;
   }
-  return { stackKey: inner?.type === 'stack' ? inner.key : null, depth: 1, tabIndex, atTabRoot: true };
+  if (inner?.type === 'stack' && inner.routes?.length > 1) {
+    return { stackKey: inner.key, depth: inner.routes.length, tabIndex, atTabRoot: false, rootKey };
+  }
+  return { stackKey: inner?.type === 'stack' ? inner.key : null, depth: 1, tabIndex, atTabRoot: true, rootKey };
 }
 
 /** Notes every stack's change: pages closed are kept ahead, a page opened some other way clears what was ahead. */
@@ -87,7 +98,7 @@ export function NavArrows() {
   const insets = useSafeAreaInsets();
   const siftOpen = useSearch((s) => s.open);
   const shown = side && width >= WIDE_AT && !siftOpen;
-  const [where, setWhere] = React.useState<Where>({ stackKey: null, depth: 0, tabIndex: -1, atTabRoot: false });
+  const [where, setWhere] = React.useState<Where>({ stackKey: null, depth: 0, tabIndex: -1, atTabRoot: false, rootKey: null });
   const [, bump] = React.useState(0);
 
   React.useEffect(() => {
@@ -104,7 +115,10 @@ export function NavArrows() {
   }, [nav]);
 
   const pageBack = where.depth > 1;
-  const kept = where.stackKey ? ahead.get(where.stackKey) ?? [] : [];
+  // what forward reopens: a page closed inside this tool, else (at a tab's own screen) a full page just closed over it
+  const own = where.stackKey ? ahead.get(where.stackKey) ?? [] : [];
+  const keptKey = own.length ? where.stackKey : where.atTabRoot && where.rootKey && (ahead.get(where.rootKey)?.length ?? 0) > 0 ? where.rootKey : null;
+  const kept = keptKey ? ahead.get(keptKey) ?? [] : [];
   const canBack = pageBack || (where.atTabRoot && where.tabIndex > 0);
   const canForward = kept.length > 0 || (where.atTabRoot && where.tabIndex >= 0 && where.tabIndex < TAB_ROUTES.length - 1);
 
@@ -118,9 +132,9 @@ export function NavArrows() {
     if (!canForward) return;
     tick();
     const next = kept[kept.length - 1];
-    if (next && where.stackKey) {
-      reopening = where.stackKey;
-      nav.dispatch({ ...StackActions.push(next.name, next.params), target: where.stackKey });
+    if (next && keptKey) {
+      reopening = keptKey;
+      nav.dispatch({ ...StackActions.push(next.name, next.params), target: keptKey });
     } else stepTab(1);
   };
 
