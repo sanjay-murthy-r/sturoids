@@ -118,7 +118,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/dayring.png"
             },
             {
               "name": "AtAGlance",
@@ -129,7 +130,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/ataglance.png"
             },
             {
               "name": "Agenda",
@@ -140,7 +142,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 4,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/agenda.png"
             },
             {
               "name": "Clock",
@@ -151,7 +154,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/clock.png"
             },
             {
               "name": "Search",
@@ -162,7 +166,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/search.png"
             },
             {
               "name": "NextUp",
@@ -173,7 +178,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/nextup.png"
             },
             {
               "name": "Checklist",
@@ -184,7 +190,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/checklist.png"
             },
             {
               "name": "Deadlines",
@@ -195,7 +202,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/deadlines.png"
             },
             {
               "name": "QuickStart",
@@ -206,7 +214,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/quickstart.png"
             },
             {
               "name": "Session",
@@ -217,7 +226,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/session.png"
             },
             {
               "name": "FocusWeek",
@@ -228,7 +238,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 4,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/focusweek.png"
             },
             {
               "name": "NowNext",
@@ -239,7 +250,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/nownext.png"
             },
             {
               "name": "TodaysBlocks",
@@ -250,7 +262,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/todaysblocks.png"
             },
             {
               "name": "HabitGrid",
@@ -261,7 +274,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/habitgrid.png"
             },
             {
               "name": "Streak",
@@ -272,7 +286,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/streak.png"
             },
             {
               "name": "NewNote",
@@ -283,7 +298,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/newnote.png"
             },
             {
               "name": "Pinned",
@@ -294,7 +310,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/pinned.png"
             },
             {
               "name": "RecentNotes",
@@ -305,7 +322,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 4,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/recentnotes.png"
             },
             {
               "name": "WriteToday",
@@ -316,7 +334,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/writetoday.png"
             },
             {
               "name": "MoodStrip",
@@ -327,7 +346,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/moodstrip.png"
             },
             {
               "name": "OnThisDay",
@@ -338,7 +358,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/onthisday.png"
             },
             {
               "name": "Countdown",
@@ -349,7 +370,8 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/countdown.png"
             },
             {
               "name": "Results",
@@ -360,7 +382,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/results.png"
             },
             {
               "name": "SubjectTrend",
@@ -371,7 +394,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 4,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/subjecttrend.png"
             },
             {
               "name": "ContinueWatching",
@@ -382,7 +406,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/continuewatching.png"
             },
             {
               "name": "WatchList",
@@ -393,7 +418,8 @@
               "targetCellWidth": 4,
               "targetCellHeight": 4,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/watchlist.png"
             },
             {
               "name": "AiDock",
@@ -404,11 +430,25 @@
               "targetCellWidth": 2,
               "targetCellHeight": 2,
               "resizeMode": "horizontal|vertical",
-              "updatePeriodMillis": 1800000
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-previews/aidock.png"
+            },
+            {
+              "name": "Calculator",
+              "label": "Calculator",
+              "description": "A full keypad on the home screen, answers as you type",
+              "minWidth": "180dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 3,
+              "targetCellHeight": 4,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 0,
+              "previewImage": "./assets/widget-previews/calculator.png"
             }
           ]
         }
-      ]
+      ],
+      "./plugins/withWidgetPreviewsNodpi.js"
     ],
     "experiments": {
       "typedRoutes": false

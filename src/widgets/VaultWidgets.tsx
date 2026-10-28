@@ -24,7 +24,7 @@ function Thumb({ videoId, w, h }: { videoId: string; w: number | `${number}%`; h
   return (
     <View style={[st.thumb, { width: w, height: h, backgroundColor: C.inset }]}>
       <Ionicons name="play-outline" size={18} color={C.textFaint} />
-      {failed ? null : (
+      {failed || !videoId ? null : (
         <Image
           source={{ uri: thumbOf(videoId) }} style={StyleSheet.absoluteFill} contentFit="cover"
           cachePolicy="memory-disk" transition={200} onError={() => setFailed(true)}

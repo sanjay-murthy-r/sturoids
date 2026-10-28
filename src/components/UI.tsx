@@ -845,10 +845,10 @@ export function Chip({
   }, [active, level]);
   const litStyle = useAnimatedStyle(() => ({ opacity: on.value }));
   const restStyle = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
-  const textStyle = [
-    st.chipText, small && st.chipTextSmall, active && st.chipTextOn,
-    textFace && (active ? st.chipTextFaceOn : st.chipTextFace),
-  ];
+  // the resting words and the chosen ones (a heavier face) cross over; the box is sized by the heavier, wider face, so
+  // a chip never squeezes its chosen words into the room its resting ones took, and never changes width as it turns on
+  const restText = [st.chipText, small && st.chipTextSmall, textFace && st.chipTextFace];
+  const litText = [st.chipText, small && st.chipTextSmall, st.chipTextOn, textFace && st.chipTextFaceOn];
   const iconSize = small ? 13 : 15;
   const inert = !onPress && !onLongPress;
   return (
@@ -877,9 +877,15 @@ export function Chip({
         {/* fixed chrome: chips sit in rows, so their words grow with the phone's font size only up to 1.3 */}
         {label ? (
           <View>
-            <Animated.Text style={[textStyle, restStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{label}</Animated.Text>
+            <Text
+              style={[litText, st.inkSizer]} maxFontSizeMultiplier={CHROME_FONT_MAX} numberOfLines={1}
+              importantForAccessibility="no" accessibilityElementsHidden
+            >
+              {label}
+            </Text>
+            <Animated.Text style={[restText, st.inkCentre, restStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX} numberOfLines={1}>{label}</Animated.Text>
             <Animated.Text
-              style={[textStyle, st.ink, { color: c }, litStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}
+              style={[litText, st.inkCentre, { color: c }, litStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX} numberOfLines={1}
               importantForAccessibility="no" accessibilityElementsHidden
             >
               {label}
@@ -1792,6 +1798,9 @@ const st = StyleSheet.create({
   pillTextSmall: { ...oneLine(13), fontFamily: F.semi, letterSpacing: TRACK.small },
   /** a second ink laid exactly over the first, for colours that cross over */
   ink: { position: 'absolute', top: 0, left: 0, right: 0 },
+  /** a chip's words, laid over the room the heavier face takes (inkSizer, unseen), centred in it */
+  inkSizer: { opacity: 0 },
+  inkCentre: { position: 'absolute', top: 0, left: 0, right: 0, textAlign: 'center' },
   pill: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     paddingVertical: 13, paddingHorizontal: 20, borderRadius: 999,

@@ -89,6 +89,13 @@ const real = (modelMs: number) => modelMs / SIG_SPEED;
 const DATE_LIFT = 160;
 /** beat 1 ends on the finished signature and date, held still */
 const HOLD = 520;
+/** the shift into the slot: a touch longer than the old 1060 ms, its last stretch eased out further, so it lands softly */
+const SHIFT_DUR = 1140;
+const LANDING = Easing.bezier(0.6, 0, 0.12, 1);
+/** how long before the shift it checks that the app beneath has drawn, the most it waits for it, and the frames it then lets pass */
+const SHIFT_CHECK = 40;
+const SHIFT_WAIT_MAX = 1200;
+const SHIFT_AFTER_DRAWN = 120;
 
 /**
  * Every beat after the pen, from how long the signature (model ms) and today's date (real ms) take to write. The
@@ -309,6 +316,8 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
     ];
     const timers: ReturnType<typeof setTimeout>[] = [];
     const frames: number[] = [];
+    /** the shift waiting for the app beneath to draw (see `rest`) */
+    let waitUnsub: (() => void) | null = null;
     const at = (ms: number, fn: () => void) => { timers.push(setTimeout(fn, ms)); };
     let revealed = false;
     const reveal = () => {
@@ -406,27 +415,61 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
       tau.value = withDelay(real(SIG_START), withTiming(model.total, {
         duration: real(model.total), easing: Easing.linear,
       }));
-      writeDate(B.dateStart, dateRef.current, 1);
-      rereadDate(B.dateStart, 1);
-      // beat 2: the shift, the sink into a carve, the rise
-      travel.value = withDelay(B.SHIFT.at, withTiming(1, { duration: B.SHIFT.dur, easing: cubicInOut }));
-      ink.value = withDelay(B.SINK.at, withTiming(0, { duration: B.SINK.dur, easing: cubicInOut }));
-      carve.value = withDelay(B.SINK.at, withTiming(1, { duration: B.SINK.dur, easing: cubicInOut }));
-      // two-stage extrusion: the bulk of the rise, then the last 1% settles
-      rise.value = withDelay(B.RISE.at, withSequence(
-        withTiming(0.99, { duration: B.RISE.dur, easing: cubicOut }),
-        withTiming(1, { duration: B.RISE.settle, easing: Easing.inOut(Easing.quad) }),
-      ));
-      grooves.value = withDelay(B.GROOVES.at, withTiming(1, { duration: B.GROOVES.dur, easing: cubicOut }));
-      // beat 3: the words, and one shine across the plate and the signature at an even, unhurried pace
-      word.value = withDelay(B.WORD.at, withTiming(1, { duration: B.WORD.dur, easing: cubicOut }));
-      caption.value = withDelay(B.CAPTION.at, withTiming(CAPTION_OPACITY, {
-        duration: B.CAPTION.dur, easing: Easing.linear,
-      }));
-      glint.value = withDelay(B.SHINE.at, withTiming(1, { duration: B.SHINE.dur, easing: Easing.inOut(Easing.sin) }));
-      // beat 4: the scene settles back, one layer after another, and the material clears for the app
-      handOver(B.LEAVE);
+      if (!late) {
+        writeDate(B.dateStart, dateRef.current, 1);
+        rereadDate(B.dateStart, 1);
+      }
       at(B.REVEAL, reveal);
+      /**
+       * Beats 2 to 4, from `lead` ms from now, when the shift begins. Each keeps its place in the timeline relative to
+       * the shift, so the scene plays exactly as composed, only starting once the app beneath has been built.
+       */
+      const rest = (lead: number) => {
+        if (leaving) return;
+        const d = (abs: number) => Math.max(0, lead + abs - B.SHIFT.at);
+        // beat 2: the shift, landing softly in its slot, the sink into a carve, the rise
+        travel.value = withDelay(d(B.SHIFT.at), withTiming(1, { duration: SHIFT_DUR, easing: LANDING }));
+        ink.value = withDelay(d(B.SINK.at), withTiming(0, { duration: B.SINK.dur, easing: cubicInOut }));
+        carve.value = withDelay(d(B.SINK.at), withTiming(1, { duration: B.SINK.dur, easing: cubicInOut }));
+        // two-stage extrusion: the bulk of the rise, then the last 1% settles
+        rise.value = withDelay(d(B.RISE.at), withSequence(
+          withTiming(0.99, { duration: B.RISE.dur, easing: cubicOut }),
+          withTiming(1, { duration: B.RISE.settle, easing: Easing.inOut(Easing.quad) }),
+        ));
+        grooves.value = withDelay(d(B.GROOVES.at), withTiming(1, { duration: B.GROOVES.dur, easing: cubicOut }));
+        // beat 3: the words, and one shine across the plate and the signature at an even, unhurried pace
+        word.value = withDelay(d(B.WORD.at), withTiming(1, { duration: B.WORD.dur, easing: cubicOut }));
+        caption.value = withDelay(d(B.CAPTION.at), withTiming(CAPTION_OPACITY, {
+          duration: B.CAPTION.dur, easing: Easing.linear,
+        }));
+        glint.value = withDelay(d(B.SHINE.at), withTiming(1, { duration: B.SHINE.dur, easing: Easing.inOut(Easing.sin) }));
+        if (late) {
+          writeDate(d(B.dateStart), dateRef.current, 1);
+          rereadDate(d(B.dateStart), 1);
+        }
+        // beat 4: the scene settles back, one layer after another, and the material clears for the app
+        handOver(d(B.LEAVE));
+      };
+      // The shift waits for a still moment: the app is built under the overlay after the pen, and on a slower phone
+      // that can run past the held beat. Mounting it lands on the UI thread, so a shift moving meanwhile would stutter.
+      // Once the app has drawn (at once, almost always), the shift begins as composed; at most it waits a little more.
+      at(B.SHIFT.at - SHIFT_CHECK, () => {
+        if (leaving) return;
+        if (useIntro.getState().appDrawn) {
+          rest(SHIFT_CHECK);
+          return;
+        }
+        let started = false;
+        const go = (lead: number) => {
+          if (started) return;
+          started = true;
+          waitUnsub?.();
+          waitUnsub = null;
+          rest(lead);
+        };
+        waitUnsub = useIntro.subscribe((now) => { if (now.appDrawn) go(SHIFT_AFTER_DRAWN); });
+        at(SHIFT_CHECK + SHIFT_WAIT_MAX, () => go(0));
+      });
     }
 
     // Tap to skip. The tap itself retargets the scene on the UI thread (see `skipGesture` below), with no freeze: every
@@ -477,6 +520,7 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
     return () => {
       armed.value = 0;
       skipJs.current = { start: () => {}, settled: () => {} };
+      waitUnsub?.();
       unsubDrawn?.();
       if (capTimer) clearTimeout(capTimer);
       timers.forEach(clearTimeout);

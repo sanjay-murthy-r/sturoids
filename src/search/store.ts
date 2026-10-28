@@ -63,8 +63,17 @@ export interface OpenedRef {
   at: number;
 }
 
+/** Something kept at the top of Sift: a search to run again, or a result (a tool, a note, a setting) to open. */
+export type PinnedRef =
+  | { kind: 'query'; key: string; query: string }
+  | { kind: 'doc'; key: string; title: string; subtitle?: string; icon: string; color?: string; section: string };
+
 export interface SiftMemory {
   loaded: boolean;
+  /** what was pinned, in the order it was pinned */
+  pinned: PinnedRef[];
+  /** when Sift was first used on this profile (ms), for the first week's hint that Enter opens the top result; 0 unknown */
+  firstUsedAt: number;
   /** the last searches, newest first */
   recent: string[];
   /** the last results opened, newest first */
@@ -77,8 +86,24 @@ const MEMORY_KEY = pkey('sturoids-search');
 const RECENT_MAX = 8;
 const OPENED_MAX = 6;
 const USES_MAX = 300;
+const PINNED_MAX = 12;
+/** how long Sift says that Enter opens the top result: its first week */
+export const ENTER_HINT_MS = 7 * 24 * 60 * 60 * 1000;
 
-export const useSiftMemory = create<SiftMemory>(() => ({ loaded: false, recent: [], opened: [], uses: {} }));
+export const useSiftMemory = create<SiftMemory>(() => ({ loaded: false, pinned: [], firstUsedAt: 0, recent: [], opened: [], uses: {} }));
+
+/** A pin as kept, checked: anything else is dropped. */
+function cleanPin(p: any): PinnedRef | null {
+  if (!p || typeof p !== 'object' || typeof p.key !== 'string' || !p.key) return null;
+  if (p.kind === 'query' && typeof p.query === 'string' && p.query.trim()) return { kind: 'query', key: p.key, query: p.query };
+  if (p.kind === 'doc' && typeof p.title === 'string' && typeof p.icon === 'string') {
+    return {
+      kind: 'doc', key: p.key, title: p.title, icon: p.icon, section: typeof p.section === 'string' ? p.section : '',
+      ...(typeof p.subtitle === 'string' ? { subtitle: p.subtitle } : null), ...(typeof p.color === 'string' ? { color: p.color } : null),
+    };
+  }
+  return null;
+}
 
 let loading: Promise<void> | null = null;
 
@@ -95,9 +120,12 @@ export function loadSiftMemory(): Promise<void> {
     if (j?.uses && typeof j.uses === 'object') {
       for (const [k, v] of Object.entries(j.uses)) if (typeof v === 'number' && v > 0) uses[k] = Math.floor(v);
     }
-    useSiftMemory.setState({ loaded: true, recent, opened, uses });
+    const pinned = (Array.isArray(j?.pinned) ? j.pinned : []).map(cleanPin).filter(Boolean).slice(0, PINNED_MAX) as PinnedRef[];
+    const firstUsedAt = typeof j?.firstUsedAt === 'number' && j.firstUsedAt > 0 ? j.firstUsedAt : Date.now();
+    useSiftMemory.setState({ loaded: true, recent, opened, uses, pinned, firstUsedAt });
+    if (!j?.firstUsedAt) saveSoon();
   }).catch(() => {
-    useSiftMemory.setState({ loaded: true });
+    useSiftMemory.setState({ loaded: true, firstUsedAt: Date.now() });
   });
   return loading;
 }
@@ -107,8 +135,8 @@ function saveSoon() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    const { recent, opened, uses } = useSiftMemory.getState();
-    AsyncStorage.setItem(MEMORY_KEY, JSON.stringify({ recent, opened, uses })).catch(() => {});
+    const { recent, opened, uses, pinned, firstUsedAt } = useSiftMemory.getState();
+    AsyncStorage.setItem(MEMORY_KEY, JSON.stringify({ recent, opened, uses, pinned, firstUsedAt })).catch(() => {});
   }, 400);
 }
 
@@ -143,5 +171,32 @@ export function rememberOpen(ref: Omit<OpenedRef, 'at'>) {
 /** Drops a recently opened result that no longer exists. */
 export function forgetOpened(key: string) {
   useSiftMemory.setState((s) => ({ opened: s.opened.filter((o) => o.key !== key) }));
+  saveSoon();
+}
+
+/* ---------------------------------------------------------------- pins */
+
+/** The key a search is pinned under. */
+export const queryPinKey = (q: string) => 'query:' + q.trim().replace(/\s+/g, ' ').toLowerCase();
+
+export const isPinned = (key: string) => useSiftMemory.getState().pinned.some((p) => p.key === key);
+
+/** Pins something, or unpins it if it is pinned; says which. At most twelve: the oldest pin makes room. */
+export function togglePin(ref: PinnedRef): boolean {
+  const { pinned } = useSiftMemory.getState();
+  if (pinned.some((p) => p.key === ref.key)) {
+    useSiftMemory.setState({ pinned: pinned.filter((p) => p.key !== ref.key) });
+    saveSoon();
+    return false;
+  }
+  const clean = cleanPin(ref);
+  if (!clean) return false;
+  useSiftMemory.setState({ pinned: [...pinned, clean].slice(-PINNED_MAX) });
+  saveSoon();
+  return true;
+}
+
+export function unpin(key: string) {
+  useSiftMemory.setState((s) => ({ pinned: s.pinned.filter((p) => p.key !== key) }));
   saveSoon();
 }

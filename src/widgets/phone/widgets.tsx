@@ -11,8 +11,9 @@ import {
   FocusWeekModel, Gate, HabitGridModel, MOOD_COLORS, MoodStripModel, NewNoteModel, NextUpModel, NotesModel, NowNextModel,
   OnThisDayModel, PhoneData, PhonePalette, PhoneWidgetName, QuickStartModel, ResultsModel, SessionModel, StreakModel,
   SubjectTrendModel, TodaysBlocksModel, VideosModel, WriteTodayModel, APP_LINK, gateOf, glyphSvg, hexOf, minText,
-  modelFor, paletteOf, rgba, ringSvg, trendSvg,
+  modelFor, openLink, paletteOf, rgba, ringSvg, trendSvg,
 } from './model';
+import { CalcKey, CalcPad, EMPTY_PAD, padAnswer, showsAnswer } from './calc';
 
 /** The widget's size on the home screen, in dp, as the launcher gives it. */
 export interface PhoneBox { width: number; height: number }
@@ -293,20 +294,22 @@ const NowLine = ({ p }: { p: PhonePalette }) => (
  * a home-screen widget drawn this way cannot run a ticking clock or a continuous pulse).
  */
 function Clock({ m, p, box }: { m: ClockModel; p: PhonePalette; box: PhoneBox }) {
-  const ring = Math.min(72, Math.max(52, Math.round(Math.min(box.width, box.height) * 0.42)));
+  // the date keeps its room beside the ring: on a narrow widget the ring gives way first, then the date's size
+  const narrow = box.width < 200;
+  const ring = Math.max(40, Math.min(72, Math.round(Math.min(box.width - 28 - 10 - (narrow ? 80 : 96), box.height * 0.42))));
   const svg = ringSvg({ size: ring, stroke: 4, frac: m.dayFrac, color: rgba(p.accent, 0.85), track: p.well, dot: p.accent });
   return (
     <Frame p={p} uri={m.uri} pad={14} gap={6}>
       <Row gap={10} style={{ alignItems: 'flex-start' }}>
         <FlexWidget style={{ flex: 1, flexDirection: 'column' }}>
           <Txt text={m.weekday} size={11} face="smMed" color={p.accent} caps fixed />
-          <Txt text={m.day + ' ' + m.month} size={26} face="head" color={p.text} fixed />
+          <Txt text={m.day + ' ' + m.month} size={narrow ? 22 : 26} face="head" color={p.text} fixed />
         </FlexWidget>
         <SvgWidget svg={svg} style={{ width: ring, height: ring }} />
       </Row>
       <Spacer />
       <Txt text={m.greeting} size={12} face="sm" color={p.dim} />
-      <Txt text={m.next || 'Nothing else planned'} size={13} face="med" color={p.text} lines={small(box) ? 1 : 2} />
+      <Txt text={m.next || 'Nothing else planned'} size={13} face="med" color={p.text} lines={box.height < 200 ? 1 : 2} />
       <Txt
         text={m.left ? m.left + (m.left === 1 ? ' ToDo left' : ' ToDos left') : 'All ToDos done'}
         size={11} face="sm" color={p.faint} fixed
@@ -326,6 +329,86 @@ function Search({ p }: { p: PhonePalette }) {
       >
         <Glyph name="search" size={16} color={p.accent} />
         <Txt text="Sift through everything" size={12} face="sm" color={p.faint} style={{ flex: 1 }} />
+      </FlexWidget>
+    </Frame>
+  );
+}
+
+/* ---------------------------------------------------------------- calculator */
+
+/** The Calculator widget's keys, row by row: each fills its share of the widget, so the pad grows with it. */
+const PAD_ROWS: CalcKey[][] = [
+  ['C', '(', ')', '÷'],
+  ['7', '8', '9', '×'],
+  ['4', '5', '6', '−'],
+  ['1', '2', '3', '+'],
+  ['0', '.', 'DEL', '='],
+];
+/** below this height the widget is its display alone, a tap opening the Calculator */
+const PAD_MIN_H = 230;
+
+function CalcKeyWidget({ k, p, h }: { k: CalcKey; p: PhonePalette; h: number }) {
+  const op = k === '+' || k === '−' || k === '×' || k === '÷' || k === '(' || k === ')';
+  const eq = k === '=';
+  const quiet = k === 'C' || k === 'DEL';
+  const fill = eq ? p.accent : op ? rgba(p.accent, 0.13) : p.well;
+  const ink = eq ? p.onAccent : op ? p.accent : quiet ? p.dim : p.text;
+  const size = Math.max(15, Math.min(22, Math.round(h * 0.4)));
+  return (
+    <FlexWidget
+      style={{ flex: 1, height: 'match_parent', borderRadius: Math.min(16, Math.round(h / 2.4)), backgroundColor: fill, alignItems: 'center', justifyContent: 'center' }}
+      clickAction="CALC" clickActionData={{ key: k }}
+    >
+      {k === 'DEL'
+        ? <Glyph name="del" size={Math.round(size * 1.05)} color={ink} />
+        : <Txt text={k === 'C' ? 'AC' : k} size={k === 'C' ? Math.round(size * 0.72) : size} face={op || eq ? 'med' : 'reg'} color={ink} fixed />}
+    </FlexWidget>
+  );
+}
+
+function Calculator({ pad, p, box }: { pad: CalcPad; p: PhonePalette; box: PhoneBox }) {
+  const answer = pad.done ? '' : showsAnswer(pad.expr) ? padAnswer(pad.expr) : '';
+  const open = openLink('calculator', { expr: pad.expr || undefined });
+  const compact = box.height < PAD_MIN_H;
+  const display = (
+    <FlexWidget
+      style={{
+        width: 'match_parent', borderRadius: 16, backgroundColor: p.well, paddingHorizontal: 14, paddingVertical: 10,
+        flexDirection: 'column', flexGap: 2, ...(compact ? { flex: 1, justifyContent: 'center' } : null),
+      }}
+      {...tap(open)}
+    >
+      <Row>
+        <Kicker text="Calculator" p={p} />
+        <Spacer />
+        {pad.done ? <Txt text="Answer" size={11} face="sm" color={p.accent} fixed /> : null}
+      </Row>
+      <Txt
+        text={pad.expr || '0'} size={answer ? 15 : 26} face={answer ? 'reg' : 'num'} color={answer || !pad.expr ? p.dim : p.text}
+        align="right" fixed style={{ width: 'match_parent' }}
+      />
+      {answer ? <Txt text={'= ' + answer} size={22} face="num" color={p.text} align="right" fixed style={{ width: 'match_parent' }} /> : null}
+    </FlexWidget>
+  );
+  if (compact) {
+    return (
+      <Frame p={p} uri={open} pad={12} gap={8}>
+        {display}
+        <Txt text="Tap to open the keypad" size={11} face="sm" color={p.faint} align="center" fixed style={{ width: 'match_parent' }} />
+      </Frame>
+    );
+  }
+  const gap = box.width > 260 ? 7 : 5;
+  const keyH = Math.max(28, (box.height - 24 - 86 - 10 - gap * 4) / 5);
+  return (
+    <Frame p={p} uri={open} pad={12} gap={10}>
+      {display}
+      <FlexWidget style={{ flex: 1, width: 'match_parent', flexDirection: 'column', flexGap: gap }}>
+        {PAD_ROWS.map((row, i) => (
+          <FlexWidget key={i} style={{ flex: 1, width: 'match_parent', flexDirection: 'row', flexGap: gap }}>
+            {row.map((k) => <CalcKeyWidget key={k} k={k} p={p} h={keyH} />)}
+          </FlexWidget>
+        ))}
       </FlexWidget>
     </Frame>
   );
@@ -994,6 +1077,7 @@ export function renderPhoneWidget(name: PhoneWidgetName, d: PhoneData, box: Phon
     case 'ContinueWatching': return <ContinueWatching m={m} p={p} box={box} />;
     case 'WatchList': return <WatchList m={m} p={p} box={box} />;
     case 'AiDock': return <AiDock m={m} p={p} />;
+    case 'Calculator': return <Calculator pad={(m as CalcPad | null) || EMPTY_PAD} p={p} box={box} />;
   }
 }
 

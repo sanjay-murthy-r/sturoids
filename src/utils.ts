@@ -154,10 +154,10 @@ const STREAK_WALK_MAX = 3660;
  * or not; a due day not done ends it. Today never breaks a run: until it is done the count starts from yesterday.
  * Without `days` (every day due) the answer is the plain run of days, exactly as before weekdays came in.
  */
-export function streaks(doneDates: string[], days?: number[]): { current: number; best: number } {
+export function streaks(doneDates: string[], days?: number[], now: Date = new Date()): { current: number; best: number } {
   if (!doneDates || doneDates.length === 0) return { current: 0, best: 0 };
   const due = cleanDays(days);
-  if (due) return streaksOnDays(doneDates, due);
+  if (due) return streaksOnDays(doneDates, due, now);
   const set = new Set(doneDates);
   // best: walk sorted dates
   const sorted = [...set].sort();
@@ -173,7 +173,7 @@ export function streaks(doneDates: string[], days?: number[]): { current: number
   }
   // current: count back from today (or yesterday if today not yet done)
   let current = 0;
-  const cursor = new Date();
+  const cursor = new Date(now.getTime());
   if (!set.has(todayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
   while (set.has(todayKey(cursor))) {
     current++;
@@ -193,7 +193,7 @@ function dayNumber(key: string): number {
 const weekdayOfNumber = (n: number) => (((n + 3) % 7) + 7) % 7;
 
 /** streaks() for a habit due on some weekdays only (see there). */
-function streaksOnDays(doneDates: string[], due: number[]): { current: number; best: number } {
+function streaksOnDays(doneDates: string[], due: number[], now: Date): { current: number; best: number } {
   const done = new Set<number>();
   for (const k of doneDates) {
     const n = dayNumber(k);
@@ -207,7 +207,7 @@ function streaksOnDays(doneDates: string[], due: number[]): { current: number; b
     if (n > last) last = n;
   }
   const isDue = (n: number) => due.includes(weekdayOfNumber(n));
-  const today = dayNumber(todayKey());
+  const today = dayNumber(todayKey(now));
 
   // current: back from today (from yesterday while today is not done), as far as the first day ever done
   let current = 0;

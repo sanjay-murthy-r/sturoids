@@ -6,21 +6,25 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from 'expo-router';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { FadeIn, FadeOut, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, {
+  AnimatedRef, FadeIn, FadeOut, SharedValue, runOnJS, scrollTo, useAnimatedRef, useAnimatedScrollHandler,
+  useAnimatedStyle, useFrameCallback, useSharedValue, withTiming,
+} from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, neuInset, oneLine } from '../../src/theme';
-import { useStore, FocusSession, Habit, PlannerWeek, TodayWidget, hasAnyUserData } from '../../src/store';
+import { useStore, FocusSession, Habit, PlannerWeek, TodayWidget, StoreOverride, hasAnyUserData } from '../../src/store';
+import { makeSampleStore } from '../../src/widgets/sample';
 import { fmtDate, uid } from '../../src/utils';
 import { Card, PillButton, PullPill, ScreenBG, Sheet, useHeaderPull, useTheme } from '../../src/components/UI';
-import { EASE_OUT, Enter, FadeSwap, glide, useAnimLevel, useFocusKey } from '../../src/components/Motion';
+import { Bouncy, EASE_OUT, Enter, FadeSwap, glide, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { toast } from '../../src/components/Toast';
-import { tap } from '../../src/haptics';
+import { tap, tick } from '../../src/haptics';
 import { normaliseSlots, toolByKey } from '../../src/tools';
 import { openPage } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
 import { useIntro } from '../../src/intro';
 import { useNow } from '../../src/hooks/useNow';
-import { TWO_COL_AT, WIDE_MAX, columnWidth } from '../../src/layout';
+import { BOARD_MAX, columnWidth } from '../../src/layout';
 import { useProfiles } from '../../src/profiles';
 import { ProfileSwitcher } from '../../src/components/ProfileSwitcher';
 import { openSift } from '../../src/search/store';
@@ -29,8 +33,8 @@ import { readLastExport, shouldNudgeBackup } from '../../src/backupNudge';
 import { BoardNow, NudgeRow } from '../../src/widgets/kit';
 import { useTodayItems, useNextBlock } from '../../src/widgets/data';
 import {
-  CELL_H, DEFAULT_LAYOUT, GRID_GAP, fitLayout, heightOf, insertWidget, moveWidget, nextSize, packBoard, removeWidget,
-  spanOf,
+  ColItem, DEFAULT_LAYOUT, GRID_GAP, arrangeColumns, boardColumns, dropTarget, fitLayout, heightOf, insertWidget,
+  layoutColumns, moveInColumns, nextSize, removeWidget,
 } from '../../src/widgets/logic';
 import { galleryGroups, sizesOf, widgetDef, widgetShown } from '../../src/widgets/registry';
 import type { WidgetDef } from '../../src/widgets/types';
@@ -89,10 +93,18 @@ export default function Today() {
   const [dragging, setDragging] = useState(false);
   // the day's column, known ahead on a wide window (so the board's columns are right on the first frame), then measured
   const { width: dayWinW } = useWindowDimensions();
-  const [areaW, setAreaW] = useState(() => columnWidth(dayWinW, true, WIDE_MAX));
+  const [areaW, setAreaW] = useState(() => columnWidth(dayWinW, true, BOARD_MAX));
   const now = useNow();
-  const scrollRef = React.useRef<ScrollView>(null);
-  useScrollToTop(scrollRef);
+  const scrollRef = useAnimatedRef<Animated.ScrollView>();
+  useScrollToTop(scrollRef as unknown as React.RefObject<ScrollView>);
+  // the scroll, on the UI thread, as a drag near an edge of the screen reads and moves it
+  const scrollY = useSharedValue(0);
+  const scrollMax = useSharedValue(0);
+  const onScroll = useAnimatedScrollHandler((e) => { scrollY.value = e.contentOffset.y; });
+  const viewH = React.useRef(0);
+  const contentH = React.useRef(0);
+  const measureScroll = () => { scrollMax.value = Math.max(0, contentH.current - viewH.current); };
+  const scroll = useMemo<BoardScroll>(() => ({ ref: scrollRef, y: scrollY, max: scrollMax }), [scrollRef, scrollY, scrollMax]);
 
   // editing ends when Today is left; while it lasts, Back ends it instead of closing the app
   useFocusEffect(useCallback(() => () => setEditing(false), []));
@@ -209,25 +221,34 @@ export default function Today() {
     </Enter>
   );
 
-  const cols = areaW >= TWO_COL_AT ? 4 : 2;
+  const boardW = Math.max(0, areaW - S.pad * 2);
+  const count = boardColumns(boardW);
   return (
-    <ScreenBG guard maxWidth={WIDE_MAX}>
+    // while the board is edited a sideways drag moves a widget between columns, never to the next tab
+    <ScreenBG guard maxWidth={BOARD_MAX} fling={!editing}>
       <BoardNow.Provider value={now}>
-        <ScrollView
+        <Animated.ScrollView
           key={fk}
           ref={scrollRef}
           scrollEnabled={!dragging}
-          onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+          onLayout={(e) => {
+            setAreaW(e.nativeEvent.layout.width);
+            viewH.current = e.nativeEvent.layout.height;
+            measureScroll();
+          }}
+          onContentSizeChange={(_, h) => { contentH.current = h; measureScroll(); }}
           contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 44 }}
           showsVerticalScrollIndicator={false}
         >
           {header}
           <SystemBanners />
           <Board
-            cols={cols} width={Math.max(0, areaW - S.pad * 2)} editing={editing} archived={archived}
-            onEdit={setEditing} onDragging={setDragging}
+            count={count} width={boardW} editing={editing} archived={archived}
+            onEdit={setEditing} onDragging={setDragging} scroll={scroll}
           />
-        </ScrollView>
+        </Animated.ScrollView>
       </BoardNow.Provider>
       <ProfileSwitcher visible={switcher} onClose={() => setSwitcher(false)} onManage={openAccount} />
     </ScreenBG>
@@ -298,56 +319,109 @@ function SystemBanners() {
 
 /* ---------------------------------------------------------------- the board */
 
-/** where a widget sits inside the board, as last laid out */
-type Rect = { x: number; y: number; w: number; h: number };
+/** a flow section's height before it has been measured (its first frame), for the columns' first layout */
+const FLOW_EST = 200;
+/** how near the top or foot of the screen a dragged widget starts the board scrolling, and how fast at the very edge */
+const EDGE_ZONE = 90;
+const EDGE_SPEED = 14;
+/** the glide of a widget to a new place, and of a dropped one into its own */
+const MOVE = { duration: 300, easing: EASE_OUT };
+const LAND = { duration: 340, easing: EASE_OUT };
+
+/** What the board is told about the scroll view it sits in, for a drag near the edges to scroll it. */
+export interface BoardScroll {
+  ref: AnimatedRef<Animated.ScrollView>;
+  /** the scroll offset, and the furthest it goes, kept on the UI thread */
+  y: SharedValue<number>;
+  max: SharedValue<number>;
+}
 
 /**
- * Today's widgets, packed into rows of cells in their order (2 on a phone, 4 on a wide window). The layout is the saved
- * one, or Today's own arrangement until it is first edited; an archived tool's widgets keep their place but are not
- * shown. Editing settles each widget inside a carved outline with a remove well (and a size chip where it has several
- * sizes); holding one and dragging moves it, its neighbours gliding into place.
+ * Today's widgets in columns: one on a phone (its S tiles two to a row), two or three on a wide window, each count of
+ * columns keeping its own arrangement, so a tablet turned or a foldable folded comes back to the board it had. Every
+ * widget sits at a place worked out here (src/widgets/logic.ts) and glides when it changes. Editing settles each widget
+ * inside a carved outline with a remove well (and a size chip where it has several sizes); holding one lifts it, and as
+ * it is dragged the others move aside to show where it will land, the board scrolling when it nears an edge.
  */
-function Board({ cols, width, editing, archived, onEdit, onDragging }: {
-  cols: number; width: number; editing: boolean; archived: ReadonlySet<string>;
-  onEdit: (on: boolean) => void; onDragging: (on: boolean) => void;
+function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: {
+  count: 1 | 2 | 3; width: number; editing: boolean; archived: ReadonlySet<string>;
+  onEdit: (on: boolean) => void; onDragging: (on: boolean) => void; scroll: BoardScroll;
 }) {
   const level = useAnimLevel();
+  const theme = useTheme();
   const saved = useStore((s) => s.todayLayout);
+  const savedCols = useStore((s) => s.todayColumns[String(count)]);
   const setTodayLayout = useStore((s) => s.setTodayLayout);
+  const setTodayColumns = useStore((s) => s.setTodayColumns);
   const [gallery, setGallery] = useState(false);
-  // where the gallery adds: after this widget (a gap's row), or at the end
+  // where the gallery adds: after this widget, or at the end
   const [addAfter, setAddAfter] = useState<string | null>(null);
   const layout = useMemo(() => fitLayout(saved ?? DEFAULT_LAYOUT, sizesOf), [saved]);
   const visible = useMemo(
     () => layout.filter((w) => { const d = widgetDef(w.type); return !!d && widgetShown(d, archived); }),
     [layout, archived],
   );
-  const spanFor = useCallback((w: TodayWidget) => {
-    const def = widgetDef(w.type)!;
-    return spanOf(def.flow ? 'M' : w.size, cols);
-  }, [cols]);
-  const slots = useMemo(() => packBoard(visible.map((w) => ({ id: w.id, span: spanFor(w) })), cols), [visible, spanFor, cols]);
-  const cellW = Math.max(0, Math.floor(((width - GRID_GAP * (cols - 1)) / cols) * 100) / 100);
-  const widthOf = (span: number) => cellW * span + GRID_GAP * (span - 1);
 
-  // the latest of each, for callbacks handed to gestures and toasts
-  const rects = React.useRef(new Map<string, Rect>());
-  const visibleRef = React.useRef(visible);
-  visibleRef.current = visible;
+  // the flow sections' heights, as measured (the tiles' are fixed)
+  const [measured, setMeasured] = useState<Record<string, number>>({});
+  const onMeasure = useCallback((id: string, h: number) => {
+    setMeasured((m) => (Math.abs((m[id] ?? -1) - h) < 0.5 ? m : { ...m, [id]: h }));
+  }, []);
+  const items = useMemo(() => {
+    const map = new Map<string, ColItem>();
+    for (const w of visible) {
+      const def = widgetDef(w.type)!;
+      // a flow section carries its own space below it (its card's margin), which stands in for the board's gap
+      const h = def.flow ? Math.max(0, (measured[w.id] ?? FLOW_EST) - GRID_GAP) : heightOf(w.size);
+      map.set(w.id, { id: w.id, half: !def.flow && w.size === 'S', h });
+    }
+    return map;
+  }, [visible, measured]);
 
-  const setRect = useCallback((id: string, r: Rect) => { rects.current.set(id, r); }, []);
-  const commit = useCallback((next: TodayWidget[]) => setTodayLayout(next), [setTodayLayout]);
+  const colW = Math.max(0, Math.floor(((width - GRID_GAP * (count - 1)) / count) * 100) / 100);
+  const ids = useMemo(() => visible.map((w) => w.id), [visible]);
+  const allMeasured = visible.every((w) => !widgetDef(w.type)!.flow || measured[w.id] != null);
+  const columns = useMemo(
+    () => arrangeColumns(ids, count, count > 1 ? savedCols : null, (id) => {
+      const it = items.get(id);
+      return it ? (it.half ? it.h / 2 : it.h) : 0;
+    }),
+    // the heights only steer where a widget new to the arrangement goes: past the first measure (which deals a first
+    // arrangement by the sections' real heights), a height changing never re-deals the columns
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ids, count, savedCols, allMeasured],
+  );
+
+  // A wide board's first arrangement is kept once its sections have been measured, so adding or removing a widget later
+  // never deals the others out afresh into different columns.
+  useEffect(() => {
+    if (count === 1 || savedCols || !allMeasured || !visible.length) return undefined;
+    const t = setTimeout(() => setTodayColumns(count, live.current.columns), 400);
+    return () => clearTimeout(t);
+  }, [count, savedCols, allMeasured, visible.length, setTodayColumns]);
+
+  // a drag in progress: the widget and where it would land
+  const [drag, setDrag] = useState<{ id: string; col: number; index: number } | null>(null);
+  const shown = useMemo(
+    () => (drag ? moveInColumns(columns, drag.id, drag.col, drag.index) : columns),
+    [columns, drag],
+  );
+  const { rects, gaps, heights } = useMemo(() => layoutColumns(shown, items, colW, GRID_GAP), [shown, items, colW]);
+  const boardH = Math.max(0, ...heights);
+
+  // the latest of each, for the gestures' JS ends and the edge scroll's timer
+  const live = React.useRef({ columns, items, colW, drag, count, layout, savedCols, rects });
+  live.current = { columns, items, colW, drag, count, layout, savedCols, rects };
+
   const current = () => fitLayout(useStore.getState().todayLayout ?? DEFAULT_LAYOUT, sizesOf);
+  const commit = useCallback((next: TodayWidget[]) => setTodayLayout(next), [setTodayLayout]);
 
   const remove = useCallback((id: string) => {
     const { list, removed, index } = removeWidget(current(), id);
     if (!removed) return;
     commit(list);
     const name = widgetDef(removed.type)?.title || 'Widget';
-    toast(name + ' removed', {
-      label: 'Undo',
-      onPress: () => commit(insertWidget(current(), removed, index)),
-    });
+    toast(name + ' removed', { label: 'Undo', onPress: () => commit(insertWidget(current(), removed, index)) });
   }, [commit]);
 
   const resize = useCallback((id: string) => {
@@ -358,32 +432,97 @@ function Board({ cols, width, editing, archived, onEdit, onDragging }: {
     }));
   }, [commit]);
 
-  // a drop moves the widget to the place under its centre (or the nearest), among the widgets shown; hidden ones keep
-  // their places in the saved list
-  const drop = useCallback((id: string, dx: number, dy: number) => {
-    const vis = visibleRef.current;
-    const from = vis.findIndex((w) => w.id === id);
-    const r = rects.current.get(id);
-    if (from < 0 || !r) return;
-    const cx = r.x + r.w / 2 + dx;
-    const cy = r.y + r.h / 2 + dy;
-    let to = from;
-    let best = Infinity;
-    vis.forEach((w, i) => {
-      const o = rects.current.get(w.id);
-      if (!o) return;
-      if (cx >= o.x && cx <= o.x + o.w && cy >= o.y && cy <= o.y + o.h) { to = i; best = -1; return; }
-      if (best < 0) return;
-      const d = Math.hypot(o.x + o.w / 2 - cx, o.y + o.h / 2 - cy);
-      if (d < best) { best = d; to = i; }
+  /**
+   * A drop: the board takes the arrangement it showed. On a phone that is the order itself (hidden widgets keep their
+   * places in the saved list); on a wide window it is that column count's own arrangement, where a hidden widget keeps
+   * its place in its column too.
+   */
+  const settleDrop = useCallback((id: string, col: number, index: number) => {
+    const { columns: cols, count: n, layout: full, savedCols: kept } = live.current;
+    const next = moveInColumns(cols, id, col, index);
+    if (n === 1) {
+      const order = next[0];
+      const shownIds = new Set(order);
+      let i = 0;
+      const moved = full.filter((w) => shownIds.has(w.id));
+      const byId = new Map(moved.map((w) => [w.id, w]));
+      commit(full.map((w) => (shownIds.has(w.id) ? byId.get(order[i++])! : w)));
+      return;
+    }
+    const exists = new Set(full.map((w) => w.id));
+    const merged = next.map((c, ci) => {
+      const out = c.slice();
+      // a hidden widget (its tool archived) goes back where it was in its column
+      (kept?.[ci] || []).forEach((hid, at) => {
+        if (exists.has(hid) && !out.includes(hid) && !next.some((x) => x.includes(hid))) out.splice(Math.min(at, out.length), 0, hid);
+      });
+      return out;
     });
-    if (to === from) return;
-    const moved = moveWidget(vis, from, to);
-    const full = current();
-    const shownIds = new Set(vis.map((w) => w.id));
-    let i = 0;
-    commit(full.map((w) => (shownIds.has(w.id) ? moved[i++] : w)));
-  }, [commit]);
+    setTodayColumns(n, merged);
+  }, [commit, setTodayColumns]);
+
+  // where the drag would land, worked out from the centre of the widget: where the finger has taken it, and how far the
+  // board has scrolled under it since it was picked up
+  const point = React.useRef({ cx: 0, cy: 0, scrollAt: 0 });
+  const aimNow = useCallback((id: string) => {
+    const { cx, cy, scrollAt } = point.current;
+    const { columns: cols, items: its, colW: w, drag: d } = live.current;
+    const t = dropTarget(cols, id, its, w, GRID_GAP, cx, cy + (scroll.y.value - scrollAt));
+    if (!d || d.id !== id || d.col !== t.col || d.index !== t.index) {
+      if (d && d.id === id) tick();
+      setDrag({ id, ...t });
+    }
+  }, [scroll]);
+  const aim = useCallback((id: string, cx: number, cy: number) => {
+    point.current.cx = cx;
+    point.current.cy = cy;
+    aimNow(id);
+  }, [aimNow]);
+
+  // Held near the top or foot of the screen, the board scrolls under the dragged widget, faster the nearer the edge: on
+  // the UI thread, a frame at a time, so it glides; the place it would land is worked out again as it goes.
+  const edgeDir = useSharedValue(0);
+  const edgeFrame = useFrameCallback((f) => {
+    const dir = edgeDir.value;
+    if (!dir) return;
+    const step = dir * EDGE_SPEED * Math.min(3, (f.timeSincePreviousFrame ?? 16) / 16);
+    const to = Math.max(0, Math.min(scroll.max.value, scroll.y.value + step));
+    if (Math.abs(to - scroll.y.value) >= 0.5) scrollTo(scroll.ref, 0, to, false);
+  }, false);
+  const edgeTimer = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopEdge = useCallback(() => {
+    edgeDir.value = 0;
+    edgeFrame.setActive(false);
+    if (edgeTimer.current) clearInterval(edgeTimer.current);
+    edgeTimer.current = null;
+  }, [edgeFrame]);
+  const edgeAt = useCallback((id: string, screenY: number, winH: number) => {
+    const top = EDGE_ZONE + 40;
+    const dir = screenY < top ? -(top - screenY) / top : screenY > winH - EDGE_ZONE ? (screenY - (winH - EDGE_ZONE)) / EDGE_ZONE : 0;
+    if (!dir) {
+      if (edgeTimer.current) stopEdge();
+      return;
+    }
+    edgeDir.value = Math.max(-1, Math.min(1, dir));
+    if (edgeTimer.current) return;
+    edgeFrame.setActive(true);
+    edgeTimer.current = setInterval(() => aimNow(id), 80);
+  }, [aimNow, edgeFrame, stopEdge]);
+  useEffect(() => stopEdge, [stopEdge]);
+
+  const dragStart = useCallback((id: string, scrollAt: number) => {
+    onDragging(true);
+    const r = live.current.rects.get(id);
+    point.current.scrollAt = scrollAt;
+    if (r) aim(id, r.x + r.w / 2, r.y + r.h / 2);
+  }, [aim, onDragging]);
+  const dragEnd = useCallback((id: string) => {
+    stopEdge();
+    const d = live.current.drag;
+    if (d && d.id === id) settleDrop(id, d.col, d.index);
+    setDrag(null);
+    onDragging(false);
+  }, [onDragging, settleDrop, stopEdge]);
 
   const add = useCallback((def: WidgetDef) => {
     const full = current();
@@ -391,8 +530,14 @@ function Board({ cols, width, editing, archived, onEdit, onDragging }: {
     const w: TodayWidget = { id: uid(), type: def.type, size: def.sizes[0] };
     const after = addAfter ? full.findIndex((x) => x.id === addAfter) : -1;
     commit(insertWidget(full, w, after >= 0 ? after + 1 : full.length));
+    // on a wide board it goes beside the widget it was added after, in that widget's column
+    const { columns: cols, count: n } = live.current;
+    if (n > 1 && addAfter) {
+      const ci = cols.findIndex((c) => c.includes(addAfter));
+      if (ci >= 0) setTodayColumns(n, moveInColumns(cols, w.id, ci, cols[ci].indexOf(addAfter) + 1));
+    }
     setGallery(false);
-  }, [addAfter, commit]);
+  }, [addAfter, commit, setTodayColumns]);
 
   const setConfig = useCallback((id: string, patch: Record<string, unknown>) => {
     commit(current().map((w) => (w.id === id ? { ...w, config: { ...(w.config || {}), ...patch } } : w)));
@@ -405,41 +550,52 @@ function Board({ cols, width, editing, archived, onEdit, onDragging }: {
   const enterEdit = useCallback(() => { tap(); onEdit(true); }, [onEdit]);
 
   const onTypes = useMemo(() => new Set(layout.map((w) => w.type)), [layout]);
+  const dragRect = drag ? rects.get(drag.id) : undefined;
   let enterAt = 1;
   return (
     <>
-      <View style={[st.board, { columnGap: GRID_GAP }]}>
-        {slots.map((slot) => {
-          if (slot.kind === 'gap') {
-            if (!editing) return null;
-            // a gap's widget is the one before it on its row
-            const before = slots.filter((x) => x.kind === 'widget' && x.row === slot.row).pop();
-            return (
-              <Animated.View key={slot.key} entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)} layout={glide(level)}>
-                <Pressable
-                  onPress={() => openGallery(before && before.kind === 'widget' ? before.id : null)}
-                  style={[st.ghost, { width: widthOf(slot.span), height: CELL_H, borderColor: C.borderBright }]}
-                  accessibilityRole="button" accessibilityLabel="Add a widget here"
-                >
-                  <Ionicons name="add" size={22} color={C.textFaint} />
-                  <Text style={st.ghostText} maxFontSizeMultiplier={CHROME_FONT_MAX}>Add</Text>
-                </Pressable>
-              </Animated.View>
-            );
-          }
-          const w = visible.find((x) => x.id === slot.id)!;
+      <View style={{ height: boardH, width }}>
+        {/* where the dragged widget will land: a carved outline in its place */}
+        {dragRect ? (
+          <Animated.View
+            pointerEvents="none" entering={FadeIn.duration(140)} exiting={FadeOut.duration(160)} layout={glide(level)}
+            style={[
+              st.landing, { left: dragRect.x, top: dragRect.y, width: dragRect.w, height: dragRect.h },
+              theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('mid') },
+            ]}
+          />
+        ) : null}
+        {editing && !drag ? gaps.map((g) => (
+          <Animated.View
+            key={g.key} entering={FadeIn.duration(220).easing(EASE_OUT)} exiting={FadeOut.duration(140)}
+            style={{ position: 'absolute', left: g.x, top: g.y, width: g.w, height: g.h }}
+          >
+            <Pressable
+              onPress={() => openGallery(g.afterId)}
+              style={({ pressed }) => [st.ghost, { flex: 1, borderColor: C.borderBright }, pressed && { opacity: 0.6 }]}
+              accessibilityRole="button" accessibilityLabel="Add a widget here"
+            >
+              <Ionicons name="add" size={22} color={C.textFaint} />
+              <Text style={st.ghostText} maxFontSizeMultiplier={CHROME_FONT_MAX}>Add</Text>
+            </Pressable>
+          </Animated.View>
+        )) : null}
+        {visible.map((w) => {
+          const r = rects.get(w.id);
+          if (!r) return null;
           const def = widgetDef(w.type)!;
           return (
             <BoardItem
-              key={w.id} w={w} def={def} width={widthOf(slot.span)} editing={editing} enter={Math.min(6, enterAt++)}
-              onRect={setRect} onRemove={remove} onResize={resize} onDrop={drop}
-              onHold={enterEdit} onDragging={onDragging} setConfig={setConfig}
+              key={w.id} w={w} def={def} x={r.x} y={r.y} width={r.w} editing={editing} enter={Math.min(6, enterAt++)}
+              dragging={drag?.id === w.id} scroll={scroll}
+              onMeasure={onMeasure} onRemove={remove} onResize={resize} onHold={enterEdit}
+              onDragStart={dragStart} onAim={aim} onEdge={edgeAt} onDragEnd={dragEnd} setConfig={setConfig}
             />
           );
         })}
       </View>
       {editing ? (
-        <Animated.View entering={FadeIn.duration(200)} style={st.editKeys}>
+        <Animated.View entering={FadeIn.duration(220).easing(EASE_OUT)} style={st.editKeys}>
           <PillButton label="Add widget" icon="add" onPress={() => openGallery(null)} />
           <PillButton label="Done" outline onPress={() => onEdit(false)} style={{ marginLeft: 14 }} />
         </Animated.View>
@@ -454,88 +610,140 @@ function Board({ cols, width, editing, archived, onEdit, onDragging }: {
       )}
       <Gallery
         visible={gallery} onClose={() => setGallery(false)} archived={archived} onTypes={onTypes} onAdd={add}
-        cellW={cellW} boardW={width}
+        cellW={(colW - GRID_GAP) / 2} boardW={colW}
       />
     </>
   );
 }
 
 /**
- * One widget on the board. Resting, a hold (on a widget with no hold of its own) starts editing the board. Edited, it
- * settles to 0.97 inside a carved outline and takes no touches itself: its remove well and size chip do, and a hold
- * then a drag moves it.
+ * One widget on the board, at the place the board gives it, gliding there when it changes. Resting, a hold (on a widget
+ * with no hold of its own) starts editing the board. Edited, it settles to 0.97 inside a carved outline and takes no
+ * touches itself: its remove well and size chip do, and a hold lifts it to be dragged, following the finger (and the
+ * board, as it scrolls under it) until it is let go, when it glides into the place the board kept for it.
  */
 const BoardItem = React.memo(function BoardItem({
-  w, def, width, editing, enter, onRect, onRemove, onResize, onDrop, onHold, onDragging, setConfig,
+  w, def, x, y, width, editing, enter, dragging, scroll, onMeasure, onRemove, onResize, onHold, onDragStart, onAim,
+  onEdge, onDragEnd, setConfig,
 }: {
-  w: TodayWidget; def: WidgetDef; width: number; editing: boolean; enter: number;
-  onRect: (id: string, r: Rect) => void; onRemove: (id: string) => void; onResize: (id: string) => void;
-  onDrop: (id: string, dx: number, dy: number) => void; onHold: () => void; onDragging: (on: boolean) => void;
+  w: TodayWidget; def: WidgetDef; x: number; y: number; width: number; editing: boolean; enter: number; dragging: boolean;
+  scroll: BoardScroll;
+  onMeasure: (id: string, h: number) => void; onRemove: (id: string) => void; onResize: (id: string) => void;
+  onHold: () => void; onDragStart: (id: string, scrollAt: number) => void; onAim: (id: string, cx: number, cy: number) => void;
+  onEdge: (id: string, screenY: number, winH: number) => void; onDragEnd: (id: string) => void;
   setConfig: (id: string, patch: Record<string, unknown>) => void;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
+  const { height: winH } = useWindowDimensions();
   const settle = useSharedValue(editing ? 1 : 0);
+  // where it rests on the board, and the drag: where it was picked up, how far the finger has gone, the scroll then
+  const px = useSharedValue(x);
+  const py = useSharedValue(y);
   const tx = useSharedValue(0);
   const ty = useSharedValue(0);
+  const scrollAt = useSharedValue(0);
+  const held = useSharedValue(0);
   const lift = useSharedValue(0);
+  const h = useSharedValue(0);
+  const placed = React.useRef(false);
+
   useEffect(() => {
-    settle.value = level === 'none' ? (editing ? 1 : 0) : withTiming(editing ? 1 : 0, { duration: 240, easing: EASE_OUT });
+    settle.value = level === 'none' ? (editing ? 1 : 0) : withTiming(editing ? 1 : 0, { duration: 260, easing: EASE_OUT });
   }, [editing, level]);
+
+  // a new place: glide there (its very first place, and any while the animation level is off, is simply taken)
+  useEffect(() => {
+    if (dragging) return;
+    if (!placed.current || level === 'none') {
+      px.value = x;
+      py.value = y;
+      placed.current = true;
+      return;
+    }
+    if (held.value) {
+      // just let go: land from where the finger left it
+      const fromX = px.value + tx.value;
+      const fromY = py.value + ty.value + (scroll.y.value - scrollAt.value);
+      held.value = 0;
+      tx.value = 0;
+      ty.value = 0;
+      px.value = fromX;
+      py.value = fromY;
+      px.value = withTiming(x, LAND);
+      py.value = withTiming(y, LAND);
+      lift.value = withTiming(0, LAND);
+      return;
+    }
+    px.value = withTiming(x, MOVE);
+    py.value = withTiming(y, MOVE);
+  }, [x, y, dragging, level]);
+
   // the latest callbacks, for the gestures' JS ends
-  const cb = React.useRef({ onDrop, onHold, onDragging });
-  cb.current = { onDrop, onHold, onDragging };
+  const cb = React.useRef({ onHold, onDragStart, onAim, onEdge, onDragEnd });
+  cb.current = { onHold, onDragStart, onAim, onEdge, onDragEnd };
   const id = w.id;
   const hold = useCallback(() => cb.current.onHold(), []);
-  const dragOn = useCallback((on: boolean) => cb.current.onDragging(on), []);
-  const dropAt = useCallback((dx: number, dy: number) => cb.current.onDrop(id, dx, dy), [id]);
+  const start = useCallback((scrollAtStart: number) => { tap(); cb.current.onDragStart(id, scrollAtStart); }, [id]);
+  const aimAt = useCallback((cx: number, cy: number, screenY: number) => {
+    cb.current.onAim(id, cx, cy);
+    cb.current.onEdge(id, screenY, winH);
+  }, [id, winH]);
+  const end = useCallback(() => cb.current.onDragEnd(id), [id]);
 
   const gesture = useMemo(() => {
     if (editing) {
       return Gesture.Pan()
         .activateAfterLongPress(220)
         .onStart(() => {
-          lift.value = withTiming(1, { duration: 160, easing: EASE_OUT });
-          runOnJS(dragOn)(true);
+          held.value = 1;
+          scrollAt.value = scroll.y.value;
+          lift.value = withTiming(1, { duration: 180, easing: EASE_OUT });
+          runOnJS(start)(scrollAt.value);
         })
         .onUpdate((e) => {
           tx.value = e.translationX;
           ty.value = e.translationY;
-        })
-        .onEnd((e) => {
-          runOnJS(dropAt)(e.translationX, e.translationY);
+          // the centre as the finger has moved it; the board adds how far it has scrolled since the pick-up
+          const cx = px.value + e.translationX + width / 2;
+          const cy = py.value + e.translationY + h.value / 2;
+          runOnJS(aimAt)(cx, cy, e.absoluteY);
         })
         .onFinalize(() => {
-          // the widget eases from where it was let go into its new place, as the layout glides it there
-          tx.value = withTiming(0, { duration: 260, easing: EASE_OUT });
-          ty.value = withTiming(0, { duration: 260, easing: EASE_OUT });
-          lift.value = withTiming(0, { duration: 200, easing: EASE_OUT });
-          runOnJS(dragOn)(false);
+          if (!held.value) return;
+          runOnJS(end)();
         });
     }
     return Gesture.LongPress()
       .enabled(!def.ownHold)
       .minDuration(480)
       .onStart(() => { runOnJS(hold)(); });
-  }, [editing, def.ownHold, hold, dragOn, dropAt]);
+  }, [editing, def.ownHold, hold, start, aimAt, end, width]);
 
+  const place = useAnimatedStyle(() => {
+    const ride = held.value ? scroll.y.value - scrollAt.value : 0;
+    return {
+      transform: [{ translateX: px.value + tx.value }, { translateY: py.value + ty.value + ride }] as const,
+      zIndex: held.value || lift.value > 0.01 ? 10 : 0,
+    };
+  });
   const body = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: tx.value },
-      { translateY: ty.value },
-      { scale: 1 - 0.03 * settle.value + 0.03 * lift.value },
-    ] as const,
+    transform: [{ scale: 1 - 0.03 * settle.value + 0.045 * lift.value }] as const,
+    opacity: 1 - 0.06 * lift.value,
   }));
-  const outline = useAnimatedStyle(() => ({ opacity: settle.value }));
-  const front = useAnimatedStyle(() => ({ zIndex: lift.value > 0 ? 10 : 0 }));
+  const outline = useAnimatedStyle(() => ({ opacity: settle.value * (1 - lift.value) }));
   const sizes = def.sizes;
-  const flowBox = def.flow ? null : { height: heightOf(w.size), marginBottom: GRID_GAP };
+  const box = def.flow ? null : { height: heightOf(w.size) };
   const setOwn = useCallback((patch: Record<string, unknown>) => setConfig(id, patch), [id, setConfig]);
   const Component = def.Component;
   return (
     <Animated.View
-      layout={glide(level)} style={[{ width }, flowBox, front]}
-      onLayout={(e) => { const l = e.nativeEvent.layout; onRect(w.id, { x: l.x, y: l.y, w: l.width, h: l.height }); }}
+      style={[st.item, { width }, box, place]}
+      onLayout={(e) => {
+        const hh = e.nativeEvent.layout.height;
+        h.value = hh;
+        if (def.flow) onMeasure(id, hh);
+      }}
     >
       <Enter index={enter}>
         <GestureDetector gesture={gesture}>
@@ -551,16 +759,14 @@ const BoardItem = React.memo(function BoardItem({
             />
             <Animated.View style={body} pointerEvents={editing ? 'none' : 'auto'}>
               {editing && def.flow ? <View style={st.flowPad} /> : null}
-              <Component
-                id={w.id} size={w.size} config={w.config} editing={editing} preview={false} setConfig={setOwn}
-              />
+              <Component id={w.id} size={w.size} config={w.config} editing={editing} preview={false} setConfig={setOwn} />
             </Animated.View>
           </View>
         </GestureDetector>
       </Enter>
-      {editing ? (
+      {editing && !dragging ? (
         <>
-          <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)} style={st.removeAt}>
+          <Animated.View entering={FadeIn.duration(200).easing(EASE_OUT)} exiting={FadeOut.duration(120)} style={st.removeAt}>
             <Pressable
               onPress={() => onRemove(w.id)} hitSlop={10}
               style={[st.remove, theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('hairline') }]}
@@ -570,7 +776,7 @@ const BoardItem = React.memo(function BoardItem({
             </Pressable>
           </Animated.View>
           {sizes.length > 1 ? (
-            <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)} style={st.sizeAt}>
+            <Animated.View entering={FadeIn.duration(200).easing(EASE_OUT)} exiting={FadeOut.duration(120)} style={st.sizeAt}>
               <Pressable
                 onPress={() => onResize(w.id)} hitSlop={12} style={[st.sizeChip, { borderColor: C.outline, backgroundColor: C.card }]}
                 accessibilityRole="button" accessibilityLabel={def.title + ', size ' + w.size} accessibilityHint="Changes its size"
@@ -600,8 +806,11 @@ function Gallery({ visible, onClose, archived, onTypes, onAdd, cellW, boardW }: 
   const groups = useMemo(() => galleryGroups(archived), [archived]);
   const { width: winW } = useWindowDimensions();
   const room = Math.min(winW, 560) - 48;
+  // the previews read a sample day, made fresh each time the gallery opens, never the app's own data
+  const sample = useMemo(() => (visible ? makeSampleStore() : null), [visible]);
   return (
     <Sheet visible={visible} onClose={onClose} onRisen={() => setReady(true)} title="Add a widget">
+      <StoreOverride.Provider value={sample}>
       {groups.map((g) => (
         <View key={g.tool || 'app'} style={{ marginBottom: 26 }}>
           <Text style={[T.kicker, { marginBottom: 12 }]}>{g.tool ? toolByKey(g.tool)?.label ?? g.tool : 'Sturoids'}</Text>
@@ -635,39 +844,52 @@ function Gallery({ visible, onClose, archived, onTypes, onAdd, cellW, boardW }: 
           })}
         </View>
       ))}
+      </StoreOverride.Provider>
     </Sheet>
   );
 }
 
 /** a flow section's preview shows at most this much of it, before scaling */
 const FLOW_PREVIEW_H = 240;
+/** the room a preview keeps around itself inside its well, so a raised tile's light and shadow are never cut */
+const PREVIEW_PAD = 12;
 
-/** One widget drawn live at its board size, scaled to fit the sheet; it takes no touches, a tap on it adds it. */
+/**
+ * One widget drawn at its board size over the gallery's sample day, scaled to fit the sheet, raised inside a carved well
+ * of its own; it takes no touches, a tap on it adds it.
+ */
 function Preview({ def, size, ready, room, cellW, boardW, onPress }: {
   def: WidgetDef; size: TodayWidget['size']; ready: boolean; room: number; cellW: number; boardW: number; onPress?: () => void;
 }) {
-  const natW = size === 'S' && !def.flow ? Math.max(140, cellW) : Math.max(280, boardW);
+  const theme = useTheme();
+  const small = size === 'S' && !def.flow;
+  const natW = small ? Math.max(150, cellW) : Math.max(300, boardW);
   const natH = def.flow ? FLOW_PREVIEW_H : heightOf(size);
-  const scale = Math.min(size === 'S' && !def.flow ? 0.8 : 0.72, room / natW);
+  const scale = Math.min(small ? 0.8 : 0.74, (room - PREVIEW_PAD * 2) / natW);
   const Component = def.Component;
   const noop = useCallback(() => {}, []);
+  const w = natW * scale + PREVIEW_PAD * 2;
+  const h = natH * scale + PREVIEW_PAD * 2;
   return (
-    <Pressable
-      onPress={onPress} disabled={!onPress} style={{ width: natW * scale, height: natH * scale }}
-      accessibilityRole="button" accessibilityLabel={'Add ' + def.title + (def.sizes.length > 1 ? ', size ' + size : '')}
-      importantForAccessibility={onPress ? 'auto' : 'no-hide-descendants'}
+    <Bouncy
+      onPress={onPress} disabled={!onPress} scaleTo={0.97} radius={S.radiusSm}
+      style={[
+        st.previewWell, { width: w, height: h },
+        theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
+      ]}
+      accessibilityLabel={'Add ' + def.title + (def.sizes.length > 1 ? ', size ' + size : '')}
     >
-      <View pointerEvents="none" style={[st.previewClip, { width: natW * scale, height: natH * scale }]}>
+      <View pointerEvents="none" style={{ width: natW * scale, height: natH * scale, overflow: def.flow ? 'hidden' : 'visible' }}>
         {ready ? (
           <Animated.View
-            entering={FadeIn.duration(200)}
+            entering={FadeIn.duration(260).easing(EASE_OUT)}
             style={{ width: natW, height: natH, transform: [{ scale }], transformOrigin: 'top left' }}
           >
             <Component id={'preview-' + def.type} size={size} editing preview setConfig={noop} />
           </Animated.View>
         ) : null}
       </View>
-    </Pressable>
+    </Bouncy>
   );
 }
 
@@ -680,12 +902,12 @@ const st = StyleSheet.create({
   link: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   nudgeHead: { flexDirection: 'row', alignItems: 'center' },
   nudgeKeys: { flexDirection: 'row', alignItems: 'center', marginTop: 16 },
-  board: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' },
+  item: { position: 'absolute', left: 0, top: 0 },
+  landing: { position: 'absolute', borderRadius: S.radius + 2, opacity: 0.9 },
   outline: { borderRadius: S.radius + 2, margin: -4 },
   flowPad: { height: 4 },
   ghost: {
-    borderWidth: 1, borderStyle: 'dashed', borderRadius: S.radius, alignItems: 'center', justifyContent: 'center',
-    marginBottom: GRID_GAP, gap: 4,
+    borderWidth: 1, borderStyle: 'dashed', borderRadius: S.radius, alignItems: 'center', justifyContent: 'center', gap: 4,
   },
   ghostText: { color: C.textFaint, fontFamily: F.smMed, ...oneLine(12), letterSpacing: TRACK.fine },
   removeAt: { position: 'absolute', top: -10, left: -10, zIndex: 20 },
@@ -699,5 +921,5 @@ const st = StyleSheet.create({
   galleryHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   galleryTitle: { color: C.text, fontFamily: F.semi, fontSize: 15, letterSpacing: TRACK.body },
   previews: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  previewClip: { overflow: 'hidden', borderRadius: 12 },
+  previewWell: { borderRadius: S.radiusSm, padding: PREVIEW_PAD, overflow: 'hidden' },
 });

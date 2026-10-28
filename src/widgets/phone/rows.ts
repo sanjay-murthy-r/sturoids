@@ -1,11 +1,12 @@
 // The saved rows the phone widgets are drawn from, read straight from storage for the widget task handler, which can
 // run with the app closed. Never through the store (src/store.ts): loading it would start a load and saves of its own
 // in a process that only wants to draw a picture, and a save from there could write over the app's next one. Reads
-// only, never a write.
+// only, never a write to the app's rows (the Calculator widget keeps its sum under a key of its own).
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isProfileId, pkey, ProfileId } from '../../profiles';
 import { PHONE_ROWS, PhoneData, PhoneRow, cleanData } from './model';
+import { CalcPad, EMPTY_PAD, cleanPad } from './calc';
 
 /** which profile is in use (profiles.ts ACTIVE_KEY), read fresh each time: a switch restarts the app, not the widgets */
 const ACTIVE_KEY = 'sturoids.profile.active';
@@ -34,16 +35,17 @@ function parse(text: string | null | undefined): unknown {
   }
 }
 
-/** The active profile's rows, as the widgets read them. Anything unreadable reads as empty. */
-export async function readPhoneData(): Promise<PhoneData> {
+/** The active profile's rows, as the widgets read them (only `only`, when given: the rest read as empty). Anything unreadable reads as empty. */
+export async function readPhoneData(only?: readonly PhoneRow[]): Promise<PhoneData> {
   const id = await activeProfileId();
   const base = pkey(STORE_BASE, id);
   const rows: Partial<Record<PhoneRow, unknown>> = {};
   try {
-    const pairs = await AsyncStorage.multiGet([base + ':meta', ...PHONE_ROWS.map((k) => base + ':' + k)]);
+    const keys = only || PHONE_ROWS;
+    const pairs = await AsyncStorage.multiGet([base + ':meta', ...keys.map((k) => base + ':' + k)]);
     const meta = parse(pairs[0]?.[1]);
     if (meta) {
-      PHONE_ROWS.forEach((k, i) => {
+      keys.forEach((k, i) => {
         rows[k] = parse(pairs[i + 1]?.[1]);
       });
     } else {
@@ -63,4 +65,30 @@ export async function readPhoneData(): Promise<PhoneData> {
     }
   }
   return cleanData(rows);
+}
+
+/* ---------------------------------------------------------------- the Calculator widget's own sum */
+
+const padKey = (widgetId: number) => 'sturoids.calcWidget.' + widgetId;
+
+/** The sum one Calculator widget holds (each widget on the home screen keeps its own). */
+export async function readPad(widgetId: number): Promise<CalcPad> {
+  try {
+    return cleanPad(parse(await AsyncStorage.getItem(padKey(widgetId))));
+  } catch {
+    return EMPTY_PAD;
+  }
+}
+
+/**
+ * Keeps a Calculator widget's sum. The one write the widgets make, to a key of their own that the app never reads, so
+ * it can never race the app's saves.
+ */
+export async function writePad(widgetId: number, pad: CalcPad | null): Promise<void> {
+  try {
+    if (pad && pad.expr) await AsyncStorage.setItem(padKey(widgetId), JSON.stringify(pad));
+    else await AsyncStorage.removeItem(padKey(widgetId));
+  } catch {
+    // the sum is lost with the next draw: nothing else depends on it
+  }
 }

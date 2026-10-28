@@ -9,6 +9,8 @@ export const WIDE_AT = 600;
 export const READ_MAX = 720;
 /** Dashboards and grids. */
 export const WIDE_MAX = 1040;
+/** Today's board: room for three columns of widgets on a tablet turned sideways, a desktop window or an opened foldable. */
+export const BOARD_MAX = 1320;
 /** The left tab rail on a wide window, its hairline included. */
 export const RAIL_W = 88;
 /** From this width of a screen's area (a sideways tablet), a screen may set two columns side by side. */

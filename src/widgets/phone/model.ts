@@ -19,7 +19,7 @@ import {
 /* ---------------------------------------------------------------- the widgets */
 
 /** The tools a widget can belong to (as src/tools.ts names them); null is the app itself. */
-export type PhoneTool = 'tasks' | 'focus' | 'planner' | 'notes' | 'journal' | 'scores' | 'vault' | 'ai';
+export type PhoneTool = 'tasks' | 'focus' | 'planner' | 'notes' | 'journal' | 'scores' | 'vault' | 'ai' | 'calculator';
 
 /** Every phone widget, by the name app.json gives it, with its tool. */
 export const PHONE_WIDGETS = {
@@ -50,6 +50,7 @@ export const PHONE_WIDGETS = {
   ContinueWatching: 'vault',
   WatchList: 'vault',
   AiDock: 'ai',
+  Calculator: 'calculator',
 } as const satisfies Record<string, PhoneTool | null>;
 
 export type PhoneWidgetName = keyof typeof PHONE_WIDGETS;
@@ -59,7 +60,7 @@ export const isPhoneWidget = (v: unknown): v is PhoneWidgetName =>
 
 const TOOL_LABEL: Record<PhoneTool, string> = {
   tasks: 'Tasks', focus: 'Deep Work', planner: 'Planner', notes: 'Notes', journal: 'Journal', scores: 'Scores',
-  vault: 'YT Vault', ai: 'AI Quick-Links',
+  vault: 'YT Vault', ai: 'AI Quick-Links', calculator: 'Calculator',
 };
 /** Tools archived on a fresh install (tools.ts DEFAULT_ARCHIVED). */
 const DEFAULT_ARCHIVED = ['desmos', 'ai'];
@@ -621,7 +622,7 @@ export function streakModel(d: PhoneData, now: Date): StreakModel | null {
   const today = todayKey(now);
   let pick: StreakModel | null = null;
   for (const h of d.habits) {
-    const s = streaks(h.doneDates, h.days);
+    const s = streaks(h.doneDates, h.days, now);
     const atRisk = s.current > 0 && habitDueOn(h, today) && !h.doneDates.includes(today);
     if (!pick || s.current > pick.current || (s.current === pick.current && s.best > pick.best)) {
       pick = { title: h.title.trim() || 'Habit', current: s.current, best: s.best, atRisk, uri: openLink('planner', { item: h.id }) };
@@ -833,6 +834,8 @@ export function modelFor(name: PhoneWidgetName, d: PhoneData, now: Date): unknow
     case 'ContinueWatching': return continueModel(d);
     case 'WatchList': return watchListModel(d);
     case 'AiDock': return aiDockModel(d);
+    // the Calculator's sum is its own, kept per widget (calc.ts): the handler and the updater read it and pass it in
+    case 'Calculator': return null;
   }
 }
 
@@ -942,6 +945,7 @@ const GLYPH: Record<string, string> = {
   level: '<path d="M6 12 H18"/>',
   note: '<path d="M7 4.5 H14 L18 8.5 V19.5 H7 Z M14 4.5 V8.5 H18 M9.5 12.5 H15.5 M9.5 15.5 H13.5"/>',
   arrow: '<path d="M9 6 L15 12 L9 18"/>',
+  del: '<path d="M9 6 H19 A1.5 1.5 0 0 1 20.5 7.5 V16.5 A1.5 1.5 0 0 1 19 18 H9 L3.5 12 Z M11.5 9.5 L16.5 14.5 M16.5 9.5 L11.5 14.5"/>',
 };
 
 export function glyphSvg(name: keyof typeof GLYPH | string, size: number, color: string, fill = false): string {

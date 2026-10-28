@@ -19,7 +19,12 @@ npm run test:scores
 npm run test:analytics
 node scripts/build-signature.js --check
 node scripts/build-handwriting.js --check
+node scripts/build-widget-previews.js --check
+npm run test:phone
+node scripts/test-widgets.js
 ```
+
+`build-widget-previews.js` (run without `--check`) draws the picture Android's widget picker shows for each home-screen widget, from the widgets' own drawing code over a sample day, into `assets/widget-previews/`; `plugins/withWidgetPreviewsNodpi.js` puts them in `drawable-nodpi` so they are never scaled up. Run it again after changing a phone widget's look.
 
 `lint:type` fails on `fontWeight`, fractional or sub-11 font sizes, and any size set without a font family.
 
@@ -36,6 +41,10 @@ node scripts/build-handwriting.js --check
 **Navigation.** The bar always has five places: Today, three slots and More. Settings chooses the tool in each slot. A tool in a slot opens as a tab and keeps the bar; every other tool opens full screen from More, with a back button. `openTool()` in `src/toolNav.ts` goes to wherever a tool lives right now, so links from Today, the planner and quick access never open a second copy. Each tool screen takes `mode: 'tab' | 'stack'`. Only Today is built with the app; once the intro has gone and the screen is still, Today prepares the other tabs one at a time, so a first visit never waits and nothing is built out of sight during the intro. Tabs are never frozen, and a switch is a short shift from the side the new tab sits on. A screen makes its entrance the first time it is really in view, once. Any tool can be archived from More (hold its row) or Settings; Desmos and AI Quick-Links start archived. An archived tool leaves More, quick access and Today, and its reminders pause until it is restored; a tool in a slot is never archived.
 
 **Windows.** A phone is laid out exactly as it always was, and stays upright. From 600 dp wide (a tablet either way up, or a wide split screen) the tabs stand in a rail on the left and each screen sits in a centred column (`src/layout.ts`): 720 dp for lists and editors, 1040 dp for Today. Sheets stay at most 560 dp wide. A sideways tablet sets Today, Deep Work, the video player and the calculator in two columns. Every rule either applies from 600 dp or is a cap no phone reaches.
+
+**Today's board.** Widgets sit in columns: one on a phone (its S tiles two to a row), two on a tablet upright, an opened foldable or a split screen, three on a tablet sideways or a desktop window (`boardColumns`, `src/widgets/logic.ts`). The phone's order is `todayLayout`; each wide column count keeps its own arrangement in `todayColumns`, so a tablet turned or a foldable folded and opened comes back to the board it had. Every widget is placed by `layoutColumns` and glides when its place changes. Held while editing, a widget lifts and follows the finger; the others move aside to show where it will land (`dropTarget`, worked against the board without it, so the answer never flickers), and the board scrolls on the UI thread when it nears an edge. The widget gallery draws every preview over a sample day (`src/widgets/sample.ts`, read through `StoreOverride`), never the app's own data.
+
+**Sift.** Enter opens the top result, or the Calculator with a typed sum written in; a sum's answer shows in any scope. Any search, tool or result can be held to pin it to the top. For the first week a quiet line under the field says what Enter will open.
 
 **Data.** One persisted zustand store (`src/store.ts`, version 5). A load that fails or answers late is never silent: the saved data is copied aside before anything can overwrite it, and Settings, under Data, can share or restore that copy. Journal text lives in files with a small index in the store, because Android cannot read a single storage row over about 2 MB. Backups carry everything: journal text, and the photos, videos and files attached to notes. The files follow the data in the same JSON file and are streamed in and out in pieces (`src/backup.ts`), so a backup with long videos never has to fit in memory; an older app still reads the data. Because the store is one row, a save waits for a 350 ms pause instead of following every keystroke, and the app going to the background writes whatever is waiting.
 

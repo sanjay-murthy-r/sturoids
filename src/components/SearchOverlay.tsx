@@ -23,13 +23,13 @@ import { openTool } from '../toolNav';
 import { DAY_NAMES, fmtClockTime, todoDueOn, toMinutes } from '../utils';
 import { requestJournalOpen } from '../journal';
 import { openScoreNode } from '../scoresNav';
-import { quickMath } from '../calcEngine';
+import { keypadSum, quickMath } from '../calcEngine';
 import { startVoice, voiceAvailable, VoiceSession } from '../voice';
 import { Range, SearchResult, fold, highlight, parseDay, queryTerms, snippet } from '../search/engine';
 import { SiftDoc, addTodo, inScope, newNote, restoreDocs, useSiftSources } from '../search/sources';
 import {
-  OpenedRef, SiftScope, closeSift, forgetOpened, forgetQuery, loadSiftMemory, rememberOpen, rememberQuery, siftPull,
-  siftShown, useSearch, useSiftMemory,
+  ENTER_HINT_MS, OpenedRef, PinnedRef, SiftScope, closeSift, forgetOpened, forgetQuery, loadSiftMemory, queryPinKey,
+  rememberOpen, rememberQuery, siftPull, siftShown, togglePin, unpin, useSearch, useSiftMemory,
 } from '../search/store';
 
 // Sift: the app-wide search, laid over everything. The app behind scales back a little and dims (AppFrame, driven by
@@ -50,6 +50,8 @@ const PULL_CLOSE = 90;
 const STAGGER = 24;
 const STAGGER_ROWS = 10;
 const PANEL_MAX = 640;
+/** what leaves for a result waits this long once Sift starts to go, so the first frames of its way out are never held up */
+const HAND_OVER_MS = 70;
 
 const SCOPES: { key: SiftScope; label: string }[] = [
   { key: 'all', label: 'All' }, { key: 'todos', label: 'ToDos' }, { key: 'notes', label: 'Notes' },
@@ -63,6 +65,9 @@ const ASKABLE: { host: RegExp; url: (q: string) => string }[] = [
   { host: /(^|\.)perplexity\.ai$/, url: (q) => 'https://www.perplexity.ai/search?q=' + encodeURIComponent(q) },
   { host: /(^|\.)google\.[a-z.]+$/, url: (q) => 'https://www.google.com/search?q=' + encodeURIComponent(q) },
 ];
+
+/** Runs what a result opens a moment after Sift starts to leave (see HAND_OVER_MS). */
+const handOver = (fn: () => void) => requestAnimationFrame(() => setTimeout(fn, HAND_OVER_MS));
 
 const hostOf = (url: string) => url.replace(/^https?:\/\//i, '').split(/[/?#]/)[0].replace(/^www\./i, '').toLowerCase();
 
@@ -101,8 +106,10 @@ const wellOf = (theme: ThemeMode) => (theme === 'minimal'
   : { backgroundColor: C.inset });
 
 /** A result's row: flat, its icon in a small well, the title (matches in the accent), a sub-line, a snippet. */
-function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onRemove, theme, trailing }: {
+function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onLongPress, pinned, onRemove, theme, trailing }: {
   icon: string; color?: string; title: string; subtitle?: string; terms: string[]; body?: string; onPress: () => void;
+  /** a hold pins the row (or unpins it) */
+  onLongPress?: () => void; pinned?: boolean;
   onRemove?: () => void; theme: ThemeMode; trailing?: string;
 }) {
   const snip = body && terms.length ? snippet(body, terms) : null;
@@ -111,8 +118,11 @@ function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onRemov
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={420}
       accessibilityRole="button"
-      accessibilityLabel={[title, subtitle].filter(Boolean).join(', ')}
+      accessibilityLabel={[title, subtitle, pinned ? 'pinned' : ''].filter(Boolean).join(', ')}
+      accessibilityHint={onLongPress ? (pinned ? 'Hold to unpin' : 'Hold to pin to the top of Sift') : undefined}
       style={({ pressed }) => [st.row, pressed && { backgroundColor: theme === 'minimal' ? MIN.inset : C.pressDim }]}
     >
       <View style={[st.rowWell, wellOf(theme)]}>
@@ -125,6 +135,7 @@ function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onRemov
         {snip && titleRanges.length && snip.ranges.length ? <Marked text={snip.text} ranges={snip.ranges} style={st.rowSnip} lines={1} /> : null}
       </View>
       {trailing ? <Text style={st.rowTrail} numberOfLines={1}>{trailing}</Text> : null}
+      {pinned && !onRemove ? <Ionicons name="pin" size={14} color={C.textFaint} style={st.rowPin} /> : null}
       {onRemove ? (
         <Pressable onPress={onRemove} hitSlop={10} accessibilityRole="button" accessibilityLabel={'Remove ' + title} style={st.rowX}>
           <Ionicons name="close" size={16} color={C.textFaint} />
@@ -145,8 +156,8 @@ function SectionHead({ label, theme, more }: { label: string; theme: ThemeMode; 
 }
 
 /** The raised card at the top: the Top hit, a sum's answer, a day. */
-function TopCard({ kicker, children, theme, onPress, label }: {
-  kicker: string; children: React.ReactNode; theme: ThemeMode; onPress?: () => void; label?: string;
+function TopCard({ kicker, children, theme, onPress, onLongPress, label }: {
+  kicker: string; children: React.ReactNode; theme: ThemeMode; onPress?: () => void; onLongPress?: () => void; label?: string;
 }) {
   const face = theme === 'minimal'
     ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
@@ -159,7 +170,7 @@ function TopCard({ kicker, children, theme, onPress, label }: {
   );
   return onPress ? (
     <Pressable
-      onPress={onPress} accessibilityRole="button" accessibilityLabel={label}
+      onPress={onPress} onLongPress={onLongPress} delayLongPress={420} accessibilityRole="button" accessibilityLabel={label}
       style={({ pressed }) => [st.top, face, pressed && { opacity: 0.85 }]}
     >
       {body}
@@ -177,8 +188,12 @@ type Item =
   | { t: 'top'; key: string; doc: SiftDoc }
   | { t: 'math'; key: string; expr: string; answer: string }
   | { t: 'day'; key: string; day: DayCard }
-  | { t: 'row'; key: string; icon: string; color?: string; title: string; subtitle?: string; onPress: () => void; onRemove?: () => void; index: number }
+  | {
+    t: 'row'; key: string; icon: string; color?: string; title: string; subtitle?: string; onPress: () => void;
+    onRemove?: () => void; index: number; pin?: PinnedRef; pinned?: boolean;
+  }
   | { t: 'loading'; key: string; label: string }
+  | { t: 'hint'; key: string; text: string }
   | { t: 'note'; key: string; text: string; action?: { label: string; onPress: () => void } };
 
 interface DayLine { key: string; icon: string; color?: string; text: string; open: () => void }
@@ -381,15 +396,26 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     });
     if (dq.trim()) rememberQuery(dq);
     closeSift();
-    // the target opens under Sift as it leaves
-    requestAnimationFrame(() => doc.payload.open());
+    // the target opens under Sift as it leaves, once its fade has begun: building the page never stalls the first frames
+    handOver(() => doc.payload.open());
   }, [dq]);
 
   const run = React.useCallback((fn: () => void, remember = true) => {
     if (remember && dq.trim()) rememberQuery(dq);
     closeSift();
-    requestAnimationFrame(fn);
+    handOver(fn);
   }, [dq]);
+
+  /* ---- pins: a hold on a result, a recent search or a suggested tool keeps it at the top of Sift */
+  const pinToggle = React.useCallback((ref: PinnedRef, name: string) => {
+    tick();
+    const on = togglePin(ref);
+    toast(on ? 'Pinned ' + name : 'Unpinned ' + name);
+  }, []);
+  const docPin = (doc: SiftDoc): PinnedRef => ({
+    kind: 'doc', key: doc.key, title: doc.title, subtitle: doc.subtitle, icon: doc.payload.icon, color: doc.payload.color, section: doc.section,
+  });
+  const pinnedKeys = React.useMemo(() => new Set(memory.pinned.map((p) => p.key)), [memory.pinned]);
 
   const openRecent = React.useCallback((o: OpenedRef) => {
     const doc = sources.index.get(o.key);
@@ -398,7 +424,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   }, [sources.index, go]);
 
   // a sum's answer, worked out once per query (mathjs is not free)
-  const math = React.useMemo(() => (scope === 'all' && dq.trim() ? quickMath(dq.trim()) : null), [dq, scope]);
+  const math = React.useMemo(() => (dq.trim() ? quickMath(dq.trim()) : null), [dq]);
   const { index, journalLoading, notesLocked, journalLocked, archived, subjects } = sources;
 
   const items: Item[] = React.useMemo(() => {
@@ -408,33 +434,60 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     const row = (x: Omit<Extract<Item, { t: 'row' }>, 't' | 'index'>) => out.push({ t: 'row', index: n++, ...x });
 
     if (!query) {
-      // nothing typed: what you searched, what you opened, and tools that fit now
+      // nothing typed: what was pinned, what you searched, what you opened, and tools that fit now
+      if (scope === 'all' && memory.pinned.length) {
+        out.push({ t: 'head', key: 'h-pinned', label: 'Pinned' });
+        for (const p of memory.pinned) {
+          if (p.kind === 'query') {
+            row({
+              key: 'pin:' + p.key, icon: 'search', color: C.accent, title: p.query, subtitle: 'Pinned search',
+              onPress: () => { setQ(p.query); setDq(p.query); }, onRemove: () => unpin(p.key),
+            });
+          } else {
+            row({
+              key: 'pin:' + p.key, icon: p.icon, color: p.color, title: p.title, subtitle: p.subtitle || p.section,
+              onPress: () => {
+                const doc = index.get(p.key);
+                if (!doc) { unpin(p.key); toast("That isn't here any more"); return; }
+                go(doc);
+              },
+              onRemove: () => unpin(p.key),
+            });
+          }
+        }
+      }
       if (scope === 'all' || scope === 'settings') {
-        if (memory.recent.length) {
+        const recent = memory.recent.filter((r) => !pinnedKeys.has(queryPinKey(r)));
+        if (recent.length) {
           out.push({ t: 'head', key: 'h-recent', label: 'Recent searches' });
-          for (const r of memory.recent) {
+          for (const r of recent) {
             row({
               key: 'recent:' + r, icon: 'time-outline', title: r,
               onPress: () => { setQ(r); setDq(r); }, onRemove: () => forgetQuery(r),
+              pin: { kind: 'query', key: queryPinKey(r), query: r },
             });
           }
         }
       }
       if (scope === 'all') {
-        const opened = memory.opened.filter((o) => index.get(o.key));
+        const opened = memory.opened.filter((o) => index.get(o.key) && !pinnedKeys.has(o.key));
         if (opened.length) {
           out.push({ t: 'head', key: 'h-opened', label: 'Recently opened' });
           for (const o of opened) {
-            row({ key: 'opened:' + o.key, icon: o.icon, color: o.color, title: o.title, subtitle: o.subtitle || o.section, onPress: () => openRecent(o) });
+            row({
+              key: 'opened:' + o.key, icon: o.icon, color: o.color, title: o.title, subtitle: o.subtitle || o.section, onPress: () => openRecent(o),
+              pin: { kind: 'doc', key: o.key, title: o.title, subtitle: o.subtitle, icon: o.icon, color: o.color, section: o.section },
+            });
           }
         }
-        const tools = suggestedTools(memory.uses, archived, new Date().getHours());
+        const tools = suggestedTools(memory.uses, archived, new Date().getHours()).filter((k) => !pinnedKeys.has('tool:' + k));
         if (tools.length) {
           out.push({ t: 'head', key: 'h-suggest', label: 'Suggested' });
           for (const k of tools) {
             const tool = toolByKey(k)!;
             row({
               key: 'suggest:' + k, icon: tool.icon, color: colorOf(tool.colorKey), title: tool.label, subtitle: tool.desc,
+              pin: { kind: 'doc', key: 'tool:' + k, title: tool.label, subtitle: tool.desc, icon: tool.icon, color: colorOf(tool.colorKey), section: 'Tools' },
               onPress: () => {
                 const doc = index.get('tool:' + k);
                 if (doc) go(doc);
@@ -445,12 +498,15 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
         }
       }
       if (!out.length) out.push({ t: 'note', key: 'n-start', text: 'Type to sift through your ToDos, notes, journal, videos, scores and settings.' });
+      if (scope === 'all' && !memory.pinned.length) {
+        out.push({ t: 'hint', key: 'n-pin', text: 'Hold a search, a tool or any result to pin it here.' });
+      }
       return out;
     }
 
-    // a sum: its answer first
+    // a sum: its answer first, whichever scope is chosen
+    if (math) out.push({ t: 'math', key: 'math', expr: math.expr, answer: math.answer });
     if (scope === 'all') {
-      if (math) out.push({ t: 'math', key: 'math', expr: math.expr, answer: math.answer });
       // a day: what it holds
       const d = parseDay(query);
       if (d) out.push({ t: 'day', key: 'day:' + d.key, day: dayCard(d.key, d.date, hour24, journalLocked, archived) });
@@ -539,14 +595,44 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       });
     }
     return out;
-  }, [dq, scope, result, math, memory, index, journalLoading, notesLocked, journalLocked, archived, subjects, hour24, aiLinks, go, run, openRecent]);
+  }, [dq, scope, result, math, memory, pinnedKeys, index, journalLoading, notesLocked, journalLocked, archived, subjects, hour24, aiLinks, go, run, openRecent]);
 
+  /**
+   * Enter: a sum goes to the Calculator, written in (even one with no answer yet, to be finished there); anything else
+   * opens the top result. Worked out from what is typed now, not from the results a pause behind it.
+   */
+  const enterTarget = React.useCallback((typed: string): { kind: 'sum'; expr: string } | { kind: 'doc'; doc: SiftDoc } | null => {
+    const query = typed.trim();
+    if (!query) return null;
+    const sum = keypadSum(query);
+    if (sum) return { kind: 'sum', expr: sum };
+    if (query === dq.trim()) {
+      const first = items.find((x) => x.t === 'top' || x.t === 'doc');
+      return first && (first.t === 'top' || first.t === 'doc') ? { kind: 'doc', doc: first.doc } : null;
+    }
+    const fresh = sources.index.search(query, { filter: (d) => inScope(d.section, scope), usage: (k) => memory.uses[k] || 0, perSection: 5 });
+    const doc = fresh.top?.doc ?? fresh.sections[0]?.hits[0]?.doc;
+    return doc ? { kind: 'doc', doc } : null;
+  }, [dq, items, sources.index, scope, memory.uses]);
   const onSubmit = () => {
-    const first = items.find((x) => x.t === 'math' || x.t === 'top' || x.t === 'doc');
-    if (!first) return;
-    if (first.t === 'math') run(() => openTool('calculator', { expr: first.expr }));
-    else if (first.t === 'top' || first.t === 'doc') go(first.doc);
+    const target = enterTarget(q);
+    if (!target) return;
+    if (target.kind === 'sum') {
+      if (q.trim()) rememberQuery(q);
+      closeSift();
+      handOver(() => openTool('calculator', { expr: target.expr }));
+    } else go(target.doc);
   };
+  // the first week, a quiet line says what Enter will do
+  const hintOn = memory.loaded && memory.firstUsedAt > 0 && Date.now() - memory.firstUsedAt < ENTER_HINT_MS;
+  const enterHint = React.useMemo(() => {
+    if (!hintOn || !dq.trim()) return '';
+    const t = enterTarget(dq);
+    if (!t) return '';
+    if (t.kind === 'sum') return 'Enter opens the Calculator with this sum';
+    const name = t.doc.title.length > 34 ? t.doc.title.slice(0, 33).trimEnd() + '…' : t.doc.title;
+    return 'Enter opens the top result, “' + name + '”';
+  }, [hintOn, dq, enterTarget]);
 
   /* ---- the panel's motion */
   const panelStyle = useAnimatedStyle(() => ({ opacity: siftShown.value }));
@@ -617,20 +703,25 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
           <ResultRow
             icon={x.doc.payload.icon} color={x.doc.payload.color} title={x.doc.title} subtitle={x.doc.subtitle} terms={terms}
             body={x.doc.body} onPress={() => go(x.doc)} theme={theme}
+            pinned={pinnedKeys.has(x.doc.key)} onLongPress={() => pinToggle(docPin(x.doc), x.doc.title)}
           />
         );
       case 'row':
         return (
           <ResultRow
-            icon={x.icon} color={x.color} title={x.title} subtitle={x.subtitle} terms={x.key.startsWith('recent:') || x.key.startsWith('q:') ? [] : terms}
+            icon={x.icon} color={x.color} title={x.title} subtitle={x.subtitle} terms={x.key.startsWith('recent:') || x.key.startsWith('q:') || x.key.startsWith('pin:') ? [] : terms}
             onPress={x.onPress} onRemove={x.onRemove} theme={theme}
+            onLongPress={x.pin ? () => pinToggle(x.pin!, x.title) : undefined}
           />
         );
       case 'top': {
         const d = x.doc;
         const snip = d.body ? snippet(d.body, terms) : null;
         return (
-          <TopCard kicker="Top hit" theme={theme} onPress={() => go(d)} label={[d.title, d.subtitle].filter(Boolean).join(', ')}>
+          <TopCard
+            kicker={pinnedKeys.has(d.key) ? 'Top hit · pinned' : 'Top hit'} theme={theme} onPress={() => go(d)}
+            onLongPress={() => pinToggle(docPin(d), d.title)} label={[d.title, d.subtitle].filter(Boolean).join(', ')}
+          >
             <View style={st.topRow}>
               <View style={[st.topWell, wellOf(theme), theme !== 'minimal' && neuInset('low')]}>
                 <Ionicons name={d.payload.icon as any} size={22} color={d.payload.color || C.textDim} />
@@ -681,6 +772,8 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
             </View>
           </View>
         );
+      case 'hint':
+        return <Text style={st.hint} maxFontSizeMultiplier={CHROME_FONT_MAX}>{x.text}</Text>;
       case 'note':
         return (
           <View style={st.note}>
@@ -707,7 +800,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     >
       {renderItem(x)}
     </Animated.View>
-  )), [items, terms, theme, level]);
+  )), [items, terms, theme, level, pinnedKeys]);
 
   const column = width > PANEL_MAX + S.pad * 2 ? { width: PANEL_MAX, alignSelf: 'center' as const } : null;
   const fieldWell = theme === 'minimal'
@@ -755,14 +848,31 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
             </Pressable>
           </Animated.View>
 
+          {/* the first week: a quiet line under the field, saying what Enter will open. Its room is kept all week, so the
+              list below never jumps as the line comes and goes */}
+          {hintOn ? (
+            <View style={st.enterHint}>
+              {enterHint ? (
+                <Animated.View
+                  key={enterHint} style={st.enterHintRow}
+                  entering={level === 'none' ? undefined : FadeIn.duration(180).easing(EASE_OUT)}
+                  exiting={level === 'none' ? undefined : FadeOut.duration(120)}
+                >
+                  <Ionicons name="return-down-back-outline" size={13} color={C.textFaint} style={{ transform: [{ scaleX: -1 }] }} />
+                  <Text style={st.enterHintText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>{enterHint}</Text>
+                </Animated.View>
+              ) : null}
+            </View>
+          ) : null}
+
           <Animated.View style={[{ flex: 1 }, bodyStyle]}>
-            {/* scope chips: flat, in one scrolling row */}
+            {/* scope chips: flat, in one scrolling row, each at its own natural width */}
             <ScrollView
               horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
-              contentContainerStyle={st.chips} style={{ flexGrow: 0 }}
+              contentContainerStyle={st.chips} style={st.chipsRow}
             >
               {SCOPES.map((s) => (
-                <Chip key={s.key} small label={s.label} active={scope === s.key} onPress={() => setScope(s.key)} style={{ marginRight: 8 }} />
+                <Chip key={s.key} small label={s.label} active={scope === s.key} onPress={() => setScope(s.key)} style={st.chip} />
               ))}
             </ScrollView>
 
@@ -807,7 +917,14 @@ const st = StyleSheet.create({
   fieldBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
   cancel: { marginLeft: 14, height: 44, justifyContent: 'center' },
   cancelText: { fontFamily: F.med, fontSize: 15, letterSpacing: TRACK.body },
-  chips: { paddingHorizontal: S.pad, paddingBottom: 14, alignItems: 'center' },
+  chipsRow: { flexGrow: 0, flexShrink: 0 },
+  chips: { paddingHorizontal: S.pad, paddingTop: 2, paddingBottom: 12, alignItems: 'center' },
+  chip: { marginRight: 8, marginBottom: 0, flexShrink: 0 },
+  enterHint: { height: 16, marginTop: -4, marginBottom: 10, paddingHorizontal: S.pad + 4, opacity: 0.62 },
+  enterHintRow: { position: 'absolute', left: S.pad + 4, right: S.pad + 4, top: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  enterHintText: { flex: 1, color: C.textFaint, fontFamily: F.sm, ...oneLine(12), letterSpacing: TRACK.fine },
+  hint: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, lineHeight: 17, letterSpacing: TRACK.fine, paddingHorizontal: S.pad, paddingTop: 22, opacity: 0.8 },
+  rowPin: { marginLeft: 8 },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: S.pad, paddingTop: 18, paddingBottom: 8 },
   headMore: { color: C.textFaint, fontFamily: F.sm, fontSize: 11, letterSpacing: TRACK.fine },
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: S.pad, paddingVertical: 10, minHeight: 56 },

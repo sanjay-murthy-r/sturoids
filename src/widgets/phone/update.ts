@@ -10,6 +10,7 @@
 // Started from boot.ts once the app's own screen is up, never in a headless task: it reads the running store.
 
 import { AppState, AppStateStatus } from 'react-native';
+import { readPad } from './rows';
 import { PHONE_ROWS, PHONE_WIDGET_NAMES, PhoneData, PhoneRow, PhoneWidgetName, cleanData, gateOf, modelFor, paletteOf } from './model';
 
 const QUIET_MS = 2000;
@@ -68,16 +69,19 @@ export async function updatePhoneWidgets(force = false): Promise<void> {
       }
       if (!infos.length) continue;
       const gate = gateOf(name as PhoneWidgetName, data);
-      const model = gate ? null : modelFor(name as PhoneWidgetName, data, now);
+      const calc = name === 'Calculator';
+      const model = gate || calc ? null : modelFor(name as PhoneWidgetName, data, now);
       const sig = look + '|' + JSON.stringify(gate) + '|' + JSON.stringify(model);
       for (const info of infos) {
         const key = sig + '|' + info.width + 'x' + info.height;
         if (!force && drawn.get(info.widgetId) === key) continue;
         try {
+          // a Calculator keeps the sum it holds: only its look follows the app
+          const own = calc && !gate ? await readPad(info.widgetId) : model;
           await L.requestWidgetUpdateById({
             widgetName: name,
             widgetId: info.widgetId,
-            renderWidget: (i) => renderPhoneWidget(name as PhoneWidgetName, data, { width: i.width, height: i.height }, now, gate ? undefined : model),
+            renderWidget: (i) => renderPhoneWidget(name as PhoneWidgetName, data, { width: i.width, height: i.height }, now, gate ? undefined : own),
           });
           drawn.set(info.widgetId, key);
         } catch {

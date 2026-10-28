@@ -57,6 +57,7 @@ function load(file) {
 const model = load(path.join(ROOT, 'src', 'widgets', 'phone', 'model.ts'));
 const widgets = load(path.join(ROOT, 'src', 'widgets', 'phone', 'widgets.tsx'));
 const links = load(path.join(ROOT, 'src', 'appLinks.ts'));
+const calc = load(path.join(ROOT, 'src', 'widgets', 'phone', 'calc.ts'));
 
 let failed = 0;
 let passed = 0;
@@ -92,6 +93,8 @@ function checkTree(tree, label) {
       assert.ok(typeof uri === 'string' && uri, label + ': a tap with no link');
       if (uri.startsWith('sturoids:')) assert.ok(links.parseAppLink(uri), label + ': the app cannot read ' + uri);
       else assert.match(uri, /^https?:\/\//, label + ': ' + uri);
+    } else if (n.props.clickAction === 'CALC') {
+      assert.ok(calc.isCalcKey(n.props.clickActionData && n.props.clickActionData.key), label + ': a key the pad does not know');
     } else if (n.props.clickAction) {
       assert.equal(n.props.clickAction, 'OPEN_APP', label + ': an unknown tap ' + n.props.clickAction);
     }
@@ -207,8 +210,12 @@ test('every widget in app.json has a model and a drawing, and the reverse', () =
   assert.ok(entry, 'the widget plugin is in app.json');
   const names = entry[1].widgets.map((w) => w.name).sort();
   assert.deepEqual(names, [...model.PHONE_WIDGET_NAMES].sort());
-  assert.equal(names.length, 27);
-  for (const w of entry[1].widgets) assert.ok(w.updatePeriodMillis >= 1800000, w.name + ' asks for updates more often than Android allows');
+  assert.equal(names.length, 28);
+  for (const w of entry[1].widgets) {
+    // the Calculator draws only when a key is pressed (and with the app's look): it asks for no updates at all
+    if (w.name === 'Calculator') assert.equal(w.updatePeriodMillis, 0);
+    else assert.ok(w.updatePeriodMillis >= 1800000, w.name + ' asks for updates more often than Android allows');
+  }
 });
 
 test('the widget fonts in app.json are the faces the widgets use', () => {
@@ -501,6 +508,58 @@ test('models are plain data (the updater compares them as JSON)', () => {
   for (const name of model.PHONE_WIDGET_NAMES) {
     const m = model.modelFor(name, d, NOW);
     assert.deepEqual(JSON.parse(JSON.stringify(m === undefined ? null : m)), m === undefined ? null : m, name);
+  }
+});
+
+/* ---------------------------------------------------------------- the Calculator widget's keypad */
+
+test('the Calculator widget works a sum key by key, as the Calculator does', () => {
+  const type = (keys, from = calc.EMPTY_PAD) => keys.reduce((p, k) => calc.pressKey(p, k), from);
+  assert.equal(type(['1', '2', '×', '7', '+', '3']).expr, '12×7+3');
+  assert.equal(calc.padAnswer('12×7+3'), '87');
+  assert.equal(type(['1', '2', '×', '7', '+', '3', '=']).expr, '87');
+  assert.equal(type(['0', '.', '1', '+', '0', '.', '2', '=']).expr, '0.3');
+  // a sign after a sign takes its place; a minus after × is a negative number
+  assert.equal(type(['5', '+', '×', '2']).expr, '5×2');
+  assert.equal(type(['5', '×', '−', '2', '=']).expr, '−10');
+  // one point to a number, and a point on its own starts 0.
+  assert.equal(type(['.', '5', '.', '2']).expr, '0.52');
+  // a digit after an answer starts afresh, a sign carries it on
+  const ans = type(['2', '+', '2', '=']);
+  assert.equal(type(['9'], ans).expr, '9');
+  assert.equal(type(['×', '3', '='], ans).expr, '12');
+  // brackets close only what is open, and multiply next to a number
+  assert.equal(type([')', '2', '(', '1', '+', '1', ')', ')']).expr, '2×(1+1)');
+  assert.equal(calc.padAnswer('2×(1+1'), '4');
+  // leading zeros, delete, clear
+  assert.equal(type(['0', '0', '7']).expr, '7');
+  assert.equal(type(['1', '2', 'DEL']).expr, '1');
+  assert.equal(type(['1', '2', 'C']).expr, '');
+  // nothing to work out is no answer, and "=" on it changes nothing
+  assert.equal(calc.padAnswer('5÷'), '5');
+  assert.equal(type(['1', '÷', '0', '=']).expr, '1÷0');
+  assert.equal(calc.showsAnswer('42'), false);
+  // a stored pad is checked
+  assert.deepEqual(calc.cleanPad({ expr: 'rm -rf', done: true }), calc.EMPTY_PAD);
+  assert.deepEqual(calc.cleanPad({ expr: '1.5×10^23', done: true }), { expr: '1.5×10^23', done: true });
+  assert.equal(type(Array(80).fill('9')).expr.length, calc.PAD_MAX);
+});
+
+test('the Calculator widget draws a sum and its answer, and its keys in every size', () => {
+  const d = busy();
+  const pad = { expr: '12×7+3', done: false };
+  for (const box of BOXES) {
+    const tree = build(widgets.renderPhoneWidget('Calculator', d, box, NOW, pad));
+    checkTree(tree, 'calc ' + box.width + 'x' + box.height);
+    const texts = [];
+    let keys = 0;
+    walk(tree, (n) => {
+      if (n.type === 'TextWidget') texts.push(n.props.text);
+      if (n.props.clickAction === 'CALC') keys++;
+    });
+    assert.ok(texts.includes('12×7+3'), 'the sum shows');
+    assert.ok(texts.includes('= 87'), 'the answer shows');
+    assert.equal(keys, box.height >= 230 ? 20 : 0, 'the keypad at ' + box.height);
   }
 });
 

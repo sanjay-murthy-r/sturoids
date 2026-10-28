@@ -56,6 +56,132 @@ export function packBoard(items: readonly { id: string; span: number }[], cols: 
   return out;
 }
 
+/* ---------------------------------------------------------------- columns: the board as it is laid out and dragged */
+
+/**
+ * How many columns Today's board has in an area this wide: one on a phone (its S tiles two to a row, as ever), two on a
+ * tablet upright, an opened foldable or a split screen, three on a tablet turned sideways or a desktop window.
+ */
+export function boardColumns(areaW: number): 1 | 2 | 3 {
+  if (areaW >= 1080) return 3;
+  if (areaW >= 600) return 2;
+  return 1;
+}
+
+/** One widget as the column layout reads it: half a column (an S tile) or the whole, and its height. */
+export interface ColItem { id: string; half: boolean; h: number }
+export interface ColRect { x: number; y: number; w: number; h: number; col: number }
+/** An empty half a lone S tile leaves beside it: while editing, it offers Add. */
+export interface ColGap { key: string; afterId: string; x: number; y: number; w: number; h: number; col: number }
+
+/**
+ * Lays out columns of widgets: each column top to bottom, an S tile taking half its width (two side by side in a row,
+ * the second on the right), the rest the whole width, `gap` between them across and down. Returns each widget's place,
+ * the half-rows left empty, and each column's height (its last widget's foot, no gap after it).
+ */
+export function layoutColumns(
+  columns: readonly (readonly string[])[], items: ReadonlyMap<string, ColItem>, colW: number, gap: number,
+): { rects: Map<string, ColRect>; gaps: ColGap[]; heights: number[] } {
+  const rects = new Map<string, ColRect>();
+  const gaps: ColGap[] = [];
+  const heights: number[] = [];
+  const halfW = Math.max(0, (colW - gap) / 2);
+  columns.forEach((ids, col) => {
+    const x0 = col * (colW + gap);
+    let y = 0;
+    let pending: ColItem | null = null;
+    const closeRow = () => {
+      if (!pending) return;
+      gaps.push({ key: 'gap-' + pending.id, afterId: pending.id, x: x0 + halfW + gap, y, w: halfW, h: pending.h, col });
+      y += pending.h + gap;
+      pending = null;
+    };
+    for (const id of ids) {
+      const it = items.get(id);
+      if (!it) continue;
+      if (it.half) {
+        if (pending) {
+          rects.set(id, { x: x0 + halfW + gap, y, w: halfW, h: it.h, col });
+          y += Math.max(pending.h, it.h) + gap;
+          pending = null;
+        } else {
+          rects.set(id, { x: x0, y, w: halfW, h: it.h, col });
+          pending = it;
+        }
+      } else {
+        closeRow();
+        rects.set(id, { x: x0, y, w: colW, h: it.h, col });
+        y += it.h + gap;
+      }
+    }
+    closeRow();
+    heights.push(Math.max(0, y - gap));
+  });
+  return { rects, gaps, heights };
+}
+
+/**
+ * A wide board's columns for the widgets shown: the kept arrangement when there is one (a widget it does not know yet
+ * goes to the foot of the shortest column, one it knows that is gone is left out), else the widgets dealt out in their
+ * order, each to the shortest column so far, so the columns end close together.
+ */
+export function arrangeColumns(
+  ids: readonly string[], count: number, saved: readonly (readonly string[])[] | null | undefined,
+  heightOf: (id: string) => number,
+): string[][] {
+  if (count <= 1) return [ids.slice()];
+  const known = new Set(ids);
+  const cols: string[][] = Array.from({ length: count }, (_, i) => (saved && saved.length === count ? saved[i].filter((id) => known.has(id)) : []));
+  const placed = new Set(cols.flat());
+  const height = (col: string[]) => col.reduce((n, id) => n + heightOf(id) + GRID_GAP, 0);
+  for (const id of ids) {
+    if (placed.has(id)) continue;
+    let best = 0;
+    for (let i = 1; i < count; i++) if (height(cols[i]) < height(cols[best]) - 0.5) best = i;
+    cols[best].push(id);
+    placed.add(id);
+  }
+  return cols;
+}
+
+/** Moves one widget to `index` of column `col` (counted without it), the others closing up around it. */
+export function moveInColumns(columns: readonly (readonly string[])[], id: string, col: number, index: number): string[][] {
+  const out = columns.map((c) => c.filter((x) => x !== id));
+  const c = Math.max(0, Math.min(out.length - 1, col));
+  out[c].splice(Math.max(0, Math.min(index, out[c].length)), 0, id);
+  return out;
+}
+
+/**
+ * Where a widget being dragged would go: the column under its centre, and its place in that column among the others
+ * as they would lie without it. A widget comes after another whose middle the centre has passed going down; beside an
+ * S tile in the same row, after it once the centre is past its middle across. Worked against the board without the
+ * dragged widget, which does not move while the drag lasts, so the place never flickers between two answers as the
+ * others glide to make room.
+ */
+export function dropTarget(
+  columns: readonly (readonly string[])[], id: string, items: ReadonlyMap<string, ColItem>, colW: number, gap: number,
+  cx: number, cy: number,
+): { col: number; index: number } {
+  const count = columns.length;
+  const col = Math.max(0, Math.min(count - 1, Math.floor((cx + gap / 2) / (colW + gap))));
+  const rest = columns.map((c) => c.filter((x) => x !== id));
+  const { rects } = layoutColumns(rest, items, colW, gap);
+  const ids = rest[col];
+  const self = items.get(id);
+  let index = 0;
+  for (let i = 0; i < ids.length; i++) {
+    const r = rects.get(ids[i]);
+    if (!r) continue;
+    const midY = r.y + r.h / 2;
+    const sameRow = cy >= r.y && cy <= r.y + r.h;
+    // an S tile dragged across a row of S tiles takes its side; anything else goes by height
+    const after = sameRow && self?.half && items.get(ids[i])?.half ? cx > r.x + r.w / 2 : cy > midY;
+    if (after) index = i + 1;
+  }
+  return { col, index };
+}
+
 /* ---------------------------------------------------------------- layouts */
 
 /**

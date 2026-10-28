@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo, Keyboard, TextInput } from 'react-native';
 import Animated, {
+  FadeIn, FadeOut,
   Easing, LayoutAnimationConfig, runOnJS, useAnimatedRef, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
   useSharedValue, withSpring, withTiming,
 } from 'react-native-reanimated';
@@ -12,7 +13,7 @@ import Constants from 'expo-constants';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import {
-  C, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, WritingFont, bgFor, neuInset, neuRaised, shadowsSupported, writingFace,
+  C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, WritingFont, bgFor, neuInset, neuRaised, shadowsSupported, writingFace,
 } from '../src/theme';
 import {
   useStore, exportSnapshot, importSnapshot, readSnapshot, applySnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves,
@@ -511,22 +512,43 @@ function MarkedLabel({ text, ranges }: { text: string; ranges: Range[] }) {
   return <Text style={[T.body, { fontFamily: F.med }]} numberOfLines={2}>{parts}</Text>;
 }
 
-/** The field at the top of Settings' list: it filters the list in place, to the settings that match. */
+/**
+ * The field at the top of Settings' list: one carved well, as Sift's field is, holding the glyph, the words and a clear
+ * key whose room is kept, so nothing in the well moves as typing starts. It filters the list in place, to the settings
+ * that match.
+ */
 const SettingsSearchField = React.memo(function SettingsSearchField({ value, onChange }: {
   value: string; onChange: (v: string) => void;
 }) {
-  useTheme();
+  const theme = useTheme();
+  const level = useAnimLevel();
+  const input = useRef<TextInput>(null);
+  const [focused, setFocused] = useState(false);
+  const well = theme === 'minimal'
+    ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: focused ? C.accent + '88' : MIN.border }
+    : { backgroundColor: C.inset, ...neuInset('mid') };
   return (
-    <Row style={st.searchRow}>
-      <Ionicons name="search-outline" size={18} color={C.textFaint} style={st.searchIcon} />
-      <Field
-        value={value} onChangeText={onChange} placeholder="Search settings" autoCorrect={false} autoCapitalize="none"
-        returnKeyType="search" style={{ flex: 1, marginBottom: 0 }} accessibilityLabel="Search settings"
+    <Pressable onPress={() => input.current?.focus()} style={[st.searchWell, well]} accessible={false}>
+      <Ionicons name="search" size={18} color={focused ? C.accent : C.textFaint} />
+      <TextInput
+        ref={input} value={value} onChangeText={onChange} placeholder="Search settings" placeholderTextColor={C.textFaint}
+        selectionColor={C.accent} cursorColor={C.accent} autoCorrect={false} autoCapitalize="none" returnKeyType="search"
+        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+        style={st.searchInput} accessibilityLabel="Search settings" maxFontSizeMultiplier={CHROME_FONT_MAX}
       />
-      {value ? (
-        <IconBtn name="close-circle" size={18} color={C.textFaint} onPress={() => onChange('')} accessibilityLabel="Clear the search" />
-      ) : null}
-    </Row>
+      <View style={st.searchClear}>
+        {value ? (
+          <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(160)} exiting={level === 'none' ? undefined : FadeOut.duration(120)}>
+            <Pressable
+              onPress={() => { onChange(''); input.current?.focus(); }} hitSlop={10}
+              accessibilityRole="button" accessibilityLabel="Clear the search" style={st.searchClearKey}
+            >
+              <Ionicons name="close-circle" size={18} color={C.textFaint} />
+            </Pressable>
+          </Animated.View>
+        ) : null}
+      </View>
+    </Pressable>
   );
 });
 
@@ -1976,8 +1998,14 @@ const st = StyleSheet.create({
   pageLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   // the list under a search: kept mounted (its scroll and its state), out of sight and out of reach
   hidden: { display: 'none' },
-  searchRow: { alignItems: 'center', marginBottom: 6 },
-  searchIcon: { marginRight: 10 },
+  // the search well: as tall as a row, its corners the cards' own; the cards below keep the list's rhythm from it
+  searchWell: {
+    height: 48, borderRadius: S.radiusSm, flexDirection: 'row', alignItems: 'center', paddingLeft: 16, paddingRight: 6,
+    marginTop: 2, marginBottom: S.gap + 4, overflow: 'hidden',
+  },
+  searchInput: { flex: 1, marginLeft: 12, color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, paddingVertical: 0 },
+  searchClear: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  searchClearKey: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   statusDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
   catRow: { paddingVertical: 13 },
   // level with the toggle's words above it; the press carves a little past them

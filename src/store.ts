@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState as AppLifecycle } from 'react-native';
-import { create } from 'zustand';
+import React from 'react';
+import { create, useStore as useZustand, StoreApi } from 'zustand';
 import { persist, PersistStorage, StorageValue } from 'zustand/middleware';
 import { uid, todayKey, toMinutes, fmtShortDate, fmtMediaTime, cleanDays, DayName, DAY_NAMES } from './utils';
 import { ThemeMode, AnimLevel, DEFAULT_ACCENT, setAccent } from './theme';
@@ -103,6 +104,8 @@ export interface QuickItem { id: string; label: string; icon: string; color: str
 export type WidgetSize = 'S' | 'M' | 'L';
 /** One widget on Today's board, in order. `type` names a widget in src/widgets/registry.ts; `config` is its own. */
 export interface TodayWidget { id: string; type: string; size: WidgetSize; config?: Record<string, unknown> }
+/** Today's wide arrangements: by column count ('2', '3'), each column's widget ids from the top. */
+export type TodayColumns = Record<string, string[][]>;
 export interface TodoReminder { id: string; time: string; label: string }
 
 /** A Deep Work session in flight — persisted so a process kill cannot lose it. */
@@ -430,6 +433,11 @@ export function initialData() {
     doneLog: {} as Record<string, DayDone>,
     /** Today's board, in order; null until it is first edited: the default arrangement (src/widgets/registry.ts) */
     todayLayout: null as TodayWidget[] | null,
+    /**
+     * Today's board on a wide window, as columns of widget ids, kept apart for each count of columns ('2', '3'): a
+     * tablet turned, or a foldable folded and opened, comes back to the arrangement it had (src/widgets/logic.ts)
+     */
+    todayColumns: {} as TodayColumns,
   };
 }
 type DataKey = keyof ReturnType<typeof initialData>;
@@ -488,6 +496,8 @@ export interface AppState {
   doneLog: Record<string, DayDone>;
   /** Today's board, in order; null: the default arrangement, until it is first edited */
   todayLayout: TodayWidget[] | null;
+  /** Today's board on a wide window, by how many columns it has: each column's widget ids, top to bottom */
+  todayColumns: TodayColumns;
 
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** puts tools in the three slots; a tool placed in a slot is restored if it was archived */
@@ -673,6 +683,8 @@ export interface AppState {
 
   /** Today's board as edited (cleaned); null goes back to the default arrangement */
   setTodayLayout: (layout: TodayWidget[] | null) => void;
+  /** keeps the arrangement of a wide board of `count` columns (null forgets it: it is laid out afresh) */
+  setTodayColumns: (count: number, columns: string[][] | null) => void;
 
   /** a TRUE replace: every data key not in `data` goes back to its fresh value */
   replaceAll: (data: Partial<AppState>) => void;
@@ -1076,6 +1088,30 @@ export function cleanTodayLayout(raw: unknown, knownTypes?: readonly string[]): 
   return out;
 }
 
+/** the column counts a wide board keeps an arrangement for */
+export const TODAY_COLUMN_COUNTS = [2, 3] as const;
+
+/**
+ * Today's wide arrangements as kept: for each column count it knows, that many columns of ids (each id once across them,
+ * at most the board's limit). Anything else is dropped: that count is laid out afresh. Never throws.
+ */
+export function cleanTodayColumns(raw: unknown): TodayColumns {
+  const out: TodayColumns = {};
+  if (!isRecord(raw)) return out;
+  for (const n of TODAY_COLUMN_COUNTS) {
+    const cols = (raw as any)[String(n)];
+    if (!Array.isArray(cols) || cols.length !== n) continue;
+    const seen = new Set<string>();
+    const clean = cols.map((col: unknown) => (Array.isArray(col) ? col : []).filter((id: unknown) => {
+      if (typeof id !== 'string' || !id || seen.has(id) || seen.size >= TODAY_MAX_WIDGETS) return false;
+      seen.add(id);
+      return true;
+    }) as string[]);
+    out[String(n)] = clean;
+  }
+  return out;
+}
+
 function cleanVideo(v: any): VaultVideo {
   const out = { ...v };
   if (!(isFiniteNumber(out.resumeAt) && out.resumeAt >= 0)) delete out.resumeAt;
@@ -1233,6 +1269,7 @@ export function sanitizeV6(p: any): any {
   if ('missions' in out) out.missions = listOf(out.missions).filter(isRecord).map(cleanMission);
   if ('sessions' in out) out.sessions = listOf(out.sessions).filter(isRecord).map(cleanSession);
   if ('todayLayout' in out) out.todayLayout = cleanTodayLayout(out.todayLayout);
+  if ('todayColumns' in out) out.todayColumns = cleanTodayColumns(out.todayColumns);
   if ('vaultVideos' in out) out.vaultVideos = listOf(out.vaultVideos).filter(isRecord).map(cleanVideo);
   if ('habits' in out) out.habits = listOf(out.habits).filter(isRecord).map(cleanHabit);
   if ('doneLog' in out) out.doneLog = cleanDoneLog(out.doneLog);
@@ -1338,6 +1375,7 @@ const COLLECTION_NAMES: Record<string, string> = {
   vaultVideos: 'YT Vault', vaultFolders: 'YT Vault folders', calcHistory: 'Calculator history', deepWork: 'Deep Work',
   journal: 'Journal', journalTags: 'Journal tags', scores: 'Scores', scoreTags: 'Score tags', learnings: 'Learnings',
   trash: 'Recently deleted', desmosState: 'Desmos', doneLog: 'Done history', todayLayout: 'Today',
+  todayColumns: 'Today',
 };
 
 /** The collections that could not be loaded this launch, by name ("Notes"); empty when everything loaded. */
@@ -1706,7 +1744,7 @@ function dropForGood(s: AppState, items: TrashItem[], set: (partial: Partial<App
 
 // ---------- store ----------
 
-export const useStore = create<AppState>()(
+const appStore = create<AppState>()(
   persist(
     (set, get) => ({
       ...initialData(),
@@ -2682,6 +2720,13 @@ export const useStore = create<AppState>()(
       },
 
       setTodayLayout: (layout) => set({ todayLayout: cleanTodayLayout(layout) }),
+      setTodayColumns: (count, columns) =>
+        set((s) => {
+          const next = { ...s.todayColumns };
+          if (columns) next[String(count)] = columns;
+          else delete next[String(count)];
+          return { todayColumns: cleanTodayColumns(next) };
+        }),
 
       replaceAll: (data) => {
         const fresh = initialData();
@@ -2726,6 +2771,20 @@ export const useStore = create<AppState>()(
     }
   )
 );
+
+/**
+ * A stand-in store a subtree can read instead of the app's own (the widget gallery's sample data): every `useStore`
+ * selector under the provider reads it. Only reads are redirected; `useStore.getState()` is always the app's own.
+ */
+export const StoreOverride = React.createContext<StoreApi<AppState> | null>(null);
+
+function useAppStore<U = AppState>(selector?: (s: AppState) => U): U {
+  const alt = React.useContext(StoreOverride);
+  // the override is fixed for a subtree's life, so the hook called is always the same one for a component
+  return alt ? useZustand(alt, selector as (s: AppState) => U) : appStore(selector as (s: AppState) => U);
+}
+
+export const useStore = Object.assign(useAppStore, appStore) as typeof appStore;
 
 // ---------- accent stays in step with the store (never set during render) ----------
 // registered before any component subscribes, so it runs first on every change
@@ -3020,6 +3079,7 @@ export function exportSnapshot() {
     desmosState: s.desmosState,
     doneLog: s.doneLog,
     todayLayout: s.todayLayout,
+    todayColumns: s.todayColumns,
   };
 }
 

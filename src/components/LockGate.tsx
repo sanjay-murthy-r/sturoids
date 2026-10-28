@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming,
 } from 'react-native-reanimated';
-import { AnimLevel, C, CHROME_FONT_MAX, F, MIN, NEU, S, T, TRACK, oneLine } from '../theme';
+import { AnimLevel, C, CHROME_FONT_MAX, F, LX, LY, MIN, NEU, S, T, TRACK, darkSh, liteSh, oneLine } from '../theme';
 import { Field, PillButton, ScreenBG, Sheet, useTheme } from './UI';
 import { Bouncy, EASE_OUT, FadeSwap, useAnimLevel } from './Motion';
 import { useStore } from '../store';
@@ -316,6 +316,15 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other 
               if (!kind) return <View key={k} style={{ width: key, height: key }} />;
               // the resting pad already dims every key; the OK key only adds its own dim when the pad is live
               const off = !resting && kind === 'ok' && digits.length < LEGACY_MIN;
+              // delete is no key of its own: its glyph alone, raised out of the material, quieter than the digits
+              if (kind === 'del') {
+                return (
+                  <GlyphKey
+                    key={k} size={key} onPress={() => press(kind)} label={KEY_LABEL[kind] ?? kind} disabled={resting}
+                    name="backspace" minimal={theme === 'minimal'}
+                  />
+                );
+              }
               return (
                 <Bouncy
                   key={k}
@@ -327,9 +336,7 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other 
                   accessibilityLabel={KEY_LABEL[kind] ?? kind}
                   accessibilityState={resting || off ? { disabled: true } : undefined}
                 >
-                  {kind === 'del' ? (
-                    <Ionicons name="backspace-outline" size={24} color={C.textDim} />
-                  ) : kind === 'ok' ? (
+                  {kind === 'ok' ? (
                     <Ionicons name="checkmark" size={26} color={tint} />
                   ) : kind === 'bio' ? (
                     <Ionicons name="finger-print-outline" size={26} color={tint} />
@@ -621,8 +628,54 @@ export function NoteGate({ id, locked, header, children }: {
   );
 }
 
+/**
+ * A glyph raised out of the material, as the keys are, with no key around it: the same light (from the top right) lifts
+ * its edge on the lit side and lays a soft dark under the other, a quarter as far as a key's, for a mark this small.
+ */
+function GlyphKey({ size, onPress, label, disabled, name, minimal }: {
+  size: number; onPress: () => void; label: string; disabled: boolean;
+  name: React.ComponentProps<typeof Ionicons>['name']; minimal: boolean;
+}) {
+  const level = useAnimLevel();
+  // 1 raised, 0 pressed flat into the material: the glyph sinks a little and its light and shadow close up under it
+  const up = useSharedValue(1);
+  const glyph = 26;
+  const lift = 0.3;
+  const dark = useAnimatedStyle(() => ({
+    opacity: 0.35 + 0.65 * up.value,
+    transform: [{ translateX: -LX * lift * up.value }, { translateY: -LY * lift * up.value }] as const,
+  }));
+  const lite = useAnimatedStyle(() => ({
+    opacity: up.value,
+    transform: [{ translateX: LX * lift * 0.6 * up.value }, { translateY: LY * lift * 0.6 * up.value }] as const,
+  }));
+  const face = useAnimatedStyle(() => ({ transform: [{ scale: 0.92 + 0.08 * up.value }] }));
+  const ease = { duration: 90, easing: EASE_OUT };
+  const back = { duration: 200, easing: EASE_OUT };
+  return (
+    <Pressable
+      onPress={onPress} disabled={disabled} hitSlop={6}
+      onPressIn={level === 'none' ? undefined : () => { up.value = withTiming(0, ease); }}
+      onPressOut={level === 'none' ? undefined : () => { up.value = withTiming(1, back); }}
+      style={[st.key, { width: size, height: size }]}
+      accessibilityRole="button" accessibilityLabel={label} accessibilityState={disabled ? { disabled: true } : undefined}
+    >
+      <Animated.View style={[{ width: glyph + 6, height: glyph + 6, alignItems: 'center', justifyContent: 'center' }, face]}>
+        {minimal ? null : (
+          <>
+            <Animated.View style={[st.glyphLayer, dark]}><Ionicons name={name} size={glyph} color={darkSh(0.95)} /></Animated.View>
+            <Animated.View style={[st.glyphLayer, lite]}><Ionicons name={name} size={glyph} color={liteSh(0.5)} /></Animated.View>
+          </>
+        )}
+        <Ionicons name={name} size={glyph} color={C.textDim} />
+      </Animated.View>
+    </Pressable>
+  );
+}
+
 const st = StyleSheet.create({
   page: { flex: 1 },
+  glyphLayer: { position: 'absolute', top: 3, left: 3 },
   lockScroll: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: S.pad, paddingBottom: 28, paddingTop: 12 },
   lockWell: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   lockTitle: { ...T.title, marginTop: 14, marginBottom: 18, textAlign: 'center' },
