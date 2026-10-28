@@ -385,9 +385,10 @@ function Calculator({ pad, p, box }: { pad: CalcPad; p: PhonePalette; box: Phone
       </Row>
       <Txt
         text={pad.expr || '0'} size={answer ? 15 : 26} face={answer ? 'reg' : 'num'} color={answer || !pad.expr ? p.dim : p.text}
-        align="right" fixed style={{ width: 'match_parent' }}
+        align="right" fixed uri={open} style={{ width: 'match_parent' }}
       />
-      {answer ? <Txt text={'= ' + answer} size={22} face="num" color={p.text} align="right" fixed style={{ width: 'match_parent' }} /> : null}
+      {/* the answer is a tap of its own: it opens the Calculator with the sum, wherever the display's own area lands */}
+      {answer ? <Txt text={'= ' + answer} size={22} face="num" color={p.text} align="right" fixed uri={open} style={{ width: 'match_parent' }} /> : null}
     </FlexWidget>
   );
   if (compact) {

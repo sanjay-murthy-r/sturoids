@@ -64,11 +64,20 @@ export const CHANGE = { duration: 200, easing: EASE_OUT };
  */
 /** Emphasised out: most of the way there in the first third, then a long soft landing. */
 export const EASE_EMPHASISED = Easing.bezier(0.16, 1, 0.3, 1);
-/** The leaving curve: a gentle start that gathers speed. */
-export const EASE_EXIT = Easing.in(Easing.quad);
+/**
+ * The leaving curve: a gentle start that gathers speed, but never all at once at the end (a plain ease-in reached full
+ * speed in its last frame, which read as a panel snatched away).
+ */
+export const EASE_EXIT = Easing.bezier(0.32, 0, 0.67, 0);
 /** A panel arriving (a sheet rising) and leaving again. */
-export const ARRIVE = { duration: 360, easing: EASE_EMPHASISED };
-export const LEAVE = { duration: 220, easing: EASE_EXIT };
+export const ARRIVE = { duration: 420, easing: EASE_EMPHASISED };
+export const LEAVE = { duration: 260, easing: EASE_EXIT };
+/**
+ * The dim behind a panel: it comes up a little ahead of the panel and goes a little behind it, always on an ease-out,
+ * so the screen is never darkened or lit in one step.
+ */
+export const DIM_IN = { duration: 300, easing: Easing.out(Easing.cubic) };
+export const DIM_OUT = { duration: 300, easing: Easing.out(Easing.quad) };
 /** With only some motion a panel fades in place instead of travelling: short, and a little shorter out. */
 export const FADE_IN = { duration: 200, easing: EASE_OUT };
 export const FADE_OUT = { duration: 150, easing: EASE_EXIT };

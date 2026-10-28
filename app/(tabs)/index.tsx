@@ -7,17 +7,17 @@ import { useFocusEffect, useNavigation } from 'expo-router';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
-  AnimatedRef, FadeIn, FadeOut, SharedValue, runOnJS, scrollTo, useAnimatedRef, useAnimatedScrollHandler,
-  useAnimatedStyle, useFrameCallback, useSharedValue, withTiming,
+  AnimatedRef, Easing, FadeIn, FadeOut, SharedValue, ZoomIn, ZoomOut, runOnJS, scrollTo, useAnimatedRef,
+  useAnimatedScrollHandler, useAnimatedStyle, useFrameCallback, useSharedValue, withSequence, withTiming,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, neuInset, oneLine } from '../../src/theme';
+import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, neuRaised, oneLine } from '../../src/theme';
 import {
   useStore, FocusSession, Habit, PlannerWeek, TodayWidget, StoreOverride, hasAnyUserData, todayColumnsKey,
 } from '../../src/store';
 import { makeSampleStore } from '../../src/widgets/sample';
 import { fmtDate, uid } from '../../src/utils';
-import { Card, PillButton, PullPill, ScreenBG, SectionTopTrim, Sheet, useHeaderPull, useTheme } from '../../src/components/UI';
+import { ArrivalPulse, Card, PillButton, PullPill, ScreenBG, SectionTopTrim, Sheet, useHeaderPull, useTheme } from '../../src/components/UI';
 import { Bouncy, EASE_OUT, Enter, FadeSwap, glide, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { toast } from '../../src/components/Toast';
 import { tap, tick } from '../../src/haptics';
@@ -531,20 +531,53 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
     onDragging(false);
   }, [onDragging, settleDrop, stopEdge]);
 
-  const add = useCallback((def: WidgetDef) => {
-    const full = current();
-    if (def.flow && full.some((w) => w.type === def.type)) return;
-    const w: TodayWidget = { id: uid(), type: def.type, size: def.sizes[0] };
-    const after = addAfter ? full.findIndex((x) => x.id === addAfter) : -1;
-    commit(insertWidget(full, w, after >= 0 ? after + 1 : full.length));
-    // on a wide board it goes beside the widget it was added after, in that widget's column
+  // Widgets picked in the gallery go on the board once its sheet has gone, so they rise into a board that is in view,
+  // each with a soft wash of the accent to say where it went.
+  const pending = React.useRef<GalleryPick[]>([]);
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(() => new Set());
+  const add = useCallback((picks: GalleryPick[]) => {
+    pending.current = picks;
+    setGallery(false);
+  }, []);
+  const placePending = useCallback(() => {
+    const picks = pending.current;
+    pending.current = [];
+    if (!picks.length) return;
+    let full = current();
+    const added: string[] = [];
+    let after = addAfter ? full.findIndex((x) => x.id === addAfter) : -1;
+    for (const { def, size } of picks) {
+      if (def.flow && full.some((w) => w.type === def.type)) continue;
+      const w: TodayWidget = { id: uid(), type: def.type, size: def.sizes.includes(size) ? size : def.sizes[0] };
+      full = insertWidget(full, w, after >= 0 ? after + 1 : full.length);
+      if (after >= 0) after += 1;
+      added.push(w.id);
+    }
+    if (!added.length) return;
+    commit(full);
+    // on a wide board they go beside the widget they were added after, in that widget's column, in the order picked
     const { columns: cols, count: n, colKey: key } = live.current;
     if (n > 1 && addAfter) {
       const ci = cols.findIndex((c) => c.includes(addAfter));
-      if (ci >= 0) setTodayColumns(key, moveInColumns(cols, w.id, ci, cols[ci].indexOf(addAfter) + 1));
+      if (ci >= 0) {
+        let next = cols;
+        added.forEach((id, i) => { next = moveInColumns(next, id, ci, cols[ci].indexOf(addAfter) + 1 + i); });
+        setTodayColumns(key, next);
+      }
     }
-    setGallery(false);
+    setFresh(new Set(added));
   }, [addAfter, commit, setTodayColumns]);
+  // the wash has played by then; a set kept longer would play it again if the board were rebuilt
+  useEffect(() => {
+    if (!fresh.size) return undefined;
+    const t = setTimeout(() => setFresh(new Set()), 2200);
+    return () => clearTimeout(t);
+  }, [fresh]);
+  // a section of Today's own taken off from the gallery, by its tick
+  const removeType = useCallback((type: string) => {
+    const w = current().find((x) => x.type === type);
+    if (w) remove(w.id);
+  }, [remove]);
 
   const setConfig = useCallback((id: string, patch: Record<string, unknown>) => {
     commit(current().map((w) => (w.id === id ? { ...w, config: { ...(w.config || {}), ...patch } } : w)));
@@ -562,13 +595,13 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
   return (
     <>
       <View style={{ height: boardH, width }}>
-        {/* where the dragged widget will land: a carved outline in its place */}
+        {/* where the dragged widget will land: its place drawn in a fine line of the accent, flat on the material */}
         {dragRect ? (
           <Animated.View
-            pointerEvents="none" entering={FadeIn.duration(140)} exiting={FadeOut.duration(160)} layout={glide(level)}
+            pointerEvents="none" entering={FadeIn.duration(160).easing(EASE_OUT)} exiting={FadeOut.duration(180)} layout={glide(level)}
             style={[
-              st.landing, { left: dragRect.x, top: dragRect.y, width: dragRect.w, height: dragRect.h },
-              theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('mid') },
+              st.landing,
+              { left: dragRect.x, top: dragRect.y, width: dragRect.w, height: dragRect.h, borderColor: theme === 'minimal' ? MIN.border : C.accent },
             ]}
           />
         ) : null}
@@ -594,6 +627,7 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
           return (
             <BoardItem
               key={w.id} w={w} def={def} x={r.x} y={r.y} width={r.w} editing={editing} enter={Math.min(6, enterAt++)}
+              fresh={fresh.has(w.id)}
               topOfColumn={count > 1 && r.y === 0}
               dragging={drag?.id === w.id} scroll={scroll}
               onMeasure={onMeasure} onRemove={remove} onResize={resize} onHold={enterEdit}
@@ -617,8 +651,8 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
         </Pressable>
       )}
       <Gallery
-        visible={gallery} onClose={() => setGallery(false)} archived={archived} onTypes={onTypes} onAdd={add}
-        cellW={(colW - GRID_GAP) / 2} boardW={colW}
+        visible={gallery} onClose={() => setGallery(false)} onClosed={placePending} archived={archived} onTypes={onTypes}
+        onAdd={add} onRemoveType={removeType} cellW={(colW - GRID_GAP) / 2} boardW={colW}
       />
     </>
   );
@@ -631,10 +665,12 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
  * board, as it scrolls under it) until it is let go, when it glides into the place the board kept for it.
  */
 const BoardItem = React.memo(function BoardItem({
-  w, def, x, y, width, editing, enter, dragging, topOfColumn, scroll, onMeasure, onRemove, onResize, onHold, onDragStart,
-  onAim, onEdge, onDragEnd, setConfig,
+  w, def, x, y, width, editing, enter, fresh, dragging, topOfColumn, scroll, onMeasure, onRemove, onResize, onHold,
+  onDragStart, onAim, onEdge, onDragEnd, setConfig,
 }: {
   w: TodayWidget; def: WidgetDef; x: number; y: number; width: number; editing: boolean; enter: number; dragging: boolean;
+  /** just added from the gallery: it gives one soft wash of the accent */
+  fresh: boolean;
   /** first in its column on a wide board: a heading at its top drops the space above it */
   topOfColumn: boolean;
   scroll: BoardScroll;
@@ -741,7 +777,12 @@ const BoardItem = React.memo(function BoardItem({
     transform: [{ scale: 1 - 0.03 * settle.value + 0.045 * lift.value }] as const,
     opacity: 1 - 0.06 * lift.value,
   }));
-  const outline = useAnimatedStyle(() => ({ opacity: settle.value * (1 - lift.value) }));
+  // the ring that marks a widget being edited: a fine line of the accent that draws in as the board settles and goes
+  // while the widget is held up
+  const outline = useAnimatedStyle(() => ({
+    opacity: 0.55 * settle.value * (1 - lift.value),
+    transform: [{ scale: 1.012 - 0.012 * settle.value }] as const,
+  }));
   const sizes = def.sizes;
   const box = def.flow ? null : { height: heightOf(w.size) };
   const setOwn = useCallback((patch: Record<string, unknown>) => setConfig(id, patch), [id, setConfig]);
@@ -758,37 +799,34 @@ const BoardItem = React.memo(function BoardItem({
       <Enter index={enter}>
         <GestureDetector gesture={gesture}>
           <View collapsable={false} accessible={editing} accessibilityLabel={editing ? def.title : undefined}>
-            {/* the carved outline the widget settles into while the board is edited */}
+            {/* while the board is edited the widget stays on the material, ringed by a fine line of the accent */}
             <Animated.View
               pointerEvents="none"
-              style={[
-                StyleSheet.absoluteFill, st.outline,
-                theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
-                outline,
-              ]}
+              style={[StyleSheet.absoluteFill, st.outline, { borderColor: theme === 'minimal' ? MIN.border : C.accent }, outline]}
             />
             <Animated.View style={body} pointerEvents={editing ? 'none' : 'auto'}>
               {editing && def.flow ? <View style={st.flowPad} /> : null}
               <SectionTopTrim.Provider value={topOfColumn}>
                 <Component id={w.id} size={w.size} config={w.config} editing={editing} preview={false} setConfig={setOwn} />
               </SectionTopTrim.Provider>
+              <ArrivalPulse active={fresh} radius={S.radius} delay={420} />
             </Animated.View>
           </View>
         </GestureDetector>
       </Enter>
       {editing && !dragging ? (
         <>
-          <Animated.View entering={FadeIn.duration(200).easing(EASE_OUT)} exiting={FadeOut.duration(120)} style={st.removeAt}>
-            <Pressable
-              onPress={() => onRemove(w.id)} hitSlop={10}
-              style={[st.remove, theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('hairline') }]}
-              accessibilityRole="button" accessibilityLabel={'Remove ' + def.title}
+          <Animated.View entering={ZoomIn.duration(220).easing(EASE_OUT)} exiting={ZoomOut.duration(140)} style={st.removeAt}>
+            <Bouncy
+              onPress={() => onRemove(w.id)} hitSlop={10} scaleTo={0.86} radius={14}
+              style={[st.remove, theme === 'minimal' ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.card, ...neuRaised('low') }]}
+              accessibilityLabel={'Remove ' + def.title}
             >
               <Ionicons name="remove" size={16} color={C.danger} />
-            </Pressable>
+            </Bouncy>
           </Animated.View>
           {sizes.length > 1 ? (
-            <Animated.View entering={FadeIn.duration(200).easing(EASE_OUT)} exiting={FadeOut.duration(120)} style={st.sizeAt}>
+            <Animated.View entering={ZoomIn.duration(220).delay(40).easing(EASE_OUT)} exiting={ZoomOut.duration(140)} style={st.sizeAt}>
               <Pressable
                 onPress={() => onResize(w.id)} hitSlop={12} style={[st.sizeChip, { borderColor: C.outline, backgroundColor: C.card }]}
                 accessibilityRole="button" accessibilityLabel={def.title + ', size ' + w.size} accessibilityHint="Changes its size"
@@ -805,29 +843,66 @@ const BoardItem = React.memo(function BoardItem({
 
 /* ---------------------------------------------------------------- the gallery */
 
+/** A widget picked in the gallery, in the size picked. */
+interface GalleryPick { def: WidgetDef; size: TodayWidget['size'] }
+
 /**
- * Adding a widget: per tool, each kind drawn live and scaled down in each size it comes in. An archived tool's are left
- * out; one of Today's own sections already on the board says so. The previews are built once the sheet has risen.
+ * Adding widgets: per tool, each kind drawn live and scaled down in each size it comes in. An archived tool's are left
+ * out. Each kind has Add, which puts it on the board at once, and a circle that picks it, so several can go on together:
+ * with one picked, a Confirm key comes in at the sheet's top right, and a tap on a preview picks that size. One of
+ * Today's own sections already on the board shows its circle ticked, quietly, in place of Add; a tap there takes it
+ * off the board. The
+ * previews are built once the sheet has risen.
  */
-function Gallery({ visible, onClose, archived, onTypes, onAdd, cellW, boardW }: {
-  visible: boolean; onClose: () => void; archived: ReadonlySet<string>; onTypes: ReadonlySet<string>;
-  onAdd: (def: WidgetDef) => void; cellW: number; boardW: number;
+function Gallery({ visible, onClose, onClosed, archived, onTypes, onAdd, onRemoveType, cellW, boardW }: {
+  visible: boolean; onClose: () => void; onClosed: () => void; archived: ReadonlySet<string>; onTypes: ReadonlySet<string>;
+  onAdd: (picks: GalleryPick[]) => void; onRemoveType: (type: string) => void; cellW: number; boardW: number;
 }) {
   const [ready, setReady] = useState(false);
-  useEffect(() => { if (!visible) setReady(false); }, [visible]);
+  const [picked, setPicked] = useState<ReadonlyMap<string, TodayWidget['size']>>(() => new Map());
+  useEffect(() => {
+    if (!visible) setReady(false);
+    else setPicked(new Map());
+  }, [visible]);
   const groups = useMemo(() => galleryGroups(archived), [archived]);
   const { width: winW } = useWindowDimensions();
   const room = Math.min(winW, 560) - 48;
   // the previews read a sample day, made fresh each time the gallery opens, never the app's own data
   const sample = useMemo(() => (visible ? makeSampleStore() : null), [visible]);
+
+  const toggle = (def: WidgetDef, size: TodayWidget['size']) => {
+    tick();
+    setPicked((m) => {
+      const next = new Map(m);
+      if (next.get(def.type) === size) next.delete(def.type);
+      else next.set(def.type, size);
+      return next;
+    });
+  };
+  const picks = (): GalleryPick[] => {
+    const out: GalleryPick[] = [];
+    for (const g of groups) for (const def of g.defs) { const size = picked.get(def.type); if (size) out.push({ def, size }); }
+    return out;
+  };
+  const confirm = () => { tap(); onAdd(picks()); };
+  const addOne = (def: WidgetDef, size: TodayWidget['size']) => {
+    tap();
+    // anything already picked goes on with it
+    onAdd([...picks().filter((x) => x.def.type !== def.type), { def, size }]);
+  };
+
   return (
-    <Sheet visible={visible} onClose={onClose} onRisen={() => setReady(true)} title="Add a widget">
+    <Sheet
+      visible={visible} onClose={onClose} onClosed={onClosed} onRisen={() => setReady(true)} title="Add widgets"
+      action={picked.size ? <ConfirmKey count={picked.size} onPress={confirm} /> : null}
+    >
       <StoreOverride.Provider value={sample}>
       {groups.map((g) => (
         <View key={g.tool || 'app'} style={{ marginBottom: 26 }}>
           <Text style={[T.kicker, { marginBottom: 12 }]}>{g.tool ? toolByKey(g.tool)?.label ?? g.tool : 'Sturoids'}</Text>
           {g.defs.map((def) => {
             const on = !!def.flow && onTypes.has(def.type);
+            const size = picked.get(def.type);
             return (
               <View key={def.type} style={st.galleryItem}>
                 <View style={st.galleryHead}>
@@ -835,20 +910,31 @@ function Gallery({ visible, onClose, archived, onTypes, onAdd, cellW, boardW }: 
                     <Text style={st.galleryTitle} maxFontSizeMultiplier={CHROME_FONT_MAX}>{def.title}</Text>
                     <Text style={T.caption} maxFontSizeMultiplier={CHROME_FONT_MAX}>{def.desc}</Text>
                   </View>
-                  {on ? (
-                    <Text style={[st.link, { color: C.textFaint }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>On Today</Text>
-                  ) : (
-                    <Pressable
-                      onPress={() => onAdd(def)} hitSlop={LINK_SLOP}
-                      accessibilityRole="button" accessibilityLabel={'Add ' + def.title}
-                    >
-                      <Text style={[st.link, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Add</Text>
-                    </Pressable>
-                  )}
+                  <View style={st.galleryKeys}>
+                    {on ? null : (
+                      <Animated.View entering={FadeIn.duration(200).easing(EASE_OUT)} exiting={FadeOut.duration(120)}>
+                        <Pressable
+                          onPress={() => addOne(def, size ?? def.sizes[0])} hitSlop={LINK_SLOP}
+                          accessibilityRole="button" accessibilityLabel={'Add ' + def.title}
+                        >
+                          <Text style={[st.link, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Add</Text>
+                        </Pressable>
+                      </Animated.View>
+                    )}
+                    <PickCircle
+                      state={on ? 'on' : size ? 'picked' : 'off'}
+                      onPress={() => (on ? (tap(), onRemoveType(def.type)) : toggle(def, size ?? def.sizes[0]))}
+                      label={on ? def.title + ' is on Today. Remove it' : 'Pick ' + def.title}
+                    />
+                  </View>
                 </View>
                 <View style={st.previews}>
-                  {def.sizes.map((size) => (
-                    <Preview key={size} def={def} size={size} ready={ready} room={room} cellW={cellW} boardW={boardW} onPress={on ? undefined : () => onAdd(def)} />
+                  {def.sizes.map((sz) => (
+                    <Preview
+                      key={sz} def={def} size={sz} ready={ready} room={room} cellW={cellW} boardW={boardW}
+                      picked={size === sz}
+                      onPress={on ? undefined : () => (picked.size ? toggle(def, sz) : addOne(def, sz))}
+                    />
                   ))}
                 </View>
               </View>
@@ -861,19 +947,95 @@ function Gallery({ visible, onClose, archived, onTypes, onAdd, cellW, boardW }: 
   );
 }
 
+/**
+ * The circle beside Add. Empty: a tap picks the widget, and it fills with the accent and a tick. A section already on
+ * Today shows it ticked but quiet (no accent): a tap takes that section off, and it eases back to empty.
+ */
+function PickCircle({ state, onPress, label }: { state: 'off' | 'picked' | 'on'; onPress: () => void; label: string }) {
+  const level = useAnimLevel();
+  const fill = useSharedValue(state === 'off' ? 0 : 1);
+  const settle = useSharedValue(1);
+  const was = React.useRef(state);
+  useEffect(() => {
+    if (was.current === state) return;
+    const from = was.current;
+    was.current = state;
+    const to = state === 'off' ? 0 : 1;
+    if (level === 'none') { fill.value = to; return; }
+    fill.value = withTiming(to, { duration: to ? 200 : 160, easing: EASE_OUT });
+    if (state === 'picked' && from === 'off' && level === 'full') {
+      settle.value = withSequence(
+        withTiming(1.14, { duration: 130, easing: EASE_OUT }),
+        withTiming(1, { duration: 200, easing: Easing.inOut(Easing.quad) }),
+      );
+    }
+  }, [state, level]);
+  const ring = useAnimatedStyle(() => ({ opacity: 1 - fill.value }));
+  const dot = useAnimatedStyle(() => ({ opacity: fill.value, transform: [{ scale: (0.55 + 0.45 * fill.value) * settle.value }] }));
+  return (
+    <Bouncy
+      onPress={onPress} scaleTo={0.84} radius={13} hitSlop={12}
+      accessibilityRole="checkbox" accessibilityState={{ checked: state !== 'off' }} accessibilityLabel={label}
+    >
+      <View style={st.pick}>
+        <Animated.View style={[StyleSheet.absoluteFill, st.pick, ring]}>
+          <Ionicons name="ellipse-outline" size={24} color={C.textFaint} />
+        </Animated.View>
+        <Animated.View style={[StyleSheet.absoluteFill, st.pick, dot]}>
+          <Ionicons name="checkmark-circle" size={24} color={state === 'on' ? C.textFaint : C.accent} />
+        </Animated.View>
+      </View>
+    </Bouncy>
+  );
+}
+
+/** The sheet's Confirm: it comes in from the right as the first widget is picked, and counts them. */
+function ConfirmKey({ count, onPress }: { count: number; onPress: () => void }) {
+  return (
+    <Animated.View entering={confirmIn} exiting={FadeOut.duration(140)}>
+      <Bouncy
+        onPress={onPress} scaleTo={0.94} radius={999}
+        style={[st.confirm, { backgroundColor: C.accent }]}
+        accessibilityLabel={'Add ' + count + (count === 1 ? ' widget' : ' widgets')}
+      >
+        <Text style={[st.confirmText, { color: C.onAccent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Confirm</Text>
+        <View style={[st.confirmCount, { backgroundColor: C.onAccent }]}>
+          <FadeSwap swapKey={String(count)}>
+            <Text style={[st.confirmCountText, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{count}</Text>
+          </FadeSwap>
+        </View>
+      </Bouncy>
+    </Animated.View>
+  );
+}
+
+const confirmIn = (): any => {
+  'worklet';
+  const ease = { duration: 280, easing: Easing.bezier(0.16, 1, 0.3, 1) };
+  return {
+    initialValues: { opacity: 0, transform: [{ translateX: 14 }, { scale: 0.92 }] },
+    animations: {
+      opacity: withTiming(1, { duration: 200 }),
+      transform: [{ translateX: withTiming(0, ease) }, { scale: withTiming(1, ease) }],
+    },
+  };
+};
+
 /** a flow section's preview shows at most this much of it, before scaling */
 const FLOW_PREVIEW_H = 240;
-/** the room a preview keeps around itself inside its well, so a raised tile's light and shadow are never cut */
+/** the room a preview keeps around itself, so a raised tile's light and shadow are never cut */
 const PREVIEW_PAD = 12;
 
 /**
- * One widget drawn at its board size over the gallery's sample day, scaled to fit the sheet, raised inside a carved well
- * of its own; it takes no touches, a tap on it adds it.
+ * One widget drawn at its board size over the gallery's sample day, scaled to fit the sheet, on the sheet's own material:
+ * raised only if it is raised on Today, flat if it sits flat there. It takes no touches itself; a tap on it adds it (or,
+ * with widgets picked, picks this size), and a picked size is ringed in the accent.
  */
-function Preview({ def, size, ready, room, cellW, boardW, onPress }: {
-  def: WidgetDef; size: TodayWidget['size']; ready: boolean; room: number; cellW: number; boardW: number; onPress?: () => void;
+function Preview({ def, size, ready, room, cellW, boardW, picked, onPress }: {
+  def: WidgetDef; size: TodayWidget['size']; ready: boolean; room: number; cellW: number; boardW: number;
+  picked: boolean; onPress?: () => void;
 }) {
-  const theme = useTheme();
+  const level = useAnimLevel();
   const small = size === 'S' && !def.flow;
   const natW = small ? Math.max(150, cellW) : Math.max(300, boardW);
   const natH = def.flow ? FLOW_PREVIEW_H : heightOf(size);
@@ -882,15 +1044,18 @@ function Preview({ def, size, ready, room, cellW, boardW, onPress }: {
   const noop = useCallback(() => {}, []);
   const w = natW * scale + PREVIEW_PAD * 2;
   const h = natH * scale + PREVIEW_PAD * 2;
+  const on = useSharedValue(picked ? 1 : 0);
+  useEffect(() => {
+    on.value = level === 'none' ? (picked ? 1 : 0) : withTiming(picked ? 1 : 0, { duration: 200, easing: EASE_OUT });
+  }, [picked, level]);
+  const ring = useAnimatedStyle(() => ({ opacity: on.value, transform: [{ scale: 1.03 - 0.03 * on.value }] }));
   return (
     <Bouncy
-      onPress={onPress} disabled={!onPress} scaleTo={0.97} radius={S.radiusSm}
-      style={[
-        st.previewWell, { width: w, height: h },
-        theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') },
-      ]}
-      accessibilityLabel={'Add ' + def.title + (def.sizes.length > 1 ? ', size ' + size : '')}
+      onPress={onPress} disabled={!onPress} scaleTo={0.97} radius={S.radius}
+      style={[st.preview, { width: w, height: h }]}
+      accessibilityLabel={(picked ? 'Picked: ' : 'Add ') + def.title + (def.sizes.length > 1 ? ', size ' + size : '')}
     >
+      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, st.outline, { margin: 2, borderColor: C.accent }, ring]} />
       <View pointerEvents="none" style={{ width: natW * scale, height: natH * scale, overflow: def.flow ? 'hidden' : 'visible' }}>
         {ready ? (
           <Animated.View
@@ -915,8 +1080,8 @@ const st = StyleSheet.create({
   nudgeHead: { flexDirection: 'row', alignItems: 'center' },
   nudgeKeys: { flexDirection: 'row', alignItems: 'center', marginTop: 16 },
   item: { position: 'absolute', left: 0, top: 0 },
-  landing: { position: 'absolute', borderRadius: S.radius + 2, opacity: 0.9 },
-  outline: { borderRadius: S.radius + 2, margin: -4 },
+  landing: { position: 'absolute', borderRadius: S.radius + 2, borderWidth: 1.5, borderStyle: 'dashed', opacity: 0.7 },
+  outline: { borderRadius: S.radius + 4, margin: -5, borderWidth: 1.5 },
   flowPad: { height: 4 },
   ghost: {
     borderWidth: 1, borderStyle: 'dashed', borderRadius: S.radius, alignItems: 'center', justifyContent: 'center', gap: 4,
@@ -930,8 +1095,14 @@ const st = StyleSheet.create({
   editKeys: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: S.section - S.gap },
   editLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginTop: S.section - S.gap, paddingVertical: 6 },
   galleryItem: { marginBottom: 20 },
-  galleryHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  galleryHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  galleryKeys: { flexDirection: 'row', alignItems: 'center', marginLeft: 12, gap: 14 },
+  pick: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
+  confirm: { flexDirection: 'row', alignItems: 'center', borderRadius: 999, paddingLeft: 14, paddingRight: 6, height: 32 },
+  confirmText: { fontFamily: F.semi, ...oneLine(13), letterSpacing: TRACK.small },
+  confirmCount: { minWidth: 20, height: 20, borderRadius: 10, marginLeft: 8, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
+  confirmCountText: { fontFamily: F.smSemi, ...oneLine(11) },
   galleryTitle: { color: C.text, fontFamily: F.semi, fontSize: 15, letterSpacing: TRACK.body },
   previews: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  previewWell: { borderRadius: S.radiusSm, padding: PREVIEW_PAD, overflow: 'hidden' },
+  preview: { borderRadius: S.radius, padding: PREVIEW_PAD },
 });

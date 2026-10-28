@@ -18,7 +18,7 @@ import {
 } from '../theme';
 import { useStore } from '../store';
 import {
-  ARRIVE, Bouncy, CHANGE, EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, FadeSwap, LEAVE, PressRole, RISE_OUT, glide, rowIn,
+  ARRIVE, Bouncy, CHANGE, DIM_IN, DIM_OUT, EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, FadeSwap, LEAVE, PressRole, RISE_OUT, glide, rowIn,
   rowOut, useAnimLevel, useAppear, useBreath, useEntrance,
 } from './Motion';
 import { tap, tick } from '../haptics';
@@ -1301,9 +1301,11 @@ const FADE = { arrive: FADE_IN, leave: FADE_OUT };
  * While it leaves, neither the panel nor the backdrop takes a tap, so nothing in it can run twice on the way out.
  */
 export function Sheet({
-  visible, onClose, onClosed, onRisen, title, children,
+  visible, onClose, onClosed, onRisen, title, action, children,
 }: {
   visible: boolean; onClose: () => void; title?: string; children: React.ReactNode;
+  /** a key at the title's right (the gallery's Confirm): it brings its own entrance */
+  action?: React.ReactNode;
   /** runs once the sheet has finished closing: the moment to open another sheet or show a toast */
   onClosed?: () => void;
   /** runs once the sheet has finished rising: the moment to focus a field, so the keyboard never rides the rise */
@@ -1365,11 +1367,16 @@ export function Sheet({
   }, []);
   const rise = React.useCallback(() => {
     waiting.current = false;
-    dim.value = withTiming(1, motion.current.arrive);
+    dim.value = withTiming(1, motion.current === SLIDE ? DIM_IN : motion.current.arrive);
     prog.value = withTiming(1, motion.current.arrive, (fin) => {
       if (fin) runOnJS(risen)();
     });
   }, []);
+  // the rise starts a frame after the panel has measured: the frame that builds the modal's window and its content is
+  // the slow one, and a rise begun in it lost its first steps, which read as a jump
+  const riseSoon = React.useCallback(() => {
+    requestAnimationFrame(() => { if (waiting.current) rise(); });
+  }, [rise]);
   React.useEffect(() => {
     if (visible) {
       tap();
@@ -1411,7 +1418,7 @@ export function Sheet({
       else {
         leaving.current = true;
         setClosing(true);
-        dim.value = withTiming(0, motion.current.leave);
+        dim.value = withTiming(0, motion.current === SLIDE ? DIM_OUT : motion.current.leave);
         prog.value = withTiming(0, motion.current.leave, (fin) => {
           if (fin) runOnJS(finishClose)();
         });
@@ -1434,8 +1441,8 @@ export function Sheet({
       return;
     }
     panelH.value = h;
-    if (waiting.current) rise();
-  }, []);
+    if (waiting.current) riseSoon();
+  }, [riseSoon]);
   // the backdrop comes and goes with the panel, and thins a little as a pull takes the panel down
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: Math.min(1, dim.value) * (1 - 0.5 * Math.min(1, drag.value / Math.max(1, panelH.value))),
@@ -1479,7 +1486,12 @@ export function Sheet({
           <GestureDetector gesture={pull}>
             <View collapsable={false} style={st.grab}>
               <View style={[st.sheetHandle, theme === 'minimal' ? { backgroundColor: MIN.border } : neuInset('hairline')]} />
-              {title ? <Text style={st.sheetTitle} accessibilityRole="header">{title}</Text> : null}
+              {title || action ? (
+                <View style={st.sheetHead}>
+                  {title ? <Text style={[st.sheetTitle, { flex: 1 }]} accessibilityRole="header">{title}</Text> : <View style={{ flex: 1 }} />}
+                  {action ? <View style={st.sheetAction}>{action}</View> : null}
+                </View>
+              ) : null}
             </View>
           </GestureDetector>
           {/* negative margin + matching padding: children's raised shadows get
@@ -1624,10 +1636,11 @@ export function ListSlice({ first, last, enter = false, children }: {
         style={[
           lst.surface,
           {
-            top: first ? SLICE_TOP : -SLICE_OVERLAP,
-            bottom: last ? SLICE_BOTTOM : -SLICE_OVERLAP,
-            borderTopLeftRadius: first ? r : 0, borderTopRightRadius: first ? r : 0,
-            borderBottomLeftRadius: last ? r : 0, borderBottomRightRadius: last ? r : 0,
+            // every corner rounded alike, an inner slice's reaching past the clip: a shadow on corners that differ is
+            // painted square on Android, which showed the card's colour past its rounded ends
+            top: first ? SLICE_TOP : -SLICE_OVERLAP - r,
+            bottom: last ? SLICE_BOTTOM : -SLICE_OVERLAP - r,
+            borderRadius: r,
           },
           theme === 'minimal'
             ? {
@@ -1852,11 +1865,15 @@ const st = StyleSheet.create({
   /** the handle and title: a taller target for the pull that closes a sheet */
   grab: { marginTop: -12, paddingTop: 12 },
   sheet: {
-    backgroundColor: C.card, borderTopLeftRadius: 30, borderTopRightRadius: 30,
-    padding: 24, paddingBottom: 40,
+    // rounded alike at all four corners, the lower two below the screen's edge: a shadow drawn on corners that differ
+    // (only the top two rounded) was painted square on Android, so the panel's colour showed past its rounded top
+    backgroundColor: C.card, borderRadius: 30, marginBottom: -30,
+    padding: 24, paddingBottom: 40 + 30,
     // the lit top rim rides the shadow, so it follows the rounded corners (see SH.sheetPanel)
     boxShadow: SH.sheetPanel,
   },
+  sheetHead: { flexDirection: 'row', alignItems: 'flex-start' },
+  sheetAction: { marginLeft: 12, minHeight: 26, justifyContent: 'center', marginBottom: 18 },
   sheetWide: { width: '100%', maxWidth: 560, alignSelf: 'center' },
   sheetHandle: {
     alignSelf: 'center', width: 44, height: 5, borderRadius: 3,
