@@ -109,6 +109,9 @@ const FUNCS = ['asin', 'acos', 'atan', 'sin', 'cos', 'tan', 'sqrt', 'abs', 'ln',
 export function keypadSum(q: string): string | null {
   let s = String(q ?? '').trim().toLowerCase();
   if (!s || s.length > 80 || !/\d/.test(s)) return null;
+  // a date or a phone number is not a sum, though it reads as one: this keeps Enter in Sift from opening the Calculator
+  // on "2024-10-28" or "555-1234" (a spaced "2024 - 10" and a fraction like "3/4" stay sums)
+  if (/^\d{4}-\d{1,2}-\d{1,2}$|^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}$|^\d+(-\d+){2,}$|^\d{3}-\d{4}$|^\+\d/.test(s)) return null;
   // "15% of 80", "15 % of 80"
   s = s.replace(/(\d)\s*%\s*of\s*/g, '$1%×');
   // a function written with a space ("sqrt 2", "sin 30") takes its bracket

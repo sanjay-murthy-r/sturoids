@@ -285,6 +285,16 @@ test('a sum typed into Sift is answered with the calculator engine', () => {
   assert.equal(CE.quickMath('1/0'), null);
 });
 
+test('a date or a phone number typed into Sift is not a sum', () => {
+  for (const q of ['2024-10-28', '28-10-2026', '28/10/2026', '28.10.2026', '555-1234', '1-2-3', '+91 98765']) {
+    assert.equal(CE.keypadSum(q), null, q);
+    assert.equal(CE.quickMath(q), null, q);
+  }
+  assert.equal(CE.quickMath('100-25').answer, '75');
+  assert.equal(CE.quickMath('3/4').answer, '0.75');
+  assert.equal(CE.quickMath('2024 - 10').answer, '2014');
+});
+
 /* ---------------------------------------------------------------- the settings index */
 
 test('settings ids are page:slug(label), unique', () => {

@@ -54,6 +54,15 @@ const test = (name, fn) => {
 
 /* ---------------------------------------------------------------- days */
 
+test('minutes until a clock time are worked to the second', () => {
+  const at = (h, m, s) => new Date(2026, 9, 28, h, m, s);
+  assert.equal(L.minutesUntil(11 * 60, at(10, 0, 45)), 59);
+  assert.equal(L.minutesUntil(11 * 60, at(10, 0, 10)), 60);
+  assert.equal(L.minutesUntil(11 * 60, at(10, 0, 0)), 60);
+  assert.equal(L.minutesUntil(10 * 60, at(10, 0, 5)), 1440, 'a time just gone is tomorrow\'s');
+  assert.equal(L.minutesUntil(10 * 60 + 1, at(10, 0, 50)), 1, 'never less than one minute');
+});
+
 test('shifts days and months across their ends', () => {
   assert.equal(L.shiftDay('2026-03-01', -1), '2026-02-28');
   assert.equal(L.shiftDay('2026-12-31', 1), '2027-01-01');

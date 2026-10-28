@@ -311,20 +311,36 @@ export async function ensureChannel() {
 
 const minutesWord = (n: number) => n + (n === 1 ? ' minute' : ' minutes');
 
+/**
+ * How many times each one-off alert has been scheduled or cancelled. A scheduling that awaits permission or the channel
+ * and finds its number moved on was overtaken (the block was paused or ended meanwhile), and stands down.
+ */
+const alertGeneration = new Map<string, number>();
+const nextGeneration = (id: string) => {
+  const n = (alertGeneration.get(id) || 0) + 1;
+  alertGeneration.set(id, n);
+  return n;
+};
+
 /** One-off Deep Work alerts are set only when notifications are already allowed, so starting never stops to ask. */
 async function scheduleSessionAlert(id: string, endAt: number, title: string, body: string) {
+  const mine = nextGeneration(id);
+  const current = () => alertGeneration.get(id) === mine;
   try {
     const perm = await Notifications.getPermissionsAsync();
-    if (!perm.granted) return;
+    if (!perm.granted || !current()) return;
     await ensureChannel();
+    if (!current()) return;
     await Notifications.cancelScheduledNotificationAsync(id).catch(() => {});
-    if (endAt <= Date.now()) return;
+    if (endAt <= Date.now() || !current()) return;
     const channelId = sessionEndChannel();
     await Notifications.scheduleNotificationAsync({
       identifier: id,
       content: { title, body, data: { tool: 'focus' }, sound: channelId === SESSION_END_CHIME_CHANNEL ? 'chime.wav' : false },
       trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(endAt), channelId } as any,
     });
+    // cancelled while it was being set: take it back
+    if (!current()) await Notifications.cancelScheduledNotificationAsync(id).catch(() => {});
   } catch {
     // no notification service in some environments: the in-app wrap-up still happens
   }
@@ -343,6 +359,7 @@ export async function scheduleCountdownEnd(endAt: number, minutes: number, subje
 }
 
 export function cancelCountdownEnd() {
+  nextGeneration(COUNTDOWN_NOTIF_ID);
   Notifications.cancelScheduledNotificationAsync(COUNTDOWN_NOTIF_ID).catch(() => {});
 }
 
@@ -352,6 +369,7 @@ export async function scheduleBreakEnd(endAt: number, minutes: number) {
 }
 
 export function cancelBreakEnd() {
+  nextGeneration(BREAK_NOTIF_ID);
   Notifications.cancelScheduledNotificationAsync(BREAK_NOTIF_ID).catch(() => {});
 }
 

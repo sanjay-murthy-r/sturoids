@@ -132,7 +132,8 @@ export function useExportFlow(kinds: SummaryKind | readonly SummaryKind[], opts?
 
   const info = KIND_INFO[d.kind];
   // one exam is one exam whatever the range
-  const ranged = info.ranged && !seed.examId;
+  // an exam or a list of exams chosen by the screen is the whole report: a range would not change it
+  const ranged = info.ranged && !seed.examId && !seed.examIds;
   const ranges = [...RANGES, ...(KIND_INFO[d.kind].range === 'all' || d.range === 'all' ? [ALL_RANGE] : [])];
   const available = availableSections(archived || []);
   const hasJournal = d.kind !== 'day' && sectionsFor(d.kind, { sections: d.sections }).includes('journal');

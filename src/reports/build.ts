@@ -319,6 +319,8 @@ function habitCell(h: Habit, k: string, today: string, done: Set<string>): GridC
   if (done.has(k)) return 'done';
   const since = habitSince(h);
   if ((since && k < since) || !habitDueOn(h, k)) return 'rest';
+  // today is not missed until it is over
+  if (k === today) return 'ahead';
   return 'missed';
 }
 
@@ -334,16 +336,18 @@ function habitsSection({ src, days, today }: Ctx): Section {
     const set = new Set(h.doneDates || []);
     let due = 0;
     let got = 0;
+    let kept = 0;
     for (const k of past) {
       const c = habitCell(h, k, today, set);
-      if (c === 'done') { got++; if (habitDueOn(h, k)) due++; }
+      // a tick on a rest day is done, but only a tick on a due day is a day kept
+      if (c === 'done') { got++; if (habitDueOn(h, k)) { kept++; due++; } }
       else if (c === 'missed') due++;
     }
     allDue += due;
-    allDone += Math.min(got, due);
-    const s = streaks(h.doneDates || [], h.days);
+    allDone += kept;
+    const s = streaks(h.doneDates || [], h.days, keyToDate(today));
     if (s.current > 0 && (!top || s.current > top.n)) top = { title: h.title, n: s.current };
-    return [h.title || 'Habit', String(got), String(due), due ? pctOf(Math.min(got, due), due) + '%' : '', String(s.current), String(s.best)];
+    return [h.title || 'Habit', String(got), String(due), due ? pctOf(kept, due) + '%' : '', String(s.current), String(s.best)];
   });
   const summary: Stat[] = habits.length ? [
     { label: 'Habits', value: String(habits.length) },
