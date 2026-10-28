@@ -43,6 +43,8 @@ interface Draft {
   mood: Mood; rating: Rating; checkoutSkipped: boolean; tags: string[]; promptId?: string; dirty: boolean;
   /** the stored entry's updatedAt as this page last loaded or saved it: a different one means it changed elsewhere */
   seen?: number;
+  /** the entry was made on this visit to the page, so clearing it again leaves nothing worth keeping */
+  madeHere?: boolean;
 }
 
 const SAVE_DEBOUNCE_MS = 400;
@@ -172,10 +174,23 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     const empty = !d.title.trim() && !d.body.trim() && d.mood == null && d.rating == null && d.tags.length === 0;
     try {
       if (empty) {
-        if (d.id) {
+        if (d.id && d.madeHere) {
           await deleteEntry(d.id);
           d.id = null;
           setEntryId(null);
+        } else if (d.id) {
+          // an entry from before this visit goes to Recently deleted, with its words, pin and day, never for good
+          const id = d.id;
+          const key = d.dateKey;
+          const trashId = useStore.getState().trashJournalEntry(id);
+          // Recently deleted could not take it: the entry and its file stay as they are
+          if (!trashId) return;
+          d.id = null;
+          setEntryId(null);
+          toastTrashed(trashId, () => {
+            const c = draft.current;
+            if (c.dateKey === key && !c.id && !c.dirty && !timer.current) loadEntry(key, id);
+          });
         }
         return;
       }
@@ -191,6 +206,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
       }
       if (draft.current === d && !d.id) {
         d.id = id;
+        d.madeHere = true;
         setEntryId(id);
       }
       d.seen = useStore.getState().journal.find((x) => x.id === id)?.updatedAt;
@@ -230,7 +246,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     draft.current = {
       id: meta?.id ?? null, dateKey: key, title: meta?.title ?? '', body: text,
       mood: meta?.mood, rating: meta?.rating, checkoutSkipped: !!meta?.checkoutSkipped,
-      tags: meta?.tags ?? [], promptId: meta?.promptId, dirty: false, seen: meta?.updatedAt,
+      tags: meta?.tags ?? [], promptId: meta?.promptId, dirty: false, seen: meta?.updatedAt, madeHere: false,
     };
     setDateKey(key);
     setEntryId(meta?.id ?? null);

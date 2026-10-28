@@ -39,7 +39,7 @@ const saved = (state) => JSON.stringify({ state, version: 5 });
 const backupOf = (data) => JSON.stringify({ _app: 'student-hub', _v: 3, _exportedAt: T0, ...data });
 
 /** Boots src/cloud.ts and src/store.ts in a fresh module registry, over its own storage, files and cloud. */
-function boot({ seed = {}, rows = {}, files = {}, session = sessionFor(), meta } = {}) {
+function boot({ seed = {}, rows = {}, files = {}, session = sessionFor(), meta, afterChangeMs } = {}) {
   const root = path.join(PHONES, String(++phones));
   const toPath = (uri) => {
     if (!uri.startsWith('file://')) throw new Error('not a file uri: ' + uri);
@@ -68,7 +68,7 @@ function boot({ seed = {}, rows = {}, files = {}, session = sessionFor(), meta }
   const world = {
     rows: new Map(Object.entries(rows)), files: new Map(Object.entries(files)), session, log: [], authCb: null,
     failUpsert: false, failDownload: new Set(), network: 'WIFI', offline: false, password: 'secret1', resetCode: null,
-    toasts: [],
+    toasts: [], onUpload: null,
   };
   const offlineError = () => Object.assign(new Error('Network request failed'), { name: 'AuthRetryableFetchError', status: 0 });
   const objectPath = (url) => url.split('/storage/v1/object/')[1].replace(/^authenticated\//, '').replace(/^backups\//, '');
@@ -94,6 +94,8 @@ function boot({ seed = {}, rows = {}, files = {}, session = sessionFor(), meta }
       const p = objectPath(url);
       world.log.push('upload ' + p);
       world.files.set(p, fs.readFileSync(toPath(uri)));
+      // another phone may write while this one's attachments are on their way
+      if (world.onUpload) world.onUpload(p);
       return { status: 200, body: '{}' };
     },
     async downloadAsync(url, uri) {
@@ -175,6 +177,45 @@ function boot({ seed = {}, rows = {}, files = {}, session = sessionFor(), meta }
             },
           };
         },
+        // a write that only lands when every filter matches the row, as the cloud's does
+        update(row) {
+          const filters = {};
+          const chain = {
+            eq(col, value) { filters[col] = value; return chain; },
+            select() {
+              return {
+                async maybeSingle() {
+                  world.log.push('upsert');
+                  world.log.push('update');
+                  if (world.failUpsert) return { data: null, error: { message: 'Network request failed' } };
+                  const was = world.rows.get(filters.user_id);
+                  if (!was || was.updated_at !== filters.updated_at) return { data: null, error: null };
+                  const kept = { ...row, updated_at: new Date(Date.parse(row.updated_at) + 1).toISOString() };
+                  world.rows.set(row.user_id, kept);
+                  return { data: { updated_at: kept.updated_at }, error: null };
+                },
+              };
+            },
+          };
+          return chain;
+        },
+        insert(row) {
+          return {
+            select() {
+              return {
+                async single() {
+                  world.log.push('upsert');
+                  world.log.push('insert');
+                  if (world.failUpsert) return { data: null, error: { message: 'Network request failed' } };
+                  if (world.rows.has(row.user_id)) return { data: null, error: { code: '23505', message: 'duplicate key' } };
+                  const kept = { ...row, updated_at: new Date(Date.parse(row.updated_at) + 1).toISOString() };
+                  world.rows.set(row.user_id, kept);
+                  return { data: { updated_at: kept.updated_at }, error: null };
+                },
+              };
+            },
+          };
+        },
         delete() { return { async eq(_, id) { world.rows.delete(id); return { error: null }; } }; },
       };
     },
@@ -209,7 +250,10 @@ function boot({ seed = {}, rows = {}, files = {}, session = sessionFor(), meta }
   const registry = new Map();
   const load = (file) => {
     if (registry.has(file)) return registry.get(file).exports;
-    const { outputText } = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
+    let source = fs.readFileSync(file, 'utf8');
+    // a few milliseconds instead of 45 seconds, so the wait after a change can be seen to end
+    if (afterChangeMs && file.endsWith('cloud.ts')) source = source.replace('AFTER_CHANGE_MS = 45 * 1000', 'AFTER_CHANGE_MS = ' + afterChangeMs);
+    const { outputText } = ts.transpileModule(source, {
       compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true },
     });
     const mod = { exports: {} };
@@ -351,6 +395,48 @@ const scenarios = {
     const lastUpsert = app.world.log.lastIndexOf('upsert');
     const removed = app.world.log.findIndex((l) => l.startsWith('remove'));
     assert.ok(removed > lastUpsert, 'removed after the save: ' + app.world.log.join(' | '));
+  },
+
+  async 'a copy another phone writes while attachments are on their way is never written over'() {
+    const app = boot({
+      rows: { [USER]: { ...bigRow(800), snapshot: backupOf({}) } },
+      meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true },
+    });
+    await until(() => app.store.hydrationSettled(), 'the store to load');
+    const a = app.attach('a1', Buffer.from('a photo'));
+    app.state().addNote({ title: 'Waves', body: '', folder: 'General' });
+    app.store.useStore.setState((s) => ({ notes: s.notes.map((n) => ({ ...n, attachments: [a] })) }));
+    const other = backupOf({ settings: { name: 'Other' } });
+    app.world.onUpload = () => {
+      app.world.onUpload = null;
+      app.world.rows.set(USER, { ...bigRow(900), snapshot: other, device_id: 'dev-2', device: 'Other phone', updated_at: '2026-10-01T09:00:00.000Z' });
+      app.world.files.set(USER + '/att/theirs', Buffer.from('their video'));
+    };
+    await start(app);
+    assert.equal(app.world.rows.get(USER).snapshot, other, 'the other phone\'s copy is kept');
+    assert.equal(app.cloudState().status, 'choice');
+    assert.equal(app.cloudState().reason, 'newer');
+    assert.ok(app.world.files.has(USER + '/att/theirs'), 'its file is not cleared as unused: ' + app.world.log.join(' | '));
+    assert.ok(!app.world.log.some((l) => l.startsWith('remove')), 'nothing was removed');
+  },
+
+  async 'turning automatic backup off, or deleting the cloud data, ends a backup that was waiting'() {
+    for (const how of ['off', 'delete']) {
+      const app = boot({
+        rows: { [USER]: { ...bigRow(800), snapshot: backupOf({}) } },
+        meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true },
+        afterChangeMs: 60,
+      });
+      await start(app);
+      assert.equal(app.cloudState().status, 'idle');
+      const sent = app.world.log.filter((l) => l === 'upsert').length;
+      app.state().addDaily('Written just now');
+      if (how === 'off') await app.cloud.setAuto(false);
+      else await app.cloud.deleteCloudCopy();
+      await sleep(250);
+      assert.equal(app.world.log.filter((l) => l === 'upsert').length, sent, how + ': nothing went up after the switch');
+      assert.equal(app.world.rows.has(USER), how === 'off', how + ': the cloud copy stays as the user left it');
+    }
   },
 
   async 'signing out ends this phone only, and signing back in raises no false choice'() {

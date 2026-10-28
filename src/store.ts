@@ -769,14 +769,21 @@ function earliestActivity(p: any): number {
 
 /**
  * Whether the data holds anything the user made (a name, tasks, notes, sessions, habits, videos, journal entries,
- * exams, or something deleted that can still come back).
+ * exams, planner blocks and templates, learnings, tags, a graph, or something deleted that can still come back). The
+ * default links and quick access are not the user's own, so they do not count.
  */
 export function hasAnyUserData(p: any): boolean {
+  const hasKeys = (o: any) => !!o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length > 0;
   const nonEmpty = (a: any) => Array.isArray(a) && a.length > 0;
   return !!(p?.settings?.name) || nonEmpty(p?.dailyTasks) || nonEmpty(p?.missions) || nonEmpty(p?.sessions)
     || nonEmpty(p?.notes) || nonEmpty(p?.habits) || nonEmpty(p?.vaultVideos) || nonEmpty(p?.journal)
     || nonEmpty(p?.scores) || nonEmpty(p?.trash)
-    || (!!p?.doneLog && typeof p.doneLog === 'object' && Object.keys(p.doneLog).length > 0);
+    || nonEmpty(p?.learnings) || nonEmpty(p?.scoreTags) || nonEmpty(p?.journalTags) || nonEmpty(p?.calcHistory)
+    || nonEmpty(p?.todoReminders) || nonEmpty(p?.vaultFolders)
+    || (Array.isArray(p?.noteFolders) && p.noteFolders.some((f: any) => f !== 'General'))
+    || (!!p?.planner && typeof p.planner === 'object' && Object.values(p.planner).some(nonEmpty))
+    || hasKeys(p?.weekTemplates) || hasKeys(p?.todayColumns) || hasKeys(p?.doneLog)
+    || (typeof p?.desmosState === 'string' && p.desmosState.length > 0) || Array.isArray(p?.todayLayout);
 }
 
 function normaliseQuick(items: any): QuickItem[] {
