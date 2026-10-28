@@ -289,7 +289,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const tabMode = mode === 'tab';
   const exp = useExport(tab === 'daily' ? ['todos', 'longterm'] : ['longterm', 'todos'], { range: tab === 'daily' ? 'week' : '30d' });
-  const header = useToolHeader({
+  const header = useToolHeader({ scrollRef,
     title: tab === 'daily' ? 'ToDos' : 'Tasks',
     mode: tabMode ? 'tab' : 'page',
     context,

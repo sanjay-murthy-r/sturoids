@@ -534,7 +534,8 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
   }
   if (!notebook) tray.push(exp.action);
-  const header = useToolHeader({
+  const scrollRef = useRef<Animated.ScrollView>(null);
+  const header = useToolHeader({ scrollRef,
     title: notebook ? 'Learnings' : analytics ? 'Analytics' : here ? nameOf(ix, here) : 'Scores',
     // the root of a bar slot is the only page with the big title; every level below it, and the root opened from More, has an arrow
     mode: mode === 'tab' && !loc ? 'tab' : 'page',
@@ -549,7 +550,6 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // from far down a level, its ground would otherwise cover the big title for a frame. The content below is keyed to
   // the level, so it rises anew while the scroll view itself stays (the bar and the scroll are the same two elements in
   // the root's tab mode and a level's page mode).
-  const scrollRef = useRef<Animated.ScrollView>(null);
   const pageKey = keyOf(loc);
   const barOffset = header.scrollY;
   // where each page on the trail was left, and where the scroll last came to rest (its own end events, on the JS thread)
@@ -605,7 +605,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
           ref={scrollRef}
           {...header.scrollProps}
           onLayout={(e) => { viewH.current = e.nativeEvent.layout.height; }}
-          onContentSizeChange={onContentSize}
+          onContentSizeChange={(w: number, h: number) => { header.scrollProps.onContentSizeChange(w, h); onContentSize(w, h); }}
           onScrollBeginDrag={() => { restore.current = null; }}
           onScrollEndDrag={onRest}
           onMomentumScrollEnd={onRest}

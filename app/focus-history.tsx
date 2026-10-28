@@ -184,7 +184,7 @@ export default function FocusHistoryPage() {
   const allMin = Math.round(allSecs / 60);
   // the month in view (read when exporting, after it is declared below)
   const exp = useExport('focus', () => ({ range: 'custom', ...monthRange(month, today) }));
-  const tool = useToolHeader({
+  const tool = useToolHeader({ scrollRef: listRef,
     title: 'Sessions',
     mode: 'page',
     // how many there are and how long they come to; nothing at all with none

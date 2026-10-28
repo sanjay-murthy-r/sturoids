@@ -877,7 +877,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           lead,
           endsAt ? ' until ' + clockAt(endsAt) : startedAtRef.current ? ' since ' + clockAt(startedAtRef.current) : '',
         ]);
-  const header = useToolHeader({
+  const scrollRef = useRef<Animated.ScrollView>(null);
+  const header = useToolHeader({ scrollRef,
     title: 'Deep Work',
     mode: mode === 'tab' ? 'tab' : 'page',
     context: focusContext,
@@ -890,7 +891,6 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   // The subject field tapped half under the tab-mode bar: Android brings a focused field into view only when it is
   // outside the scroll, and the bar lies over the scroll's top, so it would stay there. It is moved to just below the bar.
-  const scrollRef = useRef<Animated.ScrollView>(null);
   const subjectBox = useRef<View>(null);
   const revealSubject = () => {
     const box = subjectBox.current;

@@ -364,7 +364,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const edited = note ? editedLine(note.updatedAt, today, hour24) : '';
   const [editedHeld, setEditedHeld] = useState(edited);
   React.useEffect(() => { if (!keyboardOpen) setEditedHeld(edited); }, [keyboardOpen, edited]);
-  const header = useToolHeader({
+  const header = useToolHeader({ scrollRef, scrollMemory: 'keep',
     title: note?.folder ?? 'Note',
     mode: 'page',
     context: editedHeld,

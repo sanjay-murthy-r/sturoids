@@ -704,7 +704,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
     { icon: 'albums-outline', label: 'Archive', onPress: openArchive },
     { icon: 'ellipsis-horizontal', label: 'More', onPress: openMenu },
   ], [openArchive, openMenu]);
-  const tool = useToolHeader({
+  const tool = useToolHeader({ scrollMemory: 'keep',
     title: 'Journal',
     mode: tabMode ? 'tab' : 'page',
     context: lineHeld,

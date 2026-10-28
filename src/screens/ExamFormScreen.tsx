@@ -379,7 +379,7 @@ export function ExamFormScreen() {
   // unsaved-changes guard as the hardware key.
   const group = init.parentId ? ix.byId.get(init.parentId) : undefined;
   const pickedCategory = d.category ? categories.find((c) => c.id === d.category) : undefined;
-  const header = useToolHeader({
+  const header = useToolHeader({ scrollMemory: 'keep',
     title: editing ? 'Edit exam' : 'New exam',
     mode: 'page',
     context: contextLine(

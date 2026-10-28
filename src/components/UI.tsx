@@ -26,6 +26,7 @@ import { stepTab } from '../toolNav';
 import { READ_MAX, WIDE_AT } from '../layout';
 import { openSift, siftPull } from '../search/store';
 import { TimeWheel, defaultTime, isTime, timeLabel } from './TimeWheel';
+import { ScrollMemoryMode, useScrollMemory } from '../hooks/useScrollMemory';
 
 export { TimeWheel } from './TimeWheel';
 
@@ -124,6 +125,13 @@ export interface ToolHeaderOptions {
    * a screen that is not calm right now (Deep Work running, the journal's page, an edit mode) passes false.
    */
   pull?: boolean;
+  /**
+   * How the page keeps its scroll (src/hooks/useScrollMemory.ts): 'timed' (the default) keeps it for 15 seconds after
+   * the page is left, 'keep' always (a page being written in).
+   */
+  scrollMemory?: ScrollMemoryMode;
+  /** the screen's own ref to its scroll view, when it keeps one: scrollProps carries the ref and passes it on */
+  scrollRef?: any;
 }
 
 /** The compact title and the context line, set as the Header Lab drew them. */
@@ -224,11 +232,16 @@ const partsOf = (context: ToolHeaderOptions['context']): ContextPart[] | null =>
  */
 export function useToolHeader({
   title, mode = 'page', context, live = false, covered = false, actions, right, onBack, contentStyle, pull = true,
+  scrollMemory, scrollRef,
 }: ToolHeaderOptions) {
   const insets = useSafeAreaInsets();
   const scrollY = useSharedValue(0);
   const onScroll = useAnimatedScrollHandler((e) => { scrollY.value = e.contentOffset.y; });
-  const scrollProps = React.useMemo(() => ({ onScroll, scrollEventThrottle: 16 }), [onScroll]);
+  const memory = useScrollMemory(scrollY, { mode: scrollMemory, ref: scrollRef });
+  const scrollProps = React.useMemo(
+    () => ({ onScroll, scrollEventThrottle: 16, ref: memory.ref, onContentSizeChange: memory.onContentSizeChange }),
+    [onScroll, memory.ref, memory.onContentSizeChange],
+  );
   const parts = partsOf(context);
   const tab = mode === 'tab';
   // the big title shares the tray's row, so it leaves the tray's width free on its right (the overflow button takes the

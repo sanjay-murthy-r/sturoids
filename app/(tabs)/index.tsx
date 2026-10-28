@@ -26,6 +26,7 @@ import { openPage } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
 import { useIntro } from '../../src/intro';
 import { useNow } from '../../src/hooks/useNow';
+import { useScrollMemory } from '../../src/hooks/useScrollMemory';
 import { BOARD_MAX, columnWidth } from '../../src/layout';
 import { useProfiles } from '../../src/profiles';
 import { ProfileSwitcher } from '../../src/components/ProfileSwitcher';
@@ -103,6 +104,8 @@ export default function Today() {
   const scrollY = useSharedValue(0);
   const scrollMax = useSharedValue(0);
   const onScroll = useAnimatedScrollHandler((e) => { scrollY.value = e.contentOffset.y; });
+  // back within 15 seconds, Today is where it was left; later, at its top (src/hooks/useScrollMemory.ts)
+  const memory = useScrollMemory(scrollY, { ref: scrollRef });
   const viewH = React.useRef(0);
   const contentH = React.useRef(0);
   const measureScroll = () => { scrollMax.value = Math.max(0, contentH.current - viewH.current); };
@@ -231,7 +234,7 @@ export default function Today() {
       <BoardNow.Provider value={now}>
         <Animated.ScrollView
           key={fk}
-          ref={scrollRef}
+          ref={memory.ref}
           scrollEnabled={!dragging}
           onScroll={onScroll}
           scrollEventThrottle={16}
@@ -240,7 +243,7 @@ export default function Today() {
             viewH.current = e.nativeEvent.layout.height;
             measureScroll();
           }}
-          onContentSizeChange={(_, h) => { contentH.current = h; measureScroll(); }}
+          onContentSizeChange={(w, h) => { contentH.current = h; measureScroll(); memory.onContentSizeChange(w, h); }}
           contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 44 }}
           showsVerticalScrollIndicator={false}
         >

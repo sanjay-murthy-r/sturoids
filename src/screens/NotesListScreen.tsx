@@ -270,7 +270,8 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const inFolder = useMemo(() => (folder ? notes.filter((n) => n.folder === folder).length : 0), [notes, folder]);
   const total = folder ? inFolder : notes.length;
   const tabMode = mode === 'tab';
-  const header = useToolHeader({
+  const listRef = React.useRef<FlatList<Note>>(null);
+  const header = useToolHeader({ scrollRef: listRef,
     title: 'Notes',
     mode: tabMode ? 'tab' : 'page',
     context: contextLine(
@@ -286,7 +287,6 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   // On a tab the bar lies over the top of the list, and Android brings a field it focuses into view against the list's
   // own edge, which is under the bar. A search field tapped while the list is partly scrolled is moved down to just
   // below the bar instead of staying half under it
-  const listRef = React.useRef<FlatList<Note>>(null);
   const searchY = React.useRef(0);
   const onSearchFocus = () => {
     if (!tabMode) return;

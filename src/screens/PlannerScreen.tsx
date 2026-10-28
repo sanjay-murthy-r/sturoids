@@ -260,7 +260,8 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // the dot is for a block in progress this minute: nothing else says "now" in the header
   const anySheet = blockSheet || copySheet || tplSheet || habitSheet || !!remindEdit;
   const exp = useExport(['habits', 'planner'], { range: '30d' });
-  const header = useToolHeader({
+  const scrollRef = React.useRef<Animated.ScrollView>(null);
+  const header = useToolHeader({ scrollRef,
     title: 'Planner',
     mode: tabMode ? 'tab' : 'page',
     // the header pull opens Sift only while the planner is calm: no sheet up over it
@@ -288,7 +289,6 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     ],
   });
   // a block or a habit Sift opened is brought into view
-  const scrollRef = React.useRef<Animated.ScrollView>(null);
   const { topRef, bring } = useBringIntoView({
     scrollTo: (y, animated) => scrollRef.current?.scrollTo({ y, animated }),
     scrollY: header.scrollY, padTop: header.padTop, barH: header.barH, still: level === 'none',
