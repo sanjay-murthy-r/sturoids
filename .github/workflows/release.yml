@@ -97,7 +97,9 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Build the web app into the desktop app
-        run: npx expo export --platform web --output-dir desktop/app
+        run: |
+          npx expo export --platform web --output-dir desktop/app
+          node scripts/desktop-assets.js desktop/app
       - name: Build the Windows installer
         working-directory: desktop
         run: |
