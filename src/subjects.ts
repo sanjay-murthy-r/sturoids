@@ -220,10 +220,11 @@ export function subjectSummary(data: SubjectData, subject: string, now: Date = n
     });
   const lastDelta = results.length >= 2 ? results[results.length - 1].pct - results[results.length - 2].pct : null;
 
-  // the next class: one going on now, or the next to start, today and the week ahead
+  // the next class: one going on now, or the next to start, from today to the same weekday next week (a class held once
+  // a week, already over today, is next week's)
   let nextClass: SubjectClass | null = null;
   const nowMin = now.getHours() * 60 + now.getMinutes();
-  for (let d = 0; d < 7 && !nextClass; d++) {
+  for (let d = 0; d <= 7 && !nextClass; d++) {
     const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
     const day = dayName(date);
     let best: { b: PlannerBlock; start: number; on: boolean } | null = null;

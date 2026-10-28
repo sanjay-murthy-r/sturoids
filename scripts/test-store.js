@@ -1452,6 +1452,48 @@ const scenarios = {
     assert.ok(!got.some((r) => r.id === `examweek:${e2}:${k(-3)}`));
   },
 
+  async '2.0: a Deep Work alert cancelled while it was being set is not left scheduled'() {
+    const live = new Set();
+    const N = {
+      setNotificationHandler() {},
+      async setNotificationChannelAsync() {},
+      async getPermissionsAsync() { await new Promise((r) => setTimeout(r, 20)); return { granted: true, status: 'granted', canAskAgain: true }; },
+      async requestPermissionsAsync() { return { granted: true }; },
+      async getAllScheduledNotificationsAsync() { return []; },
+      async cancelScheduledNotificationAsync(id) { live.delete(id); },
+      async scheduleNotificationAsync(req) { live.add(req.identifier); },
+      addNotificationResponseReceivedListener() {},
+      async getLastNotificationResponseAsync() { return null; },
+      async clearLastNotificationResponseAsync() {},
+      SchedulableTriggerInputTypes: { DAILY: 'daily', DATE: 'date' },
+      AndroidImportance: { DEFAULT: 3, HIGH: 4 },
+      DEFAULT_ACTION_IDENTIFIER: 'default',
+    };
+    const RN = { Platform: { OS: 'ios' }, AppState: { currentState: 'active', addEventListener() {} }, Alert: { alert() {} }, Linking: {} };
+    const app = boot({}, {
+      stubs: {
+        'expo-notifications': N, 'react-native': RN,
+        './deepWork': { COUNTDOWN_NOTIF_ID: 'c', FINISH_NOTIF_ID: 'f' },
+        './toolNav': { openTool() {} },
+        './components/Toast': { toast() {} },
+      },
+    });
+    await settled(app);
+    const notif = app.load('src/notifications.ts');
+    const end = Date.now() + 25 * 60_000;
+    await notif.scheduleCountdownEnd(end, 25, 'Physics');
+    assert.equal(live.size, 1, 'a countdown with nobody pausing it is scheduled');
+    notif.cancelCountdownEnd();
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(live.size, 0);
+    // paused (cancelled) while the permission was still being read
+    const pending = notif.scheduleCountdownEnd(end, 25, 'Physics');
+    notif.cancelCountdownEnd();
+    await pending;
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(live.size, 0, 'the overtaken scheduling stands down');
+  },
+
   async '2.0: the pure helpers the widgets read'() {
     const app = boot();
     await settled(app);
@@ -1550,6 +1592,11 @@ const scenarios = {
     assert.deepEqual(sum.notes.map((n) => n.id), ['n2', 'n1']);
     const hidden = sj.subjectSummary({ ...data, settings: { notesLocked: true } }, 'physics', now);
     assert.deepEqual([hidden.notes, hidden.notesHidden], [[], true]);
+    // a class held once a week and over for today is next week's
+    const weekly = Object.fromEntries(u.DAY_NAMES.map((d) => [d, []]));
+    weekly[u.dayName(now)] = [{ id: 'w1', subject: 'Maths', start: '09:00', end: '10:00', color: '#fff' }];
+    const next = sj.subjectSummary({ sessions: [], notes: [], planner: weekly, scores: [] }, 'Maths', now);
+    assert.deepEqual([next.nextClass.block.id, next.nextClass.inDays, next.nextClass.onNow], ['w1', 7, false]);
     const week = sj.focusWeek(data.sessions, '2026-03-10');
     assert.equal(week.days.length, 7);
     assert.equal(week.days[6].min, 45);

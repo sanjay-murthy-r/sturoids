@@ -8,6 +8,16 @@ import { Range, highlight, queryTerms, snippet as bodySnippet } from './search/e
 
 /* ---------------------------------------------------------------- days */
 
+/**
+ * Minutes from `now` until the clock next reads `at` (minutes of the day), worked to the second and rounded to the
+ * nearest minute: a time just gone is tomorrow's, and the answer is at least one.
+ */
+export function minutesUntil(at: number, now: Date = new Date()): number {
+  let diff = at * 60 - (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds());
+  if (diff <= 0) diff += 86400;
+  return Math.max(1, Math.round(diff / 60));
+}
+
 /** A day key `days` from `key`. */
 export function shiftDay(key: string, days: number): string {
   const [y, m, d] = key.split('-').map(Number);

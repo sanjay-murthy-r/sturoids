@@ -159,8 +159,22 @@ test('habits: a weekday habit rests on its other days', () => {
   src.habits = [{ id: 'h_2', title: 'Gym', doneDates: [], days: [wd] }];
   const rep = R.buildReport(src, { range: R.rangeOf('custom', today, { from: k(-6), to: today }), sections: ['habits'], journalOpen: true, notesOpen: true, today });
   const cells = section(rep, 'habits').blocks.find((b) => b.t === 'grid').rows[0].cells;
-  assert.equal(cells.filter((c) => c === 'missed').length, 1);
+  // today is its day and not ticked yet: not missed until the day is over
+  assert.equal(cells.filter((c) => c === 'missed').length, 0);
+  assert.equal(cells.filter((c) => c === 'ahead').length, 1);
   assert.equal(cells.filter((c) => c === 'rest').length, 6);
+});
+
+test('habits: a tick on a rest day is done but is not a day kept', () => {
+  const src = empty();
+  const day = '2026-10-28'; // a Wednesday
+  // due Monday and Wednesday; ticked on Saturday and Sunday (rest days) and on Monday the 26th only
+  src.habits = [{ id: 'h_3', title: 'Read', doneDates: ['2026-10-24', '2026-10-25', '2026-10-26'], days: [0, 2] }];
+  const rep = R.buildReport(src, { range: R.rangeOf('custom', day, { from: '2026-10-19', to: day }), sections: ['habits'], journalOpen: true, notesOpen: true, today: day });
+  const s = section(rep, 'habits');
+  // due: Mon 19, Wed 21, Mon 26 (kept) and Wed 28, which is today and not over
+  assert.deepEqual(s.blocks.find((b) => b.t === 'table').rows[0].slice(0, 4), ['Read', '3', '3', '33%']);
+  assert.equal(stat(s, 'Kept'), '33% of due days');
 });
 
 test('focus: totals, by subject, and one subject only', () => {

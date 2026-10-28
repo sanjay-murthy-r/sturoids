@@ -36,6 +36,7 @@ import { useNow, useToday } from '../hooks/useNow';
 import { toast, ToastAction } from '../components/Toast';
 import { openPage, openTool } from '../toolNav';
 import { useIntro } from '../intro';
+import { minutesUntil } from '../toolLogic';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
@@ -423,8 +424,12 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const pause = () => {
     // the block has run out and is wrapping up: pausing now would only stall the wrap-up
     if (wrapTimer.current) return;
-    // a phone clock set back never takes time away
-    if (startTs) setAccumSec((a) => a + Math.max(0, (Date.now() - startTs) / 1000));
+    // a phone clock set back never takes time away; a stopwatch paused after its finish line has passed counts the
+    // running stretch only up to the line, as ending it while running does
+    if (startTs) {
+      const upTo = timerMode === 'stopwatch' && finishAt != null && Date.now() > finishAt ? Math.max(startTs, finishAt) : Date.now();
+      setAccumSec((a) => a + Math.max(0, (upTo - startTs) / 1000));
+    }
     setRunning(false); setStartTs(null);
   };
 
@@ -1402,14 +1407,6 @@ export function sessionDay(key: string): string {
   const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
   if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
   return d.toLocaleDateString('en-IN', opts);
-}
-
-/** Minutes from now until the clock next reads `at` (minutes of the day); a time just gone is tomorrow's. */
-function minutesUntil(at: number): number {
-  const now = new Date();
-  let diff = at - (now.getHours() * 60 + now.getMinutes());
-  if (diff <= 0) diff += 24 * 60;
-  return diff;
 }
 
 /**
