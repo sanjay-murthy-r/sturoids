@@ -28,7 +28,7 @@
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#262624"
+        "backgroundColor": "#A9ADB5"
       },
       "permissions": [
         "android.permission.RECORD_AUDIO",
