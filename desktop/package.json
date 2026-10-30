@@ -1,7 +1,7 @@
 {
   "name": "sturoids-desktop",
   "productName": "Sturoids",
-  "version": "2.1.0",
+  "version": "2.4.0",
   "description": "Sturoids for Windows",
   "author": "Sanjay Murthy",
   "main": "main.js",
