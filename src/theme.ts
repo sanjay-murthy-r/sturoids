@@ -45,10 +45,15 @@ const LITE_RGB = '129, 129, 125';
 export const darkSh = (a: number) => `rgba(${DARK_RGB}, ${a})`;
 export const liteSh = (a: number) => `rgba(${LITE_RGB}, ${a})`;
 
-const raisedPair = (dA: number, lA: number, dBlur: number, lBlur: number, k = 1) =>
+/**
+ * How strongly the light falls on the material: every highlight at 90% of the kit's (Option A, "Softer", picked
+ * 2026-10-30), so surfaces sit a touch calmer; the shadows are the kit's own.
+ */
+const LIGHT = 0.9;
+const raisedPair = (dA: number, lA0: number, dBlur: number, lBlur: number, k = 1, lA = lA0 * LIGHT) =>
   `${+(LX * k).toFixed(2)}px ${+(LY * k).toFixed(2)}px ${lBlur}px ${liteSh(lA)}, ` +
   `${+(-LX * k).toFixed(2)}px ${+(-LY * k).toFixed(2)}px ${dBlur}px ${darkSh(dA)}`;
-const insetPair = (dA: number, lA: number, dBlur: number, lBlur: number, k = 1) =>
+const insetPair = (dA: number, lA0: number, dBlur: number, lBlur: number, k = 1, lA = lA0 * LIGHT) =>
   `inset ${+(LX * k).toFixed(2)}px ${+(LY * k).toFixed(2)}px ${lBlur}px ${liteSh(lA)}, ` +
   `inset ${+(-LX * k).toFixed(2)}px ${+(-LY * k).toFixed(2)}px ${dBlur}px ${darkSh(dA)}`;
 
