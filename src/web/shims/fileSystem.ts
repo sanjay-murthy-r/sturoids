@@ -156,8 +156,10 @@ export async function moveAsync({ from, to }: { from: string; to: string }) {
   if (!/^(blob:|data:|https?:)/i.test(from)) await deleteAsync(from, { idempotent: true });
 }
 
-export async function downloadAsync(url: string, uri: string, _opts?: any) {
-  const r = await fetch(url);
+export async function downloadAsync(url: string, uri: string, opts?: { headers?: Record<string, string> }) {
+  // the headers go with it: the cloud's attachments are fetched with the account's sign-in
+  const r = await fetch(url, opts?.headers ? { headers: opts.headers } : undefined);
+  if (!r.ok) return { uri, status: r.status, headers: {} as Record<string, string>, md5: undefined };
   const data = new Uint8Array(await r.arrayBuffer());
   await ensureParents(norm(uri));
   await put(uri, { dir: false, data, mtime: Date.now() });

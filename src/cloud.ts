@@ -1118,7 +1118,10 @@ async function bringDown(s: Session, onReplaced?: () => void, mayReplace?: () =>
   const read = readSnapshot(parsed);
   if (!read) throw said('The cloud copy could not be read by this version of the app.');
   if (mayReplace && !mayReplace()) throw said('This phone changed while the cloud copy came down.');
+  // the PC keeps its own arrangement of Today (its own columns): everything else follows the account
+  const ownBoard = Platform.OS === 'web' ? pcColumns() : null;
   applySnapshot(read);
+  if (ownBoard) for (const k of Object.keys(ownBoard)) useStore.getState().setTodayColumns(k, ownBoard[k]);
   onReplaced?.();
   let missing = 0;
   try {
@@ -1242,6 +1245,14 @@ async function dropSafetyCopy(id: string | null): Promise<boolean> {
 }
 
 /** A copy in the cloud this phone has not seen: it comes here quietly when it may (newerCopyAction), else it is asked about. */
+/** The PC's own arrangements of Today (keys 'pc2', 'pc3'), as they stand here. */
+function pcColumns(): Record<string, string[][]> | null {
+  const cols = useStore.getState().todayColumns || {};
+  const out: Record<string, string[][]> = {};
+  for (const k of Object.keys(cols)) if (k.startsWith('pc') && cols[k]) out[k] = cols[k];
+  return Object.keys(out).length ? out : null;
+}
+
 async function meetNewer(s: Session, remote: RemoteCopy): Promise<void> {
   if (await follow(s, remote)) return;
   patch({ status: 'choice', reason: 'newer', remote, hasCopy: true, error: null, progress: null });
@@ -1262,15 +1273,19 @@ async function follow(s: Session, remote: RemoteCopy): Promise<boolean> {
     remoteAt: remote.updatedAt, remoteDeviceId: remote.deviceId, lastRemoteAt: meta.lastRemoteAt, deviceId: meta.deviceId,
     localHash, lastHash: meta.lastHash, savePending: savePending(), declinedAt: meta.declinedAt,
   });
+  // The PC starts from the account's data: signed in there for the first time, the cloud copy comes down at once (with
+  // an Undo, and the PC's own Today arrangement kept), instead of asking which side to keep. After that it follows the
+  // cloud as a phone does.
+  const firstOnPc = Platform.OS === 'web' && !meta.lastRemoteAt;
   // everything that needs no snapshot is asked first: most newer copies are a choice
-  if (newerCopyAction({ ...facts(meta.lastHash), savePending: false }) !== 'follow') return false;
+  if (!firstOnPc && newerCopyAction({ ...facts(meta.lastHash), savePending: false }) !== 'follow') return false;
   // a save still in its pause is let through first: on a return to the app it is often only this phone's open time,
   // stamped just as this look at the cloud began. A change to the data still shows in the fingerprint below
   if (savePending()) await new Promise((r) => setTimeout(r, SAVE_PAUSE_MS + 50));
   await afterInteractions();
   const atBuild = changes;
   const mine = await buildSnapshot();
-  if (newerCopyAction(facts(mine.hash)) !== 'follow') return false;
+  if (!firstOnPc && newerCopyAction(facts(mine.hash)) !== 'follow') return false;
   // a kept copy of data that could not be opened is never replaced, and without a copy of its own there is no Undo
   let kept: string | null;
   try { kept = await AsyncStorage.getItem(RECOVERY_KEY); } catch { return false; }
@@ -1306,7 +1321,7 @@ async function follow(s: Session, remote: RemoteCopy): Promise<boolean> {
     }
   }
   const from = remote.device && remote.device !== 'this phone' ? remote.device : 'another phone';
-  toast('Updated from ' + from, { label: 'Undo', onPress: () => { undoFollow(safetyId, remote.updatedAt, before).catch(() => {}); } });
+  toast(firstOnPc ? 'Your data is here from the cloud' : 'Updated from ' + from, { label: 'Undo', onPress: () => { undoFollow(safetyId, remote.updatedAt, before).catch(() => {}); } });
   if (followTimer) clearTimeout(followTimer);
   followTimer = setTimeout(() => {
     followTimer = null;
