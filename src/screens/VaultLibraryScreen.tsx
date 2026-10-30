@@ -14,6 +14,7 @@ import { VideoOfferSheet } from '../shareIntake';
 import {
   ScreenBG, Card, Field, EmptyState, ListCard, ListRow, ListSlice, Row, Chip, Sheet, PillButton, IconBtn, NeuIconBtn, DotMenu,
   ScrollEdge, edgeStrength, useToolHeader, contextLine,
+  PullArea, useContentPull,
 } from '../components/UI';
 import { toast } from '../components/Toast';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -606,11 +607,18 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // a sliver of results to show. They then start below the bar (barH: a tab's bar lies over the top, a page's has its own space)
   const typing = useKeyboardOpen() && width < WIDE_AT;
   const header = useToolHeader({
+    // a pull down on any of the three pages, at the top of the Vault, opens Sift on its Vault filter
+    contentPull: cwdFolder ? undefined : 'vault',
     title: cwdFolder ? cwdFolder.name : 'YT Vault',
     mode: mode === 'tab' && !cwdFolder ? 'tab' : 'page',
     context: contextLine(levelCount > 0 && plural(levelCount, 'video')),
     onBack: () => { if (!goUp()) router.back(); },
   });
+  const vaultPullMode = useStore((s) => s.settings.siftPull);
+  const pullOn = !cwdFolder && vaultPullMode === 'anywhere';
+  const pull0 = useContentPull(pullOn, y0, header.pullProgress, header.pullOpen);
+  const pull1 = useContentPull(pullOn, y1, header.pullProgress, header.pullOpen);
+  const pull2 = useContentPull(pullOn, y2, header.pullProgress, header.pullOpen);
 
   return (
     <ScreenBG guard={mode === 'tab'} fling={false}>
@@ -648,7 +656,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
           >
             {/* the folder in view as a list that makes only the rows near the screen, so a level of 150 lectures never
                 mounts 150 rows and thumbnails at once */}
-            <Animated.FlatList
+            <PullArea gesture={pull0}><Animated.FlatList
               style={pageBox}
               contentContainerStyle={pageStyle}
               onScroll={onLibrary}
@@ -699,9 +707,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   </FolderPage>
                 </>
               }
-            />
+            /></PullArea>
 
-            <Animated.FlatList
+            <PullArea gesture={pull1}><Animated.FlatList
               style={pageBox}
               contentContainerStyle={pageStyle}
               onScroll={onRecent}
@@ -712,9 +720,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
               windowSize={7}
               renderItem={renderRecent}
               ListEmptyComponent={recentEmpty}
-            />
+            /></PullArea>
 
-            <Animated.FlatList
+            <PullArea gesture={pull2}><Animated.FlatList
               style={pageBox}
               contentContainerStyle={pageStyle}
               onScroll={onNotes}
@@ -725,7 +733,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
               windowSize={7}
               renderItem={renderNote}
               ListEmptyComponent={notesEmpty}
-            />
+            /></PullArea>
           </Animated.ScrollView>
           <ScrollEdge at={edgeAt} />
         </Enter>

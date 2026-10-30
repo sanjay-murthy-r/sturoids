@@ -17,7 +17,9 @@ import {
 } from '../../src/store';
 import { makeSampleStore } from '../../src/widgets/sample';
 import { fmtDate, uid } from '../../src/utils';
-import { ArrivalPulse, Card, PillButton, PullPill, ScreenBG, SectionTopTrim, Sheet, useHeaderPull, useTheme } from '../../src/components/UI';
+import {
+  ArrivalPulse, Card, PillButton, PullArea, PullPill, ScreenBG, SectionTopTrim, Sheet, useContentPull, useHeaderPull, useTheme,
+} from '../../src/components/UI';
 import { Bouncy, EASE_OUT, Enter, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { toast } from '../../src/components/Toast';
 import { tap, tick } from '../../src/haptics';
@@ -180,6 +182,9 @@ export default function Today() {
   // a drag down from inside the greeting opens Sift; off while the board is edited, and when Settings turns the pull off
   const pullMode = useStore((s) => s.settings.siftPull);
   const headerPull = useHeaderPull(focused && !editing && pullMode !== 'off');
+  // and, with Settings' 'Anywhere', a pull anywhere on Today once it is at its top (never while the board is edited)
+  const openFromToday = useCallback(() => openSift('pull'), []);
+  const todayPull = useContentPull(focused && !editing && !dragging && pullMode === 'anywhere', scrollY, headerPull.progress, openFromToday);
 
   // a greeting that changes while Today is open dips out and back as the new words; a figure in the same sentence
   // changes in place, so the line never blinks each minute
@@ -234,6 +239,7 @@ export default function Today() {
     // while the board is edited a sideways drag moves a widget between columns, never to the next tab
     <ScreenBG guard maxWidth={BOARD_MAX} fling={!editing}>
       <BoardNow.Provider value={now}>
+        <PullArea gesture={todayPull}>
         <Animated.ScrollView
           key={fk}
           ref={memory.ref}
@@ -259,6 +265,7 @@ export default function Today() {
             />
           </Animated.View>
         </Animated.ScrollView>
+        </PullArea>
       </BoardNow.Provider>
       <ProfileSwitcher visible={switcher} onClose={() => setSwitcher(false)} onManage={openAccount} />
     </ScreenBG>

@@ -270,6 +270,9 @@ export function useToolHeader({
     hero: <ToolHero title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} reserve={tab ? reserve : 0} />,
     scrollProps,
     scrollY,
+    /** for a page with several scrolls (the Vault's pages): the pull's progress and what it opens, for useContentPull */
+    pullProgress,
+    pullOpen,
     /** the page's scroll view, wrapped in the content pull when it has one */
     pullArea: (child: React.ReactElement) => <PullArea gesture={contentPull ? content : null}>{child}</PullArea>,
     // tab: the big title's line is centred on the bar's row, beside the tray; the hero's own top padding is part of the lift

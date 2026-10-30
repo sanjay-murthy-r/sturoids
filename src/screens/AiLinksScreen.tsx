@@ -224,7 +224,7 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   // the tool's two controls live in the header's tray, so nothing floats under it: what the launchers are, and editing
   // them (the pencil turns to a tick in the accent while the keys are out). No context line: there is nothing to say
-  const header = useToolHeader({
+  const header = useToolHeader({ contentPull: 'all',
     title: 'AI Quick-Links',
     mode: mode === 'tab' ? 'tab' : 'page',
     // the header pull opens Sift, except while the links are being edited
@@ -241,7 +241,7 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   return (
     <ScreenBG guard={mode === 'tab'}>
       {header.bar}
-      <Animated.ScrollView
+      {header.pullArea(<Animated.ScrollView
         {...header.scrollProps}
         contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
       >
@@ -268,7 +268,7 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
             <PillButton label="Add link" icon="add" onPress={() => setAddSheet(true)} />
           </Appear>
         )}
-      </Animated.ScrollView>
+      </Animated.ScrollView>)}
 
       <Sheet visible={about} onClose={() => setAbout(false)} title="AI Quick-Links">
         <Text style={T.body}>

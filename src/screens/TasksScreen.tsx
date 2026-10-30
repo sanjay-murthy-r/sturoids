@@ -295,7 +295,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const rail = useRail();
   const twoCol = winW - (rail && tabMode ? RAIL_W : 0) >= TWO_COL_AT;
   const exp = useExport(tab === 'daily' ? ['todos', 'longterm'] : ['longterm', 'todos'], { range: tab === 'daily' ? 'week' : '30d' });
-  const header = useToolHeader({ scrollRef,
+  const header = useToolHeader({ contentPull: 'todos', scrollRef,
     title: twoCol ? 'Tasks' : tab === 'daily' ? 'ToDos' : 'Tasks',
     mode: tabMode ? 'tab' : 'page',
     context,
@@ -395,7 +395,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   return (
     <ScreenBG guard={tabMode} maxWidth={twoCol ? WIDE_MAX : READ_MAX}>
       {header.bar}
-      <Animated.ScrollView
+      {header.pullArea(<Animated.ScrollView
         key={fk}
         ref={scrollRef}
         {...header.scrollProps}
@@ -434,7 +434,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
             </>
           )}
         </Enter>
-      </Animated.ScrollView>
+      </Animated.ScrollView>)}
 
       <Animated.View
         pointerEvents={typing ? 'none' : 'box-none'}

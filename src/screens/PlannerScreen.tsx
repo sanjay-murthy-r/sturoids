@@ -261,7 +261,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const anySheet = blockSheet || copySheet || tplSheet || habitSheet || !!remindEdit;
   const exp = useExport(['habits', 'planner'], { range: '30d' });
   const scrollRef = React.useRef<Animated.ScrollView>(null);
-  const header = useToolHeader({ scrollRef,
+  const header = useToolHeader({ contentPull: 'all', scrollRef,
     title: 'Planner',
     mode: tabMode ? 'tab' : 'page',
     // the header pull opens Sift only while the planner is calm: no sheet up over it
@@ -340,7 +340,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   return (
     <ScreenBG guard={tabMode} maxWidth={twoCol ? WIDE_MAX : undefined}>
       {header.bar}
-      <Animated.ScrollView
+      {header.pullArea(<Animated.ScrollView
         key={fk}
         ref={scrollRef}
         {...header.scrollProps}
@@ -387,7 +387,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
             {streaksPart}
           </>
         )}
-      </Animated.ScrollView>
+      </Animated.ScrollView>)}
 
       <BlockSheet
         visible={blockSheet} day={day} editing={editing} onClose={() => setBlockSheet(false)} onClosed={runAfterSheet}

@@ -277,7 +277,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const total = folder ? inFolder : notes.length;
   const tabMode = mode === 'tab';
   const listRef = React.useRef<FlatList<Note>>(null);
-  const header = useToolHeader({ scrollRef: listRef,
+  const header = useToolHeader({ contentPull: 'notes', scrollRef: listRef,
     title: 'Notes',
     mode: tabMode ? 'tab' : 'page',
     context: contextLine(
@@ -327,7 +327,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
       {/* the list rises as one surface, the header's hero, the search and the folders with its rows, on every visit:
           whatever rows are in the window then, however they got there */}
       <Enter index={0} style={{ flex: 1 }}>
-        <Animated.FlatList
+        {header.pullArea(<Animated.FlatList
           ref={listRef}
           data={filtered}
           keyExtractor={(n) => n.id}
@@ -372,7 +372,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
               <EmptyState icon="document-text-outline" title="No notes here yet" body="Photos, files, voice and checklists live inside a note." actionLabel="New note" onAction={newNote} />
             )
           }
-        />
+        />)}
       </Enter>
 
       <Animated.View

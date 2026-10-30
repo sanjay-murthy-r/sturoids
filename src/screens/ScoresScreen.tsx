@@ -537,7 +537,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
   }
   if (!notebook) tray.push(exp.action);
   const scrollRef = useRef<Animated.ScrollView>(null);
-  const header = useToolHeader({ scrollRef,
+  const header = useToolHeader({ contentPull: loc || notebook || analytics ? undefined : 'scores', scrollRef,
     title: notebook ? 'Learnings' : analytics ? 'Analytics' : here ? nameOf(ix, here) : 'Scores',
     // the root of a bar slot is the only page with the big title; every level below it, and the root opened from More, has an arrow
     mode: mode === 'tab' && !loc ? 'tab' : 'page',
@@ -603,7 +603,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
     <ScreenBG guard={mode === 'tab'}>
       <View style={{ flex: 1 }} onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}>
         {header.bar}
-        <Animated.ScrollView
+        {header.pullArea(<Animated.ScrollView
           ref={scrollRef}
           {...header.scrollProps}
           onLayout={(e) => { viewH.current = e.nativeEvent.layout.height; }}
@@ -663,7 +663,7 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
               />
             )}
           </View>
-        </Animated.ScrollView>
+        </Animated.ScrollView>)}
 
         {!inExam && !aside ? (
           <Bouncy

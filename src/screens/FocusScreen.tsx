@@ -891,7 +891,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           endsAt ? ' until ' + clockAt(endsAt) : startedAtRef.current ? ' since ' + clockAt(startedAtRef.current) : '',
         ]);
   const scrollRef = useRef<Animated.ScrollView>(null);
-  const header = useToolHeader({ scrollRef,
+  const header = useToolHeader({ contentPull: 'all', scrollRef,
     title: 'Deep Work',
     mode: mode === 'tab' ? 'tab' : 'page',
     context: focusContext,
@@ -1187,7 +1187,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     <ScreenBG guard={mode === 'tab'} maxWidth={WIDE_MAX}>
       {/* above the scroll, so the bar's shade falls over the cards rather than behind them */}
       <View style={[frame(twoCol ? WIDE_MAX : READ_MAX), st.barLayer]}>{header.bar}</View>
-      <Animated.ScrollView
+      {header.pullArea(<Animated.ScrollView
         key={fk}
         ref={scrollRef}
         {...header.scrollProps}
@@ -1207,7 +1207,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             <View style={twoCol ? [st.col, st.colSide] : undefined}>{tasksBlock}</View>
           </View>
         </View>
-      </Animated.ScrollView>
+      </Animated.ScrollView>)}
 
       {/* the subject, once a session is under way */}
       <Sheet visible={subjectSheet} onClose={closeSubject} title="Subject">
