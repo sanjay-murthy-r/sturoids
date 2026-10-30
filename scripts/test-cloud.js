@@ -602,21 +602,25 @@ const scenarios = {
     assert.equal(app.cloudState().remote.updatedAt, again, 'and the choice is about the newest copy');
   },
 
-  async 'when both phones changed, the choice stays and nothing is replaced'() {
+  async 'when both phones changed, each one\'s changes are kept, joined, and the join goes up'() {
     const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
     await start(app);
+    // here: the goal changes, and the name too; there: the name changes. The goal is only here's; the name was changed
+    // on both, and this device's stands
+    app.state().setSetting('focusGoalMin', 120);
     app.state().setSetting('name', 'Changed here');
     app.world.rows.set(USER, {
-      user_id: USER, snapshot: backupOf({ ...SAM, settings: { name: 'Changed there' } }), device: 'Tablet', device_id: 'dev-2',
-      bytes: 900, files: 0, updated_at: new Date(Date.now() + 60 * 1000).toISOString(),
+      user_id: USER, snapshot: backupOf({ ...SAM, settings: { ...SAM.settings, name: 'Changed there', journalWordGoal: 300 } }),
+      device: 'Tablet', device_id: 'dev-2', bytes: 900, files: 0, updated_at: new Date(Date.now() + 60 * 1000).toISOString(),
     });
     app.store.flushSaves();
     await app.cloud.check(false);
-    assert.equal(app.cloudState().status, 'choice');
-    assert.equal(app.cloudState().reason, 'newer');
-    assert.equal(app.state().settings.name, 'Changed here');
-    assert.equal(app.storage.has(app.store.RECOVERY_KEY), false);
-    assert.equal(app.world.toasts.length, 0);
+    await sleep(700);
+    assert.notEqual(app.cloudState().status, 'choice', 'nobody is asked');
+    assert.equal(app.state().settings.focusGoalMin, 120, 'this device\'s change is kept');
+    assert.equal(app.state().settings.journalWordGoal, 300, 'the tablet\'s change came in');
+    assert.equal(app.state().settings.name, 'Changed here', 'both changed it: this device\'s stands');
+    assert.ok(app.world.toasts.some((t) => /Synced with Tablet/.test(t.message || t)), 'said once');
   },
 
   async 'a Deep Work session under way here is never ended by following quietly'() {
@@ -630,7 +634,7 @@ const scenarios = {
     });
     app.store.flushSaves();
     await app.cloud.check(false);
-    assert.equal(app.cloudState().status, 'choice', 'the user chooses');
+    assert.notEqual(app.cloudState().status, 'choice', 'the join waits for the session, without asking');
     assert.equal(app.state().settings.name, 'Sam');
     assert.ok(app.state().deepWork && app.state().deepWork.running, 'the session runs on');
     assert.equal(app.storage.has(app.store.RECOVERY_KEY), false);

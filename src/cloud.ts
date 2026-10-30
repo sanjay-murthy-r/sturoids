@@ -4,6 +4,10 @@
 // place the data lives: the cloud holds its latest copy, kept current a little after each change and whenever the app
 // goes to the background, and brings it to another phone.
 //
+// Live: every device signed in to the account sends its change up a few seconds after it settles, and tells the others
+// it did over a Realtime broadcast on the account's own channel; they look at the cloud at once and follow (a light
+// look every half minute covers a missed message). So a tick on the phone shows on the PC within seconds.
+//
 // Two phones on one account never overwrite each other silently: a phone remembers the copy it last saw. When the cloud
 // holds a newer one written on another phone and this phone has changed nothing since, it follows quietly (keeping a
 // copy of its own data for an Undo); when both changed, it stops and asks which to keep. See supabase/setup.sql.
@@ -14,7 +18,7 @@ import { AppState, InteractionManager, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
 import { create } from 'zustand';
-import type { Session, SupabaseClient } from '@supabase/supabase-js';
+import type { RealtimeChannel, Session, SupabaseClient } from '@supabase/supabase-js';
 import {
   useStore, exportSnapshot, readSnapshot, applySnapshot, flushSaves, hasAnyUserData, localDataState, isDeviceOnlyChange,
   withoutDeviceSettings, Attachment, RECOVERY_KEY, trashedAttachments, savePending, SAVE_PAUSE_MS,
@@ -24,12 +28,35 @@ import { restoredPath } from './backup';
 import { ATT_DIR } from './attachments';
 import { toast } from './components/Toast';
 import { uid } from './utils';
+import { mergeSnapshots } from './merge';
 import { accountTakenBy, noteActiveEmail, pkey, sessionKey, takenMessage } from './profiles';
 
 // A copy of this phone's data is kept while it follows the cloud quietly, so the toast's Undo can bring it back. It
 // sits in the store's recovery row (Settings can share or restore it like a kept copy, and no file is cleared as
 // unused while it is there), marked as this module's own so it is never taken for data that could not be opened.
 const SAFETY_PREFIX = '{"_safety":';
+/**
+ * The copy this device and the cloud last shared, as the cloud keeps it: what a join of two devices' changes is worked
+ * out against (src/merge.ts). A file, since a snapshot can be larger than a storage row takes.
+ */
+const BASE_FILE = () => FileSystem.documentDirectory + pkey('sturoids-cloud-base') + '.json';
+async function saveBase(json: string) {
+  try { await FileSystem.writeAsStringAsync(BASE_FILE(), json); } catch { /* the next join asks instead */ }
+}
+async function readBase(): Promise<any | null> {
+  try {
+    const info = await FileSystem.getInfoAsync(BASE_FILE());
+    if (!info.exists) return null;
+    return JSON.parse(await FileSystem.readAsStringAsync(BASE_FILE()));
+  } catch {
+    return null;
+  }
+}
+
+/** following another device is said at most this often */
+const FOLLOW_TOAST_GAP_MS = 3 * 60 * 1000;
+let lastFollowToast = 0;
+
 /** how long the Undo of a quiet follow stands: the toast with its action, ten seconds with a screen reader, and a margin */
 const FOLLOW_UNDO_MS = 20 * 1000;
 
@@ -49,8 +76,10 @@ const SESSION_KEY = sessionKey();
 export const QUOTA_BYTES = 120 * 1024 * 1024;
 /** the bucket takes files up to 20 MB (setup.sql) */
 export const FILE_LIMIT = 20 * 1024 * 1024;
-/** a backup follows a change after this long without another one */
-const AFTER_CHANGE_MS = 45 * 1000;
+/** a backup follows a change after this long without another one: short, so the other devices see it almost at once */
+const AFTER_CHANGE_MS = 5 * 1000;
+/** while the app is in front, a light look at the cloud this often, for a Realtime message that did not arrive */
+const LIVE_POLL_MS = 30 * 1000;
 /** a failed backup with changes waiting tries again after these waits, while the app is in front */
 const RETRY_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000];
 /**
@@ -447,9 +476,53 @@ function watchChanges() {
   });
 }
 
+// ---------------------------------------------------------------- live
+
+let channel: RealtimeChannel | null = null;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let liveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Another device saved (or half a minute went by): a look at the cloud, unless one is under way or the app is away. */
+function liveLook() {
+  if (liveTimer) return;
+  liveTimer = setTimeout(() => {
+    liveTimer = null;
+    if (!watching || !meta.auto || running || AppState.currentState !== 'active') return;
+    if (useCloud.getState().status === 'choice') return;
+    check(false).catch(() => {});
+  }, 300);
+}
+
+function startLive(userId: string) {
+  stopLive();
+  try {
+    channel = cloud().channel('sync-' + userId, { config: { broadcast: { self: false, ack: false } } });
+    channel.on('broadcast', { event: 'saved' }, (msg: any) => {
+      if (msg?.payload?.device && msg.payload.device === meta.deviceId) return;
+      liveLook();
+    });
+    channel.subscribe();
+  } catch {
+    channel = null;
+  }
+  pollTimer = setInterval(liveLook, LIVE_POLL_MS);
+}
+
+function stopLive() {
+  if (channel) { cloud().removeChannel(channel).catch(() => {}); channel = null; }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; }
+}
+
+/** Tells the account's other devices that a new copy is up. */
+function announce(at: string) {
+  channel?.send({ type: 'broadcast', event: 'saved', payload: { device: meta.deviceId, at } }).catch(() => {});
+}
+
 function startWatching() {
   if (watching) return;
   watching = true;
+  if (adoptedUser) startLive(adoptedUser);
   appStateSub = AppState.addEventListener('change', onAppState);
   // attachments left for Wi-Fi go up as soon as the phone is on it
   try {
@@ -468,6 +541,7 @@ let appStateSub: { remove: () => void } | null = null;
 let networkSub: { remove: () => void } | null = null;
 function stopWatching() {
   watching = false;
+  stopLive();
   appStateSub?.remove();
   appStateSub = null;
   networkSub?.remove();
@@ -1001,6 +1075,8 @@ export function syncNow(force = false, opts: { mobileData?: boolean } = {}): Pro
         }
       }
       meta.lastRemoteAt = data!.updated_at;
+      announce(data!.updated_at);
+      await saveBase(json);
       meta.lastHash = hash;
       meta.lastSyncedAt = Date.now();
       meta.rescue = false;
@@ -1105,7 +1181,11 @@ function sweepAfterReplace(startedAt: number) {
  * hears the moment the data is, and `mayReplace`, asked once the copy is here and read, can still stop it then.
  * Returns how many attachments could not be brought down.
  */
-async function bringDown(s: Session, onReplaced?: () => void, mayReplace?: () => boolean): Promise<{ missing: number }> {
+async function bringDown(
+  s: Session, onReplaced?: () => void, mayReplace?: () => boolean,
+  /** the data to keep, given the cloud's: a join with this device's own changes (follow's merge) */
+  transform?: (theirs: any) => any,
+): Promise<{ missing: number }> {
   const { data, error } = await cloud().from('backups').select('snapshot, updated_at').eq('user_id', s.user.id).maybeSingle();
   if (error) throw error;
   if (!data) {
@@ -1115,6 +1195,9 @@ async function bringDown(s: Session, onReplaced?: () => void, mayReplace?: () =>
   // the copy comes down whole and is read before anything here is replaced; it is parsed once for both steps
   let parsed: any = null;
   try { parsed = JSON.parse(data.snapshot); } catch { /* refused just below */ }
+  // what the cloud holds is what this device now shares with it, joined or not
+  if (parsed) await saveBase(data.snapshot);
+  if (parsed && transform) parsed = transform(parsed);
   const read = readSnapshot(parsed);
   if (!read) throw said('The cloud copy could not be read by this version of the app.');
   if (mayReplace && !mayReplace()) throw said('This phone changed while the cloud copy came down.');
@@ -1255,6 +1338,14 @@ function pcColumns(): Record<string, string[][]> | null {
 
 async function meetNewer(s: Session, remote: RemoteCopy): Promise<void> {
   if (await follow(s, remote)) return;
+  // a Deep Work session under way here is in no copy, and replacing the data ends it: the join waits for it to end,
+  // quietly, and this device's changes go up after
+  if (useStore.getState().deepWork && localDataState() === 'ok' && !meta.rescue) {
+    patch({ status: 'idle', progress: null });
+    return;
+  }
+  // both changed: each device's changes are kept, joined
+  if (await follow(s, remote, true)) return;
   patch({ status: 'choice', reason: 'newer', remote, hasCopy: true, error: null, progress: null });
 }
 
@@ -1263,12 +1354,15 @@ async function meetNewer(s: Session, remote: RemoteCopy): Promise<void> {
  * is kept first, then the cloud copy comes here, and a toast offers the Undo. False (nothing changed) when it may not:
  * then the user chooses. Runs inside `running`.
  */
-async function follow(s: Session, remote: RemoteCopy): Promise<boolean> {
+async function follow(s: Session, remote: RemoteCopy, merge = false): Promise<boolean> {
   if (localDataState() !== 'ok' || meta.rescue) return false;
   // a choice still waiting (a follow the user undid) is never made for them by following a later copy quietly
   if (useCloud.getState().status === 'choice') return false;
-  // a Deep Work session under way here is in no copy, and a replace ends it: the user chooses
+  // a Deep Work session under way here is in no copy, and a replace ends it
   if (useStore.getState().deepWork) return false;
+  // a join needs the copy both last shared, and is never made over a copy the user once turned down
+  const base = merge ? await readBase() : null;
+  if (merge && (!base || meta.declinedAt === remote.updatedAt)) return false;
   const facts = (localHash: string | null): NewerCopyFacts => ({
     remoteAt: remote.updatedAt, remoteDeviceId: remote.deviceId, lastRemoteAt: meta.lastRemoteAt, deviceId: meta.deviceId,
     localHash, lastHash: meta.lastHash, savePending: savePending(), declinedAt: meta.declinedAt,
@@ -1278,14 +1372,18 @@ async function follow(s: Session, remote: RemoteCopy): Promise<boolean> {
   // cloud as a phone does.
   const firstOnPc = Platform.OS === 'web' && !meta.lastRemoteAt;
   // everything that needs no snapshot is asked first: most newer copies are a choice
-  if (!firstOnPc && newerCopyAction({ ...facts(meta.lastHash), savePending: false }) !== 'follow') return false;
+  if (!merge && !firstOnPc && newerCopyAction({ ...facts(meta.lastHash), savePending: false }) !== 'follow') return false;
   // a save still in its pause is let through first: on a return to the app it is often only this phone's open time,
   // stamped just as this look at the cloud began. A change to the data still shows in the fingerprint below
   if (savePending()) await new Promise((r) => setTimeout(r, SAVE_PAUSE_MS + 50));
   await afterInteractions();
   const atBuild = changes;
   const mine = await buildSnapshot();
-  if (!firstOnPc && newerCopyAction(facts(mine.hash)) !== 'follow') return false;
+  if (!merge && !firstOnPc && newerCopyAction(facts(mine.hash)) !== 'follow') return false;
+  let mineParsed: any = null;
+  if (merge) {
+    try { mineParsed = JSON.parse(mine.json); } catch { return false; }
+  }
   // a kept copy of data that could not be opened is never replaced, and without a copy of its own there is no Undo
   let kept: string | null;
   try { kept = await AsyncStorage.getItem(RECOVERY_KEY); } catch { return false; }
@@ -1312,7 +1410,7 @@ async function follow(s: Session, remote: RemoteCopy): Promise<boolean> {
     await bringDown(s, () => { replaced = true; }, () => {
       moved = changes !== atBuild || savePending();
       return !moved;
-    });
+    }, merge ? (theirs) => mergeSnapshots(base, mineParsed, theirs) : undefined);
   } catch (e) {
     if (!replaced) {
       await dropSafetyCopy(safetyId);
@@ -1321,7 +1419,20 @@ async function follow(s: Session, remote: RemoteCopy): Promise<boolean> {
     }
   }
   const from = remote.device && remote.device !== 'this phone' ? remote.device : 'another phone';
-  toast(firstOnPc ? 'Your data is here from the cloud' : 'Updated from ' + from, { label: 'Undo', onPress: () => { undoFollow(safetyId, remote.updatedAt, before).catch(() => {}); } });
+  if (merge) {
+    // the joined data holds this device's changes the cloud has not: it goes up next, and the others follow it
+    meta.lastHash = null;
+    meta.dirty = true;
+    await saveMeta();
+    patch({ pending: true });
+    setTimeout(() => { syncNow().catch(() => {}); }, 400);
+  }
+  // live, another device's changes arrive often: said (with its Undo) once in a while, not at every one
+  const quietly = !firstOnPc && Date.now() - lastFollowToast < FOLLOW_TOAST_GAP_MS;
+  if (!quietly) {
+    lastFollowToast = Date.now();
+    toast(firstOnPc ? 'Your data is here from the cloud' : merge ? 'Synced with ' + from : 'Updated from ' + from, { label: 'Undo', onPress: () => { undoFollow(safetyId, remote.updatedAt, before).catch(() => {}); } });
+  }
   if (followTimer) clearTimeout(followTimer);
   followTimer = setTimeout(() => {
     followTimer = null;

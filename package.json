@@ -19,7 +19,8 @@
     "test:tools": "node scripts/test-tools.js",
     "test:links": "node scripts/test-links.js",
     "test:report": "node scripts/test-report.js",
-    "test:phone": "node scripts/test-phone-widgets.js"
+    "test:phone": "node scripts/test-phone-widgets.js",
+    "test:merge": "node scripts/test-merge.js"
   },
   "dependencies": {
     "@expo-google-fonts/inter-tight": "^0.4.2",
