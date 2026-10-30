@@ -13,7 +13,8 @@ import Constants from 'expo-constants';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import {
-  C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, WritingFont, bgFor, neuInset, neuRaised, shadowsSupported, writingFace,
+  C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, WritingFont, bgFor, neuInset, neuRaised, shadowsSupported,
+  wellFor, writingFace,
 } from '../src/theme';
 import {
   useStore, DEFAULT_UPDATE_REPO, exportSnapshot, importSnapshot, readSnapshot, applySnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves,
@@ -775,7 +776,7 @@ type UpdateState =
   | { k: 'downloading'; rel: Release; p: number } | { k: 'handed'; rel: Release };
 
 const UpdatesCard = React.memo(function UpdatesCard() {
-  useTheme();
+  const theme = useTheme();
   const level = useAnimLevel();
   const repoDraft = useSettingDraft('githubRepo');
   const [state, setState] = useState<UpdateState>({ k: 'idle' });
@@ -857,7 +858,7 @@ const UpdatesCard = React.memo(function UpdatesCard() {
 
       {state.k === 'downloading' ? (
         <Animated.View entering={level === 'none' ? undefined : FadeIn.duration(180)} style={st.updBarWrap}>
-          <View style={[st.updBar, { backgroundColor: C.inset, ...neuInset('hairline') }]}>
+          <View style={[st.updBar, wellFor(theme, 'hairline')]}>
             <View style={[st.updFill, { width: `${Math.round(state.p * 100)}%`, backgroundColor: C.accent }]} />
           </View>
           <Text style={[T.caption, st.updPct]}>{'Downloading  ' + Math.round(state.p * 100) + '%'}</Text>

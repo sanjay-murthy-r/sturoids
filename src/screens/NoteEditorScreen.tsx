@@ -13,7 +13,7 @@ import { Image as CachedImage } from 'expo-image';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { C, F, MIN, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU, writingFace } from '../theme';
+import { C, F, MIN, NO_SHADOW, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU, wellFor, writingFace } from '../theme';
 import { columnWidth } from '../layout';
 import { useStore, Attachment, Note, flushSaves } from '../store';
 import { fmtClockTime, todayKey, yesterdayKey } from '../utils';
@@ -693,7 +693,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         <Animated.View
           entering={level === 'none' ? undefined : FadeIn.duration(level === 'full' ? 220 : 160).easing(EASE_OUT)}
           exiting={level === 'none' ? undefined : FadeOut.duration(150)}
-          style={[st.liveBar, { bottom: 66 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, boxShadow: undefined }]}
+          style={[st.liveBar, { bottom: 66 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, boxShadow: NO_SHADOW }]}
         >
           <View style={st.liveDot} />
           <Text style={st.liveBarText} numberOfLines={2}>
@@ -703,7 +703,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       )}
 
       {/* editor toolbar */}
-      <View style={[st.toolbar, { paddingBottom: 9 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: undefined }]}>
+      <View style={[st.toolbar, { paddingBottom: 9 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: NO_SHADOW }]}>
         <MicButton listening={listening} onPress={toggleVoice} />
         <IconBtn name="ellipse-outline" size={20} pad={6} onPress={() => markLine('bullet')} accessibilityLabel="Bullet" />
         <IconBtn name="checkbox-outline" size={20} pad={6} onPress={() => markLine('box')} accessibilityLabel="Checkbox, then tick it" />
@@ -983,12 +983,13 @@ const Attachments = React.memo(function Attachments({ items, width, onRemove, on
  * instead of an empty box.
  */
 function AttachedImage({ uri, width, onPress }: { uri: string; width: number; onPress: () => void }) {
+  const theme = useTheme();
   const [failed, setFailed] = React.useState(false);
   const box = { width, height: width * 0.75, borderRadius: 14 };
   if (failed) {
     return (
       <View
-        style={[box, { backgroundColor: C.inset, alignItems: 'center', justifyContent: 'center', ...NEU.insetLow }]}
+        style={[box, { alignItems: 'center', justifyContent: 'center' }, wellFor(theme)]}
         accessible accessibilityLabel="This picture could not be found"
       >
         <Ionicons name="image-outline" size={22} color={C.textFaint} />
@@ -1008,12 +1009,13 @@ function AttachedImage({ uri, width, onPress }: { uri: string; width: number; on
  * with several clips keeps no decoders alive while it is written in. A tap makes the player and starts it.
  */
 function AttachedVideo({ uri, name, width }: { uri: string; name: string; width: number }) {
+  const theme = useTheme();
   const [on, setOn] = React.useState(false);
   if (on) return <InlineVideo uri={uri} width={width} />;
   return (
     <Bouncy
       onPress={() => setOn(true)} scaleTo={0.98} radius={14} accessibilityRole="button" accessibilityLabel={'Play ' + name}
-      style={[st.videoWell, { width, height: width * 0.62, backgroundColor: C.inset, ...NEU.insetLow }]}
+      style={[st.videoWell, { width, height: width * 0.62 }, wellFor(theme)]}
     >
       <Ionicons name="play" size={22} color={C.accent} />
       <Text style={[T.caption, { marginTop: 6, maxWidth: width - 24 }]} numberOfLines={1}>{name}</Text>

@@ -6,14 +6,14 @@ import Animated, {
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, S, T, TRACK, NEU } from '../theme';
+import { C, F, S, T, TRACK, NEU, wellFor } from '../theme';
 import { useStore, VaultVideo, VaultFolder, TimedNote, Bookmark } from '../store';
 import { fmtMediaTime } from '../utils';
 import { PLAYLIST_SAID, videosIn } from '../toolLogic';
 import { VideoOfferSheet } from '../shareIntake';
 import {
   ScreenBG, Card, Field, EmptyState, ListCard, ListRow, ListSlice, Row, Chip, Sheet, PillButton, IconBtn, NeuIconBtn, DotMenu,
-  ScrollEdge, edgeStrength, useToolHeader, contextLine,
+  ScrollEdge, edgeStrength, useToolHeader, useTheme, contextLine,
   PullArea, useContentPull,
 } from '../components/UI';
 import { toast } from '../components/Toast';
@@ -52,12 +52,13 @@ const hitText = (x: NoteHit) => (x.isBookmark ? (x.item as Bookmark).label : (x.
  * place carries the loading sheen. `style` sizes it (a row's 92 x 52 unless given) and `radius` rounds it.
  */
 function Thumb({ videoId, style, radius = 10 }: { videoId: string; style?: any; radius?: number }) {
+  const theme = useTheme();
   const [failed, setFailed] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
   const box = [st.thumb, style, { borderRadius: radius }];
   if (failed) {
     return (
-      <View style={[box, { alignItems: 'center', justifyContent: 'center', ...NEU.insetLow }]}>
+      <View style={[box, { alignItems: 'center', justifyContent: 'center' }, wellFor(theme)]}>
         <Ionicons name="play-outline" size={20} color={C.textFaint} />
       </View>
     );

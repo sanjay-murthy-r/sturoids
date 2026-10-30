@@ -13,7 +13,7 @@ import type { SharedValue } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import {
-  AnimLevel, C, CHROME_FONT_MAX, F, MIN, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner,
+  AnimLevel, C, CHROME_FONT_MAX, F, MIN, NO_SHADOW, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner,
   oneLine, shownTheme,
 } from '../theme';
 import { useStore } from '../store';
@@ -1186,16 +1186,16 @@ export function Toggle({ value, onChange, color, label }: {
           st.ring,
           theme === 'minimal' && {
             backgroundColor: MIN.card, borderWidth: 1,
-            borderColor: value ? c : MIN.border, boxShadow: undefined,
+            borderColor: value ? c : MIN.border, boxShadow: NO_SHADOW,
           },
         ]}
       >
-        <View style={[st.track, theme === 'minimal' && { backgroundColor: MIN.inset, boxShadow: undefined }]}>
+        <View style={[st.track, theme === 'minimal' && { backgroundColor: MIN.inset, boxShadow: NO_SHADOW }]}>
           <Animated.View
             style={[
               st.thumb,
               { backgroundColor: C.knob },
-              theme === 'minimal' && { boxShadow: undefined },
+              theme === 'minimal' && { boxShadow: NO_SHADOW },
               thumbStyle,
             ]}
           >
@@ -1630,7 +1630,7 @@ export function Sheet({
               carry it — C.inset on MIN.card is all but invisible */}
           <GestureDetector gesture={pull}>
             <View collapsable={false} style={st.grab}>
-              <View style={[st.sheetHandle, theme === 'minimal' ? { backgroundColor: MIN.border } : neuInset('hairline')]} />
+              <View style={[st.sheetHandle, theme === 'minimal' ? { backgroundColor: MIN.border, boxShadow: NO_SHADOW } : neuInset('hairline')]} />
               {title || action ? (
                 <View style={st.sheetHead}>
                   {title ? <Text style={[st.sheetTitle, { flex: 1 }]} accessibilityRole="header">{title}</Text> : <View style={{ flex: 1 }} />}
