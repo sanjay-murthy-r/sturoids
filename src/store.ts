@@ -50,6 +50,27 @@ export interface FocusSession {
   id: string; dateKey: string; endedAt: number; netSeconds: number; taskTitles: string[]; subject?: string;
   /** logged by hand in the history ("Log a session"), not timed */
   manual?: boolean;
+  /** a line written about it afterwards */
+  note?: string;
+  /** how it went, said afterwards: 1 scattered, 2 steady, 3 deep */
+  rating?: 1 | 2 | 3;
+  /** the minutes it was timed at, kept the first time its length is changed, so the editor can say what it was */
+  timedSeconds?: number;
+}
+
+/** What can be changed about a session afterwards (the session editor). */
+export interface SessionPatch {
+  /** '' takes it off */
+  subject?: string;
+  /** 1 to 720 */
+  minutes?: number;
+  /** when it ended, on its own day */
+  endedAt?: number;
+  taskTitles?: string[];
+  /** '' takes it off */
+  note?: string;
+  /** null takes it off */
+  rating?: 1 | 2 | 3 | null;
 }
 export interface PlannerBlock { id: string; subject: string; start: string; end: string; color: string }
 export interface Habit {
@@ -302,6 +323,8 @@ export interface Settings {
    * (Settings, More) once it is at its top, 'off' never
    */
   siftPull: 'top' | 'anywhere' | 'off';
+  /** a Deep Work session shorter than a minute is not kept (a start by mistake, a quick try) */
+  focusDropShort: boolean;
   /** on a wide screen (a tablet, a PC), where the tabs sit: a rail down the left side, or a bar along the bottom */
   tabNav: 'side' | 'bottom';
 }
@@ -412,6 +435,7 @@ export const DEFAULT_SETTINGS: Settings = {
   focusAlertAsked: false,
   backupNudgeAt: 0,
   siftPull: 'anywhere',
+  focusDropShort: true,
   tabNav: 'side',
 };
 
@@ -561,8 +585,8 @@ export interface AppState {
    * or null when the day or the minutes are not ones it takes
    */
   addManualSession: (s: { dateKey: string; minutes: number; subject?: string }) => string | null;
-  /** changes a session's subject ('' takes it off) or its minutes (1 to 720); false when there is no such session */
-  updateSession: (id: string, patch: { subject?: string; minutes?: number }) => boolean;
+  /** changes what a session says about itself (SessionPatch); false when there is no such session */
+  updateSession: (id: string, patch: SessionPatch) => boolean;
   setDeepWork: (s: ActiveSession | null) => void;
   patchDeepWork: (patch: Partial<ActiveSession>) => void;
 
@@ -1074,6 +1098,10 @@ function cleanSession(x: any): FocusSession {
   const out = { ...x };
   if (out.manual !== true) delete out.manual;
   if (out.subject !== undefined && typeof out.subject !== 'string') delete out.subject;
+  if (out.note !== undefined && (typeof out.note !== 'string' || !out.note.trim())) delete out.note;
+  if (out.rating !== undefined && out.rating !== 1 && out.rating !== 2 && out.rating !== 3) delete out.rating;
+  if (out.timedSeconds !== undefined && !(isFiniteNumber(out.timedSeconds) && out.timedSeconds > 0)) delete out.timedSeconds;
+  if (!Array.isArray(out.taskTitles)) out.taskTitles = [];
   return out;
 }
 
@@ -1223,6 +1251,7 @@ function cleanSettingsV6(s: any): Settings {
   if (!(isFiniteNumber(st.backupNudgeAt) && st.backupNudgeAt >= 0)) st.backupNudgeAt = DEFAULT_SETTINGS.backupNudgeAt;
   st.siftPull = st.siftPull === 'top' || st.siftPull === 'off' ? st.siftPull : 'anywhere';
   st.tabNav = st.tabNav === 'bottom' ? 'bottom' : 'side';
+  st.focusDropShort = st.focusDropShort !== false;
   // no repo yet checks Sturoids' own releases; one saved under an earlier address follows the rename
   if (typeof st.githubRepo !== 'string' || !st.githubRepo.trim() || OLD_UPDATE_REPO.test(st.githubRepo.trim())) st.githubRepo = DEFAULT_UPDATE_REPO;
   return st;
@@ -2004,10 +2033,43 @@ const appStore = create<AppState>()(
         }
         if (patch.minutes !== undefined) {
           const min = Math.round(Number(patch.minutes));
-          if (min >= 1 && min <= MANUAL_MAX_MIN) next.netSeconds = min * 60;
+          if (min >= 1 && min <= MANUAL_MAX_MIN && min * 60 !== was.netSeconds) {
+            // the length it was timed at is kept the first time it changes, so it can always be seen (and put back)
+            if (!was.manual && was.timedSeconds === undefined) next.timedSeconds = was.netSeconds;
+            next.netSeconds = min * 60;
+          }
         }
-        if (next.subject === was.subject && next.netSeconds === was.netSeconds) return true;
-        set({ sessions: s.sessions.map((x) => (x.id === id ? next : x)) });
+        if (patch.endedAt !== undefined && Number.isFinite(patch.endedAt)) {
+          // a new end on the session's own day, never in the future
+          const at = Math.min(Date.now(), Math.round(patch.endedAt));
+          if (todayKey(new Date(at)) === was.dateKey) next.endedAt = at;
+        }
+        if (Array.isArray(patch.taskTitles)) {
+          next.taskTitles = patch.taskTitles
+            .filter((t): t is string => typeof t === 'string')
+            .map((t) => t.trim().replace(/\s+/g, ' ').slice(0, 140))
+            .filter(Boolean)
+            .filter((t, i, all) => all.indexOf(t) === i)
+            .slice(0, 40);
+        }
+        if (typeof patch.note === 'string') {
+          const n = patch.note.trim().slice(0, 500);
+          if (n) next.note = n;
+          else delete next.note;
+        }
+        if (patch.rating !== undefined) {
+          if (patch.rating === 1 || patch.rating === 2 || patch.rating === 3) next.rating = patch.rating;
+          else delete next.rating;
+        }
+        // nothing different: nothing written, so a Save with no change never counts as one
+        const same = next.subject === was.subject && next.netSeconds === was.netSeconds && next.endedAt === was.endedAt
+          && next.note === was.note && next.rating === was.rating && next.timedSeconds === was.timedSeconds
+          && next.taskTitles.length === was.taskTitles.length && next.taskTitles.every((t, i) => t === was.taskTitles[i]);
+        if (same) return true;
+        let list = s.sessions.map((x) => (x.id === id ? next : x));
+        // a new end keeps the history in order by time
+        if (next.endedAt !== was.endedAt) list = [...list].sort((a, b) => a.endedAt - b.endedAt);
+        set({ sessions: list });
         return true;
       },
       setDeepWork: (session) => set({ deepWork: session }),

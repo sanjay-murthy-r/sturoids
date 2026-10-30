@@ -10,7 +10,11 @@ import { useRail } from '../hooks/useRail';
 
 export interface ToastAction { label: string; onPress: () => void }
 /** More a toast can do: its words themselves can be a way somewhere (Recently deleted), said to a screen reader as `hint`. */
-export interface ToastOptions { onMessage?: () => void; hint?: string }
+export interface ToastOptions {
+  onMessage?: () => void; hint?: string;
+  /** a second, quieter key before the action (Edit details beside Undo) */
+  second?: ToastAction;
+}
 type Shown = { message: string; action?: ToastAction; opts?: ToastOptions; key: number };
 
 let show: ((message: string, action?: ToastAction, opts?: ToastOptions) => void) | null = null;
@@ -79,7 +83,7 @@ export function ToastHost() {
   React.useEffect(() => {
     show = (message, action, opts) => {
       counter.current += 1;
-      const next = { message, action, opts: opts?.onMessage ? opts : undefined, key: counter.current };
+      const next = { message, action, opts: opts?.onMessage || opts?.second ? opts : undefined, key: counter.current };
       const replacing = current.current != null;
       current.current = next;
       setShownToast(next);
@@ -111,7 +115,7 @@ export function ToastHost() {
   const onMessage = opts?.onMessage;
   const words = (
     <Text
-      style={[st.text, action && { textAlign: 'left', flexShrink: 1 }, onMessage && st.textLink]}
+      style={[st.text, (action || opts?.second) && { textAlign: 'left', flexShrink: 1 }, onMessage && st.textLink]}
       numberOfLines={action ? 2 : undefined}
     >
       {message}
@@ -122,7 +126,7 @@ export function ToastHost() {
     // above the tab bar; a wide window with its tabs in the rail at the side has no bar below, so the card sits low
     <Animated.View pointerEvents="box-none" style={[st.wrap, { bottom: insets.bottom + (rail ? 24 : 96) }, style]}>
       <View
-        pointerEvents={action || onMessage ? 'auto' : 'none'}
+        pointerEvents={action || onMessage || opts?.second ? 'auto' : 'none'}
         style={[
           st.card,
           theme === 'minimal'
@@ -130,7 +134,7 @@ export function ToastHost() {
             : { backgroundColor: C.card, ...NEU.raisedMid },
         ]}
       >
-        <Animated.View style={[action ? st.rowWithAction : null, wordsStyle]}>
+        <Animated.View style={[action || opts?.second ? st.rowWithAction : null, wordsStyle]}>
           {onMessage ? (
             // the words open where the thing went; the card goes as they are used
             <Pressable
@@ -143,6 +147,17 @@ export function ToastHost() {
               {words}
             </Pressable>
           ) : words}
+          {opts?.second ? (
+            <Pressable
+              key={'s' + key}
+              onPress={() => { tick(); hide(160); opts.second!.onPress(); }}
+              hitSlop={10}
+              accessibilityRole="button"
+              style={({ pressed }) => [st.action, pressed && st.actionPressed]}
+            >
+              <Text style={[st.actionText, { color: C.textDim }]}>{opts.second.label}</Text>
+            </Pressable>
+          ) : null}
           {action ? (
             <Pressable
               key={key}

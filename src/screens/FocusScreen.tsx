@@ -37,6 +37,7 @@ import { toast, ToastAction } from '../components/Toast';
 import { openPage, openTool } from '../toolNav';
 import { useIntro } from '../intro';
 import { minutesUntil } from '../toolLogic';
+import { openSessionEditor } from '../components/SessionEditor';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
@@ -606,8 +607,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
     if (unchecked.length === 0) {
       const id = commit(net, {});
-      // a session ended by hand with nothing to review is saved at once: a tap on End by mistake can be taken back
-      if (byHand && id) toast('Session saved', { label: 'Undo', onPress: () => resumeRef.current(id, before) });
+      // a session ended by hand with nothing to review is saved at once: a tap on End by mistake can be taken back. Any
+      // session saved says so quietly, with a way to put its details right (a break that was not paused, say)
+      if (id) savedToast(id, net, byHand ? () => resumeRef.current(id, before) : undefined);
+      else if (net >= 5) toast('Under a minute, so not kept');
       return;
     }
     const choices: Record<string, ReviewChoice> = {};
@@ -627,9 +630,11 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       }
     }
     // said once the review has gone, where the toast can be seen
-    if (added) afterReview.current = () => toast(added === 1 ? 'Task added to ToDos' : added + ' tasks added to ToDos');
+    const addedLine = added ? (added === 1 ? 'Task added to ToDos' : added + ' tasks added to ToDos') : '';
     let id: string | null = null;
-    if (netSeconds >= 5) {
+    // a session under a minute is not kept unless Settings keeps them (a start by mistake, a quick try)
+    const keepFrom = useStore.getState().settings.focusDropShort ? 60 : 5;
+    if (netSeconds >= keepFrom) {
       id = logSession({
         // the day the session began, so a session across midnight counts where it started
         dateKey: todayKey(new Date(startedAtRef.current ?? Date.now())), endedAt: Date.now(),
@@ -637,6 +642,14 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         taskTitles: attached.map((a) => a.title),
         subject: subject.trim() || undefined,
       });
+    }
+    // after a review, said once its sheet has gone, where the toast can be seen
+    if (Object.keys(choices).length) {
+      const saved = id;
+      afterReview.current = () => {
+        if (saved) savedToast(saved, netSeconds, undefined, addedLine);
+        else if (addedLine) toast(addedLine);
+      };
     }
     reset();
     return id;
@@ -1407,6 +1420,19 @@ export function sessionDay(key: string): string {
   const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
   if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
   return d.toLocaleDateString('en-IN', opts);
+}
+
+/**
+ * The quiet word a saved session leaves: how long it was, with Undo (a session ended by hand) and "Edit details", which
+ * opens the session editor to put it right afterwards.
+ */
+function savedToast(id: string, netSeconds: number, undo?: () => void, extra = '') {
+  const m = Math.max(1, Math.round(netSeconds / 60));
+  const len = m >= 60 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '') : m + ' min';
+  const message = 'Saved · ' + len + (extra ? ' · ' + extra : '');
+  const edit = { label: 'Edit details', onPress: () => openSessionEditor(id) };
+  if (undo) toast(message, { label: 'Undo', onPress: undo }, { second: edit });
+  else toast(message, edit);
 }
 
 /**

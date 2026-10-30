@@ -40,6 +40,7 @@ import { ArrivalMoment, SwitchingOverlay } from '../src/components/ProfileSwitch
 import { AppFrame, SearchOverlay } from '../src/components/SearchOverlay';
 import { NavArrows } from '../src/components/NavArrows';
 import { QuickAddHost } from '../src/components/QuickAddHost';
+import { SessionEditorHost } from '../src/components/SessionEditor';
 import { appIsUp } from '../src/actions';
 import { ShareIntake } from '../src/shareIntake';
 import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
@@ -326,6 +327,7 @@ export default function RootLayout() {
       {/* Sift, the app-wide search, over the tabs and every page; and the app-wide "Add a task" sheet */}
       {showApp && <SearchOverlay />}
       {showApp && <QuickAddHost />}
+      {showApp && <SessionEditorHost />}
       {showApp && <ToastHost />}
       {/* covers everything while the app restarts into another profile */}
       <SwitchingOverlay />

@@ -20,6 +20,7 @@ import { useToday } from '../src/hooks/useNow';
 import { tap, tick } from '../src/haptics';
 import { fmtMins, sessionDay, sessionLength } from '../src/screens/FocusScreen';
 import { monthGrid, shiftMonthKey } from '../src/toolLogic';
+import { openSessionEditor } from '../src/components/SessionEditor';
 
 /** The list the header's scroll offset follows: Reanimated hands the offset to its handler on the UI thread. */
 const AnimatedSectionList = Animated.createAnimatedComponent(SectionList) as typeof SectionList;
@@ -53,13 +54,14 @@ const SessionRow = React.memo(function SessionRow({ s, first, last, enter, hour2
   const ended = new Date(s.endedAt);
   const at = fmtClockTime(ended.getHours() * 60 + ended.getMinutes(), hour24);
   const title = sessionLength(s.netSeconds) + (s.subject ? ' · ' + s.subject : '');
-  const caption = [s.manual ? 'Logged by hand' : 'Ended ' + at, s.taskTitles.join(', ')].filter(Boolean).join(' · ');
+  const how = s.rating === 3 ? 'Deep' : s.rating === 2 ? 'Steady' : s.rating === 1 ? 'Scattered' : '';
+  const caption = [s.manual ? 'Logged by hand' : 'Ended ' + at, how, s.taskTitles.join(', '), s.note ?? ''].filter(Boolean).join(' · ');
   // settled as the row mounts: a row of the first screenful rises with the page, and later renders never take it back
   const [rise] = React.useState(enter);
   return (
     <ListSlice first={first} last={last} enter={rise}>
       <View>
-        <ListRow style={st.row} onPress={() => onEdit(s)} accessibilityHint="Change its subject or length">
+        <ListRow style={st.row} onPress={() => onEdit(s)} accessibilityHint="Opens its details, to change them">
           <View style={st.rowText} accessible accessibilityLabel={title + ', ' + caption}>
             <Text style={st.rowTitle} numberOfLines={1}>{title}</Text>
             <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{caption}</Text>
@@ -141,10 +143,8 @@ export default function FocusHistoryPage() {
 
   // ---- logging and editing ----
   const [logOpen, setLogOpen] = React.useState(false);
-  const [editing, setEditing] = React.useState<FocusSession | null>(null);
-  const heldEdit = React.useRef<FocusSession | null>(null);
-  if (editing) heldEdit.current = editing;
-  const openEdit = React.useCallback((s: FocusSession) => { tick(); setEditing(s); }, []);
+  // a session's details open in the session editor, the same one a saved session's toast opens
+  const openEdit = React.useCallback((s: FocusSession) => { tick(); openSessionEditor(s.id); }, []);
 
   // ---- arriving at one session (Sift, Deep Work's recent rows) ----
   const params = useLocalSearchParams<{ session?: string }>();
@@ -358,7 +358,6 @@ export default function FocusHistoryPage() {
       />
 
       <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} today={today} />
-      <EditSheet session={editing} held={heldEdit.current} onClose={() => setEditing(null)} />
       {exp.sheet}
     </ScreenBG>
   );
@@ -432,42 +431,6 @@ function LogSheet({ visible, onClose, today }: { visible: boolean; onClose: () =
       <SubjectSuggest value={subject} max={5} onPick={setSubject} style={{ marginTop: 10 }} />
       {problem ? <Text style={st.problem}>{problem}</Text> : null}
       <PillButton label="Log it" icon="checkmark" onPress={save} style={{ marginTop: 22 }} />
-    </Sheet>
-  );
-}
-
-/** Changing a session: its subject (one the app knows, or a new one, or none) and its length in minutes. */
-function EditSheet({ session, held, onClose }: { session: FocusSession | null; held: FocusSession | null; onClose: () => void }) {
-  const [minutes, setMinutes] = React.useState('');
-  const [subject, setSubject] = React.useState('');
-  const [problem, setProblem] = React.useState('');
-  React.useEffect(() => {
-    if (!session) return;
-    setMinutes(String(Math.max(1, Math.round(session.netSeconds / 60))));
-    setSubject(session.subject || '');
-    setProblem('');
-  }, [session?.id]);
-  const shown = session ?? held;
-  const save = () => {
-    if (!session) return;
-    const min = minutesOf(minutes);
-    if (min == null) { setProblem('Minutes from 1 to 720, like 45.'); return; }
-    const was = Math.max(1, Math.round(session.netSeconds / 60));
-    // the minutes are written only when changed, so a session's exact seconds stay as they were otherwise
-    useStore.getState().updateSession(session.id, { subject, ...(min !== was ? { minutes: min } : {}) });
-    tick();
-    onClose();
-  };
-  return (
-    <Sheet visible={!!session} onClose={onClose} title={shown ? sessionDay(shown.dateKey) + "'s session" : 'Session'}>
-      <Field
-        label="Minutes" value={minutes} onChangeText={(v) => { setMinutes(v); setProblem(''); }} keyboardType="number-pad"
-        maxLength={3} style={{ width: 110, fontVariant: ['tabular-nums'] }}
-      />
-      <Field label="Subject" value={subject} onChangeText={setSubject} placeholder="No subject" maxLength={60} style={{ marginBottom: 0 }} />
-      <SubjectSuggest value={subject} max={5} onPick={setSubject} style={{ marginTop: 10 }} />
-      {problem ? <Text style={st.problem}>{problem}</Text> : null}
-      <PillButton label="Save" icon="checkmark" onPress={save} style={{ marginTop: 22 }} />
     </Sheet>
   );
 }

@@ -79,6 +79,7 @@ const DEFS: Record<SettingsPage, Def[]> = {
   deepwork: [
     ['Deep Work', 'The chime and the ambient screen', 'focus timer pomodoro'],
     ['Chime when a block ends', 'A soft chime as well as the buzz', 'sound chime focus block end'],
+    ['Drop sessions under a minute', 'Short starts are not kept', 'short session minute delete drop focus history'],
     ['Ambient screen', 'The dark screen while a block runs', 'ambient screen focus black'],
     ['Seconds on the ambient screen', undefined, 'seconds ambient timer'],
     ['Time of day on the ambient screen', undefined, 'clock time ambient'],

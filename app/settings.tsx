@@ -1766,6 +1766,16 @@ export default function Settings() {
                 </View>
                 <Toggle value={settings.focusChime} onChange={(v) => setSetting('focusChime', v)} color={C.accent} label="Chime when a block ends" />
               </Row>
+              <Hairline />
+              <Anchor ids={[sid('deepwork', 'Drop sessions under a minute')]}>
+              <Row style={{ justifyContent: 'space-between', marginTop: 10 }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[T.body, { fontFamily: F.med }]}>Drop sessions under a minute</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>A start by mistake or a quick try is not kept in the history.</Text>
+                </View>
+                <Toggle value={settings.focusDropShort} onChange={(v) => setSetting('focusDropShort', v)} color={C.accent} label="Drop sessions under a minute" />
+              </Row>
+              </Anchor>
             </Card>
             </Anchor>
             <SectionTitle>Ambient screen</SectionTitle>
