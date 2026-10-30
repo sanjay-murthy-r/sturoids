@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, bgFor, neuInset, neuRaised, oneLine } from '../theme';
 import { useStore } from '../store';
 import { Chip, useTheme } from './UI';
-import { EASE_EXIT, EASE_OUT, Sheen, useAnimLevel } from './Motion';
+import { EASE_EMPHASISED, EASE_EXIT, EASE_OUT, Sheen, useAnimLevel } from './Motion';
 import { PinSheet } from './LockGate';
 import { toast } from './Toast';
 import { tick } from '../haptics';
@@ -37,8 +37,10 @@ import {
 // comes up once the motion has settled. Results are worked out a frame after typing pauses, and the last ones stay up
 // until the new ones are ready, so nothing flashes. Pull the list down at its top, Back or Cancel to close.
 
-const OPEN_MS = 280;
-const CLOSE_MS = 220;
+const OPEN_MS = 340;
+const CLOSE_MS = 240;
+/** the pill a pull draws under the bar, about this wide: Sift's field grows out of it */
+const PILL_W = 96;
 /** the scrim's strength over the app when Sift is fully open */
 const SCRIM = 0.55;
 /** the app behind, fully open */
@@ -332,7 +334,8 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       tick();
       const start = fromPull ? Math.max(siftShown.value, 0.25 * siftPull.value) : siftShown.value;
       siftShown.value = start;
-      siftShown.value = level === 'none' ? 1 : withTiming(1, { duration: OPEN_MS, easing: EASE_OUT });
+      // quick off the mark and long to settle, as every panel arrives: from a pull it carries on the finger's motion
+      siftShown.value = level === 'none' ? 1 : withTiming(1, { duration: OPEN_MS, easing: EASE_EMPHASISED });
       // the keyboard comes once the motion has settled, so it never rides the opening
       const t = setTimeout(() => inputRef.current?.focus(), level === 'none' ? 30 : 200);
       return () => clearTimeout(t);
@@ -645,16 +648,24 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   /* ---- the panel's motion */
   const panelStyle = useAnimatedStyle(() => ({ opacity: siftShown.value }));
   const scrimStyle = useAnimatedStyle(() => ({ opacity: SCRIM * siftShown.value }));
+  // From a pull, the field grows out of the pill the pull drew under the bar: it starts the pill's width and a little
+  // lower, fully there almost at once, and opens out to its own width; closing, it draws back into the pill the same
+  // way. Opened any other way, it drops in from the top.
+  const pillScale = Math.min(0.9, Math.max(0.2, PILL_W / Math.max(1, Math.min(width, PANEL_MAX) - 32)));
   const fieldStyle = useAnimatedStyle(() => {
     if (level !== 'full') return { opacity: siftShown.value };
     const p = siftShown.value;
-    return {
-      opacity: p,
-      // from a pull it grows out of the header; otherwise it drops in from the top
-      transform: fromPull
-        ? [{ translateY: -6 * (1 - p) }, { scaleX: 0.86 + 0.14 * p }] as const
-        : [{ translateY: -22 * (1 - p) }, { scaleX: 1 }] as const,
-    };
+    if (fromPull) {
+      return {
+        opacity: Math.min(1, p * 2.4),
+        transform: [
+          { translateY: 10 * (1 - p) },
+          { scaleX: pillScale + (1 - pillScale) * p },
+          { scaleY: 0.82 + 0.18 * p },
+        ] as const,
+      };
+    }
+    return { opacity: p, transform: [{ translateY: -22 * (1 - p) }, { scaleX: 1 }, { scaleY: 1 }] as const };
   });
   const bodyStyle = useAnimatedStyle(() => ({
     opacity: level === 'none' ? 1 : Math.max(0, (siftShown.value - 0.35) / 0.65),
