@@ -18,6 +18,7 @@ import { M, closeBrackets, fmt, makeScope, math, shown, toEngine } from '../calc
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RAIL_W, TWO_COL_AT, WIDE_AT, WIDE_MAX } from '../layout';
 import { useRail } from '../hooks/useRail';
+import { rightClick } from '../web/rightClick';
 
 /** A sum that is only a number: it has nothing to preview, and "=" on it has nothing to answer. */
 const BARE = /^[−-]?(\d+\.?\d*|\.\d+)(×10\^[−-]?\d+)?$/;
@@ -917,6 +918,7 @@ const Key = React.memo(function Key({ label, value, onKey, onLongPress, color, s
     <Press
       onPress={() => { tick(); onKey(value); }}
       onLongPress={onLongPress}
+      {...rightClick(onLongPress)}
       radius={16}
       scaleTo={0.94}
       slop={slop}

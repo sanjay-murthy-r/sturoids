@@ -1,9 +1,11 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable, useWindowDimensions } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useScrollToTop } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, S, T, TRACK, ThemeMode, neuInset } from '../../src/theme';
+import { C, F, MIN, S, T, TRACK, ThemeMode, neuInset, neuRaised } from '../../src/theme';
+import { WIDE_AT, WIDE_MAX } from '../../src/layout';
+import { rightClick } from '../../src/web/rightClick';
 import { ScreenBG, ListCard, ListRow, SectionTitle, DotMenu, useTheme, useToolHeader } from '../../src/components/UI';
 import { Enter, FadeSwap, useFocusKey } from '../../src/components/Motion';
 import { ToolArchiveSheet } from '../../src/components/ToolArchiveSheet';
@@ -13,6 +15,7 @@ import { TOOLS, Tool, ToolKey, colorOf, normaliseArchived, normaliseSlots } from
 import { openPage, openTool } from '../../src/toolNav';
 import { openReport } from '../../src/reports';
 import { openSift } from '../../src/search/store';
+import { useSiftAnchor } from '../../src/search/anchor';
 import { BACKUP_ATTENTION_TEXT, useBackupAttention } from '../../src/cloud';
 
 /** what a tool's count is of, so a screen reader hears "12 notes" rather than a bare number */
@@ -52,6 +55,43 @@ const ToolRow = React.memo(function ToolRow({ tool, count, locked, onOpen, onMen
       ) : null}
       <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
     </ListRow>
+  );
+});
+
+/**
+ * A tool as a tile, for a wide screen (a tablet, the PC): the list's row grown into a card of a grid, so a wide window
+ * shows every tool at once instead of one long narrow column. A pointer over it lifts it a little; a right click opens
+ * its menu, as a long press does.
+ */
+const ToolTile = React.memo(function ToolTile({ icon, iconColor, label, desc, count, locked, onPress, onMenu, width }: {
+  icon: string; iconColor: string; label: string; desc: string; count?: number; locked?: boolean;
+  onPress: () => void; onMenu?: () => void; width: number;
+}) {
+  const theme = useTheme();
+  const face = theme === 'minimal'
+    ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
+    : { backgroundColor: C.card, ...neuRaised('mid') };
+  return (
+    <Pressable
+      onPress={onPress} onLongPress={onMenu} {...rightClick(onMenu)} delayLongPress={420}
+      accessibilityRole="button" accessibilityLabel={label + ', ' + desc}
+      style={(state: any) => [
+        st.tile, face, { width },
+        state.hovered && { transform: [{ translateY: -2 }], borderColor: theme === 'minimal' ? C.accent + '66' : undefined },
+        state.pressed && { transform: [{ scale: 0.98 }], opacity: 0.92 },
+      ]}
+    >
+      <View style={st.tileTop}>
+        <View style={[st.iconWell, wellFor(theme)]}>
+          <Ionicons name={icon as any} size={22} color={iconColor} />
+        </View>
+        <View style={{ flex: 1 }} />
+        {locked ? <Ionicons name="lock-closed-outline" size={15} color={C.textFaint} style={{ marginRight: 6 }} /> : null}
+        {count ? <Text style={st.count}>{count}</Text> : null}
+      </View>
+      <Text style={[st.title, { marginTop: 14 }]} numberOfLines={1}>{label}</Text>
+      <Text style={[T.caption, { marginTop: 3 }]} numberOfLines={2}>{desc}</Text>
+    </Pressable>
   );
 });
 
@@ -118,6 +158,12 @@ export default function More() {
   // the page is a list: its header is the big title alone, with no line of context and nothing live
   // a pull down anywhere on the list, once it is at its top, opens Sift too (Settings' choice)
   const header = useToolHeader({ scrollRef, title: 'More', mode: 'tab', contentPull: 'all' });
+  // a wide window lays the tools out as a grid of tiles, as many across as fit
+  const winW = useWindowDimensions().width;
+  const [areaW, setAreaW] = React.useState(0);
+  const grid = winW >= WIDE_AT && areaW > 0;
+  const cols = Math.max(2, Math.min(4, Math.floor((areaW + S.gap) / (220 + S.gap))));
+  const tileW = grid ? Math.floor((areaW - S.gap * (cols - 1)) / cols) : 0;
   // the backup paused or lost: the Settings row says so in amber, and opens Account straight away
   const attention = useBackupAttention();
 
@@ -128,7 +174,7 @@ export default function More() {
   };
 
   return (
-    <ScreenBG guard>
+    <ScreenBG guard maxWidth={winW >= WIDE_AT ? WIDE_MAX : undefined}>
       {header.bar}
       {header.pullArea(<Animated.ScrollView
         key={fk}
@@ -140,7 +186,25 @@ export default function More() {
             into the card, and the rows after it glide (ListCard) */}
         <Enter index={0}>
           {header.hero}
-          <SiftField theme={theme} />
+          <View onLayout={(e) => setAreaW(e.nativeEvent.layout.width)}>
+            <SiftField theme={theme} />
+          </View>
+          {grid ? (
+            <View style={st.grid}>
+              {tools.map((t) => (
+                <ToolTile
+                  key={t.key} width={tileW} icon={t.icon} iconColor={colorOf(t.colorKey)} label={t.label} desc={t.desc}
+                  count={counts[t.key] || 0} locked={lockedTool(t.key)} onPress={() => openTool(t.key)} onMenu={() => openMenu(t)}
+                />
+              ))}
+              {archivedTools.length ? (
+                <ToolTile
+                  key="archived" width={tileW} icon="archive-outline" iconColor={C.textDim} label="Archived"
+                  desc={archivedTools.map((t) => t.label).join(', ')} count={archivedTools.length} onPress={openArchive}
+                />
+              ) : null}
+            </View>
+          ) : (
           <ListCard>
             {tools.map((t) => (
               <ToolRow
@@ -155,11 +219,25 @@ export default function More() {
               />
             ) : null}
           </ListCard>
+          )}
         </Enter>
 
         {/* system, deliberately separated: settings is not a tool; its title rises with its card */}
         <Enter index={1}>
           <SectionTitle>System</SectionTitle>
+          {grid ? (
+            <View style={st.grid}>
+              <ToolTile
+                width={tileW} icon="settings-outline" iconColor={attention === 'ok' ? C.accent : C.amber} label="Settings"
+                desc={attention === 'ok' ? 'Theme, tools, reminders and backup' : BACKUP_ATTENTION_TEXT[attention]}
+                onPress={() => (attention === 'ok' ? openPage('/settings') : openPage('/settings', { page: 'account' }))}
+              />
+              <ToolTile
+                width={tileW} icon="document-text-outline" iconColor={C.accent} label="Reports & exports"
+                desc="One summary, or the full progress report, as PDF or CSV" onPress={openReport}
+              />
+            </View>
+          ) : (
           <ListCard>
             <ListRow
               key="settings" style={st.row}
@@ -194,6 +272,7 @@ export default function More() {
               <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
             </ListRow>
           </ListCard>
+          )}
         </Enter>
       </Animated.ScrollView>)}
 
@@ -215,7 +294,9 @@ export default function More() {
  * Sift over the app (every scope), where the real field takes the keyboard.
  */
 function SiftField({ theme }: { theme: ThemeMode }) {
+  const anchor = useSiftAnchor('more');
   return (
+    <Animated.View ref={anchor.ref} style={anchor.style} collapsable={false}>
     <Pressable
       onPress={() => openSift('more')}
       accessibilityRole="search"
@@ -226,11 +307,15 @@ function SiftField({ theme }: { theme: ThemeMode }) {
       <Ionicons name="search" size={18} color={C.textFaint} />
       <Text style={st.siftText} numberOfLines={1}>Sift through everything</Text>
     </Pressable>
+    </Animated.View>
   );
 }
 
 const st = StyleSheet.create({
   row: { paddingVertical: 12 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: S.gap },
+  tile: { borderRadius: S.radius, padding: S.cardPad, minHeight: 138 },
+  tileTop: { flexDirection: 'row', alignItems: 'center' },
   sift: {
     height: 48, borderRadius: 16, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 10,
     marginBottom: S.gap + 4,

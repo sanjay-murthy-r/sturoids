@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutChangeEvent, StyleSheet, TextStyle, View, useWindowDimensions } from 'react-native';
+import { LayoutChangeEvent, Platform, StyleSheet, TextStyle, View, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   cancelAnimation, interpolateColor, runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring,
@@ -148,8 +148,8 @@ export const Wheel = React.memo(function Wheel({
     return Gesture.Race(pan, tap);
   }, [spacing, count, loop, still, commit, pressCenter]);
 
-  const step = (by: 1 | -1) => {
-    const t = Math.round(pos.value) + by;
+  const step = (by: 1 | -1, toward?: number) => {
+    const t = toward ?? Math.round(pos.value) + by;
     const target = loop ? t : Math.min(count - 1, Math.max(0, t));
     if (still) {
       pos.value = target;
@@ -162,6 +162,43 @@ export const Wheel = React.memo(function Wheel({
     });
   };
 
+  // A mouse on the PC: the wheel over it turns it, a value a notch (a trackpad's swipe, either way, a value per stretch
+  // of it), and the page under it holds still meanwhile
+  const box = React.useRef<View>(null);
+  const aim = React.useRef(index);
+  const stepRef = React.useRef(step); stepRef.current = step;
+  const boundsRef = React.useRef({ loop, count }); boundsRef.current = { loop, count };
+  React.useEffect(() => {
+    if (Platform.OS !== 'web') return undefined;
+    const el = box.current as unknown as HTMLElement | null;
+    if (!el || typeof el.addEventListener !== 'function') return undefined;
+    let acc = 0;
+    let quietAt = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) return;
+      const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (!d) return;
+      e.preventDefault();
+      // a fresh turn of the wheel starts from where the wheel is going, not from where it is mid-glide
+      const now = Date.now();
+      if (now - quietAt > 220) aim.current = Math.round(pos.value);
+      quietAt = now;
+      acc += e.deltaMode === 1 ? d * 40 : d;
+      const notch = 46;
+      while (Math.abs(acc) >= notch) {
+        const by = acc > 0 ? 1 : -1;
+        acc -= by * notch;
+        const next = aim.current + by;
+        const { loop: l, count: n } = boundsRef.current;
+        if (!l && (next < 0 || next > n - 1)) { acc = 0; break; }
+        aim.current = next;
+        stepRef.current(by, next);
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
   const keys: number[] = [];
   for (let k = center - WINDOW; k <= center + WINDOW; k++) {
     if (loop || (k >= 0 && k < count)) keys.push(k);
@@ -170,6 +207,7 @@ export const Wheel = React.memo(function Wheel({
   return (
     <GestureDetector gesture={gesture}>
       <View
+        ref={box}
         style={[{ height, overflow: 'hidden' }, wideWin && { width: '100%', maxWidth: MAX_W, alignSelf: 'center' }]}
         onLayout={(e: LayoutChangeEvent) => { width.value = e.nativeEvent.layout.width; }}
         accessible

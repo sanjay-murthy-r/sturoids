@@ -19,9 +19,29 @@ export interface SiftState {
   scopes: SiftScopes;
   query: string;
   origin: SiftOrigin;
+  /**
+   * The search bar Sift was opened over (More's, Settings'), where it is on screen: Sift's field lifts out of it and
+   * goes back into it. Null for every other way in.
+   */
+  anchor: SiftRect | null;
+  /** which page's bar that is, so the bar can stand back while its field is up */
+  anchorOwner: string | null;
 }
 
-export const useSearch = create<SiftState>(() => ({ open: false, scopes: [], query: '', origin: 'other' }));
+export interface SiftRect { x: number; y: number; w: number; h: number }
+
+/** A page's own search bar, while the page is in front: what openSift measures to start from it. */
+interface Anchor { owner: string; measure: (cb: (r: SiftRect | null) => void) => void }
+let anchor: Anchor | null = null;
+/** A page puts its bar forward (and takes it back with the returned function). */
+export function setSiftAnchor(a: Anchor) {
+  anchor = a;
+  return () => { if (anchor === a) anchor = null; };
+}
+
+export const useSearch = create<SiftState>(() => ({
+  open: false, scopes: [], query: '', origin: 'other', anchor: null, anchorOwner: null,
+}));
 
 /**
  * How far Sift is open, 0 to 1, on the UI thread: the overlay drives it, and the app behind (AppFrame) scales and dims
@@ -41,7 +61,22 @@ export function openSift(origin: SiftOrigin = 'other', opts: { scope?: SiftScope
   if (s.open) return;
   const asked = opts.scope == null ? [] : typeof opts.scope === 'string' ? [opts.scope] : opts.scope;
   const scopes = asked.filter((k): k is Exclude<SiftScope, 'all'> => k !== 'all');
-  useSearch.setState({ open: true, origin, scopes, query: opts.query ?? '' });
+  const go = (rect: SiftRect | null, owner: string | null) => {
+    if (useSearch.getState().open) return;
+    useSearch.setState({ open: true, origin, scopes, query: opts.query ?? '', anchor: rect, anchorOwner: rect ? owner : null });
+  };
+  // a page with its own search bar in view: Sift starts from it (measured first: one frame)
+  const a = anchor;
+  if (!a) { go(null, null); return; }
+  let done = false;
+  const t = setTimeout(() => { if (!done) { done = true; go(null, null); } }, 60);
+  a.measure((rect) => {
+    if (done) return;
+    done = true;
+    clearTimeout(t);
+    // only a bar that is on screen: scrolled away, Sift arrives its usual way
+    go(rect && rect.w > 0 && rect.h > 0 && rect.y + rect.h > 0 ? rect : null, a.owner);
+  });
 }
 
 /** Closes Sift; the overlay plays its way out. */

@@ -13,3 +13,4 @@ web-build/
 *.apk
 .web-build/
 .export-check/
+.webcheck/

@@ -34,8 +34,10 @@ const INK = {
 const DRIFT: [number, number][] = [[0.022, -0.022], [-0.022, 0.022], [0.022, 0.022], [-0.022, -0.022], [0, 0]];
 
 // Monolith, as drawn in the Focus Lab on a 360 dp screen, in shares of the screen's shorter side (u)
-/** the minutes, as large as the screen allows */
-const BIG = 0.46;
+/** the minutes: quiet, as an always-on display keeps its time, readable across a desk without filling the screen */
+const BIG = 0.3;
+/** at most this share of the screen's width */
+const BIG_W = 0.6;
 /** the seconds, and the gap and drop that set them against the minutes, as shares of the minutes' size */
 const SEC = 10 / 46;
 const SEC_GAP = 1 / 46;
@@ -172,9 +174,9 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
   // the subject at the top and the task at the foot keep their places; the time is centred between them, as large as
   // the width and the height left over allow
   const kickerSize = u * 0.035;
-  const todSize = u * 0.039;
-  const metaSize = u * 0.044;
-  const taskSize = u * 0.04;
+  const todSize = u * 0.032;
+  const metaSize = u * 0.032;
+  const taskSize = u * 0.034;
   const top = Math.max(u * 0.15, topInset + 12);
   const foot = u * 0.17;
   const topH = top + (subject ? kickerSize * 1.5 : 0) + (showClock ? u * 0.024 + todSize * 1.35 : 0);
@@ -183,22 +185,17 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
   const room = height - 2 * (Math.max(topH, footH) + u * 0.04) - metaH;
   const rowEm = clockWidth(big, 1)
     + (withSeconds ? SEC_GAP + clockWidth(sec, 1) * SEC : unit ? UNIT_GAP + UNIT * UNIT_EM : 0);
-  const size = Math.floor(Math.max(24, Math.min(u * BIG, (width * 0.84) / rowEm, room / LINE)));
+  const size = Math.floor(Math.max(24, Math.min(u * BIG, (width * BIG_W) / rowEm, room / LINE)));
   const firstSize = React.useRef(size);
   const resized = level !== 'none' && size !== firstSize.current;
 
   const raw = displayOf(timer);
   let progress = 0;
-  let meta = '';
-  if (timer.mode === 'countdown') {
-    progress = 1 - raw / (timer.targetMin * 60);
-    meta = timer.running && timer.startTs
-      ? 'Ends ' + clockAt(timer.startTs + (timer.targetMin * 60 - timer.accumSec) * 1000, hour24)
-      : 'Paused';
-  } else {
-    if (finishAt && startedAt && finishAt > startedAt) progress = (Date.now() - startedAt) / (finishAt - startedAt);
-    meta = !timer.running ? 'Paused' : finishAt ? 'Finish ' + clockAt(finishAt, hour24) : startedAt ? 'Started ' + clockAt(startedAt, hour24) : '';
-  }
+  // no clock times under the timer (when it ends, when it began): the face keeps to the time left and the subject.
+  // Only a pause is said, since a paused face otherwise looks like a running one
+  const meta = timer.running ? '' : 'Paused';
+  if (timer.mode === 'countdown') progress = 1 - raw / (timer.targetMin * 60);
+  else if (finishAt && startedAt && finishAt > startedAt) progress = (Date.now() - startedAt) / (finishAt - startedAt);
   progress = Math.min(1, Math.max(0, progress));
   const ruleW = width - u * 0.22;
 
@@ -281,7 +278,7 @@ function AmbientBody({ onExit, ...face }: Omit<AmbientProps, 'visible'>) {
   const showHint = React.useCallback(() => {
     setHint(true);
     if (hintTimer.current) clearTimeout(hintTimer.current);
-    hintTimer.current = setTimeout(() => setHint(false), 2500);
+    hintTimer.current = setTimeout(() => setHint(false), 1800);
   }, []);
   React.useEffect(() => {
     showHint();
@@ -330,9 +327,9 @@ function AmbientBody({ onExit, ...face }: Omit<AmbientProps, 'visible'>) {
           entering={level === 'none' ? undefined : FadeIn.duration(200).easing(EASE_OUT)}
           exiting={level === 'none' ? undefined : FadeOut.duration(level === 'full' ? 400 : 160).easing(Easing.inOut(Easing.quad))}
           allowFontScaling={false}
-          style={[st.hint, { bottom: u * 0.08, fontSize: Math.max(12, u * 0.034) }]}
+          style={[st.hint, { bottom: u * 0.06, fontSize: Math.max(10, u * 0.026) }]}
         >
-          Hold anywhere to exit
+          Hold to exit
         </Animated.Text>
       ) : null}
     </Pressable>
@@ -381,5 +378,6 @@ const st = StyleSheet.create({
   foot: { position: 'absolute' },
   task: { textAlign: 'center' },
   rule: { backgroundColor: INK.track, overflow: 'hidden' },
-  hint: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: INK.soft, fontFamily: F.sm },
+  // how to leave: said small and faint, and only for a moment after a touch
+  hint: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: INK.faint, opacity: 0.7, fontFamily: F.sm, letterSpacing: 0.4 },
 });

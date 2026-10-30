@@ -39,6 +39,28 @@ import { useIntro } from '../intro';
 import { minutesUntil } from '../toolLogic';
 import { openSessionEditor } from '../components/SessionEditor';
 import { TagPicker } from '../components/TagPicker';
+import { ParkedCard, TodayCard } from '../components/FocusExtras';
+import { InOrder, SectionDef, useSections } from '../components/Arrange';
+import { noteUse, useLearnt } from '../learn';
+
+/** Deep Work's sections between sessions, in their usual order; the clock itself can move but never be put away */
+const IDLE_SECTIONS: SectionDef[] = [
+  { key: 'mode', label: 'Countdown or stopwatch', hint: 'The switch above the clock' },
+  { key: 'timer', label: 'The clock', hint: 'Length and Start', fixed: true },
+  { key: 'subject', label: 'Subject and tags' },
+  { key: 'today', label: 'Today', hint: 'Focus so far, goal, streak, next block' },
+  { key: 'tasks', label: 'Session tasks' },
+  { key: 'recent', label: 'Recent sessions' },
+];
+/** and while one runs */
+const RUN_SECTIONS: SectionDef[] = [
+  { key: 'stage', label: 'The clock', hint: 'Pause, end, ambient screen', fixed: true },
+  { key: 'parked', label: 'Park a thought', hint: 'Jot what comes to mind; it goes to ToDos after' },
+  { key: 'tasks', label: 'Session tasks' },
+  { key: 'today', label: 'Today', hint: 'Focus so far, goal, streak, next block' },
+];
+/** the sections that sit in the left column on a wide screen, beside the rest */
+const MAIN = new Set(['mode', 'timer', 'subject', 'break', 'stage']);
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
@@ -188,6 +210,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const sessions = useStore((s) => s.sessions);
   const planner = useStore((s) => s.planner);
   const hour24 = useStore((s) => s.settings.hour24);
+  const focusGoal = useStore((s) => s.settings.focusGoalMin);
   const setDeepWork = useStore((s) => s.setDeepWork);
   const patchDeepWork = useStore((s) => s.patchDeepWork);
   // a session in flight survives a process kill: the store keeps a copy and this screen resumes from it
@@ -216,6 +239,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [tags, setTags] = useState<string[]>(saved?.tags ?? []);
   const tagsRef = useRef(tags);
   tagsRef.current = tags;
+  // thoughts parked mid-session, for the ToDos once it ends
+  const [parked, setParked] = useState<string[]>(saved?.parked ?? []);
+  const parkedRef = useRef(parked);
+  parkedRef.current = parked;
   const [attached, setAttached] = useState<Attached[]>(saved?.attached ?? []);
   const [subjectSheet, setSubjectSheet] = useState(false);
   // a sideways tablet is known before it lays out, so its first frame already has its two columns
@@ -296,9 +323,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
     setDeepWork({
       mode: timerMode, targetMin, running, startTs, accumSec, finishAt, attached,
-      startedAt: startedAtRef.current ?? Date.now(), subject: subjectRef.current, tags: tagsRef.current,
+      startedAt: startedAtRef.current ?? Date.now(), subject: subjectRef.current, tags: tagsRef.current, parked: parkedRef.current,
     });
-  }, [started, timerMode, targetMin, running, startTs, accumSec, finishAt, attached]);
+  }, [started, timerMode, targetMin, running, startTs, accumSec, finishAt, attached, parked]);
   // the countdown's end notice names the subject, so a new subject lays it out again, from the live session
   const timerRef = useRef(timer);
   timerRef.current = timer;
@@ -377,6 +404,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     endedRef.current = false;
     if (startedAtRef.current == null) {
       startedAtRef.current = Date.now();
+      noteUse('focus.start');
+      if (subjectRef.current.trim()) noteUse('focus.subject');
       // a new session: a break or a next block still on offer has had its turn
       clearBetween();
       // the length the session was set up with; a block until a clock time is measured again from now, as long as the
@@ -598,7 +627,12 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     };
     setRunning(false); setStartTs(null); setAccumSec(net); setAmbient(false);
     const unchecked = live.filter((a) => !a.done);
-    if (net < 5 && attached.length === 0) { reset(); return; }
+    if (net < 5 && attached.length === 0) {
+      const n = flushParked();
+      reset();
+      if (n) toast(n === 1 ? 'Parked thought added to ToDos' : n + ' parked thoughts added to ToDos');
+      return;
+    }
     // a block that ran out offers a break, then a block like it; one ended by hand was ended on purpose
     if (!byHand && timerMode === 'countdown') {
       const blockEnd = running && startTs ? startTs + (targetMin * 60 - accumSec) * 1000 : Date.now();
@@ -618,8 +652,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       const id = commit(net, {});
       // a session ended by hand with nothing to review is saved at once: a tap on End by mistake can be taken back. Any
       // session saved says so quietly, with a way to put its details right (a break that was not paused, say)
-      if (id) savedToast(id, net, byHand ? () => resumeRef.current(id, before) : undefined);
-      else if (net >= 5) toast('Under a minute, so not kept');
+      if (id) savedToast(id, net, byHand ? () => resumeRef.current(id, before) : undefined, lastAdded.current);
+      else if (net >= 5) toast('Under a minute, so not kept' + (lastAdded.current ? ' · ' + lastAdded.current : ''));
+      else if (lastAdded.current) toast(lastAdded.current);
       return;
     }
     const choices: Record<string, ReviewChoice> = {};
@@ -638,8 +673,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         added++;
       }
     }
+    const parkedN = flushParked();
     // said once the review has gone, where the toast can be seen
-    const addedLine = added ? (added === 1 ? 'Task added to ToDos' : added + ' tasks added to ToDos') : '';
+    const addedLine = [
+      added ? (added === 1 ? 'Task added to ToDos' : added + ' tasks added to ToDos') : '',
+      parkedN ? (parkedN === 1 ? 'parked thought in ToDos' : parkedN + ' parked thoughts in ToDos') : '',
+    ].filter(Boolean).join(' · ');
+    lastAdded.current = addedLine;
     let id: string | null = null;
     // a session under a minute is not kept unless Settings keeps them (a start by mistake, a quick try)
     const keepFrom = useStore.getState().settings.focusDropShort ? 60 : 5;
@@ -705,9 +745,20 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   });
   const afterReview = useRef<(() => void) | null>(null);
 
+  const lastAdded = useRef('');
+  /** Parked thoughts go to today's ToDos, once; returns how many went. */
+  function flushParked(): number {
+    const list = parkedRef.current;
+    if (!list.length) return 0;
+    list.forEach((t) => addDaily(t));
+    parkedRef.current = [];
+    setParked([]);
+    return list.length;
+  }
+
   function reset() {
     setReview(null); setHeld(false); setAttached([]); setAccumSec(0); setRunning(false); setStartTs(null);
-    setSubject(''); setTags([]); endedRef.current = false; startedAtRef.current = null;
+    setSubject(''); setTags([]); setParked([]); endedRef.current = false; startedAtRef.current = null;
     // the wheel goes back to the length the session was set up with
     setTargetMin(chosenRef.current);
   }
@@ -902,8 +953,12 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           endsAt ? ' until ' + clockAt(endsAt) : startedAtRef.current ? ' since ' + clockAt(startedAtRef.current) : '',
         ]);
   const scrollRef = useRef<Animated.ScrollView>(null);
+  const idleSec = useSections('focus.idle', 'Deep Work', IDLE_SECTIONS);
+  const runSec = useSections('focus.running', 'Deep Work in session', RUN_SECTIONS);
+  const sec = idle ? idleSec : runSec;
   const header = useToolHeader({ contentPull: 'all', scrollRef,
     title: 'Deep Work',
+    actions: [sec.arrange],
     mode: mode === 'tab' ? 'tab' : 'page',
     context: focusContext,
     live: started && running,
@@ -991,10 +1046,16 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     </Animated.View>
   ) : null);
 
-  const stageBlock = (
-    <Enter index={0}>
-      {idle && gap ? (
-        <Animated.View key="between" entering={switchIn}>
+  const subjectHint = useLearnt('focus.subject', 'Subject, like Physics (optional)', 'Subject');
+  const wheelHint = useLearnt('focus.start', 'minutes, or tap the number to type one', 'minutes');
+  // the session running, in whole minutes, for the Today card: it moves on with the minute the screen already turns on
+  const liveMin = started ? Math.floor(elapsedOf(timer) / 60) : 0;
+  const nextLine = blocks.next ? (blocks.next.subject || 'A block') + ' at ' + fmtClockTime(toMinutes(blocks.next.start), hour24) : undefined;
+
+  // every section of the screen, by key; the page's arrangement says which show and in what order
+  const sections: Record<string, React.ReactNode> = {
+    break: gap ? (
+      <>
           <BreakStage
             stage={gap.stage}
             subject={nextName}
@@ -1010,21 +1071,27 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             hold={!focused || !appActive}
           />
           {gap.stage === 'break' ? silentLine('break') : null}
-        </Animated.View>
-      ) : idle ? (
-        <Animated.View key="idle" entering={switchIn}>
+        {gap.stage === 'break' ? silentLine('break') : null}
+      </>
+    ) : null,
+    mode: (
+      <>
           {/* timer mode */}
-          <SegmentedControl
-            size="sm"
-            options={[
-              { key: 'countdown', label: 'Countdown' },
-              { key: 'stopwatch', label: 'Stopwatch' },
-            ]}
-            value={timerMode}
-            onChange={(k) => { setTimerMode(k); if (k === 'countdown') clearFinishLine(); }}
-            style={{ marginBottom: 24 }}
-          />
-          <GlassCard hero style={{ alignItems: 'center', paddingVertical: 34 }}>
+        <SegmentedControl
+          size="sm"
+          options={[
+            { key: 'countdown', label: 'Countdown' },
+            { key: 'stopwatch', label: 'Stopwatch' },
+          ]}
+          value={timerMode}
+          onChange={(k) => { setTimerMode(k); if (k === 'countdown') clearFinishLine(); }}
+          style={{ marginBottom: 24 }}
+        />
+      </>
+    ),
+    timer: (
+      <>
+          <GlassCard hero style={{ alignItems: 'center', paddingVertical: 34, marginBottom: S.section / 2 }}>
             {timerMode === 'countdown' ? (
               // the length: drag it or tap a length beside it; tap the number for an exact length or a clock time
               <Animated.View entering={modeIn} style={st.wheelBox}>
@@ -1051,7 +1118,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             {/* the line under the time changes with the mode: it dips over with it */}
             <FadeSwap swapKey={timerMode}>
               <Text style={{ color: C.textDim, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small, marginTop: 4 }}>
-                {timerMode === 'countdown' ? 'minutes, or tap the number to type one' : 'stopwatch'}
+                {timerMode === 'countdown' ? wheelHint : 'stopwatch'}
                 {shownSubject ? ` · ${shownSubject}` : ''}
               </Text>
             </FadeSwap>
@@ -1075,17 +1142,22 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               <PillButton label="Start" icon="play" onPress={start} />
             </Row>
           </GlassCard>
+      </>
+    ),
+    subject: (
+      <View style={{ marginBottom: S.section / 2 }}>
           <View ref={subjectBox} collapsable={false}>
             <Field
-              value={subject} onChangeText={setSubject} placeholder="Subject, like Physics (optional)"
+              value={subject} onChangeText={setSubject} placeholder={subjectHint}
               maxLength={60} returnKeyType="done" onFocus={revealSubject}
             />
           </View>
           {subjectChips}
-          <TagPicker value={tags} onChange={setTags} style={{ marginTop: 14 }} />
-        </Animated.View>
-      ) : (
-        <Animated.View key="running" entering={switchIn}>
+          <TagPicker value={tags} onChange={setTags} subject={subject} style={{ marginTop: 10 }} />
+      </View>
+    ),
+    stage: (
+      <>
           <SessionStage
             timer={timer}
             subject={shownSubject}
@@ -1104,15 +1176,24 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             hold={ambient || !focused || !appActive}
           />
           {timerMode === 'countdown' || finishAt != null ? silentLine('block') : null}
-        </Animated.View>
-      )}
-    </Enter>
-  );
-
-  const tasksBlock = (
-    <>
-      {/* attached tasks: the title rises with its card, so neither waits for the other */}
-      <Enter index={2}>
+      </>
+    ),
+    parked: (
+      <View style={{ marginTop: S.section / 2 }}>
+        <ParkedCard
+          parked={parked}
+          onPark={(t) => setParked((l) => [...l, t].slice(-20))}
+          onUnpark={(i) => setParked((l) => l.filter((_, j) => j !== i))}
+        />
+      </View>
+    ),
+    today: (
+      <View style={{ marginTop: idle ? 0 : S.section / 2 }}>
+        <TodayCard sessions={sessions} today={today} liveMin={liveMin} goalMin={focusGoal} next={idle ? nextLine : undefined} />
+      </View>
+    ),
+    tasks: (
+      <>
         <SectionTitle
           right={(
             <Bouncy
@@ -1143,11 +1224,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             </ListCard>
           )}
         </Animated.View>
-      </Enter>
-
-      {/* recent sessions: history belongs to the time between sessions; it rises in when a session ends, as it does with the screen */}
-      {idle && (
-        <Enter index={3}>
+      </>
+    ),
+    recent: idle ? (
+      <>
           <SectionTitle
             right={sessions.length > 0 ? (
               // every session, by day, with the week's minutes per subject
@@ -1182,10 +1262,21 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               ))}
             </ListCard>
           )}
-        </Enter>
-      )}
-    </>
+      </>
+    ) : null,
+  };
+  // what shows now: the time between blocks takes the setup's place while it lasts
+  const order = idle
+    ? (gap ? ['break', ...idleSec.shown.filter((k) => k !== 'mode' && k !== 'timer' && k !== 'subject')] : idleSec.shown)
+    : runSec.shown;
+  const stateKey = idle ? (gap ? 'between' : 'idle') : 'running';
+  const block = (k: string, i: number) => (
+    <Enter key={k} index={Math.min(i, 4)}>
+      <Animated.View key={stateKey + ':' + k} entering={switchIn}>{sections[k]}</Animated.View>
+    </Enter>
   );
+  const mainKeys = order.filter((k) => MAIN.has(k) && sections[k] != null);
+  const sideKeys = order.filter((k) => !MAIN.has(k) && sections[k] != null);
 
   const reviewMin = Math.round(accumSec / 60);
 
@@ -1214,10 +1305,14 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
           {/* a sideways tablet: the session on the left, its tasks and the history beside it. One tree either way, so
               turning the tablet only changes styles and never builds the stage again; a phone has no styles here */}
-          <View style={twoCol ? st.cols : undefined}>
-            <View style={twoCol ? st.col : undefined}>{stageBlock}</View>
-            <View style={twoCol ? [st.col, st.colSide] : undefined}>{tasksBlock}</View>
-          </View>
+          {twoCol ? (
+            <View style={st.cols}>
+              <View style={st.col}><InOrder shown={mainKeys}>{mainKeys.map(block)}</InOrder></View>
+              <View style={[st.col, st.colSide]}><InOrder shown={sideKeys}>{sideKeys.map(block)}</InOrder></View>
+            </View>
+          ) : (
+            <InOrder shown={order.filter((k) => sections[k] != null)}>{order.filter((k) => sections[k] != null).map(block)}</InOrder>
+          )}
         </View>
       </Animated.ScrollView>)}
 
@@ -1233,7 +1328,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           onSubmitEditing={closeSubject}
         />
         {subjectChips}
-        <TagPicker value={tags} onChange={setTags} style={{ marginTop: 14, marginBottom: 18 }} />
+        <TagPicker value={tags} onChange={setTags} subject={subject} style={{ marginTop: 10, marginBottom: 18 }} />
         <PillButton label="Done" onPress={closeSubject} />
       </Sheet>
 

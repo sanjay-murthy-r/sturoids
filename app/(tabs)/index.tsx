@@ -43,6 +43,7 @@ import {
 } from '../../src/widgets/logic';
 import { galleryGroups, sizesOf, widgetDef, widgetShown } from '../../src/widgets/registry';
 import type { WidgetDef } from '../../src/widgets/types';
+import { rightClick } from '../../src/web/rightClick';
 
 // what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
 const NO_SESSIONS: FocusSession[] = [];
@@ -67,6 +68,7 @@ function GreetingPress({ onPress, onLongPress, several, children }: {
     <Pressable
       onPress={onPress}
       onLongPress={onLongPress}
+      {...rightClick(onLongPress)}
       onPressIn={level === 'none' ? undefined : () => { p.value = withTiming(1, { duration: 90, easing: EASE_OUT }); }}
       onPressOut={level === 'none' ? undefined : () => { p.value = withTiming(0, { duration: 180, easing: EASE_OUT }); }}
       accessibilityRole="button"

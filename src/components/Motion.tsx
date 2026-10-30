@@ -12,6 +12,7 @@ import { create } from 'zustand';
 import { useStore } from '../store';
 import { useIntro } from '../intro';
 import { AnimLevel, C, neuPressedInner } from '../theme';
+import { rightClick } from '../web/rightClick';
 
 /**
  * The key for a screen's content container. It stays 0 so the content is never rebuilt: a tab's entrance replays
@@ -559,6 +560,7 @@ export function Bouncy({
     <AnimatedPressable
       onPress={onPress}
       onLongPress={onLongPress}
+      {...rightClick(onLongPress)}
       disabled={disabled}
       hitSlop={hitSlop}
       accessibilityLabel={accessibilityLabel}

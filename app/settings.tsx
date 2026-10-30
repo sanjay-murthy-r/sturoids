@@ -49,6 +49,7 @@ import { LAST_EXPORT_KEY } from '../src/backupNudge';
 import { useBackupAttention } from '../src/cloud';
 import { SettingsPage, settingId } from '../src/search/settingsIndex';
 import { openSift } from '../src/search/store';
+import { useSiftAnchor } from '../src/search/anchor';
 import { useBringIntoView } from '../src/hooks/useBringIntoView';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
@@ -516,10 +517,13 @@ function PageScroll({ children, scrollRef, y, pull = null, ...props }: React.Com
  * The field at the top of Settings' list: a carved well with the glyph and the words, as More's is. A tap opens Sift with
  * its Settings filter on, where every setting can be found and opened at its row (Sift is the one search in the app).
  */
-function SettingsSiftField() {
+function SettingsSiftField({ active }: { active: boolean }) {
   const theme = useTheme();
+  // only the list's bar: on a page of Settings, Sift arrives its usual way
+  const anchor = useSiftAnchor('settings', active);
   const well = theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') };
   return (
+    <Animated.View ref={anchor.ref} style={anchor.style} collapsable={false}>
     <Pressable
       onPress={() => { tap(); openSift('other', { scope: 'settings' }); }}
       accessibilityRole="search" accessibilityLabel="Search settings" accessibilityHint="Opens Sift on its Settings filter"
@@ -528,6 +532,7 @@ function SettingsSiftField() {
       <Ionicons name="search" size={15} color={C.textFaint} />
       <Text style={st.searchText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>Search settings</Text>
     </Pressable>
+    </Animated.View>
   );
 }
 
@@ -1996,7 +2001,7 @@ export default function Settings() {
           <PageScroll scrollRef={listScroll} y={listY} pull={listPull} style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
             {/* the list rises in once, as Settings opens; coming back from a page it is simply there as it was left */}
             <Arrive first={!built.current} index={0}>
-              <SettingsSiftField />
+              <SettingsSiftField active={!page} />
             </Arrive>
             <Arrive first={!built.current} index={0}>
               <ProfileHeader onOpen={() => open('account')} onSwitch={() => setSwitcher(true)} />

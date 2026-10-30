@@ -148,7 +148,8 @@ export interface ActiveSession {
   attached: { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }[];
   finishAt: number | null;
   /** the session's tags as it runs (FocusSession.tags) */
-  tags?: string[];
+  tags?: string[];  /** thoughts parked during the session: they go to the ToDos when it ends */
+  parked?: string[];
 }
 
 export interface JournalEntry {
@@ -333,6 +334,28 @@ export interface Settings {
   focusDropShort: boolean;
   /** on a wide screen (a tablet, a PC), where the tabs sit: a rail down the left side, or a bar along the bottom */
   tabNav: 'side' | 'bottom';
+  /**
+   * Each page's own arrangement (Deep Work, the Planner…): its sections in the order chosen, and the ones put away.
+   * A section a page adds later and the order does not know yet takes its usual place.
+   */
+  pageLayout: Record<string, PageLayout>;
+  /** Makeover: Elite (calm, formal) or Cheerful (livelier motion, small celebrations, a gently moving backdrop) */
+  mood: Mood;
+}
+
+export type Mood = 'elite' | 'cheerful';
+export interface PageLayout { order: string[]; hidden: string[] }
+
+/** A page's arrangement as kept: known-looking keys, no repeats, nothing absurd. */
+export function cleanPageLayout(raw: any): Record<string, PageLayout> {
+  const out: Record<string, PageLayout> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  const keys = (l: any) => [...new Set((Array.isArray(l) ? l : []).filter((k: any) => typeof k === 'string' && k.length <= 40))].slice(0, 40) as string[];
+  for (const [page, v] of Object.entries(raw).slice(0, 40)) {
+    if (typeof page !== 'string' || !v || typeof v !== 'object') continue;
+    out[page] = { order: keys((v as any).order), hidden: keys((v as any).hidden) };
+  }
+  return out;
 }
 
 export type PlannerWeek = Record<DayName, PlannerBlock[]>;
@@ -443,6 +466,8 @@ export const DEFAULT_SETTINGS: Settings = {
   siftPull: 'anywhere',
   focusDropShort: true,
   tabNav: 'side',
+  pageLayout: {},
+  mood: 'elite',
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -1279,6 +1304,8 @@ function cleanSettingsV6(s: any): Settings {
   st.siftPull = st.siftPull === 'top' || st.siftPull === 'off' ? st.siftPull : 'anywhere';
   st.tabNav = st.tabNav === 'bottom' ? 'bottom' : 'side';
   st.focusDropShort = st.focusDropShort !== false;
+  st.pageLayout = cleanPageLayout(st.pageLayout);
+  st.mood = st.mood === 'cheerful' ? 'cheerful' : 'elite';
   // no repo yet checks Sturoids' own releases; one saved under an earlier address follows the rename
   if (typeof st.githubRepo !== 'string' || !st.githubRepo.trim() || OLD_UPDATE_REPO.test(st.githubRepo.trim())) st.githubRepo = DEFAULT_UPDATE_REPO;
   return st;

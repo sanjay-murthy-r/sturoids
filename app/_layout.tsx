@@ -41,6 +41,7 @@ import { AppFrame, SearchOverlay } from '../src/components/SearchOverlay';
 import { NavArrows } from '../src/components/NavArrows';
 import { QuickAddHost } from '../src/components/QuickAddHost';
 import { SessionEditorHost } from '../src/components/SessionEditor';
+import { ArrangeHost } from '../src/components/Arrange';
 import { appIsUp } from '../src/actions';
 import { ShareIntake } from '../src/shareIntake';
 import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
@@ -328,6 +329,7 @@ export default function RootLayout() {
       {showApp && <SearchOverlay />}
       {showApp && <QuickAddHost />}
       {showApp && <SessionEditorHost />}
+      {showApp && <ArrangeHost />}
       {showApp && <ToastHost />}
       {/* covers everything while the app restarts into another profile */}
       <SwitchingOverlay />

@@ -31,6 +31,7 @@ import {
   ENTER_HINT_MS, OpenedRef, PinnedRef, SiftScope, SiftScopes, closeSift, forgetOpened, forgetQuery, loadSiftMemory, queryPinKey,
   rememberOpen, rememberQuery, siftPull, siftShown, togglePin, unpin, useSearch, useSiftMemory,
 } from '../search/store';
+import { rightClick } from '../web/rightClick';
 
 // Sift: the app-wide search, laid over everything. The app behind scales back a little and dims (AppFrame, driven by
 // siftShown on the UI thread); the field drops from the top, or grows out of the header a pull came from; the keyboard
@@ -55,8 +56,8 @@ const PANEL_MAX = 640;
 /** what leaves for a result waits this long once Sift starts to go, so the first frames of its way out are never held up */
 const HAND_OVER_MS = 70;
 
-const SCOPES: { key: SiftScope; label: string }[] = [
-  { key: 'all', label: 'All' }, { key: 'todos', label: 'ToDos' }, { key: 'notes', label: 'Notes' },
+const SCOPES: { key: Exclude<SiftScope, 'all'>; label: string }[] = [
+  { key: 'todos', label: 'ToDos' }, { key: 'notes', label: 'Notes' },
   { key: 'journal', label: 'Journal' }, { key: 'vault', label: 'Vault' }, { key: 'scores', label: 'Scores' },
   { key: 'settings', label: 'Settings' },
 ];
@@ -121,6 +122,7 @@ function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onLongP
     <Pressable
       onPress={onPress}
       onLongPress={onLongPress}
+      {...rightClick(onLongPress)}
       delayLongPress={420}
       accessibilityRole="button"
       accessibilityLabel={[title, subtitle, pinned ? 'pinned' : ''].filter(Boolean).join(', ')}
@@ -172,7 +174,7 @@ function TopCard({ kicker, children, theme, onPress, onLongPress, label }: {
   );
   return onPress ? (
     <Pressable
-      onPress={onPress} onLongPress={onLongPress} delayLongPress={420} accessibilityRole="button" accessibilityLabel={label}
+      onPress={onPress} onLongPress={onLongPress} {...rightClick(onLongPress)} delayLongPress={420} accessibilityRole="button" accessibilityLabel={label}
       style={({ pressed }) => [st.top, face, pressed && { opacity: 0.85 }]}
     >
       {body}
@@ -292,6 +294,13 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const origin = useSearch((s) => s.origin);
+  // opened over a page's own search bar (More's, Settings'): the field lifts out of that bar and goes back into it
+  const anchor = useSearch((s) => s.anchor);
+  const anchored = anchor != null && level === 'full';
+  const wellRef = React.useRef<View>(null);
+  const well = useSharedValue({ x: 0, y: 0, w: 0, h: 0 });
+  const from = useSharedValue({ x: 0, y: 0, w: 0, h: 0 });
+  const waitingForWell = React.useRef(false);
   const hour24 = useStore((s) => s.settings.hour24);
   const aiLinks = useStore((s) => s.aiLinks);
   const memory = useSiftMemory();
@@ -308,11 +317,19 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   const [scopes, setScopes] = React.useState<SiftScopes>(() => useSearch.getState().scopes);
   const isAll = scopes.length === 0;
   const has = React.useCallback((k: Exclude<SiftScope, 'all'>) => scopes.length === 0 || scopes.includes(k), [scopes]);
-  const toggleScope = React.useCallback((k: SiftScope) => {
+  const toggleScope = React.useCallback((k: Exclude<SiftScope, 'all'>) => {
     tick();
-    if (k === 'all') { setScopes([]); return; }
     setScopes((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]));
   }, []);
+  // the filters as a row: the chosen ones first, in the order they were chosen, then the rest in their usual order. No
+  // chip for everything: nothing chosen is everything.
+  const chipOrder = React.useMemo(
+    () => [...scopes.map((k) => SCOPES.find((x) => x.key === k)!).filter(Boolean), ...SCOPES.filter((x) => !scopes.includes(x.key))],
+    [scopes],
+  );
+  const chipsRef = React.useRef<ScrollView>(null);
+  // a chosen filter moves to the front, so the row goes back to its start to show it there
+  React.useEffect(() => { chipsRef.current?.scrollTo({ x: 0, animated: level !== 'none' }); }, [scopes.length]);
   const [dq, setDq] = React.useState(q);
   const [pinFor, setPinFor] = React.useState<'notes' | 'journal' | null>(null);
 
@@ -328,8 +345,32 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   }, [open]);
 
   /* ---- in and out */
-  const fromPull = origin === 'pull';
+  const fromPull = origin === 'pull' && !anchored;
+  const openMotion = () => {
+    siftShown.value = level === 'none' ? 1 : withTiming(1, { duration: OPEN_MS, easing: EASE_EMPHASISED });
+  };
+  const openMotionNow = () => { waitingForWell.current = false; openMotion(); };
+  // the field's own place, once laid out: an opening from a bar waits for it (a frame), so the lift starts true
+  const measureWell = () => {
+    // once per opening: the well's own size moves while it lifts, and that must never become where it is going
+    if (!waitingForWell.current && well.value.w > 0) return;
+    wellRef.current?.measureInWindow((x, y, w, h) => {
+      if (w > 0 && h > 0) well.value = { x, y, w, h };
+      if (waitingForWell.current) { waitingForWell.current = false; openMotion(); }
+    });
+  };
   React.useEffect(() => {
+    if (open && anchored && anchor) {
+      tick();
+      from.value = anchor;
+      siftShown.value = 0;
+      waitingForWell.current = true;
+      // a field already laid out (opened again while leaving) starts at once; otherwise its layout starts it
+      if (well.value.w > 0) openMotionNow();
+      const late = setTimeout(() => { if (waitingForWell.current) { waitingForWell.current = false; openMotion(); } }, 120);
+      const t = setTimeout(() => inputRef.current?.focus(), 260);
+      return () => { clearTimeout(late); clearTimeout(t); };
+    }
     if (open) {
       tick();
       const start = fromPull ? Math.max(siftShown.value, 0.25 * siftPull.value) : siftShown.value;
@@ -653,6 +694,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   // way. Opened any other way, it drops in from the top.
   const pillScale = Math.min(0.9, Math.max(0.2, PILL_W / Math.max(1, Math.min(width, PANEL_MAX) - 32)));
   const fieldStyle = useAnimatedStyle(() => {
+    if (anchored) return { opacity: 1, transform: [{ translateY: 0 }, { scaleX: 1 }, { scaleY: 1 }] as const };
     if (level !== 'full') return { opacity: siftShown.value };
     const p = siftShown.value;
     if (fromPull) {
@@ -667,6 +709,22 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     }
     return { opacity: p, transform: [{ translateY: -22 * (1 - p) }, { scaleX: 1 }, { scaleY: 1 }] as const };
   });
+  // the well itself, from the bar's place and size to its own: moved and sized (never scaled), so its corners and words
+  // stay true the whole way
+  const wellStyle = useAnimatedStyle(() => {
+    const w = well.value;
+    if (!anchored || w.w === 0) return {};
+    const a = from.value;
+    const p = siftShown.value;
+    const q = 1 - p;
+    return {
+      flexGrow: 0,
+      width: w.w + (a.w - w.w) * q,
+      height: w.h + (a.h - w.h) * q,
+      transform: [{ translateX: (a.x - w.x) * q }, { translateY: (a.y - w.y) * q }] as const,
+    };
+  });
+  const cancelStyle = useAnimatedStyle(() => ({ opacity: anchored ? Math.max(0, (siftShown.value - 0.4) / 0.6) : 1 }));
   const bodyStyle = useAnimatedStyle(() => ({
     opacity: level === 'none' ? 1 : Math.max(0, (siftShown.value - 0.35) / 0.65),
     transform: [{ translateY: (level === 'full' ? 14 * (1 - siftShown.value) : 0) + drag.value }],
@@ -833,7 +891,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
         <View style={[{ flex: 1, paddingTop: insets.top + 8 }, column]}>
           {/* the field: a carved well, with the glyph, the words, a clear key, the mic; Cancel beside it */}
           <Animated.View style={[st.fieldRow, fieldStyle]}>
-            <View style={[st.field, fieldWell]}>
+            <Animated.View ref={wellRef} onLayout={anchored ? measureWell : undefined} collapsable={false} style={[st.field, fieldWell, wellStyle]}>
               <Ionicons name="search" size={18} color={C.textFaint} />
               <TextInput
                 ref={inputRef}
@@ -861,10 +919,12 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
                   <Ionicons name={listening ? 'mic' : 'mic-outline'} size={19} color={listening ? C.accent : C.textFaint} />
                 </Pressable>
               ) : null}
-            </View>
-            <Pressable onPress={closeSift} hitSlop={8} accessibilityRole="button" accessibilityLabel="Cancel" style={st.cancel}>
-              <Text style={[st.cancelText, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Cancel</Text>
-            </Pressable>
+            </Animated.View>
+            <Animated.View style={cancelStyle}>
+              <Pressable onPress={closeSift} hitSlop={8} accessibilityRole="button" accessibilityLabel="Cancel" style={st.cancel}>
+                <Text style={[st.cancelText, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Cancel</Text>
+              </Pressable>
+            </Animated.View>
           </Animated.View>
 
           {/* the first week: a quiet line under the field, saying what Enter will open. Its room is kept all week, so the
@@ -887,14 +947,17 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
           <Animated.View style={[{ flex: 1 }, bodyStyle]}>
             {/* scope chips: flat, in one scrolling row, each at its own natural width */}
             <ScrollView
-              horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+              ref={chipsRef} horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
               contentContainerStyle={st.chips} style={st.chipsRow}
             >
-              {SCOPES.map((s) => (
-                <Chip
-                  key={s.key} small label={s.label} active={s.key === 'all' ? isAll : scopes.includes(s.key)}
-                  onPress={() => toggleScope(s.key)} style={st.chip}
-                />
+              {chipOrder.map((s) => (
+                <Animated.View key={s.key} layout={level === 'none' ? undefined : LinearTransition.duration(260).easing(EASE_OUT)}>
+                  <Chip
+                    small label={s.label} active={scopes.includes(s.key)} icon={scopes.includes(s.key) ? 'close' : undefined}
+                    onPress={() => toggleScope(s.key)} style={st.chip}
+                    accessibilityHint={scopes.includes(s.key) ? 'Takes the filter off' : 'Narrows Sift to it'}
+                  />
+                </Animated.View>
               ))}
             </ScrollView>
 
