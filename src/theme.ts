@@ -82,7 +82,7 @@ export const NEU = Object.freeze({
  * No shadow at all, for a style that must take away one an earlier style gave (the minimal theme's flat controls). An
  * undefined value does not take it away everywhere (the PC's renderer keeps the earlier one), so it is said outright.
  */
-export const NO_SHADOW: any = Platform.OS === 'web' ? 'none' : [];
+export const NO_SHADOW: any = Platform?.OS === 'web' ? 'none' : [];
 
 /** A carved well in either theme: the material's valley, or in the minimal theme a flat inset with a hairline. */
 export const wellFor = (theme: ThemeMode, strength: 'hairline' | 'low' | 'mid' = 'low') =>
