@@ -340,6 +340,8 @@ const EDGE_SPEED = 14;
 /** the glide of a widget to a new place, and of a dropped one into its own */
 const MOVE = { duration: 300, easing: EASE_OUT };
 const LAND = { duration: 340, easing: EASE_OUT };
+/** how far outside a widget its edit ring sits */
+const RING_OUT = 2;
 
 /** What the board is told about the scroll view it sits in, for a drag near the edges to scroll it. */
 export interface BoardScroll {
@@ -823,7 +825,13 @@ const BoardItem = React.memo(function BoardItem({
             {/* while the board is edited the widget stays on the material, ringed by a fine line of the accent */}
             <Animated.View
               pointerEvents="none"
-              style={[StyleSheet.absoluteFill, st.outline, { borderColor: theme === 'minimal' ? MIN.border : C.accent }, outline]}
+              style={[
+                st.outline,
+                // a section that flows carries the board's gap below its card: the ring stops at the card, so it never
+                // meets the ring of the widget under it
+                { bottom: def.flow ? GRID_GAP - RING_OUT : -RING_OUT, borderColor: theme === 'minimal' ? MIN.border : C.accent },
+                outline,
+              ]}
             />
             <Animated.View style={body} pointerEvents={editing ? 'none' : 'auto'}>
               {editing && def.flow ? <View style={st.flowPad} /> : null}
@@ -1078,7 +1086,7 @@ function Preview({ def, size, ready, room, cellW, boardW, picked, onPress }: {
       style={[st.preview, { width: w, height: h }]}
       accessibilityLabel={(picked ? 'Picked: ' : 'Add ') + def.title + (def.sizes.length > 1 ? ', size ' + size : '')}
     >
-      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, st.outline, { margin: 2, borderColor: C.accent }, ring]} />
+      <Animated.View pointerEvents="none" style={[st.outline, { top: 2, left: 2, right: 2, bottom: 2, borderColor: C.accent }, ring]} />
       <View pointerEvents="none" style={{ width: natW * scale, height: natH * scale, overflow: def.flow ? 'hidden' : 'visible' }}>
         {ready ? (
           <Animated.View
@@ -1108,7 +1116,8 @@ const st = StyleSheet.create({
   nudgeKeys: { flexDirection: 'row', alignItems: 'center', marginTop: 16 },
   item: { position: 'absolute', left: 0, top: 0 },
   landing: { position: 'absolute', borderRadius: S.radius + 2, borderWidth: 1.5, borderStyle: 'dashed', opacity: 0.7 },
-  outline: { borderRadius: S.radius + 3, margin: -3, borderWidth: 1.25 },
+  // the ring sits just outside the widget (RING_OUT), so neighbours' rings keep most of the board's gap between them
+  outline: { position: 'absolute', top: -RING_OUT, left: -RING_OUT, right: -RING_OUT, borderRadius: S.radius + RING_OUT, borderWidth: 1.25 },
   flowPad: { height: 4 },
   ghost: {
     borderWidth: 1, borderStyle: 'dashed', borderRadius: S.radius, alignItems: 'center', justifyContent: 'center', gap: 4,

@@ -517,14 +517,14 @@ function PageScroll({ children, scrollRef, y, pull = null, ...props }: React.Com
  */
 function SettingsSiftField() {
   const theme = useTheme();
-  const well = theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('mid') };
+  const well = theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') };
   return (
     <Pressable
       onPress={() => { tap(); openSift('other', { scope: 'settings' }); }}
       accessibilityRole="search" accessibilityLabel="Search settings" accessibilityHint="Opens Sift on its Settings filter"
       style={({ pressed }) => [st.searchWell, well, pressed && { opacity: 0.8 }]}
     >
-      <Ionicons name="search" size={18} color={C.textFaint} />
+      <Ionicons name="search" size={15} color={C.textFaint} />
       <Text style={st.searchText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>Search settings</Text>
     </Pressable>
   );
@@ -2059,11 +2059,12 @@ const st = StyleSheet.create({
   // an open page covers the list exactly (a layer within the body, below the header)
   pageLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   // the search field: as tall as a row, its corners the cards' own; the cards below keep the list's rhythm from it
+  // a slim bar: a pull down opens Sift too, so the field only needs to say it is there
   searchWell: {
-    height: 48, borderRadius: S.radiusSm, flexDirection: 'row', alignItems: 'center', paddingLeft: 16, paddingRight: 6,
-    marginTop: 2, marginBottom: S.gap + 4, overflow: 'hidden',
+    height: 36, borderRadius: 18, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 14,
+    marginTop: 2, marginBottom: S.gap, overflow: 'hidden',
   },
-  searchText: { flex: 1, marginLeft: 12, color: C.textFaint, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body },
+  searchText: { flex: 1, marginLeft: 9, color: C.textFaint, fontFamily: F.reg, fontSize: 14, letterSpacing: TRACK.small },
   statusDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
   catRow: { paddingVertical: 13 },
   // level with the toggle's words above it; the press carves a little past them
