@@ -40,6 +40,7 @@ import { minutesUntil } from '../toolLogic';
 import { openSessionEditor } from '../components/SessionEditor';
 import { TagPicker } from '../components/TagPicker';
 import { ParkedCard, TodayCard } from '../components/FocusExtras';
+import { celebrate } from '../components/Cheer';
 import { InOrder, SectionDef, useSections } from '../components/Arrange';
 import { noteUse, useLearnt } from '../learn';
 
@@ -1535,6 +1536,8 @@ export function sessionDay(key: string): string {
  * opens the session editor to put it right afterwards.
  */
 function savedToast(id: string, netSeconds: number, undo?: () => void, extra = '') {
+  // Cheerful: confetti for a session done (nothing in Elite)
+  celebrate(netSeconds >= 20 * 60);
   const m = Math.max(1, Math.round(netSeconds / 60));
   const len = m >= 60 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '') : m + ' min';
   const message = 'Saved · ' + len + (extra ? ' · ' + extra : '');

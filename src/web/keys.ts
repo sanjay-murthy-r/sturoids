@@ -58,11 +58,42 @@ export function useDesktopKeys() {
     };
     window.addEventListener('keydown', on);
     const offSideways = sidewaysScrolling();
+    const offDrags = dragsAreNotClicks();
     return () => {
       window.removeEventListener('keydown', on);
       offSideways();
+      offDrags();
     };
   }, []);
+}
+
+/**
+ * With a mouse (or a finger on a touch screen), a press that moved on its way (a tile dragged, a card swiped, a row
+ * scrolled) lets go over what it started on, and the browser calls that a click. A click after the pointer moved more
+ * than a few pixels is not one here: nothing is opened or ticked by the end of a drag.
+ */
+function dragsAreNotClicks(): () => void {
+  let start: { x: number; y: number } | null = null;
+  let moved = false;
+  const down = (e: PointerEvent) => { start = { x: e.clientX, y: e.clientY }; moved = false; };
+  const move = (e: PointerEvent) => {
+    if (!start || moved) return;
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) moved = true;
+  };
+  const click = (e: MouseEvent) => {
+    // a click from the keyboard (Enter, Space) has no pointer before it
+    if (moved && e.detail > 0) { e.stopPropagation(); e.preventDefault(); }
+    moved = false;
+    start = null;
+  };
+  window.addEventListener('pointerdown', down, true);
+  window.addEventListener('pointermove', move, true);
+  window.addEventListener('click', click, true);
+  return () => {
+    window.removeEventListener('pointerdown', down, true);
+    window.removeEventListener('pointermove', move, true);
+    window.removeEventListener('click', click, true);
+  };
 }
 
 /** The nearest element at or above `el` that scrolls sideways and not up and down (a row of chips, the Vault's pages). */

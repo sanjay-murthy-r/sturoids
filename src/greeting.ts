@@ -82,6 +82,12 @@ export function pickGreeting(c: GreetingContext): Greeting {
   return { kind: 'go', parts: say("Let's go") };
 }
 
+/** Cheerful's picture for each kind of greeting */
+const CHEER_EMOJI: Record<string, string> = {
+  hello: '👋', streak: '🔥', clear: '🎉', on: '📚', soon: '⏰', deep: '🧠', back: '💪', 'plan-done': '✅', away: '🌼',
+  again: '😊', go: '🚀',
+};
+
 // ---------- visits ----------
 // A visit is a cold start, or a return after RETURN_AFTER_MS in the background. What the greeting
 // knows about the previous visit is read once per visit, before this visit's own stamp is written,
@@ -188,6 +194,16 @@ export function useGreeting(input: {
   }, []);
 
   const { now, name, sessions, habits, planner, listTotal, listDone, nextBlock } = input;
+  const cheerful = useStore((st) => st.settings.mood === 'cheerful');
+  const g = useGreetingInner();
+  // Cheerful: the line ends with a little picture of its own feeling
+  return React.useMemo(() => {
+    if (!cheerful) return g;
+    const e = CHEER_EMOJI[g.kind.split(':')[0]];
+    return e ? { ...g, parts: [...g.parts, { text: ' ' + e }] } : g;
+  }, [g, cheerful]);
+
+  function useGreetingInner(): Greeting {
   return React.useMemo(() => {
     const v = visit || readVisit();
     const today = todayKey(now);
@@ -221,4 +237,5 @@ export function useGreeting(input: {
       planDoneToday,
     });
   }, [now, name, sessions, habits, planner, listTotal, listDone, nextBlock, epoch]);
+  }
 }

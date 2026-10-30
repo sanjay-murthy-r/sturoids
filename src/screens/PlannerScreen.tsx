@@ -35,6 +35,14 @@ import { rescheduleAllReminders, turnOnReminders } from '../notifications';
 import { openTool } from '../toolNav';
 import { toast } from '../components/Toast';
 import { TWO_COL_AT, WIDE_MAX, columnWidth } from '../layout';
+import { InOrder, SectionDef, useSections } from '../components/Arrange';
+import { noteUse, useKnown } from '../learn';
+
+/** the Planner's parts below the day: the blocks always, the streaks if wanted, in either order */
+const PLANNER_SECTIONS: SectionDef[] = [
+  { key: 'blocks', label: 'The day\'s blocks', hint: 'Your schedule for the day', fixed: true },
+  { key: 'streaks', label: 'Streaks', hint: 'Habits and their streaks' },
+];
 
 const FULL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 /** a day's name in a sentence: the wheel shows the short one, a title, a toast or an alert says it in full */
@@ -261,6 +269,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const anySheet = blockSheet || copySheet || tplSheet || habitSheet || !!remindEdit;
   const exp = useExport(['habits', 'planner'], { range: '30d' });
   const scrollRef = React.useRef<Animated.ScrollView>(null);
+  const sections = useSections('planner', 'Planner', PLANNER_SECTIONS);
   const header = useToolHeader({ contentPull: 'all', scrollRef,
     title: 'Planner',
     mode: tabMode ? 'tab' : 'page',
@@ -286,6 +295,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       { icon: 'copy-outline', label: 'Copy this day', onPress: () => setCopySheet(true) },
       { icon: 'albums-outline', label: 'Week templates', onPress: () => setTplSheet(true) },
       exp.action,
+      sections.arrange,
     ],
   });
   // a block or a habit Sift opened is brought into view
@@ -376,16 +386,16 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
           </View>
         </Enter>
 
+        {/* the day's blocks and the streaks, in the order chosen (Arrange), the streaks put away if not wanted */}
         {twoCol ? (
           <View style={st.pair}>
-            {blocksPart}
-            {streaksPart}
+            {sections.shown.map((k) => (k === 'blocks' ? <React.Fragment key={k}>{blocksPart}</React.Fragment> : <React.Fragment key={k}>{streaksPart}</React.Fragment>))}
           </View>
         ) : (
-          <>
-            {blocksPart}
-            {streaksPart}
-          </>
+          <InOrder shown={sections.shown}>
+            <React.Fragment key="blocks">{blocksPart}</React.Fragment>
+            <React.Fragment key="streaks">{streaksPart}</React.Fragment>
+          </InOrder>
         )}
       </Animated.ScrollView>)}
 
@@ -438,6 +448,8 @@ function DayBlocks({ day, blocks, hour24, nowMin, deepWork, arrive, onArrive, on
 }) {
   const level = useAnimLevel();
   const built = useBuilt();
+  // said until it has been used a few times
+  const knownBlockTap = useKnown('planner.blockTap', 5);
   if (blocks.length === 0) {
     return <EmptyState compact icon="calendar-outline" title={'No blocks on ' + fullDay(day)} body="Add subjects with start and end times below." />;
   }
@@ -456,7 +468,7 @@ function DayBlocks({ day, blocks, hour24, nowMin, deepWork, arrive, onArrive, on
         ))}
       </ListCard>
       {/* said once for the list, not on every row */}
-      {deepWork ? <Text style={st.blocksHint}>Tap a block to start Deep Work on it.</Text> : null}
+      {deepWork && !knownBlockTap ? <Text style={st.blocksHint}>Tap a block to start Deep Work on it.</Text> : null}
     </Animated.View>
   );
 }
@@ -534,7 +546,7 @@ const BlockRow = React.memo(function BlockRow({ b, hour24, isNow, progress, past
     );
   }
   // Deep Work opens set to the block's length, or to what is left of it while it is on
-  const start = () => openTool('focus', blockFocusParams(b, isNow));
+  const start = () => { noteUse('planner.blockTap'); openTool('focus', blockFocusParams(b, isNow)); };
   // a list row's own shape and carve, with the name a screen reader needs
   return (
     <View ref={ref} collapsable={false}>

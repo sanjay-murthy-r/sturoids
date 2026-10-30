@@ -23,6 +23,7 @@ import { WIDE_AT } from '../layout';
 import { LINK_SLOP, kit, useBoardNow, useBoardToday } from './kit';
 import { useFocusToday, useNextBlock, useTodayItems } from './data';
 import type { WidgetProps } from './types';
+import { markGesture } from '../dragGuard';
 
 /** A shortcut to an archived tool stays in the saved list but is not shown. */
 const hiddenTile = (q: QuickItem, archived: ReadonlySet<string>) => q.kind === 'tool' && archived.has(q.target);
@@ -457,6 +458,7 @@ function QuickTile({ q, meta, index, last, rect, wide, rects, isDragging, onDrag
       sx.value = x.value; sy.value = y.value;
       over.value = -1;
       runOnJS(tap)();
+      runOnJS(markGesture)(400);
       runOnJS(dragStable)(q.id);
     })
     .onUpdate((e) => {
@@ -482,6 +484,7 @@ function QuickTile({ q, meta, index, last, rect, wide, rects, isDragging, onDrag
       }
     })
     .onFinalize(() => {
+      runOnJS(markGesture)(400);
       lift.value = motion.value === 0 ? 0 : motion.value === 1 ? withTiming(0, CHANGE) : withSpring(0, RISE_OUT);
       runOnJS(dropStable)();
     }), [q.id]);

@@ -10,6 +10,7 @@ import { WIDE_AT } from '../layout';
 import { Appear, Bouncy, CHANGE, EASE_OUT, FadeSwap, useAnimLevel, useBuilt, useLoop } from './Motion';
 import { ClockDigits, clockWidth } from './ClockDigits';
 import { CheckCircle, Chip, NeuIconBtn, PillButton, ProgressBar, useTheme } from './UI';
+import { Breathe } from './Cheer';
 
 // The Slab, as drawn in the Focus Lab with 104 dp minutes. Every other measure of the clock is a share of that size,
 // so a larger clock (a tablet) or a smaller one (hours on a narrow phone) keeps the same proportions.
@@ -88,6 +89,8 @@ function SlabClock({ timer, base, availW, startedAt, finishAt, hour24, clockStyl
         accessible
         accessibilityLabel={spokenTimeOf(timer)}
       >
+        {/* Cheerful: a soft glow breathes behind the running clock */}
+        {timer.running ? <Breathe size={size * 3.2} /> : null}
         <Animated.View style={[st.timeRow, pausedStyle]}>
           <ClockDigits text={big} size={size} lineHeight={Math.round(size * LINE)} />
           <ClockDigits

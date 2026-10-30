@@ -13,6 +13,7 @@ import { useStore } from '../store';
 import { useIntro } from '../intro';
 import { AnimLevel, C, neuPressedInner } from '../theme';
 import { rightClick } from '../web/rightClick';
+import { justGestured } from '../dragGuard';
 
 /**
  * The key for a screen's content container. It stays 0 so the content is never rebuilt: a tab's entrance replays
@@ -558,7 +559,8 @@ export function Bouncy({
 
   return (
     <AnimatedPressable
-      onPress={onPress}
+      // the end of a drag or a hold that did something is never a tap
+      onPress={onPress ? () => { if (!justGestured()) onPress(); } : undefined}
       onLongPress={onLongPress}
       {...rightClick(onLongPress)}
       disabled={disabled}

@@ -27,6 +27,7 @@ import { READ_MAX, WIDE_AT } from '../layout';
 import { SiftScope, openSift, siftPull } from '../search/store';
 import { TimeWheel, defaultTime, isTime, timeLabel } from './TimeWheel';
 import { ScrollMemoryMode, useScrollMemory } from '../hooks/useScrollMemory';
+import { Backdrop, Bob, Sparks, useCheerful } from './Cheer';
 
 export { TimeWheel } from './TimeWheel';
 
@@ -66,6 +67,7 @@ export function ScreenBG({ children, guard = false, fling = true, maxWidth = REA
 
   const body = (
     <View style={{ flex: 1, backgroundColor: bg }}>
+      <Backdrop minimal={theme === 'minimal'} />
       {column ? <View style={{ flex: 1, width: '100%', maxWidth: maxWidth as number, alignSelf: 'center' }}>{children}</View> : children}
       {guard && (
         <View
@@ -1106,9 +1108,12 @@ export function CheckCircle({ done, onPress, color = C.green, size = 26, label }
   const fill = useSharedValue(done ? 1 : 0);
   const settle = useSharedValue(1);
   const was = React.useRef(done);
+  // Cheerful: a tick throws a few sparks (Sparks does nothing in Elite)
+  const [spark, setSpark] = React.useState(0);
   React.useEffect(() => {
     if (was.current === done) return;
     was.current = done;
+    if (done) setSpark((n) => n + 1);
     if (level === 'none') {
       fill.value = done ? 1 : 0;
       settle.value = 1;
@@ -1143,6 +1148,7 @@ export function CheckCircle({ done, onPress, color = C.green, size = 26, label }
         <Animated.View style={[st.ink, fillStyle]}>
           <Ionicons name="checkmark-circle" size={size} color={color} />
         </Animated.View>
+        <Sparks fire={spark} size={size} />
       </View>
     </Bouncy>
   );
@@ -1348,10 +1354,13 @@ export function EmptyState({ icon, title, body, actionLabel, onAction, compact }
   icon: any; title: string; body?: string; actionLabel?: string; onAction?: () => void; compact?: boolean;
 }) {
   const theme = useTheme();
+  const cheerful = useCheerful();
   // a list that empties while you look at it fades its note in; one that is empty when its screen is built needs no more
   const appear = useAppear();
   return (
     <Animated.View style={[st.emptyWrap, compact && { marginVertical: 14 }, appear]}>
+      {/* Cheerful: the picture floats gently and takes the accent */}
+      <Bob by={3}>
       <View
         style={[
           st.emptyWell,
@@ -1360,8 +1369,9 @@ export function EmptyState({ icon, title, body, actionLabel, onAction, compact }
             : { backgroundColor: C.inset, ...neuInset('low') },
         ]}
       >
-        <Ionicons name={icon} size={22} color={C.textFaint} />
+        <Ionicons name={icon} size={22} color={cheerful ? C.accent : C.textFaint} />
       </View>
+      </Bob>
       <Text style={st.emptyTitle}>{title}</Text>
       {body ? <Text style={st.emptyBody}>{body}</Text> : null}
       {actionLabel && onAction ? <PillButton small outline label={actionLabel} onPress={onAction} style={{ marginTop: 14 }} /> : null}

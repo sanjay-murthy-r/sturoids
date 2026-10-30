@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo, Keyboard, TextInput, Platform } from 'react-native';
+import { View, Text, StyleSheet, Alert, Linking, AppState, BackHandler, Pressable, AccessibilityInfo, Keyboard, TextInput, Platform,
+  useWindowDimensions,
+} from 'react-native';
 import Animated, {
   FadeIn, FadeOut,
   Easing, LayoutAnimationConfig, runOnJS, useAnimatedRef, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
@@ -51,6 +53,12 @@ import { SettingsPage, settingId } from '../src/search/settingsIndex';
 import { openSift } from '../src/search/store';
 import { useSiftAnchor } from '../src/search/anchor';
 import { useBringIntoView } from '../src/hooks/useBringIntoView';
+import { TWO_COL_AT, WIDE_MAX } from '../src/layout';
+import { startMakeover } from '../src/components/Makeover';
+import { CHEER } from '../src/components/Cheer';
+
+/** the list's column when Settings shows two panes */
+const SPLIT_LIST_W = 380;
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = Constants.expoConfig?.version || '1.7.0';
@@ -445,20 +453,54 @@ const ProfileHeader = React.memo(function ProfileHeader({ onOpen, onSwitch }: { 
 });
 
 /** One category of Settings: its icon, its name, what it is set to now, and a way in. The list card draws the seams. */
-function CategoryRow({ icon, title, summary, onPress, danger }: {
+function CategoryRow({ icon, title, summary, onPress, danger, current }: {
   icon: any; title: string; summary: string; onPress: () => void; danger?: boolean;
+  /** the page open beside the list (two panes) */
+  current?: boolean;
 }) {
   return (
     <ListRow onPress={() => { tick(); onPress(); }} style={[st.catRow, st.twoLineRow]}>
-      <RowIcon name={icon} size={21} color={danger ? C.danger : C.textDim} />
+      <RowIcon name={icon} size={21} color={danger ? C.danger : current ? C.accent : C.textDim} />
       <View style={{ flex: 1, marginLeft: 14 }}>
-        <Text style={[T.body, { fontFamily: F.med }, danger && { color: C.danger }]}>{title}</Text>
+        <Text style={[T.body, { fontFamily: F.med }, danger && { color: C.danger }, current && { color: C.accent }]}>{title}</Text>
         <FadeSwap swapKey={summary}>
           <Text style={[T.caption, { marginTop: 1 }]} numberOfLines={1}>{summary}</Text>
         </FadeSwap>
       </View>
       <Ionicons name="chevron-forward" size={17} color={C.textFaint} style={st.rowEnd} />
     </ListRow>
+  );
+}
+
+/** Makeover: Elite or Cheerful, each a card that shows its spirit. Choosing one plays the switch, full screen. */
+function MakeoverCard() {
+  const theme = useTheme();
+  const mood = useStore((s) => s.settings.mood);
+  const opt = (key: 'elite' | 'cheerful', title: string, line: string, icon: any, tint: string) => {
+    const on = mood === key;
+    const face = theme === 'minimal'
+      ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: on ? C.accent : MIN.border }
+      : { backgroundColor: C.card, ...(on ? neuInset('low') : neuRaised('low')) };
+    return (
+      <Pressable
+        key={key} onPress={() => { if (!on) startMakeover(key); }}
+        accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={title + '. ' + line}
+        style={({ pressed }) => [st.moodCard, face, pressed && !on && { transform: [{ scale: 0.98 }] }]}
+      >
+        <View style={[st.moodIcon, { backgroundColor: tint + '22' }]}>
+          <Ionicons name={icon} size={20} color={tint} />
+        </View>
+        <Text style={[T.body, { fontFamily: F.semi, marginTop: 10 }, on && { color: C.accent }]}>{title}</Text>
+        <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={2}>{line}</Text>
+        {on ? <Ionicons name="checkmark-circle" size={18} color={C.accent} style={st.moodTick} /> : null}
+      </Pressable>
+    );
+  };
+  return (
+    <View style={{ flexDirection: 'row', gap: 12 }}>
+      {opt('elite', 'Elite', 'Calm, formal, precise', 'diamond-outline', C.accent)}
+      {opt('cheerful', 'Cheerful', 'Colour, sparks and confetti', 'sparkles-outline', CHEER.pink)}
+    </View>
   );
 }
 
@@ -1090,7 +1132,14 @@ export default function Settings() {
   // &n= each time, so the same row asked for again pulses again). Read as Settings mounts, and again whenever a link
   // reaches Settings while it is already open
   const params = useLocalSearchParams<{ page?: string; row?: string; n?: string }>();
-  const [page, setPage] = useState<Page | null>(() => (isPage(params.page) ? params.page : null));
+  // a wide window (a tablet on its side, the PC) shows the list and a page side by side: the list stays, and a page
+  // is always open beside it (Appearance to begin with)
+  const winW = useWindowDimensions().width;
+  const split = winW >= TWO_COL_AT;
+  const splitRef = useRef(split);
+  splitRef.current = split;
+  const [page, setPage] = useState<Page | null>(() => (isPage(params.page) ? params.page : split ? 'appearance' : null));
+  useEffect(() => { if (split && !page) setPage('appearance'); }, [split]);
   const [target, setTarget] = useState<Target>(() => (params.row ? { id: String(params.row), n: String(params.n ?? '0') } : null));
   const seenLink = useRef(String(params.page ?? '') + '|' + String(params.row ?? '') + '|' + String(params.n ?? ''));
   useEffect(() => {
@@ -1121,7 +1170,8 @@ export default function Settings() {
   const pageRef = useRef(page);
   pageRef.current = page;
   const back = useCallback(() => {
-    if (!pageRef.current) return false;
+    // side by side, back leaves Settings: the page beside the list is not a level of its own
+    if (!pageRef.current || splitRef.current) return false;
     setPage(null);
     setTarget(null);
     return true;
@@ -1562,7 +1612,7 @@ export default function Settings() {
         ? (cloudReason === 'newer' ? 'A newer copy in the cloud needs your choice' : 'Your cloud copy can bring your data back')
         : (cloudEmail as string)
       : cloudLost ? 'You were signed out on this phone' : 'Profile, photo and cloud backup',
-    appearance: (THEMES.find((t) => t.key === settings.theme)?.label || 'Default') + ', '
+    appearance: (settings.mood === 'cheerful' ? 'Cheerful, ' : 'Elite, ') + (THEMES.find((t) => t.key === settings.theme)?.label || 'Default') + ', '
       + (ACCENT_CHOICES.find((x) => x.color === settings.accent)?.label || 'custom') + ' accent',
     tools: slotNames,
     motion: settings.animLevel === 'none' ? 'No motion'
@@ -1609,6 +1659,12 @@ export default function Settings() {
       case 'appearance':
         return (
           <>
+            <Anchor ids={[sid('appearance', 'Makeover')]}>
+              <SectionTitle right={<InfoDot text="Elite keeps the app calm and formal. Cheerful adds soft colour drifting behind the pages, sparks when you tick something, confetti when a session or a day is done, and gentle looping motion. Both work with the Default and Minimalistic themes, and with motion turned down they stay still." />}>
+                Makeover
+              </SectionTitle>
+              <MakeoverCard />
+            </Anchor>
             <Anchor ids={[sid('appearance', 'Theme')]}>
               <SectionTitle>Theme</SectionTitle>
               <Card pad={12}>
@@ -1983,25 +2039,25 @@ export default function Settings() {
   ];
 
   return (
-    <ScreenBG>
+    <ScreenBG maxWidth={split ? WIDE_MAX : undefined}>
       {/* one bar for the list and every page: the title dips and comes back as the page changes, and back climbs page,
           list, out. Each layer's scroll draws its own edge under the bar (EdgeScroll), since two scrolls share it */}
       <NeuHeader
-        title={page ? PAGE_TITLES[page] : 'Settings'} onBack={() => { if (!back()) router.back(); }}
+        title={page && !split ? PAGE_TITLES[page] : 'Settings'} onBack={() => { if (!back()) router.back(); }}
         pull pullProgress={pullProgress} pullOpen={openSettingsSift}
       />
       <View style={st.body}>
         {/* the list never remounts: while a page is open it takes no touches and is hidden from screen readers */}
         <Animated.View
-          style={[st.body, listStyle]}
-          pointerEvents={page ? 'none' : 'auto'}
-          importantForAccessibility={page ? 'no-hide-descendants' : 'auto'}
-          accessibilityElementsHidden={!!page}
+          style={split ? st.splitList : [st.body, listStyle]}
+          pointerEvents={page && !split ? 'none' : 'auto'}
+          importantForAccessibility={page && !split ? 'no-hide-descendants' : 'auto'}
+          accessibilityElementsHidden={!!page && !split}
         >
           <PageScroll scrollRef={listScroll} y={listY} pull={listPull} style={st.body} contentContainerStyle={st.scroll} keyboardShouldPersistTaps="handled">
             {/* the list rises in once, as Settings opens; coming back from a page it is simply there as it was left */}
             <Arrive first={!built.current} index={0}>
-              <SettingsSiftField active={!page} />
+              <SettingsSiftField active={!page || split} />
             </Arrive>
             <Arrive first={!built.current} index={0}>
               <ProfileHeader onOpen={() => open('account')} onSwitch={() => setSwitcher(true)} />
@@ -2013,7 +2069,7 @@ export default function Settings() {
                   {g.rows.map((r) => (
                     <CategoryRow
                       key={r.p} icon={r.icon} danger={r.danger}
-                      title={PAGE_TITLES[r.p]} summary={summaries[r.p]} onPress={() => open(r.p)}
+                      title={PAGE_TITLES[r.p]} summary={summaries[r.p]} onPress={() => open(r.p)} current={split && page === r.p}
                     />
                   ))}
                 </ListCard>
@@ -2029,7 +2085,7 @@ export default function Settings() {
           // list does not show through it, and what it holds from the start is simply there: only parts that turn up
           // later (see `arrive`) fade in. A page on its way out takes no touches, so the list under it answers at once
           <Animated.View
-            style={[st.pageLayer, { backgroundColor: bgFor(theme) }, pageStyle]}
+            style={[st.pageLayer, { backgroundColor: bgFor(theme) }, split && st.splitPage, pageStyle]}
             pointerEvents={page ? 'auto' : 'none'}
             importantForAccessibility={page ? 'auto' : 'no-hide-descendants'}
             accessibilityElementsHidden={!page}
@@ -2064,6 +2120,12 @@ const st = StyleSheet.create({
   scroll: { padding: S.pad, paddingTop: 12, paddingBottom: 40 },
   // an open page covers the list exactly (a layer within the body, below the header)
   pageLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  moodCard: { flex: 1, borderRadius: S.radius, padding: 14, minHeight: 118 },
+  moodIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  moodTick: { position: 'absolute', top: 12, right: 12 },
+  // two panes: the list a column on the left, the page beside it, read at a comfortable width
+  splitList: { width: SPLIT_LIST_W, flexGrow: 0, flexShrink: 0, height: '100%' },
+  splitPage: { left: SPLIT_LIST_W, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: C.hairline, paddingRight: 0 },
   // the search field: as tall as a row, its corners the cards' own; the cards below keep the list's rhythm from it
   // a slim bar: a pull down opens Sift too, so the field only needs to say it is there
   searchWell: {

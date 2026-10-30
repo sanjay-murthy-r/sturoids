@@ -42,6 +42,8 @@ import { NavArrows } from '../src/components/NavArrows';
 import { QuickAddHost } from '../src/components/QuickAddHost';
 import { SessionEditorHost } from '../src/components/SessionEditor';
 import { ArrangeHost } from '../src/components/Arrange';
+import { CelebrateHost } from '../src/components/Cheer';
+import { MakeoverHost } from '../src/components/Makeover';
 import { appIsUp } from '../src/actions';
 import { ShareIntake } from '../src/shareIntake';
 import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
@@ -330,6 +332,8 @@ export default function RootLayout() {
       {showApp && <QuickAddHost />}
       {showApp && <SessionEditorHost />}
       {showApp && <ArrangeHost />}
+      {showApp && <CelebrateHost />}
+      {showApp && <MakeoverHost />}
       {showApp && <ToastHost />}
       {/* covers everything while the app restarts into another profile */}
       <SwitchingOverlay />

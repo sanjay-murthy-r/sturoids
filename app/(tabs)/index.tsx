@@ -44,6 +44,7 @@ import {
 import { galleryGroups, sizesOf, widgetDef, widgetShown } from '../../src/widgets/registry';
 import type { WidgetDef } from '../../src/widgets/types';
 import { rightClick } from '../../src/web/rightClick';
+import { markGesture } from '../../src/dragGuard';
 
 // what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
 const NO_SESSIONS: FocusSession[] = [];
@@ -778,13 +779,16 @@ const BoardItem = React.memo(function BoardItem({
         })
         .onFinalize((_e, success) => {
           if (!held.value) return;
+          runOnJS(markGesture)(400);
           runOnJS(end)(success);
         });
     }
     return Gesture.LongPress()
       .enabled(!def.ownHold)
       .minDuration(480)
-      .onStart(() => { runOnJS(hold)(); });
+      .onStart(() => { runOnJS(markGesture)(900); runOnJS(hold)(); })
+      // the finger lifting off a hold that opened the edit mode is not a tap on what it was on
+      .onFinalize((_e, success) => { if (success) runOnJS(markGesture)(400); });
   }, [editing, def.ownHold, hold, start, aimAt, end, width]);
 
   const place = useAnimatedStyle(() => {
