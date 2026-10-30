@@ -310,7 +310,8 @@ function sessionDoc(s: FocusSession, ctx: Ctx): SiftDoc {
   return {
     key: 'session:' + s.id, kind: 'session', section: 'Deep Work', title: s.subject?.trim() || 'Focus session',
     subtitle: fmtShortDate(s.dateKey) + ' · ' + min + ' min' + (s.endedAt ? ' · ' + fmtClockTime(new Date(s.endedAt).getHours() * 60 + new Date(s.endedAt).getMinutes(), ctx.hour24) : ''),
-    tags: (s.taskTitles || []).join(' '), meta: s.dateKey, at: s.endedAt,
+    // a session is found by its tags, its tasks and its note as well as its subject
+    tags: [...(s.tags || []), ...(s.taskTitles || [])].join(' '), meta: [s.dateKey, s.note || ''].join(' '), at: s.endedAt,
     payload: { icon: 'timer-outline', color: colorOf('accent'), open: () => openPage('/focus-history', { session: s.id }) },
   };
 }

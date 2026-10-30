@@ -38,13 +38,14 @@ import { openPage, openTool } from '../toolNav';
 import { useIntro } from '../intro';
 import { minutesUntil } from '../toolLogic';
 import { openSessionEditor } from '../components/SessionEditor';
+import { TagPicker } from '../components/TagPicker';
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
 /** a session as it stood when it was ended by hand, for the Undo that puts it back */
 interface Resume {
   mode: 'stopwatch' | 'countdown'; targetMin: number; accumSec: number; subject: string; attached: Attached[];
-  startedAt: number | null; finishAt: number | null; chosen: number; running: boolean;
+  startedAt: number | null; finishAt: number | null; chosen: number; running: boolean; tags: string[];
 }
 
 /** the idle stopwatch's clock sits in the slot the clock has always had, so the card keeps its height */
@@ -211,6 +212,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [startTs, setStartTs] = useState<number | null>(saved?.startTs ?? null);
   const [accumSec, setAccumSec] = useState(saved?.accumSec ?? 0);
   const [subject, setSubject] = useState(saved?.subject ?? '');
+  // what the session is for beyond its subject: an exam coming up, or a tag of the student's own
+  const [tags, setTags] = useState<string[]>(saved?.tags ?? []);
+  const tagsRef = useRef(tags);
+  tagsRef.current = tags;
   const [attached, setAttached] = useState<Attached[]>(saved?.attached ?? []);
   const [subjectSheet, setSubjectSheet] = useState(false);
   // a sideways tablet is known before it lays out, so its first frame already has its two columns
@@ -291,7 +296,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
     setDeepWork({
       mode: timerMode, targetMin, running, startTs, accumSec, finishAt, attached,
-      startedAt: startedAtRef.current ?? Date.now(), subject: subjectRef.current,
+      startedAt: startedAtRef.current ?? Date.now(), subject: subjectRef.current, tags: tagsRef.current,
     });
   }, [started, timerMode, targetMin, running, startTs, accumSec, finishAt, attached]);
   // the countdown's end notice names the subject, so a new subject lays it out again, from the live session
@@ -303,6 +308,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       void scheduleCountdownEnd(t.startTs + (t.targetMin * 60 - t.accumSec) * 1000, t.targetMin, subjectRef.current);
     }
   };
+  // the tags as they change during a session
+  useEffect(() => {
+    if (startedRef.current) patchDeepWork({ tags });
+  }, [tags]);
   // typing a subject writes once it settles, not on every keystroke
   useEffect(() => {
     if (!startedRef.current) return undefined;
@@ -585,7 +594,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     // what Undo puts back after a session ended by hand: the session as it stood, paused or running
     const before: Resume = {
       mode: timerMode, targetMin, accumSec: net, subject, attached: live, startedAt: startedAtRef.current,
-      finishAt: reachedFinish ? null : finishAt, chosen: chosenRef.current, running,
+      finishAt: reachedFinish ? null : finishAt, chosen: chosenRef.current, running, tags,
     };
     setRunning(false); setStartTs(null); setAccumSec(net); setAmbient(false);
     const unchecked = live.filter((a) => !a.done);
@@ -641,6 +650,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         netSeconds: Math.round(netSeconds),
         taskTitles: attached.map((a) => a.title),
         subject: subject.trim() || undefined,
+        ...(tags.length ? { tags } : {}),
       });
     }
     // after a review, said once its sheet has gone, where the toast can be seen
@@ -668,7 +678,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       clearBetween();
       st0.setDeepWork({
         mode: r.mode, targetMin: r.targetMin, running: r.running, startTs: r.running ? Date.now() : null,
-        accumSec: r.accumSec, startedAt: r.startedAt ?? Date.now(), subject: r.subject, attached: r.attached,
+        accumSec: r.accumSec, startedAt: r.startedAt ?? Date.now(), subject: r.subject, attached: r.attached, tags: r.tags,
         finishAt: r.finishAt != null && r.finishAt > Date.now() ? r.finishAt : null,
       });
       openTool('focus');
@@ -678,6 +688,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     useStore.getState().removeSession(id);
     clearBetween();
     setTimerMode(r.mode); setTargetMin(r.targetMin); setAccumSec(r.accumSec); setSubject(r.subject); setAttached(r.attached);
+    setTags(r.tags);
     startedAtRef.current = r.startedAt; chosenRef.current = r.chosen; endedRef.current = false;
     if (r.finishAt != null && r.finishAt > Date.now()) setFinishAt(r.finishAt);
     // a running session starts again once these are in place (start reads them)
@@ -696,7 +707,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   function reset() {
     setReview(null); setHeld(false); setAttached([]); setAccumSec(0); setRunning(false); setStartTs(null);
-    setSubject(''); endedRef.current = false; startedAtRef.current = null;
+    setSubject(''); setTags([]); endedRef.current = false; startedAtRef.current = null;
     // the wheel goes back to the length the session was set up with
     setTargetMin(chosenRef.current);
   }
@@ -1071,6 +1082,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             />
           </View>
           {subjectChips}
+          <TagPicker value={tags} onChange={setTags} style={{ marginTop: 14 }} />
         </Animated.View>
       ) : (
         <Animated.View key="running" entering={switchIn}>
@@ -1210,7 +1222,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </Animated.ScrollView>)}
 
       {/* the subject, once a session is under way */}
-      <Sheet visible={subjectSheet} onClose={closeSubject} title="Subject">
+      <Sheet visible={subjectSheet} onClose={closeSubject} title="Subject and tags">
         <Field
           value={subject}
           onChangeText={setSubject}
@@ -1221,6 +1233,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           onSubmitEditing={closeSubject}
         />
         {subjectChips}
+        <TagPicker value={tags} onChange={setTags} style={{ marginTop: 14, marginBottom: 18 }} />
         <PillButton label="Done" onPress={closeSubject} />
       </Sheet>
 

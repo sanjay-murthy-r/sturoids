@@ -395,6 +395,23 @@ function focusSection({ src, o, days, key }: Ctx): Section {
     bySubject.set(k, row);
   }
   const subjects = [...bySubject.values()].sort((a, b) => b.min - a.min);
+  // the tags (an exam coming up, or the student's own): a session counts once under each of its tags, matched without case
+  const byTag = new Map<string, { name: string; min: number; n: number }>();
+  for (const s of list) {
+    for (const t of s.tags || []) {
+      const k = t.toLowerCase();
+      const row = byTag.get(k) || { name: t, min: 0, n: 0 };
+      row.name = t;
+      row.min += minOf(s);
+      row.n++;
+      byTag.set(k, row);
+    }
+  }
+  const tags = [...byTag.values()].sort((a, b) => b.min - a.min);
+  // how the sessions went, where it was said afterwards
+  const rated = list.filter((s) => s.rating === 1 || s.rating === 2 || s.rating === 3);
+  const deepMin = rated.filter((s) => s.rating === 3).reduce((a, s) => a + minOf(s), 0);
+  const ratedMin = rated.reduce((a, s) => a + minOf(s), 0);
   const summary: Stat[] = list.length ? [
     { label: 'Focused', value: fmtMin(total) },
     { label: 'Sessions', value: String(list.length) },
@@ -402,6 +419,8 @@ function focusSection({ src, o, days, key }: Ctx): Section {
   ] : [];
   if (list.length > 1) summary.push({ label: 'Average session', value: fmtMin(total / list.length) });
   if (!key && subjects.length && subjects[0].name !== 'No subject') summary.push({ label: 'Most time on', value: subjects[0].name });
+  if (tags.length) summary.push({ label: 'Most tagged', value: tags[0].name });
+  if (rated.length) summary.push({ label: 'Deep focus', value: pctOf(deepMin, ratedMin) + '% of rated time' });
   const blocks: Block[] = [];
   if (list.length) {
     blocks.push({ t: 'stats', items: summary });
@@ -415,11 +434,29 @@ function focusSection({ src, o, days, key }: Ctx): Section {
         rows: subjects.map((s) => [s.name, fmtMin(s.min), String(s.n), pctOf(s.min, total) + '%']),
       });
     }
+    if (tags.length) {
+      blocks.push({
+        t: 'table', title: 'By tag', columns: ['Tag', 'Time', 'Sessions', 'Share'], right: [1, 2, 3],
+        rows: tags.map((t) => [t.name, fmtMin(t.min), String(t.n), pctOf(t.min, total) + '%']),
+      });
+    }
+    if (rated.length) {
+      const how = (r: 1 | 2 | 3) => rated.filter((s) => s.rating === r);
+      blocks.push({
+        t: 'table', title: 'How it went', columns: ['Said', 'Time', 'Sessions'], right: [1, 2],
+        rows: ([[3, 'Deep'], [2, 'Steady'], [1, 'Scattered']] as const)
+          .filter(([r]) => how(r).length)
+          .map(([r, label]) => [label, fmtMin(how(r).reduce((a, s) => a + minOf(s), 0)), String(how(r).length)]),
+      });
+    }
+    const said = (s: FocusSession) => (s.rating === 3 ? 'Deep' : s.rating === 2 ? 'Steady' : s.rating === 1 ? 'Scattered' : '');
     blocks.push({
-      t: 'table', title: 'Every session', columns: ['Day', 'Subject', 'Minutes', 'Tasks'], right: [2],
+      t: 'table', title: 'Every session', columns: ['Day', 'Subject', 'Minutes', 'Tags', 'Tasks', 'Notes'], right: [2],
       rows: list.map((s) => [
         fmtDay(s.dateKey, true), subjectOf(s) || 'No subject', String(Math.round(minOf(s))) + (s.manual ? ' (logged)' : ''),
+        (s.tags || []).join('; '),
         (s.taskTitles || []).filter(Boolean).join('; '),
+        [said(s), s.note || ''].filter(Boolean).join(' · '),
       ]),
     });
   }

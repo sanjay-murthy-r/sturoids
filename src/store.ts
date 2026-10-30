@@ -56,6 +56,8 @@ export interface FocusSession {
   rating?: 1 | 2 | 3;
   /** the minutes it was timed at, kept the first time its length is changed, so the editor can say what it was */
   timedSeconds?: number;
+  /** what the time was for beyond its subject: an exam coming up, or a tag of the student's own */
+  tags?: string[];
 }
 
 /** What can be changed about a session afterwards (the session editor). */
@@ -71,6 +73,8 @@ export interface SessionPatch {
   note?: string;
   /** null takes it off */
   rating?: 1 | 2 | 3 | null;
+  /** [] takes them all off */
+  tags?: string[];
 }
 export interface PlannerBlock { id: string; subject: string; start: string; end: string; color: string }
 export interface Habit {
@@ -143,6 +147,8 @@ export interface ActiveSession {
   subject: string;
   attached: { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }[];
   finishAt: number | null;
+  /** the session's tags as it runs (FocusSession.tags) */
+  tags?: string[];
 }
 
 export interface JournalEntry {
@@ -1102,6 +1108,27 @@ function cleanSession(x: any): FocusSession {
   if (out.rating !== undefined && out.rating !== 1 && out.rating !== 2 && out.rating !== 3) delete out.rating;
   if (out.timedSeconds !== undefined && !(isFiniteNumber(out.timedSeconds) && out.timedSeconds > 0)) delete out.timedSeconds;
   if (!Array.isArray(out.taskTitles)) out.taskTitles = [];
+  if (out.tags !== undefined) {
+    const tags = cleanTags(out.tags);
+    if (tags.length) out.tags = tags;
+    else delete out.tags;
+  }
+  return out;
+}
+
+/** A session's tags as kept: text, one line each, 40 characters at most, once each (any case), six at most. */
+export function cleanTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const t of raw) {
+    if (typeof t !== 'string') continue;
+    const tag = t.trim().replace(/\s+/g, ' ').slice(0, 40);
+    if (!tag || seen.has(tag.toLowerCase())) continue;
+    seen.add(tag.toLowerCase());
+    out.push(tag);
+    if (out.length >= 6) break;
+  }
   return out;
 }
 
@@ -2057,6 +2084,11 @@ const appStore = create<AppState>()(
           if (n) next.note = n;
           else delete next.note;
         }
+        if (Array.isArray(patch.tags)) {
+          const tags = cleanTags(patch.tags);
+          if (tags.length) next.tags = tags;
+          else delete next.tags;
+        }
         if (patch.rating !== undefined) {
           if (patch.rating === 1 || patch.rating === 2 || patch.rating === 3) next.rating = patch.rating;
           else delete next.rating;
@@ -2064,6 +2096,7 @@ const appStore = create<AppState>()(
         // nothing different: nothing written, so a Save with no change never counts as one
         const same = next.subject === was.subject && next.netSeconds === was.netSeconds && next.endedAt === was.endedAt
           && next.note === was.note && next.rating === was.rating && next.timedSeconds === was.timedSeconds
+          && (next.tags ?? []).join('\n') === (was.tags ?? []).join('\n')
           && next.taskTitles.length === was.taskTitles.length && next.taskTitles.every((t, i) => t === was.taskTitles[i]);
         if (same) return true;
         let list = s.sessions.map((x) => (x.id === id ? next : x));

@@ -1,8 +1,8 @@
 // A Deep Work session, put right afterwards: opened from the quiet "Edit details" on the toast a session leaves as it
 // is saved, and from a session's row in the focus history. It changes only what a student would want to change about a
 // session already done: the time it really was (a break that was not paused taken off, or a stretch that was missed
-// put on), what it was on, when it ended, how it went, what got done in it (ticking today's ToDos and tasks as done
-// too) and a line about it. Nothing is written until Save; closing the sheet leaves the session as it was.
+// put on), what it was on and for (its tags), when it ended, how it went, what got done in it (ticking today's ToDos
+// and tasks as done too) and a line about it. Nothing is written until Save; closing the sheet leaves it as it was.
 
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -18,6 +18,7 @@ import { glide, rowIn, rowOut, useAnimLevel } from './Motion';
 import { toast } from './Toast';
 import { tick } from '../haptics';
 import { todayItems } from '../widgets/logic';
+import { TagPicker } from './TagPicker';
 
 /** Which session the editor is open on (null: closed); `n` makes each opening a fresh sheet. */
 export const useSessionEditor = create<{ id: string | null; open: boolean; n: number }>(() => ({ id: null, open: false, n: 0 }));
@@ -59,6 +60,7 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
   const [tasks, setTasks] = React.useState<string[]>(base?.taskTitles ?? []);
   const [newTask, setNewTask] = React.useState('');
   const [note, setNote] = React.useState(base?.note ?? '');
+  const [tags, setTags] = React.useState<string[]>(base?.tags ?? []);
   // today's ToDos and tasks ticked here: done in the store as the session is saved
   const [ticked, setTicked] = React.useState<{ kind: 'daily' | 'mission'; id: string; title: string }[]>([]);
   // what the closing toast says, once the sheet has gone
@@ -108,7 +110,7 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
       endedAt = new Date(y, mo - 1, d, Number(m[1]), Number(m[2])).getTime();
     }
     st.updateSession(id, {
-      subject, note, rating, taskTitles: tasks,
+      subject, note, rating, taskTitles: tasks, tags,
       ...(min * 60 !== base.netSeconds && min !== Math.round(base.netSeconds / 60) ? { minutes: min } : {}),
       ...(endedAt !== undefined ? { endedAt } : {}),
     });
@@ -182,6 +184,8 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
 
       <Field label="Subject" value={subject} onChangeText={setSubject} placeholder="No subject" maxLength={60} style={{ marginTop: 18, marginBottom: 0 }} />
       <SubjectSuggest value={subject} max={5} onPick={setSubject} style={{ marginTop: 10 }} />
+
+      <TagPicker value={tags} onChange={setTags} style={{ marginTop: 18 }} />
 
       <TimeField label="Ended at" value={end} onChange={setEnd} style={{ marginTop: 18 }} />
 

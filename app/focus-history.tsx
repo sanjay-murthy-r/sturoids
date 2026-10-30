@@ -55,7 +55,9 @@ const SessionRow = React.memo(function SessionRow({ s, first, last, enter, hour2
   const at = fmtClockTime(ended.getHours() * 60 + ended.getMinutes(), hour24);
   const title = sessionLength(s.netSeconds) + (s.subject ? ' · ' + s.subject : '');
   const how = s.rating === 3 ? 'Deep' : s.rating === 2 ? 'Steady' : s.rating === 1 ? 'Scattered' : '';
-  const caption = [s.manual ? 'Logged by hand' : 'Ended ' + at, how, s.taskTitles.join(', '), s.note ?? ''].filter(Boolean).join(' · ');
+  const caption = [
+    s.manual ? 'Logged by hand' : 'Ended ' + at, how, (s.tags ?? []).join(', '), s.taskTitles.join(', '), s.note ?? '',
+  ].filter(Boolean).join(' · ');
   // settled as the row mounts: a row of the first screenful rises with the page, and later renders never take it back
   const [rise] = React.useState(enter);
   return (
@@ -111,7 +113,21 @@ export default function FocusHistoryPage() {
       }
     }
     const rows = [...bySubject.values()].sort((a, b) => b.secs - a.secs);
-    return { rows, total: rows.reduce((a, r) => a + r.secs, 0), max: rows.length ? rows[0].secs : 0 };
+    // and per tag: a session counts once under each of its tags
+    const byTag = new Map<string, { k: string; name: string; secs: number }>();
+    for (const s of sessions) {
+      if (s.dateKey < from || s.dateKey > today) continue;
+      for (const t of s.tags ?? []) {
+        const k = t.toLowerCase();
+        const had = byTag.get(k);
+        if (had) { had.secs += s.netSeconds; had.name = t; } else byTag.set(k, { k, name: t, secs: s.netSeconds });
+      }
+    }
+    const tagRows = [...byTag.values()].sort((a, b) => b.secs - a.secs);
+    return {
+      rows, total: rows.reduce((a, r) => a + r.secs, 0), max: rows.length ? rows[0].secs : 0,
+      tagRows, tagMax: tagRows.length ? tagRows[0].secs : 0,
+    };
   }, [sessions, today]);
 
   // the sessions by the day they began, newest day first and the latest session first within it. Built again on a new
@@ -311,6 +327,24 @@ export default function FocusHistoryPage() {
                 {/* flat: a plain track and a plain fill, no depth, so a column of them stays quiet */}
                 <View style={[st.track, { backgroundColor: track }]}>
                   <View style={[st.fill, { width: `${Math.max(2, Math.round((r.secs / week.max) * 100))}%`, backgroundColor: C.accent }]} />
+                </View>
+              </View>
+            ))}
+          </Card>
+        </View>
+      ) : null}
+      {week.tagRows.length > 0 ? (
+        <View style={st.week}>
+          <SectionTitle>This week by tag</SectionTitle>
+          <Card>
+            {week.tagRows.map((r, i) => (
+              <View key={'t:' + r.k} style={i > 0 ? st.barGap : undefined} accessible accessibilityLabel={r.name + ', ' + sessionLength(r.secs)}>
+                <View style={st.barHead}>
+                  <Text style={st.barName} numberOfLines={1}>{r.name}</Text>
+                  <Text style={st.barValue}>{sessionLength(r.secs)}</Text>
+                </View>
+                <View style={[st.track, { backgroundColor: track }]}>
+                  <View style={[st.fill, { width: `${Math.max(2, Math.round((r.secs / week.tagMax) * 100))}%`, backgroundColor: C.amber }]} />
                 </View>
               </View>
             ))}
