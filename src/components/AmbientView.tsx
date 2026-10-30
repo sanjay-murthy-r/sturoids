@@ -22,11 +22,13 @@ const DIM_TO = 0.25;
  * The ambient screen's own inks, a step darker than the app's: dimmed digits, softer words and a fainter rule on true
  * black, so a propped-up phone glows no more than it must.
  */
+// dim, as a phone's always-on display is: the time readable at a glance across a desk, nothing else asking to be read,
+// and the black around it as dark as the screen goes
 const INK = {
-  digit: 'rgba(250,249,245,0.82)',
-  soft: 'rgba(194,192,182,0.62)',
-  faint: 'rgba(156,154,146,0.5)',
-  track: 'rgba(250,249,245,0.07)',
+  digit: 'rgba(250,249,245,0.6)',
+  soft: 'rgba(194,192,182,0.4)',
+  faint: 'rgba(156,154,146,0.3)',
+  track: 'rgba(250,249,245,0.045)',
 };
 /** burn-in care: the face visits these offsets, one step a minute, as shares of the screen's shorter side */
 const DRIFT: [number, number][] = [[0.022, -0.022], [-0.022, 0.022], [0.022, 0.022], [-0.022, -0.022], [0, 0]];
@@ -253,7 +255,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
           </Text>
         ) : null}
         <View style={[st.rule, { height: Math.max(1, u * 0.005), borderRadius: u * 0.005 }]}>
-          <View style={{ height: '100%', width: ruleW, backgroundColor: C.accent, opacity: 0.75, transform: [{ translateX: (progress - 1) * ruleW }] }} />
+          <View style={{ height: '100%', width: ruleW, backgroundColor: C.accent, opacity: 0.5, transform: [{ translateX: (progress - 1) * ruleW }] }} />
         </View>
       </View>
     </>
@@ -368,7 +370,7 @@ const st = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.ambient },
   top: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
   // the kicker's colour is the accent, read at render: a sheet built at load would keep the first accent for good
-  kicker: { opacity: 0.8, fontFamily: F.smSemi, textTransform: 'uppercase', maxWidth: '84%' },
+  kicker: { opacity: 0.55, fontFamily: F.smSemi, textTransform: 'uppercase', maxWidth: '84%' },
   faint: { color: INK.faint, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   /** the words someone has to read on the dimmed screen (the task, how to leave) take the softer ink, not the faint one */
   soft: { color: INK.soft, fontFamily: F.reg },
