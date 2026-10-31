@@ -84,18 +84,19 @@ export function ScreenBG({ children, guard = false, fling = true, maxWidth = REA
 }
 
 /**
- * The ground of a bar (a header, the band under the status bar, the tab bar): the page's own colour. In Cheerful the
- * page has colour drifting behind it, so a bar is frosted instead: the colour shows softly through it, and a bar never
- * reads as a flat slab laid over the glow.
+ * The ground of a bar (a header, the band under the status bar, the tab bar): the page's own colour. In Cheerful on the
+ * PC the page's colour drifts behind it, so a bar is frosted there (a real CSS blur). Android never gets a blur: its
+ * blur is experimental, paints a gray slab instead of blurring and can take the app down as a screen unmounts, so a
+ * bar there is the page's own colour, as in Elite.
  */
 export function Ground({ style }: { style?: ViewStyle }) {
   const theme = useTheme();
   const cheerful = useCheerful();
   const bg = bgFor(theme);
-  if (!cheerful) return <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: bg }, style]} />;
+  if (!cheerful || Platform.OS !== 'web') return <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: bg }, style]} />;
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden' }, style]}>
-      <BlurView intensity={26} tint="dark" experimentalBlurMethod="dimezisBlurView" style={StyleSheet.absoluteFill} />
+      <BlurView intensity={26} tint="dark" style={StyleSheet.absoluteFill} />
       <View style={[StyleSheet.absoluteFill, { backgroundColor: bg + 'C4' }]} />
     </View>
   );
@@ -191,10 +192,18 @@ export const edgeStrength = (y: number, level: AnimLevel) => {
   return level === 'none' ? (y > 2 ? 1 : 0) : interpolate(y, [2, 14], [0, 1], Extrapolation.CLAMP);
 };
 
-/** How far the compact title has taken the big title's place: 0 at rest, 1 once the big title has scrolled away; a step with no motion. */
-const swapProgress = (y: number, level: AnimLevel) => {
+/**
+ * Whether the compact title has taken the big title's place. It is a switch, not a dial: it turns on once the big title
+ * is mostly gone (SWAP_ON of the way through its band) and off again only once it is mostly back (SWAP_OFF), and the
+ * compact title and the bar's ground then play to the end on their own. A scroll that stops inside the band never
+ * leaves the bar half drawn, and the gap between the two marks keeps a resting scroll from flickering it.
+ */
+const SWAP_ON = 0.72;
+const SWAP_OFF = 0.4;
+const swapWanted = (y: number, was: boolean) => {
   'worklet';
-  return level === 'none' ? (y > (TITLE_FROM + TITLE_TO) / 2 ? 1 : 0) : interpolate(y, [TITLE_FROM, TITLE_TO], [0, 1], Extrapolation.CLAMP);
+  const p = (y - TITLE_FROM) / (TITLE_TO - TITLE_FROM);
+  return was ? p > SWAP_OFF : p >= SWAP_ON;
 };
 
 const clipEm = (p: ContextPart): ContextPart => (
@@ -367,7 +376,17 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
   // the compact title takes the big title's place as it scrolls up under the bar: it rises a few points and fills in
   // with full motion, only fills in with some, and is a step with none. The ground fills in over the same offsets, so
   // the big title leaves behind it, and the hairline and shade come with the ground, never before it. All on the UI thread
-  const swap = useDerivedValue(() => (overlay ? swapProgress(y.value, level) : 0));
+  const swap = useSharedValue(0);
+  const swapped = useSharedValue(false);
+  useAnimatedReaction(
+    () => (overlay ? swapWanted(y.value, swapped.value) : false),
+    (on) => {
+      if (on === swapped.value) return;
+      swapped.value = on;
+      swap.value = level === 'none' ? (on ? 1 : 0) : withTiming(on ? 1 : 0, { duration: on ? 200 : 160, easing: on ? EASE_OUT : EASE_EXIT });
+    },
+    [overlay, level],
+  );
   // A page's bar always shows its title. A screen that turns from a tab into a page in place (Scores going down a
   // level from its root) fades the compact title in instead of showing it in one frame: it waits out the title's own
   // dip, so the tab's old name never flashes up first. Going back to the tab, it fades out the same way.

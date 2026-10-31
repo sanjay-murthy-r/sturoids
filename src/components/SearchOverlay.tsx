@@ -110,7 +110,11 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       {children}
       {blurOn && level !== 'none' ? (
         <Animated.View pointerEvents="none" style={[st.rise, blurStyle]}>
-          <BlurView intensity={level === 'full' ? 30 : 14} tint="dark" experimentalBlurMethod="dimezisBlurView" style={[st.riseBlur, { height: winH + FEATHER }]} />
+          {/* a real blur on the PC; Android's blur is experimental (a gray slab, and a crash as it unmounts), so there the
+              app is dimmed instead, rising the same way */}
+          {Platform.OS === 'web'
+            ? <BlurView intensity={level === 'full' ? 30 : 14} tint="dark" style={[st.riseBlur, { height: winH + FEATHER }]} />
+            : <View style={[st.riseBlur, { height: winH + FEATHER, backgroundColor: 'rgba(12,12,11,0.32)' }]} />}
           {/* the leading edge: a soft dimming that eases the line where the blur begins */}
           <LinearGradient pointerEvents="none" colors={['rgba(12,12,11,0.14)', 'rgba(12,12,11,0)']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={st.riseEdge} />
         </Animated.View>
@@ -858,8 +862,24 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       };
     };
   };
-  const layout = level === 'full' ? LinearTransition.duration(220).easing(EASE_OUT) : undefined;
-  const exiting = level === 'none' ? undefined : FadeOut.duration(120);
+  // Rows rise in only as Sift opens. After that a new search swaps the whole list at once, under a quick fade of the
+  // list (below): rows that animated out while new ones animated in overlapped, and moved the sticky heads about
+  const staged = React.useRef(true);
+  React.useEffect(() => {
+    const t = setTimeout(() => { staged.current = false; }, 600);
+    return () => clearTimeout(t);
+  }, []);
+  const listFade = useSharedValue(1);
+  const listRef = React.useRef<any>(null);
+  const firstQuery = React.useRef(true);
+  React.useEffect(() => {
+    if (firstQuery.current) { firstQuery.current = false; return; }
+    listRef.current?.scrollTo?.({ y: 0, animated: false });
+    if (level === 'none') return;
+    listFade.value = 0.45;
+    listFade.value = withTiming(1, { duration: 160, easing: EASE_OUT });
+  }, [dq, scopes]);
+  const listStyle = useAnimatedStyle(() => ({ opacity: listFade.value }));
 
   const sticky = items.map((x, i) => (x.t === 'head' ? i : -1)).filter((i) => i >= 0);
 
@@ -965,9 +985,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       key={x.key}
       ref={(n: any) => { if (n) nodes.current.set(x.key, n); else nodes.current.delete(x.key); }}
       style={x.key === selKey ? [st.picked, { backgroundColor: theme === 'minimal' ? MIN.inset : C.pressDim }] : undefined}
-      entering={x.t === 'head' ? undefined : entering('index' in x ? x.index : 0)}
-      exiting={exiting}
-      layout={x.t === 'head' ? undefined : layout}
+      entering={x.t === 'head' || !staged.current ? undefined : entering('index' in x ? x.index : 0)}
     >
       {renderItem(x)}
     </Animated.View>
@@ -1058,6 +1076,8 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
 
             <GestureDetector gesture={listGesture}>
               <Animated.ScrollView
+                ref={listRef}
+                style={listStyle}
                 onScroll={onScroll}
                 scrollEventThrottle={16}
                 keyboardShouldPersistTaps="handled"
