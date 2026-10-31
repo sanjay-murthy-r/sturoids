@@ -180,7 +180,7 @@ export function TagPicker({ value, onChange, style, subject }: {
 const st = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
   key: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 30, paddingHorizontal: 6, marginRight: 8, marginBottom: 8 },
-  keyText: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12.5, letterSpacing: TRACK.fine, maxWidth: 180 },
+  keyText: { color: C.textFaint, fontFamily: F.smMed, fontSize: 13, letterSpacing: TRACK.fine, maxWidth: 180 },
   when: { color: C.textFaint, fontFamily: F.sm, fontSize: 11, letterSpacing: TRACK.fine, opacity: 0.8 },
   tray: { marginTop: 2 },
   kicker: { color: C.textFaint, fontFamily: F.smMed, fontSize: 11, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 6, marginTop: 4 },

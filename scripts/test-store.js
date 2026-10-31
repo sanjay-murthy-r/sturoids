@@ -170,6 +170,23 @@ const scenarios = {
     assert.deepEqual(app.notices, []);
   },
 
+  async "3.0's single companion look goes to the companion chosen then, and each keeps its own after"() {
+    const saved = { ...V4, settings: { ...V4.settings, mood: 'cheerful', mascot: 'pip', mascotColors: 'lemon', mascotGear: ['bow', 'nope!'], mascotAwayOn: '2026-10-30' } };
+    const app = boot({ [KEY]: JSON.stringify({ state: saved, version: 5 }) });
+    await settled(app);
+    const st = app.state().settings;
+    assert.deepEqual(st.mascotLooks.pip, { colors: 'lemon', gear: ['bow'] });
+    assert.deepEqual(st.mascotLooks.sprout, { colors: '', gear: [] });
+    assert.equal('mascotGear' in st, false);
+    assert.equal('mascotAwayOn' in st, false);
+    assert.equal(st.mascotOut, false);
+    // a look chosen since is never overwritten by the old one
+    const again = { ...V4, settings: { ...V4.settings, mascot: 'sprout', mascotColors: 'fern', mascotLooks: { sprout: { colors: 'sky', gear: ['ladybug'] }, pip: { colors: '', gear: [] } } } };
+    const app2 = boot({ [KEY]: JSON.stringify({ state: again, version: 5 }) });
+    await settled(app2);
+    assert.deepEqual(app2.state().settings.mascotLooks.sprout, { colors: 'sky', gear: ['ladybug'] });
+  },
+
   async 'a tool in a tab slot is never archived'() {
     const saved = { ...V4, settings: { ...V4.settings, tabSlots: ['desmos', 'focus', 'planner'] } };
     const app = boot({ [KEY]: JSON.stringify({ state: saved, version: 5 }) });

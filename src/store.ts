@@ -1369,8 +1369,14 @@ function cleanSettingsV6(s: any): Settings {
       ? ([...new Set(v.gear.filter((g: unknown) => typeof g === 'string' && /^[a-z]{1,16}$/.test(g as string)))] as string[]).slice(0, 6)
       : [],
   });
-  const looks = st.mascotLooks && typeof st.mascotLooks === 'object' ? st.mascotLooks : {};
-  if (!st.mascotLooks && (st.mascotColors || st.mascotGear)) looks[st.mascot === 'pip' ? 'pip' : 'sprout'] = { colors: st.mascotColors, gear: st.mascotGear };
+  const looks: any = st.mascotLooks && typeof st.mascotLooks === 'object' ? { ...st.mascotLooks } : {};
+  // saved settings arrive laid over the defaults, so the looks are always there: an untouched pair (nothing chosen for
+  // either) with an old single look beside it means 3.0.x's look, which goes to the companion chosen then
+  const untouched = ['sprout', 'pip'].every((k) => !looks[k] || (!looks[k].colors && !(Array.isArray(looks[k].gear) && looks[k].gear.length)));
+  const oldGear = Array.isArray(st.mascotGear) && st.mascotGear.length > 0;
+  if (untouched && (oldGear || (typeof st.mascotColors === 'string' && st.mascotColors))) {
+    looks[st.mascot === 'pip' ? 'pip' : 'sprout'] = { colors: st.mascotColors, gear: st.mascotGear };
+  }
   st.mascotLooks = { sprout: look(looks.sprout), pip: look(looks.pip) };
   delete st.mascotColors;
   delete st.mascotGear;
@@ -1378,7 +1384,6 @@ function cleanSettingsV6(s: any): Settings {
   st.mascotHideUntil = Number.isFinite(st.mascotHideUntil) && st.mascotHideUntil > 0 ? st.mascotHideUntil : 0;
   delete st.mascotAwayOn;
   st.mascotTalk = st.mascotTalk === 'often' || st.mascotTalk === 'asked' ? st.mascotTalk : 'some';
-  if (typeof st.mascotAwayOn !== 'string' || !/^(\d{4}-\d{2}-\d{2})?$/.test(st.mascotAwayOn)) st.mascotAwayOn = '';
   // no repo yet checks Sturoids' own releases; one saved under an earlier address follows the rename
   if (typeof st.githubRepo !== 'string' || !st.githubRepo.trim() || OLD_UPDATE_REPO.test(st.githubRepo.trim())) st.githubRepo = DEFAULT_UPDATE_REPO;
   return st;

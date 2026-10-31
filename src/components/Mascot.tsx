@@ -192,7 +192,6 @@ function Companion({ kind }: { kind: Kind }) {
     return () => clearTimeout(t);
   }, [hideUntil]);
   const out = settings.mascotOut || hidden;
-  const talk = settings.mascotTalk || 'some';
   const level = useAnimLevel();
   const full = level === 'full';
   const { width: W, height: H } = useWindowDimensions();
@@ -237,8 +236,19 @@ function Companion({ kind }: { kind: Kind }) {
   roomRef.current = room;
   const outRef = React.useRef(out);
   outRef.current = out;
-  const ctxNow = () => context(kind, name, gear);
-  React.useEffect(() => () => { alive.current = false; token.current++; }, []);
+  // read fresh at each word, never from the render a timer was set up in: a new name, new gear or a new choice of how
+  // much it talks counts at once
+  const ctxNow = () => {
+    const st = useStore.getState().settings;
+    return context(kind, st.mascotName || NAMES[kind], st.mascotLooks[kind].gear);
+  };
+  const talkNow = () => useStore.getState().settings.mascotTalk || 'some';
+  React.useEffect(() => () => {
+    alive.current = false;
+    token.current++;
+    if (drag.current?.flap) clearInterval(drag.current.flap);
+    if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
+  }, []);
 
   /** its place in the room in front: at the room's right end, by the header's buttons; null with no room fit for it */
   const home = (r = roomRef.current): Spot | null => {
@@ -308,6 +318,7 @@ function Companion({ kind }: { kind: Kind }) {
    * moment's line only when it talks at all (`always` for an answer to a tap). True if it spoke.
    */
   const say = (m: Moment, opts: { spontaneous?: boolean; extra?: { minutes?: number }; always?: boolean } = {}) => {
+    const talk = talkNow();
     if (!opts.always && talk === 'asked') return false;
     const now = Date.now();
     if (opts.spontaneous && !maySpeak(memory, talk, now)) return false;
@@ -729,7 +740,7 @@ function Companion({ kind }: { kind: Kind }) {
     const hour = new Date().getHours();
     const late = hour >= 23 || hour < 5;
     // now and then, a word: within the day's budget
-    if (Math.random() < 0.3 && maySpeak(memory, talk, Date.now())) {
+    if (Math.random() < 0.3 && maySpeak(memory, talkNow(), Date.now())) {
       act(async (step) => {
         if (Math.random() < 0.5) await think(step);
         say('idle', { spontaneous: true });
@@ -933,6 +944,7 @@ function Companion({ kind }: { kind: Kind }) {
   };
   const onLift = () => {
     if (away.current) return;
+    if (busy.current) tidy();
     token.current++;
     busy.current = true;
     hush();
@@ -1007,12 +1019,17 @@ function Companion({ kind }: { kind: Kind }) {
     });
   };
 
+  // the gesture is made once; it calls this render's handlers through a ref, so they never go stale and a re-render in
+  // the middle of a drag never remakes the gesture under the finger
+  const hands = React.useRef({ onLift, onCarry, onDrop, sendOff, onTap });
+  hands.current = { onLift, onCarry, onDrop, sendOff, onTap };
   const gesture = React.useMemo(() => Gesture.Race(
     Gesture.Pan().minDistance(8).runOnJS(true)
-      .onStart(onLift).onUpdate((e) => onCarry(e.translationX, e.translationY)).onEnd(onDrop).onFinalize(onDrop),
-    Gesture.LongPress().minDuration(520).runOnJS(true).onStart(() => sendOff()),
-    Gesture.Tap().maxDuration(450).runOnJS(true).onEnd((_e, ok) => { if (ok) onTap(); }),
-  ), [W, H, rail, scroll]);
+      .onStart(() => hands.current.onLift()).onUpdate((e) => hands.current.onCarry(e.translationX, e.translationY))
+      .onEnd(() => hands.current.onDrop()).onFinalize(() => hands.current.onDrop()),
+    Gesture.LongPress().minDuration(520).runOnJS(true).onStart(() => hands.current.sendOff()),
+    Gesture.Tap().maxDuration(450).runOnJS(true).onEnd((_e, ok) => { if (ok) hands.current.onTap(); }),
+  ), []);
 
   /* ---------------- styles on the UI thread */
 
@@ -1358,7 +1375,7 @@ const st = StyleSheet.create({
     backgroundColor: PAPER, borderRadius: 13, paddingHorizontal: 11, paddingVertical: 7,
     shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 4,
   },
-  bubbleText: { color: INK, fontFamily: CUTE, fontSize: 12.5, lineHeight: 17 },
+  bubbleText: { color: INK, fontFamily: CUTE, fontSize: 13, lineHeight: 17 },
   tail: { position: 'absolute', width: 10, height: 10, backgroundColor: PAPER, transform: [{ rotate: '45deg' }], borderRadius: 2 },
   dot: { position: 'absolute', borderRadius: 1, backgroundColor: '#FFF8EE', opacity: 0.9 },
   flier: { position: 'absolute', left: 0, top: 0 },
