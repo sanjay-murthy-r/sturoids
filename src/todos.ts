@@ -1,4 +1,4 @@
-import { todoDueOn, toMinutes } from './utils';
+import { todayKey, todoDueOn, toMinutes } from './utils';
 
 /** What the ToDo list needs of a ToDo to order it. */
 export interface TodoLike { id: string; doneOn: string | null; time?: string; repeat?: 'daily'; days?: number[] }
@@ -37,4 +37,19 @@ export function leftoverTodos<T extends TodoLike & { createdAt: number }>(
   return tasks.filter((t) => (
     t.repeat !== 'daily' && t.createdAt < start && t.doneOn !== yesterday && t.doneOn !== today && !skip.includes(t.id)
   ));
+}
+
+/**
+ * Where a long-term task's deadline can be moved with one tap from its pill: tomorrow, in three days, in a week, each
+ * counted from `today` (a day key) and given as a day key. A move to the deadline it already has is left out.
+ */
+export function deadlineMoves(today: string, current?: string): { label: string; days: number; dateKey: string }[] {
+  const base = new Date(today + 'T00:00:00');
+  if (isNaN(base.getTime())) return [];
+  const out: { label: string; days: number; dateKey: string }[] = [];
+  for (const [label, days] of [['Tomorrow', 1], ['In 3 days', 3], ['In a week', 7]] as const) {
+    const dateKey = todayKey(new Date(base.getFullYear(), base.getMonth(), base.getDate() + days));
+    if (dateKey !== current) out.push({ label, days, dateKey });
+  }
+  return out;
 }
