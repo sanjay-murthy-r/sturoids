@@ -9,9 +9,11 @@ import { mascotCue } from './components/Mascot';
 // scripts/make-cheer-sounds.js; each player is made the first time its moment comes, never at launch.
 
 export type CheerMoment = 'tick' | 'add' | 'start' | 'done' | 'day' | 'streak' | 'makeover';
+type Sound = CheerMoment | 'knock';
 
 /* eslint-disable @typescript-eslint/no-var-requires */
-const FILES: Record<CheerMoment, number> = {
+const FILES: Record<Sound, number> = {
+  knock: require('../assets/sounds/cheer-knock.wav'),
   tick: require('../assets/sounds/cheer-tick.wav'),
   add: require('../assets/sounds/cheer-add.wav'),
   start: require('../assets/sounds/cheer-start.wav'),
@@ -35,10 +37,10 @@ const HAPTIC: Record<CheerMoment, number[]> = {
 /** how loud each plays, against the others (the tick is the most frequent, so the quietest) */
 const VOLUME: Record<CheerMoment, number> = { tick: 0.55, add: 0.6, start: 0.8, done: 0.9, day: 0.9, streak: 0.85, makeover: 0.8 };
 
-const players: Partial<Record<CheerMoment, AudioPlayer>> = {};
+const players: Partial<Record<Sound, AudioPlayer>> = {};
 let moded = false;
 
-function player(m: CheerMoment): AudioPlayer {
+function player(m: Sound): AudioPlayer {
   const audio = require('expo-audio') as typeof import('expo-audio');
   if (!moded) {
     moded = true;
@@ -74,5 +76,26 @@ export function cheer(m: CheerMoment) {
     p.seekTo(0).catch(() => {}).then(() => p.play()).catch(() => {});
   } catch {
     // no audio here: the haptic has said it
+  }
+}
+
+/**
+ * A knock on the companion's door: two soft knocks and a doorbell, with two light taps to feel. Plays with Cheerful's
+ * sounds on (the knock is still felt with them off).
+ */
+export function knock() {
+  try {
+    if (Platform.OS === 'android') Vibration.vibrate([0, 10, 160, 10]);
+    else tick();
+  } catch {
+    // no vibrator
+  }
+  if (!useStore.getState().settings.cheerSounds || AppState.currentState !== 'active') return;
+  try {
+    const p = player('knock');
+    p.volume = 0.75;
+    p.seekTo(0).catch(() => {}).then(() => p.play()).catch(() => {});
+  } catch {
+    // no audio here
   }
 }

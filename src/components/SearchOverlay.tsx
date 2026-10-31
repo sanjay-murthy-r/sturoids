@@ -34,6 +34,10 @@ import {
   rememberOpen, rememberQuery, siftPull, siftShown, togglePin, unpin, useSearch, useSiftMemory,
 } from '../search/store';
 import { rightClick } from '../web/rightClick';
+import { router } from 'expo-router';
+
+/** the companion's actions wear Cheerful's pink */
+const CHEER_PINK = '#FF8FB1';
 
 // Sift: the app-wide search, laid over everything. The app behind scales back a little and dims (AppFrame, driven by
 // siftShown on the UI thread); the field drops from the top, or grows out of the header a pull came from; the keyboard
@@ -688,6 +692,31 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       if (acts.length) {
         out.push({ t: 'head', key: 'h-actions-q', label: 'Do' });
         out.push(...acts);
+      }
+    }
+
+    // the companion, asked for by name or by what it is: hide it a while, send it off or call it back, its page
+    const st = useStore.getState().settings;
+    if (isAll && st.mood === 'cheerful' && st.mascot !== 'off') {
+      const pal = st.mascotName || (st.mascot === 'pip' ? 'Pip' : 'Sprout');
+      const fq = fold(query);
+      const words = ['companion', 'mascot', 'sprout', 'pip', 'buddy', 'hide', 'pet', fold(pal)];
+      if (fq.length >= 3 && words.some((w) => w.startsWith(fq) || fq.split(' ').some((p) => p.length >= 3 && w.startsWith(p)))) {
+        const gone = st.mascotOut || st.mascotHideUntil > Date.now();
+        const set = useStore.getState().setSetting;
+        const hide = (min: number, label: string): Item => ({
+          t: 'row', key: 'm:hide' + min, index: n++, icon: 'eye-off-outline', color: CHEER_PINK, title: 'Hide ' + pal + ' for ' + label,
+          subtitle: 'Back by itself after', onPress: () => run(() => { set('mascotHideUntil', Date.now() + min * 60000); toast(pal + ' will be back in ' + label); }, false),
+        });
+        const rows: Item[] = gone
+          ? [{ t: 'row', key: 'm:back', index: n++, icon: 'enter-outline', color: CHEER_PINK, title: 'Bring ' + pal + ' back', onPress: () => run(() => { set('mascotOut', false); set('mascotHideUntil', 0); }, false) }]
+          : [
+            hide(5, '5 minutes'), hide(30, '30 minutes'), hide(120, '2 hours'),
+            { t: 'row', key: 'm:off', index: n++, icon: 'exit-outline', color: CHEER_PINK, title: 'Send ' + pal + ' off', subtitle: 'Until you knock on its door', onPress: () => run(() => set('mascotOut', true), false) },
+          ];
+        rows.push({ t: 'row', key: 'm:page', index: n++, icon: 'color-palette-outline', color: CHEER_PINK, title: pal + "'s look and manners", onPress: () => run(() => router.push('/companion'), false) });
+        out.push({ t: 'head', key: 'h-companion', label: 'Companion' });
+        out.push(...rows);
       }
     }
 

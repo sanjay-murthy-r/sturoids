@@ -159,6 +159,19 @@ const SOUNDS = {
       }
     },
   },
+  // the companion's door, knocked on: two soft knocks on wood (a muffled thud with a little woody click), then a gentle
+  // two-note doorbell, high then low, like a small chime in the hall
+  knock: {
+    secs: 2.3, peak: -8, wet: 0.14,
+    make: (o) => {
+      [0.005, 0.2].forEach((t, i) => {
+        tone(o, t, 150 + i * 6, { parts: [[1, 1, 1], [2.3, 0.35, 0.4]], att: 0.002, dec: 0.09, vol: 0.5 });
+        noise(o, t, 0.045, { freq: 900, q: 1.4, vol: 0.32 });
+      });
+      tone(o, 0.62, N(76), { parts: BELL, dec: 1.1, vol: 0.12 });
+      tone(o, 1.02, N(72), { parts: BELL, dec: 1.3, vol: 0.12 });
+    },
+  },
   // a streak milestone: a bell with a little shimmer over it
   streak: {
     secs: 2.2, peak: -6, wet: 0.24,

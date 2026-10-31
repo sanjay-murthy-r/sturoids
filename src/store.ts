@@ -254,6 +254,9 @@ export interface ExamSave {
   removeIds: string[];
 }
 
+/** One companion's look: its colour set and what it keeps. */
+export interface MascotLook { colors: string; gear: string[] }
+
 export interface Settings {
   name: string;
   theme: ThemeMode;
@@ -347,14 +350,17 @@ export interface Settings {
   autoUpdate: boolean;
   /** Cheerful's companion on the screen (src/components/Mascot.tsx), or none */
   mascot: 'sprout' | 'pip' | 'off';
-  /** the day it was tucked away until tomorrow ('' for none) */
-  mascotAwayOn: string;
+  /** sent off (held, it waves and leaves by its door) until a knock on its little door brings it back */
+  mascotOut: boolean;
+  /** hidden for a while (from Sift) until this moment, in ms; 0 for not */
+  mascotHideUntil: number;
   /** what the companion is called ('' for its own name) */
   mascotName: string;
-  /** its colours: one of its colour sets (src/mascot/art.ts), '' for its first */
-  mascotColors: string;
-  /** what it wears or keeps with it (src/mascot/art.ts GEAR), by key */
-  mascotGear: string[];
+  /**
+   * each companion's own look: its colour set (src/mascot/art.ts, '' for its first) and what it keeps (art.ts GEAR, by
+   * key). Kept apart, so what Sprout wears never turns up on Pip
+   */
+  mascotLooks: { sprout: MascotLook; pip: MascotLook };
   /** how much it says by itself: 'often', 'some' (now and then), or 'asked' (only when spoken to) */
   mascotTalk: 'often' | 'some' | 'asked';
 }
@@ -487,10 +493,10 @@ export const DEFAULT_SETTINGS: Settings = {
   cheerSounds: true,
   autoUpdate: true,
   mascot: 'sprout',
-  mascotAwayOn: '',
+  mascotOut: false,
+  mascotHideUntil: 0,
   mascotName: '',
-  mascotColors: '',
-  mascotGear: [],
+  mascotLooks: { sprout: { colors: '', gear: [] }, pip: { colors: '', gear: [] } },
   mascotTalk: 'some',
 };
 
@@ -1356,10 +1362,21 @@ function cleanSettingsV6(s: any): Settings {
   // the first four friends became two: Pip stays, the others (and anything unknown) are Sprout
   st.mascot = st.mascot === 'pip' || st.mascot === 'off' ? st.mascot : 'sprout';
   st.mascotName = typeof st.mascotName === 'string' ? st.mascotName.replace(/\s+/g, ' ').trim().slice(0, 16) : '';
-  st.mascotColors = typeof st.mascotColors === 'string' && /^[a-z]{0,16}$/.test(st.mascotColors) ? st.mascotColors : '';
-  st.mascotGear = Array.isArray(st.mascotGear)
-    ? [...new Set(st.mascotGear.filter((g: unknown) => typeof g === 'string' && /^[a-z]{1,16}$/.test(g as string)))].slice(0, 6) as string[]
-    : [];
+  // one look per companion; the single look of 3.0.x becomes the look of the companion chosen then
+  const look = (v: any): MascotLook => ({
+    colors: typeof v?.colors === 'string' && /^[a-z]{0,16}$/.test(v.colors) ? v.colors : '',
+    gear: Array.isArray(v?.gear)
+      ? ([...new Set(v.gear.filter((g: unknown) => typeof g === 'string' && /^[a-z]{1,16}$/.test(g as string)))] as string[]).slice(0, 6)
+      : [],
+  });
+  const looks = st.mascotLooks && typeof st.mascotLooks === 'object' ? st.mascotLooks : {};
+  if (!st.mascotLooks && (st.mascotColors || st.mascotGear)) looks[st.mascot === 'pip' ? 'pip' : 'sprout'] = { colors: st.mascotColors, gear: st.mascotGear };
+  st.mascotLooks = { sprout: look(looks.sprout), pip: look(looks.pip) };
+  delete st.mascotColors;
+  delete st.mascotGear;
+  st.mascotOut = st.mascotOut === true;
+  st.mascotHideUntil = Number.isFinite(st.mascotHideUntil) && st.mascotHideUntil > 0 ? st.mascotHideUntil : 0;
+  delete st.mascotAwayOn;
   st.mascotTalk = st.mascotTalk === 'often' || st.mascotTalk === 'asked' ? st.mascotTalk : 'some';
   if (typeof st.mascotAwayOn !== 'string' || !/^(\d{4}-\d{2}-\d{2})?$/.test(st.mascotAwayOn)) st.mascotAwayOn = '';
   // no repo yet checks Sturoids' own releases; one saved under an earlier address follows the rename

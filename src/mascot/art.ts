@@ -79,9 +79,9 @@ const FEET: Record<Feet, Cell[]> = {
 const LEAF: Record<Limb, Cell[]> = {
   rest: [[4, 4, 'l'], [5, 4, 'l'], [6, 4, 'l'], [5, 5, 'L'], [6, 5, 'l'], [7, 5, 'l']],
   out: [[2, 5, 'l'], [3, 5, 'l'], [4, 5, 'l'], [5, 5, 'l'], [6, 5, 'l'], [7, 5, 'l'], [3, 6, 'L'], [4, 6, 'L'], [5, 6, 'L']],
-  up: [[6, 1, 'l'], [5, 2, 'l'], [6, 2, 'l'], [5, 3, 'L'], [6, 3, 'l'], [7, 3, 'l'], [6, 4, 'L'], [7, 4, 'l'], [7, 5, 'l']],
+  up: [[6, 1, 'l'], [5, 2, 'l'], [6, 2, 'l'], [7, 2, 'l'], [5, 3, 'l'], [6, 3, 'L'], [7, 3, 'l'], [6, 4, 'l'], [7, 4, 'L'], [7, 5, 'l']],
   // raised and swung outward: a wave goes up, swing, up, swing
-  swing: [[3, 1, 'l'], [3, 2, 'l'], [4, 2, 'l'], [4, 3, 'L'], [5, 3, 'l'], [5, 4, 'L'], [6, 4, 'l'], [6, 5, 'l'], [7, 5, 'l']],
+  swing: [[3, 1, 'l'], [4, 1, 'l'], [3, 2, 'l'], [4, 2, 'L'], [5, 2, 'l'], [4, 3, 'l'], [5, 3, 'L'], [6, 3, 'l'], [6, 4, 'l'], [7, 4, 'l'], [7, 5, 'l']],
   down: [[5, 6, 'l'], [6, 6, 'l'], [7, 6, 'l'], [3, 7, 'L'], [4, 7, 'L'], [5, 7, 'l']],
 };
 
@@ -105,7 +105,7 @@ const EYES: Record<Eyes, Cell[]> = {
   left: [[5, 10, 'd'], [5, 11, 'd'], [10, 10, 'd'], [10, 11, 'd']],
   right: [[7, 10, 'd'], [7, 11, 'd'], [12, 10, 'd'], [12, 11, 'd']],
   // looking down at a page
-  read: [[6, 11, 'd'], [11, 11, 'd']],
+  read: [[6, 10, 'd'], [11, 10, 'd']],
   sleepy: [[5, 11, 'd'], [6, 11, 'd'], [11, 11, 'd'], [12, 11, 'd']],
   // open, with brows set: concentrating
   focus: [[6, 10, 'd'], [6, 11, 'd'], [11, 10, 'd'], [11, 11, 'd'], [5, 9, 'd'], [6, 9, 'd'], [11, 9, 'd'], [12, 9, 'd']],
@@ -126,9 +126,20 @@ const BLUSH: Cell[] = [[4, 12, 'p'], [5, 12, 'p'], [12, 12, 'p'], [13, 12, 'p']]
 /** an open book held up in front, its pages ('K'), their shade ('q') and cover ('k') */
 const BOOK: Record<Book, Cell[]> = {
   none: [],
-  open: [...row(12, 6, 11, 'K'), [8, 12, 'q'], [9, 12, 'q'], [5, 13, 'k'], ...row(13, 6, 11, 'K'), [12, 13, 'k'], ...row(14, 5, 12, 'k')],
-  // a page lifting as it turns
-  turn: [...row(12, 6, 8, 'K'), [9, 12, 'q'], [10, 12, 'q'], [11, 12, 'K'], [9, 11, 'K'], [10, 11, 'K'], [5, 13, 'k'], ...row(13, 6, 11, 'K'), [12, 13, 'k'], ...row(14, 5, 12, 'k')],
+  // a small open book held up under the eyes: two white pages with a line of print on each and the gutter between
+  // them, the blue cover's edge below
+  open: [
+    [5, 11, 'K'], [6, 11, 'K'], [7, 11, 'K'], [8, 11, 'q'], [9, 11, 'q'], [10, 11, 'K'], [11, 11, 'K'], [12, 11, 'K'],
+    [4, 12, 'K'], [5, 12, 'n'], [6, 12, 'n'], [7, 12, 'K'], [8, 12, 'q'], [9, 12, 'q'], [10, 12, 'K'], [11, 12, 'n'], [12, 12, 'n'], [13, 12, 'K'],
+    ...row(13, 4, 13, 'k'),
+  ],
+  // the right page lifting as it turns, its shadow on the page under it
+  turn: [
+    [5, 11, 'K'], [6, 11, 'K'], [7, 11, 'K'], [8, 11, 'q'], [9, 11, 'q'], [10, 11, 'q'], [11, 11, 'q'],
+    [10, 10, 'K'], [11, 10, 'K'], [12, 10, 'K'],
+    [4, 12, 'K'], [5, 12, 'n'], [6, 12, 'n'], [7, 12, 'K'], [8, 12, 'q'], [9, 12, 'q'], [10, 12, 'K'], [11, 12, 'K'], [12, 12, 'K'], [13, 12, 'K'],
+    ...row(13, 4, 13, 'k'),
+  ],
 };
 
 /* ---------------------------------------------------------------- gear */
@@ -153,12 +164,16 @@ export const gearFor = (kind: Kind) => GEAR.filter((g) => g.for.includes(kind));
 /** the ladybug and the firefly are each a friend that flies about: one at a time */
 export const FLIERS = ['ladybug', 'firefly'];
 
-const GLASSES: Cell[] = [
-  [5, 9, 'G'], [6, 9, 'G'], [7, 9, 'G'], [10, 9, 'G'], [11, 9, 'G'], [12, 9, 'G'],
-  [5, 10, 'G'], [7, 10, 'G'], [8, 10, 'G'], [9, 10, 'G'], [10, 10, 'G'], [12, 10, 'G'],
-  [5, 11, 'G'], [7, 11, 'G'], [10, 11, 'G'], [12, 11, 'G'],
-  [5, 12, 'G'], [6, 12, 'G'], [7, 12, 'G'], [10, 12, 'G'], [11, 12, 'G'], [12, 12, 'G'],
+/**
+ * Reading glasses, half-rimmed: a brow bar over each eye and the frame's sides, the lens a pale tint with a glint in
+ * its upper corner, so the eye (drawn after, in the middle of the lens) sits inside the glass instead of filling it.
+ * The two frames meet over the nose.
+ */
+const LENS_LEFT: Cell[] = [
+  [5, 9, 'G'], [6, 9, 'G'], [7, 9, 'G'], [4, 10, 'G'], [8, 10, 'G'], [4, 11, 'G'],
+  [5, 10, 'W'], [7, 10, 'T'], [5, 11, 'T'], [7, 11, 'T'],
 ];
+const GLASSES: Cell[] = [...LENS_LEFT, ...LENS_LEFT.map(([c, r, k]): Cell => [COLS - 1 - c, r, k === 'W' ? 'T' : k]), [10, 10, 'W'], [12, 10, 'T']];
 
 const BOW: Cell[] = [
   [9, 4, 'a'], [10, 4, 'a'], [12, 4, 'a'], [13, 4, 'a'],
@@ -191,7 +206,9 @@ export interface ColorSet { key: string; name: string; pal: Palette }
 
 const FIXED: Palette = {
   // the book, the glasses, the headphones' band, the bud
-  K: '#FFF8EE', q: '#E8DCCB', k: '#D0675E', G: '#3A2E28', H: '#3B3550', u: '#A8D86E', P: '#FF8FB1', Y: '#FFC86B',
+  K: '#FFF8EE', q: '#D8CDBD', n: '#A9A3B8', k: '#4F7FD1', G: '#8A6A50', H: '#3B3550', u: '#A8D86E', P: '#FF8FB1', Y: '#FFC86B',
+  // a lens: a cool tint over the face, and its glint
+  T: 'rgba(235,246,255,0.34)', W: '#FFFFFF',
 };
 
 const sproutSet = (key: string, name: string, b: string, s: string, h: string, l: string, L: string, extra: Palette = {}): ColorSet => ({
@@ -242,9 +259,9 @@ export function compose(kind: Kind, pose: Pose, gear: string[], bud: number): Ce
   out.push(...(kind === 'sprout' ? SPROUT_BODY : PIP_BODY));
   out.push(...FEET[pose.feet]);
   out.push(...(pose.blush ? BLUSH : CHEEKS));
+  if (has('glasses')) out.push(...GLASSES);
   out.push(...EYES[pose.eyes]);
   if (pose.book === 'none') out.push(...MOUTH[pose.mouth]);
-  if (has('glasses') && (pose.book !== 'none' || pose.eyes !== 'sleepy')) out.push(...GLASSES);
   if (kind === 'pip' && has('bow')) out.push(...BOW);
   if (kind === 'pip' && has('phones') && pose.phones) out.push(...PHONES);
   out.push(...BOOK[pose.book]);
@@ -284,6 +301,11 @@ export const PROPS = {
   heart: { grid: ['.h.h.', 'hhhhh', 'hhhhh', '.hhh.', '..h..'], pal: { h: '#FF8FB1' } },
   cloud: { grid: ['..ww..', '.wwwww', 'wwwwwww', '.wwwww.'], pal: { w: '#DCE7F2' } },
   drop: { grid: ['d', 'd'], pal: { d: '#8CC8FF' } },
+  // Pip's umbrella, out of nowhere, for floating down when it is carried and let go
+  umbrella: {
+    grid: ['..aaAaa..', '.aaaAaaa.', 'aaaaAaaaa', 'a.a.h.a.a', '....h....', '....h....', '....h....', '...hh....'],
+    pal: { h: '#5B463A' } as Palette,
+  },
   balloon: { grid: ['.aaa.', 'ahaaa', 'aaaaa', 'aaaaa', '.aaa.', '..A..'], pal: {} as Palette },
 } satisfies Record<string, Prop>;
 

@@ -33,6 +33,7 @@ import { BOARD_MAX, columnWidth } from '../../src/layout';
 import { useProfiles } from '../../src/profiles';
 import { ProfileSwitcher } from '../../src/components/ProfileSwitcher';
 import { openSift } from '../../src/search/store';
+import { useRoomPublisher } from '../../src/mascot/room';
 import { BACKUP_ATTENTION_TEXT, useBackupAttention, useCloud } from '../../src/cloud';
 import { readLastExport, shouldNudgeBackup } from '../../src/backupNudge';
 import { BoardNow, NudgeRow } from '../../src/widgets/kit';
@@ -193,6 +194,20 @@ export default function Today() {
   // a greeting that changes while Today is open dips out and back as the new words; a figure in the same sentence
   // changes in place, so the line never blinks each minute
   const greetingKey = greeting.kind + '|' + (greeting.sub || '');
+  // the room on the date row, between the date and the search glyph, where the companion stands (src/mascot/room.ts);
+  // it scrolls away with the header
+  const dateRef = React.useRef<View>(null);
+  const searchRef = React.useRef<View>(null);
+  const remeasureRoom = useRoomPublisher((done) => {
+    const at = scrollY.value;
+    dateRef.current?.measureInWindow((dx, dy, dw, dh) => {
+      if (dw <= 0) { done(null); return; }
+      const finish = (right: number) => done({ left: dx + dw + 8, right: right - 6, y: dy + dh + at, scroll: scrollY });
+      if (!searchRef.current) { finish(dx + dw + 200); return; }
+      searchRef.current.measureInWindow((sx, _sy, sw) => finish(sw > 0 ? sx : dx + dw + 200));
+    });
+  });
+
   const header = (
     <Enter index={0}>
       <GestureDetector gesture={headerPull.gesture}>
@@ -204,7 +219,7 @@ export default function Today() {
                 onLongPress={() => { if (severalProfiles) { tap(); setSwitcher(true); } else openAccount(); }}
               >
                 {/* Cheerful: a small sparkle twinkles beside the date */}
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View ref={dateRef} collapsable={false} onLayout={remeasureRoom} style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start' }}>
                   <Text style={T.kicker}>{fmtDate(now)}</Text>
                   <Twinkle size={12} />
                 </View>
@@ -228,6 +243,7 @@ export default function Today() {
               </Pressable>
             ) : (
               <Pressable
+                ref={searchRef} onLayout={remeasureRoom}
                 onPress={() => openSift('today')} hitSlop={12} style={({ pressed }) => [st.headAction, st.search, pressed && { opacity: 0.55 }]}
                 accessibilityRole="button" accessibilityLabel="Search" accessibilityHint="Opens Sift, to search everything"
               >

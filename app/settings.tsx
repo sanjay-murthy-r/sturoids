@@ -482,8 +482,9 @@ function MakeoverCard() {
   const mood = useStore((s) => s.settings.mood);
   const sounds = useStore((s) => s.settings.cheerSounds);
   const mascot = useStore((s) => s.settings.mascot);
-  const colors = useStore((s) => s.settings.mascotColors);
-  const gear = useStore((s) => s.settings.mascotGear);
+  const look = useStore((s) => s.settings.mascotLooks[s.settings.mascot === 'pip' ? 'pip' : 'sprout']);
+  const colors = look.colors;
+  const gear = look.gear;
   const companionName = useStore((s) => s.settings.mascotName) || (mascot === 'pip' ? NAMES.pip : NAMES.sprout);
   const setSetting = useStore((s) => s.setSetting);
   const opt = (key: 'elite' | 'cheerful', title: string, line: string, icon: any, tint: string) => {

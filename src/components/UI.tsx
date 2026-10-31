@@ -1,10 +1,11 @@
 import React from 'react';
 import {
   View, Text, StyleSheet, Pressable, TextInput, Modal, ViewStyle, AccessibilityState, Keyboard,
-  KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions,
+  Dimensions, KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useRoomPublisher } from '../mascot/room';
 import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   Easing, Extrapolation, interpolate, runOnJS, useAnimatedReaction, useAnimatedScrollHandler, useAnimatedStyle,
@@ -287,6 +288,8 @@ export function useToolHeader({
   );
   const parts = partsOf(context);
   const tab = mode === 'tab';
+  // where the big title ends, for the room the bar leaves the companion (src/mascot/room.ts)
+  const geo = React.useRef<HeaderGeo>({ hero: 0, bump: null });
   // the big title shares the tray's row, so it leaves the tray's width free on its right (the overflow button takes the
   // second place when there are more than two actions)
   const slots = Math.min(2, (actions ?? []).length);
@@ -296,9 +299,10 @@ export function useToolHeader({
       <ToolBar
         title={title} back={!tab} onBack={onBack} actions={actions} right={right} scrollY={scrollY} overlay={tab}
         contentStyle={contentStyle} pull={tab && pull} pullProgress={contentPull ? pullProgress : undefined} pullOpen={pullOpen}
+        geo={geo}
       />
     ),
-    hero: <ToolHero title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} reserve={tab ? reserve : 0} />,
+    hero: <ToolHero title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} reserve={tab ? reserve : 0} geo={geo} />,
     scrollProps,
     scrollY,
     /** for a page with several scrolls (the Vault's pages): the pull's progress and what it opens, for useContentPull */
@@ -343,8 +347,12 @@ function TrayButton({ action }: { action: ToolAction }) {
   );
 }
 
-function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false, contentStyle, pull = false, pullProgress, pullOpen }: {
+/** What a tool's big title (in its scroll) tells its bar: where it ends, and how to ask the bar to measure again. */
+interface HeaderGeo { hero: number; bump: (() => void) | null }
+
+function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false, contentStyle, pull = false, pullProgress, pullOpen, geo }: {
   title: string; back: boolean; onBack?: () => void; actions?: ToolAction[]; right?: React.ReactNode;
+  geo?: React.MutableRefObject<HeaderGeo>;
   /** the offset the edge follows; without it (the older NeuHeader) the bar has no hairline or shade */
   scrollY?: SharedValue<number>;
   /** the tab-mode bar: laid over the top of its parent with a ground that fills in as the big title scrolls away, and
@@ -412,6 +420,24 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
   // the hairline and the shade under the bar, once the content has moved
   const edge = useDerivedValue(() => (overlay ? swap.value : edgeStrength(y.value, level)));
 
+  // the room the bar leaves on its row, between the title and the tray, where the companion stands
+  const titleRef = React.useRef<View>(null);
+  const trayRef = React.useRef<View>(null);
+  const remeasure = useRoomPublisher((done) => {
+    const y = insets.top + BAR_PAD + BAR_ROW - 1;
+    const winW = Dimensions.get('window').width;
+    const finish = (titleRight: number, trayLeft: number) => {
+      done({ left: Math.max(titleRight, geo?.current.hero ?? 0) + 10, right: trayLeft - 8, y });
+    };
+    const tray = (titleRight: number) => {
+      if (!trayRef.current) { finish(titleRight, winW - S.pad); return; }
+      trayRef.current.measureInWindow((x, _y, w) => finish(titleRight, w > 0 ? x : winW - S.pad));
+    };
+    if (!titleRef.current) { tray(0); return; }
+    titleRef.current.measureInWindow((x, _y, w) => tray(w > 0 ? x + w : 0));
+  });
+  if (geo) geo.current.bump = remeasure;
+
   const list = actions ?? [];
   const shown = list.length > 2 ? list.slice(0, 1) : list;
   const rest = list.length > 2 ? list.slice(1) : [];
@@ -453,17 +479,20 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
               the new words instead of snapping */}
           <FadeSwap swapKey={title}>
             {/* fixed chrome: the bar's row is 40 high, so its title grows with the phone's font size only a little */}
-            <Text
-              numberOfLines={1} style={hdr.title} maxFontSizeMultiplier={1.2}
-              accessibilityRole={overlay ? undefined : 'header'}
-              importantForAccessibility={overlay ? 'no' : 'auto'}
-            >
-              {title}
-            </Text>
+            <View ref={titleRef} collapsable={false} onLayout={remeasure} style={hdr.titleFit}>
+              <Text
+                numberOfLines={1} style={hdr.title} maxFontSizeMultiplier={1.2}
+                accessibilityRole={overlay ? undefined : 'header'}
+                importantForAccessibility={overlay ? 'no' : 'auto'}
+              >
+                {title}
+              </Text>
+            </View>
           </FadeSwap>
         </Animated.View>
         {hasTray ? (
           <View
+            ref={trayRef} collapsable={false} onLayout={remeasure}
             style={[
               hdr.tray,
               // the outline takes 1 of the pill's 2 padding, so both themes give the bar the same height
@@ -534,17 +563,29 @@ export function GateHeader({ title, tab }: { title: string; tab: boolean }) {
 }
 
 /** The first thing in the scroll: the big title in tab mode, and the context line, if there is one. */
-function ToolHero({ title, tab, parts, live, covered, reserve }: {
+function ToolHero({ title, tab, parts, live, covered, reserve, geo }: {
   title: string; tab: boolean; parts: ContextPart[] | null; live: boolean; covered: boolean;
   /** the width the big title leaves free on its right, for the tray beside it */
   reserve: number;
+  geo?: React.MutableRefObject<HeaderGeo>;
 }) {
+  const ref = React.useRef<View>(null);
+  // where the big title ends (sideways, so the page's scroll never moves it), for the companion's room
+  const told = () => {
+    ref.current?.measureInWindow((x, _y, w) => {
+      if (!geo || w <= 0) return;
+      geo.current.hero = x + w;
+      geo.current.bump?.();
+    });
+  };
   if (tab) {
     return (
       <View style={hdr.heroTab}>
         {/* the big title sits level with the bar's tray, so it is chrome too: it grows at most by 1.3 */}
         <FadeSwap swapKey={title} style={reserve ? { paddingRight: reserve } : undefined}>
-          <Text numberOfLines={1} accessibilityRole="header" maxFontSizeMultiplier={CHROME_FONT_MAX} style={T.display}>{title}</Text>
+          <View ref={ref} collapsable={false} onLayout={told} style={hdr.titleFit}>
+            <Text numberOfLines={1} accessibilityRole="header" maxFontSizeMultiplier={CHROME_FONT_MAX} style={T.display}>{title}</Text>
+          </View>
         </FadeSwap>
         {parts ? <ContextLine parts={parts} live={live} covered={covered} style={{ marginTop: 2 }} /> : null}
       </View>
@@ -586,6 +627,8 @@ function LiveDot({ covered }: { covered: boolean }) {
 }
 
 const hdr = StyleSheet.create({
+  /** a title's own width (not its row's), so where it ends can be measured */
+  titleFit: { alignSelf: 'flex-start', maxWidth: '100%' },
   // above the scroll that follows it, so its shade falls over the content
   bar: { paddingRight: S.pad, paddingBottom: BAR_PAD, zIndex: 2 },
   // a tab's bar: over the top of its parent instead of above the scroll

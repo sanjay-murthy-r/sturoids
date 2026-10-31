@@ -4,19 +4,19 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withSeq
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T } from '../src/theme';
-import { useStore } from '../src/store';
-import { Card, Chip, Hairline, ScreenBG, SectionTitle, Toggle, useToolHeader } from '../src/components/UI';
+import { MascotLook, useStore } from '../src/store';
+import { ScreenBG, SectionTitle, useToolHeader } from '../src/components/UI';
 import { Enter } from '../src/components/Motion';
 import { READ_MAX, frame } from '../src/layout';
-import { todayKey } from '../src/utils';
 import { CUTE, CUTE_BOLD, GridArt, Sprite } from '../src/components/Mascot';
 import { COLOR_SETS, FLIERS, Kind, NAMES, PROPS, Pose, REST, colorSet, gearFor } from '../src/mascot/art';
 import { startMakeover } from '../src/components/Makeover';
+import { tick } from '../src/haptics';
 
 const TALK: { key: 'often' | 'some' | 'asked'; label: string; line: string }[] = [
   { key: 'often', label: 'Chatty', line: 'Up to six little lines a day, twenty minutes apart at least.' },
   { key: 'some', label: 'Now and then', line: 'Two or three a day, never close together.' },
-  { key: 'asked', label: 'When spoken to', line: 'Never by itself. Still waves, cheers and studies along.' },
+  { key: 'asked', label: 'Only when tapped', line: 'Never by itself. Still waves, cheers and studies along.' },
 ];
 
 const BLURB: Record<Kind, string> = {
@@ -24,9 +24,14 @@ const BLURB: Record<Kind, string> = {
   pip: 'A soft, round friend with nub arms who bounces, hums along, and keeps a balloon.',
 };
 
+/** a warm card, Cheerful's own: a soft fill and rim, no carved shadows */
+const CARD = { backgroundColor: 'rgba(255,244,230,0.06)', borderWidth: 1, borderColor: 'rgba(255,244,230,0.08)', borderRadius: 20 };
+const PICKED = { borderColor: C.accent, backgroundColor: 'rgba(255,244,230,0.1)' };
+
 /**
- * The companion's page: who it is (Sprout or Pip, or none), its name, its colours, what it wears or keeps, and how much
- * it talks, with a live preview that shows each choice as it is made and can be asked to wave, think, cheer or read.
+ * The companion's page: who it is (Sprout or Pip, or none), its name, its colours, what it keeps, and how much it talks,
+ * each companion's look kept on its own. A live stage at the top shows every choice as it is made, and can be asked to
+ * wave, think, cheer or study.
  */
 export default function CompanionPage() {
   const insets = useSafeAreaInsets();
@@ -36,24 +41,27 @@ export default function CompanionPage() {
   const kind: Kind = s.mascot === 'pip' ? 'pip' : 'sprout';
   const off = s.mascot === 'off';
   const name = s.mascotName || NAMES[kind];
-  const set = colorSet(kind, s.mascotColors);
-  const gear = (s.mascotGear || []).filter((g) => gearFor(kind).some((x) => x.key === g));
+  const look = s.mascotLooks[kind];
+  const set = colorSet(kind, look.colors);
+  const gear = look.gear.filter((g) => gearFor(kind).some((x) => x.key === g));
   const [nameDraft, setNameDraft] = React.useState(s.mascotName);
   const preview = usePreview();
 
+  const setLook = (patch: Partial<MascotLook>) => setSetting('mascotLooks', { ...s.mascotLooks, [kind]: { ...look, ...patch } });
   const choose = (k: Kind | 'off') => {
     if (k === s.mascot) return;
+    tick();
     setSetting('mascot', k);
-    if (k !== 'off') { setSetting('mascotAwayOn', ''); setSetting('mascotColors', ''); setNameDraft(s.mascotName); preview.play('wave'); }
+    if (k !== 'off') preview.play('wave');
   };
   const toggleGear = (k: string) => {
-    let next = gear.includes(k) ? gear.filter((g) => g !== k) : [...gear, k];
+    tick();
+    const on = gear.includes(k);
+    let next = on ? gear.filter((g) => g !== k) : [...gear, k];
     // one friend flying about at a time
-    if (!gear.includes(k) && FLIERS.includes(k)) next = next.filter((g) => g === k || !FLIERS.includes(g));
-    // gear for the other companion is kept, so switching back finds it as it was
-    const others = (s.mascotGear || []).filter((g) => !gearFor(kind).some((x) => x.key === g));
-    setSetting('mascotGear', [...others, ...next]);
-    if (!gear.includes(k)) preview.play(k === 'glasses' ? 'read' : 'cheer');
+    if (!on && FLIERS.includes(k)) next = next.filter((g) => g === k || !FLIERS.includes(g));
+    setLook({ gear: next });
+    if (!on) preview.play(k === 'glasses' || k === 'phones' ? 'read' : 'cheer');
   };
   const saveName = () => {
     const v = nameDraft.replace(/\s+/g, ' ').trim().slice(0, 16);
@@ -73,33 +81,35 @@ export default function CompanionPage() {
         <Enter index={enter++}>
           {tool.hero}
           {s.mood !== 'cheerful' ? (
-            <Card style={{ marginBottom: 14 }}>
+            <View style={[CARD, st.note]}>
               <Text style={T.body}>Your companion lives in Cheerful.</Text>
               <Pressable onPress={() => startMakeover('cheerful')} accessibilityRole="button" style={{ marginTop: 8 }}>
                 <Text style={[T.body, { color: C.accent, fontFamily: F.semi }]}>Switch to Cheerful</Text>
               </Pressable>
-            </Card>
-          ) : s.mascotAwayOn === todayKey() && !off ? (
-            <Card style={{ marginBottom: 14 }}>
-              <Text style={T.body}>{name} is tucked away until tomorrow.</Text>
-              <Pressable onPress={() => setSetting('mascotAwayOn', '')} accessibilityRole="button" style={{ marginTop: 8 }}>
-                <Text style={[T.body, { color: C.accent, fontFamily: F.semi }]}>Bring {name} back now</Text>
+            </View>
+          ) : s.mascotOut && !off ? (
+            <View style={[CARD, st.note]}>
+              <Text style={T.body}>{name} is out for a walk. Knock on the little door at the right edge of the screen, or:</Text>
+              <Pressable onPress={() => setSetting('mascotOut', false)} accessibilityRole="button" style={{ marginTop: 8 }}>
+                <Text style={[T.body, { color: C.accent, fontFamily: F.semi }]}>Call {name} back</Text>
               </Pressable>
-            </Card>
+            </View>
           ) : null}
           {!off ? (
-            <View style={st.stage}>
-              <Animated.View style={preview.style}>
-                <Sprite kind={kind} pose={preview.pose} gear={gear} bud={preview.bud} pal={set.pal} px={6} />
-              </Animated.View>
-              {gear.includes('ladybug') ? <View style={st.bug}><GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={4} /></View> : null}
-              {gear.includes('firefly') ? <View style={st.fly}><View style={st.flyHalo} /><View style={st.flyDot} /></View> : null}
-              {kind === 'pip' && gear.includes('balloon') ? (
-                <View style={st.balloon}>
-                  <GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={5} />
-                  <View style={{ width: 1.5, height: 40, backgroundColor: 'rgba(120,110,100,0.7)' }} />
-                </View>
-              ) : null}
+            <View style={[CARD, st.stage]}>
+              <View style={{ alignItems: 'center', justifyContent: 'flex-end', height: 140 }}>
+                {kind === 'pip' && gear.includes('balloon') ? (
+                  <View style={st.balloon}>
+                    <GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={5} />
+                    <View style={{ width: 1.5, height: 30, backgroundColor: 'rgba(160,150,140,0.7)' }} />
+                  </View>
+                ) : null}
+                {gear.includes('ladybug') ? <View style={st.bug}><GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={4} /></View> : null}
+                {gear.includes('firefly') ? <View style={st.fly}><View style={st.flyHalo} /><View style={st.flyDot} /></View> : null}
+                <Animated.View style={preview.style}>
+                  <Sprite kind={kind} pose={preview.pose} gear={gear} bud={preview.bud} pal={set.pal} px={6} />
+                </Animated.View>
+              </View>
               <Text style={st.stageName}>{name}</Text>
               <View style={st.tries}>
                 {(['wave', 'think', 'cheer', 'read'] as const).map((k) => (
@@ -121,10 +131,10 @@ export default function CompanionPage() {
                 <Pressable
                   key={k} onPress={() => choose(k)} accessibilityRole="radio" accessibilityState={{ selected: on }}
                   accessibilityLabel={NAMES[k] + '. ' + BLURB[k]}
-                  style={({ pressed }) => [st.who, { borderColor: on ? C.accent : 'transparent', backgroundColor: C.card }, pressed && !on && { transform: [{ scale: 0.98 }] }]}
+                  style={({ pressed }) => [CARD, st.who, on && PICKED, pressed && !on && { transform: [{ scale: 0.98 }] }]}
                 >
-                  <Sprite kind={k} pose={REST} gear={[]} bud={2} pal={COLOR_SETS[k][0].pal} px={3} />
-                  <Text style={[T.body, { fontFamily: F.semi, marginTop: 8 }, on && { color: C.accent }]}>{NAMES[k]}</Text>
+                  <Sprite kind={k} pose={REST} gear={s.mascotLooks[k].gear} bud={2} pal={colorSet(k, s.mascotLooks[k].colors).pal} px={3} />
+                  <Text style={[st.whoName, on && { color: C.accent }]}>{NAMES[k]}</Text>
                   <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={3}>{BLURB[k]}</Text>
                 </Pressable>
               );
@@ -139,29 +149,28 @@ export default function CompanionPage() {
           <>
             <Enter index={enter++}>
               <SectionTitle>Name</SectionTitle>
-              <Card>
+              <View style={[CARD, { paddingHorizontal: 16, paddingVertical: 10 }]}>
                 <TextInput
                   value={nameDraft} onChangeText={setNameDraft} onBlur={saveName} onSubmitEditing={saveName}
                   placeholder={NAMES[kind]} placeholderTextColor={C.textFaint} maxLength={16} returnKeyType="done"
                   style={[st.name, { color: C.text }]} accessibilityLabel="Your companion's name"
                 />
-                <Text style={[T.caption, { marginTop: 4 }]}>What it is called when it says goodbye, and in its little card.</Text>
-              </Card>
+              </View>
             </Enter>
 
             <Enter index={enter++}>
               <SectionTitle>Colours</SectionTitle>
-              <View style={st.swatches}>
+              <View style={st.grid}>
                 {COLOR_SETS[kind].map((c) => {
                   const on = c.key === set.key;
                   return (
                     <Pressable
-                      key={c.key} onPress={() => { setSetting('mascotColors', c.key); preview.play('hop'); }}
+                      key={c.key} onPress={() => { tick(); setLook({ colors: c.key }); preview.play('hop'); }}
                       accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={c.name}
-                      style={({ pressed }) => [st.swatch, { backgroundColor: C.card, borderColor: on ? C.accent : 'transparent' }, pressed && { opacity: 0.8 }]}
+                      style={({ pressed }) => [CARD, st.swatch, on && PICKED, pressed && { opacity: 0.8 }]}
                     >
-                      <Sprite kind={kind} pose={REST} gear={[]} bud={2} pal={c.pal} px={2} />
-                      <Text style={[T.caption, { marginTop: 4 }, on && { color: C.accent }]}>{c.name}</Text>
+                      <Sprite kind={kind} pose={REST} gear={[]} bud={2} pal={c.pal} px={2.5} />
+                      <Text style={[st.tileName, on && { color: C.accent }]}>{c.name}</Text>
                     </Pressable>
                   );
                 })}
@@ -170,45 +179,65 @@ export default function CompanionPage() {
 
             <Enter index={enter++}>
               <SectionTitle>Keeps with it</SectionTitle>
-              <Card pad={0}>
-                {gearFor(kind).map((g, i, all) => (
-                  <View key={g.key}>
-                    <View style={st.gearRow}>
-                      <View style={{ flex: 1, marginRight: 12 }}>
-                        <Text style={[T.body, { fontFamily: F.med }]}>{g.name}</Text>
-                        <Text style={[T.caption, { marginTop: 2 }]}>{g.line}</Text>
+              <View style={st.grid}>
+                {gearFor(kind).map((g) => {
+                  const on = gear.includes(g.key);
+                  // the tile shows it wearing just this, in the pose that shows it best
+                  const showPose: Pose = g.key === 'phones' ? { ...REST, phones: true, eyes: 'happy' } : g.key === 'glasses' ? { ...REST, eyes: 'open' } : REST;
+                  return (
+                    <Pressable
+                      key={g.key} onPress={() => toggleGear(g.key)}
+                      accessibilityRole="checkbox" accessibilityState={{ checked: on }} accessibilityLabel={g.name + '. ' + g.line}
+                      style={({ pressed }) => [CARD, st.gearTile, on && PICKED, pressed && { opacity: 0.85 }]}
+                    >
+                      <View style={st.gearArt}>
+                        <Sprite kind={kind} pose={showPose} gear={[g.key]} bud={3} pal={set.pal} px={3} />
+                        {g.key === 'ladybug' ? <View style={{ position: 'absolute', right: 6, top: 4 }}><GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={3} /></View> : null}
+                        {g.key === 'firefly' ? <View style={{ position: 'absolute', left: 8, top: 6 }}><View style={st.flyHalo} /><View style={st.flyDot} /></View> : null}
+                        {g.key === 'balloon' ? <View style={{ position: 'absolute', right: 2, top: -2 }}><GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={3} /></View> : null}
+                        {on ? <View style={st.tick}><Ionicons name="checkmark" size={12} color="#1B1A18" /></View> : null}
                       </View>
-                      <Toggle value={gear.includes(g.key)} onChange={() => toggleGear(g.key)} label={g.name} />
-                    </View>
-                    {i < all.length - 1 ? <Hairline /> : null}
-                  </View>
-                ))}
-              </Card>
+                      <Text style={[st.tileName, on && { color: C.accent }]}>{g.name}</Text>
+                      <Text style={st.gearLine} numberOfLines={3}>{g.line}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
             </Enter>
 
             <Enter index={enter++}>
               <SectionTitle>How much it talks</SectionTitle>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {TALK.map((t) => <Chip key={t.key} small label={t.label} active={s.mascotTalk === t.key} onPress={() => setSetting('mascotTalk', t.key)} />)}
+                {TALK.map((t) => {
+                  const on = s.mascotTalk === t.key;
+                  return (
+                    <Pressable
+                      key={t.key} onPress={() => { tick(); setSetting('mascotTalk', t.key); }}
+                      accessibilityRole="radio" accessibilityState={{ selected: on }}
+                      style={[st.pill, on && { backgroundColor: C.accent + '2E', borderColor: C.accent }]}
+                    >
+                      <Text style={[st.pillText, on && { color: C.accent }]}>{t.label}</Text>
+                    </Pressable>
+                  );
+                })}
               </View>
-              <Text style={[T.caption, { marginTop: 8 }]}>{TALK.find((t) => t.key === s.mascotTalk)?.line}</Text>
-              <Text style={[T.caption, { marginTop: 4 }]}>During Deep Work it studies with you and says nothing until the session ends.</Text>
+              <Text style={[T.caption, { marginTop: 8 }]}>{TALK.find((t) => t.key === s.mascotTalk)?.line} During Deep Work it studies with you and keeps quiet.</Text>
             </Enter>
 
             <Enter index={enter++}>
               <SectionTitle>Getting along</SectionTitle>
-              <Card>
+              <View style={[CARD, { padding: 14 }]}>
                 {[
-                  ['hand-left-outline', 'Tap it for a reaction. Tap a lot and see.'],
-                  ['chatbubble-ellipses-outline', 'Hold it to talk to it, or to tuck it away until tomorrow.'],
-                  ['move-outline', 'Drag it to another spot if it is ever in the way.'],
+                  ['hand-left-outline', 'It lives on the header of each screen, by the buttons. Tap it for a reaction, and sometimes a word about your day.'],
+                  ['exit-outline', 'Hold it to send it off for a walk. It leaves by its door in the wall.'],
+                  ['notifications-outline', 'Knock on the little door at the right edge to bring it back.'],
                 ].map(([icon, line]) => (
                   <View key={line} style={st.tip}>
                     <Ionicons name={icon as any} size={17} color={C.textDim} style={{ marginRight: 10, marginTop: 1 }} />
                     <Text style={[T.caption, { flex: 1 }]}>{line}</Text>
                   </View>
                 ))}
-              </Card>
+              </View>
             </Enter>
           </>
         ) : null}
@@ -219,7 +248,7 @@ export default function CompanionPage() {
 
 type Demo = 'wave' | 'think' | 'cheer' | 'read' | 'hop';
 
-/** The preview's own little performances, and its breathing and blinking. */
+/** The stage's own little performances, and its breathing and blinking. */
 function usePreview() {
   const [pose, setPoseState] = React.useState<Pose>(REST);
   const [bud, setBud] = React.useState(1);
@@ -298,20 +327,28 @@ function usePreview() {
 }
 
 const st = StyleSheet.create({
-  stage: { alignItems: 'center', paddingTop: 34, paddingBottom: 14, marginBottom: 6, borderRadius: S.radius, backgroundColor: 'rgba(255,248,238,0.06)' },
-  stageName: { fontFamily: CUTE_BOLD, fontSize: 17, color: C.text, marginTop: 6 },
+  note: { padding: 16, marginBottom: 14 },
+  stage: { alignItems: 'center', paddingTop: 10, paddingBottom: 16, marginBottom: 6 },
+  stageName: { fontFamily: CUTE_BOLD, fontSize: 18, color: C.text, marginTop: 8 },
   tries: { flexDirection: 'row', gap: 8, marginTop: 12 },
-  try: { paddingHorizontal: 13, paddingVertical: 6, borderRadius: 999, backgroundColor: 'rgba(255,248,238,0.1)' },
+  try: { paddingHorizontal: 13, paddingVertical: 6, borderRadius: 999, backgroundColor: 'rgba(255,244,230,0.08)' },
   tryText: { fontFamily: CUTE, fontSize: 13, color: C.text },
-  bug: { position: 'absolute', top: 30, left: '50%', marginLeft: 30 },
-  fly: { position: 'absolute', top: 40, left: '50%', marginLeft: -70 },
+  bug: { position: 'absolute', top: 18, left: '50%', marginLeft: 44 },
+  fly: { position: 'absolute', top: 30, left: '50%', marginLeft: -70 },
   flyHalo: { position: 'absolute', left: -7, top: -7, width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFE68A', opacity: 0.35 },
   flyDot: { width: 6, height: 6, backgroundColor: '#FFF2B0' },
-  balloon: { position: 'absolute', top: 6, left: '50%', marginLeft: 50, alignItems: 'center' },
-  who: { flex: 1, padding: 14, borderRadius: S.radius, borderWidth: 1.5, alignItems: 'flex-start' },
+  balloon: { position: 'absolute', top: 0, left: '50%', marginLeft: -84, alignItems: 'center' },
+  who: { flex: 1, padding: 14, alignItems: 'flex-start' },
+  whoName: { fontFamily: CUTE_BOLD, fontSize: 16, color: C.text, marginTop: 8 },
   name: { fontFamily: CUTE_BOLD, fontSize: 18, paddingVertical: 4 },
-  swatches: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  swatch: { width: 76, alignItems: 'center', paddingVertical: 10, borderRadius: S.radiusSm, borderWidth: 1.5 },
-  gearRow: { flexDirection: 'row', alignItems: 'center', padding: S.cardPad },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  swatch: { width: 78, alignItems: 'center', paddingVertical: 10 },
+  tileName: { fontFamily: CUTE_BOLD, fontSize: 13, color: C.text, marginTop: 6 },
+  gearTile: { width: '47.5%', padding: 12, alignItems: 'center' },
+  gearArt: { width: '100%', height: 64, alignItems: 'center', justifyContent: 'center' },
+  gearLine: { fontFamily: CUTE, fontSize: 12, lineHeight: 16, color: C.textDim, textAlign: 'center', marginTop: 3 },
+  tick: { position: 'absolute', right: 0, top: 0, width: 20, height: 20, borderRadius: 10, backgroundColor: C.accent, alignItems: 'center', justifyContent: 'center' },
+  pill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(255,244,230,0.1)', backgroundColor: 'rgba(255,244,230,0.05)' },
+  pillText: { fontFamily: CUTE_BOLD, fontSize: 13, color: C.text },
   tip: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 5 },
 });

@@ -117,20 +117,25 @@ check('special days and a return after days away get their own hello', () => {
   assert.equal(lines.fill('Hey, it has been {away} days.', ctx({ away: 4 })), 'Hey, it has been 4 days.');
 });
 
-check('messages: greetings wave, worries are met gently, the list and exams are answered from the data', () => {
-  const r0 = () => 0;
-  assert.equal(lines.reply('hii', ctx(), r0).act, 'wave');
-  assert.equal(lines.reply('vanakkam', ctx(), r0).text, 'Vanakkam!');
-  assert.match(lines.reply('i am so stressed about boards', ctx(), r0).text, /one thing|breathe|a lot/i);
-  assert.equal(lines.reply('what should i do next', ctx(), r0).text, 'Next up: Physics notes. 2 left in all.');
-  assert.match(lines.reply('when is my exam', ctx(), r0).text, /Chemistry test is in 3 days/);
-  assert.match(lines.reply('exam?', ctx({ exam: null }), r0).text, /No exams/);
-  assert.equal(lines.reply('lets study', ctx(), r0).focus, true);
-  assert.equal(lines.reply('tell me a joke', ctx(), r0).act, 'cheer');
-  assert.equal(lines.reply('good night', ctx(), r0).act, 'nap');
-  assert.ok(lines.reply('qwertyuiop', ctx(), r0).text.length > 0);
-  // "this" is not "hi", "shy" is not "hi"
-  assert.notEqual(lines.reply('this is hard', ctx(), r0).act, 'wave');
+check('tapped, it sometimes speaks of the day; long names are cut short in what it says', () => {
+  const c = ctx({ next: 'Finish the extremely long physics worksheet on rotational motion' });
+  const pools = new Set();
+  for (let i = 0; i < 60; i++) for (const l of lines.poolFor('tap', c)) pools.add(l.id);
+  assert.ok([...pools].some((id) => /^c|^e|^f/.test(id)), 'facts about the day among the taps');
+  assert.ok([...pools].some((id) => id.startsWith('tp')), 'and plain reactions');
+  assert.equal(lines.fill('Next up: {next}.', c), 'Next up: Finish the extremely long p….');
+  for (const m of ['back', 'shh', 'bye', 'idea', 'nap', 'wave', 'dizzy', 'taps', 'start', 'day', 'streak']) assert.ok(lines.poolFor(m, c).length, m);
+});
+
+check('every line fills in: no braces are left, and no line is long for a bubble', () => {
+  const c = ctx({ subject: 'Physics', focusMin: 70 });
+  for (const m of ['hello', 'idle', 'tick', 'start', 'done', 'day', 'streak', 'wave', 'bye', 'back', 'idea', 'nap', 'shh', 'tap', 'taps', 'dizzy']) {
+    for (const k of ['sprout', 'pip']) for (const l of lines.poolFor(m, { ...c, kind: k })) {
+      const t = lines.fill(l.text, { ...c, kind: k });
+      assert.ok(!/[{}]/.test(t), l.id + ': ' + t);
+      assert.ok(t.length <= 84, l.id + ' is ' + t.length + ' long');
+    }
+  }
 });
 
 check('a companion says only its own lines', () => {
