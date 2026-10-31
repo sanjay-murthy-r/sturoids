@@ -111,10 +111,10 @@ check('days in a row go on, and start again after a gap', () => {
 });
 
 check('special days and a return after days away get their own hello', () => {
-  assert.ok(lines.poolFor('hello', ctx({ date: '01-14' }))[0].text.includes('Pongal'));
-  assert.ok(lines.poolFor('hello', ctx({ date: '10-29', year: 2027 }))[0].text.includes('Deepavali'));
+  assert.ok(lines.poolFor('hello', ctx({ date: '01-14' }))[0].text.includes('pongal'));
+  assert.ok(lines.poolFor('hello', ctx({ date: '10-29', year: 2027 }))[0].text.includes('deepavali'));
   assert.ok(lines.poolFor('hello', ctx({ away: 4 })).some((l) => l.id === 'bk2'));
-  assert.equal(lines.fill('Hey, it has been {away} days.', ctx({ away: 4 })), 'Hey, it has been 4 days.');
+  assert.equal(lines.fill('u was gone {away} sleeps!', ctx({ away: 4 })), 'u was gone 4 sleeps!');
 });
 
 check('tapped, it sometimes speaks of the day; long names are cut short in what it says', () => {
@@ -122,14 +122,18 @@ check('tapped, it sometimes speaks of the day; long names are cut short in what 
   const pools = new Set();
   for (let i = 0; i < 60; i++) for (const l of lines.poolFor('tap', c)) pools.add(l.id);
   assert.ok([...pools].some((id) => /^c|^e|^f/.test(id)), 'facts about the day among the taps');
+  // never advice: no line tells the user to rest, sleep, drink or take a break
+  for (const m of ['hello', 'idle', 'tick', 'start', 'done', 'day', 'tap']) for (const l of lines.poolFor(m, { ...c, hour: 23 })) {
+    assert.ok(!/\b(drink|water break|rest your|take a break|go to bed|early night|sleep is|you should)\b/i.test(l.text), l.id + ': ' + l.text);
+  }
   assert.ok([...pools].some((id) => id.startsWith('tp')), 'and plain reactions');
-  assert.equal(lines.fill('Next up: {next}.', c), 'Next up: Finish the extremely long p….');
-  for (const m of ['back', 'shh', 'bye', 'idea', 'nap', 'wave', 'dizzy', 'taps', 'start', 'day', 'streak']) assert.ok(lines.poolFor(m, c).length, m);
+  assert.equal(lines.fill('next is {next}!', c), 'next is Finish the extremely long p…!');
+  for (const m of ['back', 'shh', 'bye', 'idea', 'wave', 'dizzy', 'taps', 'start', 'day', 'streak', 'carry', 'land']) assert.ok(lines.poolFor(m, c).length, m);
 });
 
 check('every line fills in: no braces are left, and no line is long for a bubble', () => {
   const c = ctx({ subject: 'Physics', focusMin: 70 });
-  for (const m of ['hello', 'idle', 'tick', 'start', 'done', 'day', 'streak', 'wave', 'bye', 'back', 'idea', 'nap', 'shh', 'tap', 'taps', 'dizzy']) {
+  for (const m of ['hello', 'idle', 'tick', 'start', 'done', 'day', 'streak', 'wave', 'bye', 'back', 'idea', 'shh', 'tap', 'taps', 'dizzy', 'carry', 'land']) {
     for (const k of ['sprout', 'pip']) for (const l of lines.poolFor(m, { ...c, kind: k })) {
       const t = lines.fill(l.text, { ...c, kind: k });
       assert.ok(!/[{}]/.test(t), l.id + ': ' + t);

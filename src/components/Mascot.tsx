@@ -941,6 +941,7 @@ function Companion({ kind }: { kind: Kind }) {
     lift.value = 0;
     setPose({ ...REST, eyes: 'wide', mouth: 'o', feet: 'tuck', l: kind === 'pip' ? 'up' : 'out', r: kind === 'pip' ? 'rest' : 'out' });
     drag.current = { x: x.value, y: y.value, flap: flapStart() };
+    if (Math.random() < 0.6) say('carry', { always: true });
   };
   const onCarry = (dx: number, dy: number) => {
     const d = drag.current;
@@ -995,6 +996,7 @@ function Companion({ kind }: { kind: Kind }) {
       tilt.value = withTiming(0, { duration: 160 });
       setPose({ ...REST, eyes: 'happy', mouth: 'smile', feet: 'stand' });
       sq.value = withSequence(withTiming(0.86, { duration: 90 }), withTiming(1, { duration: 160 }));
+      if (Math.random() < 0.45) say('land', { always: true });
       face.value = withTiming(-1, { duration: 160 });
       await step(500);
     };

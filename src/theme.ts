@@ -91,19 +91,45 @@ export const wellFor = (theme: ThemeMode, strength: 'hairline' | 'low' | 'mid' =
     : { backgroundColor: C.inset, ...neuInset(strength) }) as any;
 
 /** Raised surface (frozen object — safe to spread in render). */
-export const neuRaised = (strength: 'low' | 'mid' | 'high' = 'mid') =>
-  (strength === 'high' ? NEU.raisedHigh : strength === 'mid' ? NEU.raisedMid : NEU.raisedLow) as any;
+export const neuRaised = (strength: 'low' | 'mid' | 'high' = 'mid') => {
+  const k = cheerSkin ? CHEER_SKIN : NEU;
+  return (strength === 'high' ? k.raisedHigh : strength === 'mid' ? k.raisedMid : k.raisedLow) as any;
+};
 
 /** Carved-in valley (frozen object — safe to spread in render). */
-export const neuInset = (strength: 'hairline' | 'low' | 'mid' = 'mid') =>
-  (strength === 'mid' ? NEU.insetMid : strength === 'low' ? NEU.insetLow : NEU.insetHairline) as any;
+export const neuInset = (strength: 'hairline' | 'low' | 'mid' = 'mid') => {
+  const k = cheerSkin ? CHEER_SKIN : NEU;
+  return (strength === 'mid' ? k.insetMid : strength === 'low' ? k.insetLow : k.insetHairline) as any;
+};
+
+/**
+ * Cheerful's own surfaces. Elite's neumorphic light falls from the top left as a pale highlight; over Cheerful's
+ * drifting colour that highlight reads as a gray smudge around every card. Cheerful keeps Elite's shapes and spacing
+ * but lifts its cards with a soft, warm-dark drop shadow and a faint warm rim along the top, and sinks its wells with a
+ * gentle inner shade only: no pale light anywhere.
+ */
+const WARM = (a: number) => `rgba(8, 6, 4, ${a})`;
+const RIM = (a: number) => `rgba(255, 236, 214, ${a})`;
+const CHEER_SKIN = Object.freeze({
+  raisedLow: Object.freeze({ boxShadow: `0px 3px 10px ${WARM(0.3)}, inset 0px 1px 0px ${RIM(0.06)}` }),
+  raisedMid: Object.freeze({ boxShadow: `0px 6px 16px ${WARM(0.34)}, inset 0px 1px 0px ${RIM(0.07)}` }),
+  raisedHigh: Object.freeze({ boxShadow: `0px 10px 24px ${WARM(0.38)}, inset 0px 1px 0px ${RIM(0.08)}` }),
+  insetHairline: Object.freeze({ boxShadow: `inset 0px 1px 2px ${WARM(0.3)}` }),
+  insetLow: Object.freeze({ boxShadow: `inset 0px 1px 4px ${WARM(0.32)}` }),
+  insetMid: Object.freeze({ boxShadow: `inset 0px 2px 6px ${WARM(0.36)}` }),
+  pressedInner: Object.freeze({ boxShadow: `inset 0px 2px 6px ${WARM(0.36)}` }),
+});
+let cheerSkin = false;
+/** Which skin the surfaces wear: set from the mood by useTheme (src/components/UI.tsx), before anything is drawn. */
+export function setSkin(cheerful: boolean) { cheerSkin = cheerful; }
+export const cheerSkinOn = () => cheerSkin;
 
 /**
  * Kit "pressed" state, dark adaptation — the inner panel that carves into a
  * control which keeps its own raised silhouette from its call site. Goes on an
  * overlay/panel inside the control, never on the control surface itself.
  */
-export const neuPressedInner = () => NEU.pressedInner as any;
+export const neuPressedInner = () => (cheerSkin ? CHEER_SKIN.pressedInner : NEU.pressedInner) as any;
 
 /** Non-neumorphic lifts that still ride the same shadow source. */
 export const SH = Object.freeze({
@@ -238,6 +264,9 @@ export const F = {
   /** the intro's wordmark and caption keep Rubik, the face its timing and shine were set to, and so does the colophon */
   brand: 'Rubik_600SemiBold',
   brandMed: 'Rubik_500Medium',
+  /** Cheerful's round face (Nunito): its big titles and the bar's title, and the companion's words */
+  cute: 'Nunito_700Bold',
+  cuteBold: 'Nunito_800ExtraBold',
 };
 
 /**

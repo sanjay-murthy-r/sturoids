@@ -15,7 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import {
   AnimLevel, C, CHROME_FONT_MAX, F, MIN, NO_SHADOW, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner,
-  oneLine, shownTheme,
+  oneLine, setSkin, shownTheme,
 } from '../theme';
 import { useStore } from '../store';
 import {
@@ -39,6 +39,8 @@ export const useTheme = (): ThemeMode => {
   // subscribing to the accent here makes EVERY themed component repaint the
   // moment a new accent is picked — no remount required
   useStore((s) => s.settings.accent);
+  // the mood too: Cheerful's surfaces are its own (theme.ts setSkin), so a themed component repaints in the new skin
+  setSkin(useStore((s) => s.settings.mood) === 'cheerful');
   // a phone that cannot draw shadows shows the default theme as Minimal (see shadowsSupported)
   return shownTheme(useStore((s) => s.settings.theme));
 };
@@ -367,6 +369,7 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
   pullOpen?: () => void;
 }) {
   const theme = useTheme();
+  const cheerful = useCheerful();
   const level = useAnimLevel();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -481,7 +484,7 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
             {/* fixed chrome: the bar's row is 40 high, so its title grows with the phone's font size only a little */}
             <View ref={titleRef} collapsable={false} onLayout={remeasure} style={hdr.titleFit}>
               <Text
-                numberOfLines={1} style={hdr.title} maxFontSizeMultiplier={1.2}
+                numberOfLines={1} style={[hdr.title, cheerful && CHEER_BAR_TITLE]} maxFontSizeMultiplier={1.2}
                 accessibilityRole={overlay ? undefined : 'header'}
                 importantForAccessibility={overlay ? 'no' : 'auto'}
               >
@@ -570,6 +573,7 @@ function ToolHero({ title, tab, parts, live, covered, reserve, geo }: {
   geo?: React.MutableRefObject<HeaderGeo>;
 }) {
   const ref = React.useRef<View>(null);
+  const cheerful = useCheerful();
   // where the big title ends (sideways, so the page's scroll never moves it), for the companion's room
   const told = () => {
     ref.current?.measureInWindow((x, _y, w) => {
@@ -584,7 +588,7 @@ function ToolHero({ title, tab, parts, live, covered, reserve, geo }: {
         {/* the big title sits level with the bar's tray, so it is chrome too: it grows at most by 1.3 */}
         <FadeSwap swapKey={title} style={reserve ? { paddingRight: reserve } : undefined}>
           <View ref={ref} collapsable={false} onLayout={told} style={hdr.titleFit}>
-            <Text numberOfLines={1} accessibilityRole="header" maxFontSizeMultiplier={CHROME_FONT_MAX} style={T.display}>{title}</Text>
+            <Text numberOfLines={1} accessibilityRole="header" maxFontSizeMultiplier={CHROME_FONT_MAX} style={[T.display, cheerful && CHEER_TITLE]}>{title}</Text>
           </View>
         </FadeSwap>
         {parts ? <ContextLine parts={parts} live={live} covered={covered} style={{ marginTop: 2 }} /> : null}
@@ -625,6 +629,10 @@ function LiveDot({ covered }: { covered: boolean }) {
   }));
   return <Animated.View importantForAccessibility="no" style={[hdr.dot, { backgroundColor: C.accent }, dotStyle]} />;
 }
+
+/** Cheerful's titles: the round face, a touch tighter, in place of the serif */
+export const CHEER_TITLE = { fontFamily: F.cuteBold, letterSpacing: -0.2 };
+const CHEER_BAR_TITLE = { fontFamily: F.cuteBold, letterSpacing: 0 };
 
 const hdr = StyleSheet.create({
   /** a title's own width (not its row's), so where it ends can be measured */

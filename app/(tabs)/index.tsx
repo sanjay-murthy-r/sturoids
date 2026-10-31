@@ -18,7 +18,7 @@ import {
 import { makeSampleStore } from '../../src/widgets/sample';
 import { fmtDate, uid } from '../../src/utils';
 import {
-  ArrivalPulse, Card, PillButton, PullArea, PullPill, ScreenBG, SectionTopTrim, Sheet, useContentPull, useHeaderPull, useTheme,
+  ArrivalPulse, CHEER_TITLE, Card, PillButton, PullArea, PullPill, ScreenBG, SectionTopTrim, Sheet, useContentPull, useHeaderPull, useTheme,
 } from '../../src/components/UI';
 import { Bouncy, EASE_OUT, Enter, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useFocusKey } from '../../src/components/Motion';
 import { toast } from '../../src/components/Toast';
@@ -46,7 +46,7 @@ import { galleryGroups, sizesOf, widgetDef, widgetShown } from '../../src/widget
 import type { WidgetDef } from '../../src/widgets/types';
 import { rightClick } from '../../src/web/rightClick';
 import { markGesture } from '../../src/dragGuard';
-import { Twinkle } from '../../src/components/Cheer';
+import { Twinkle, useCheerful } from '../../src/components/Cheer';
 
 // what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
 const NO_SESSIONS: FocusSession[] = [];
@@ -194,6 +194,7 @@ export default function Today() {
   // a greeting that changes while Today is open dips out and back as the new words; a figure in the same sentence
   // changes in place, so the line never blinks each minute
   const greetingKey = greeting.kind + '|' + (greeting.sub || '');
+  const cheerful = useCheerful();
   // the room on the date row, between the date and the search glyph, where the companion stands (src/mascot/room.ts);
   // it scrolls away with the header
   const dateRef = React.useRef<View>(null);
@@ -224,7 +225,7 @@ export default function Today() {
                   <Twinkle size={12} />
                 </View>
                 <FadeSwap swapKey={greetingKey}>
-                  <Text style={[T.display, { marginTop: 8, marginBottom: greeting.sub ? 6 : 24 }]}>
+                  <Text style={[T.display, cheerful && CHEER_TITLE, { marginTop: 8, marginBottom: greeting.sub ? 6 : 24 }]}>
                     {greeting.parts.map((part, i) => (
                       <Text key={i} style={part.name ? { color: C.accent } : undefined}>{part.text}</Text>
                     ))}

@@ -36,76 +36,93 @@ export type Ctx = {
 type Line = { id: string; text: string; who?: Kind };
 const L = (id: string, text: string, who?: Kind): Line => ({ id, text, who });
 
+/*
+ * ---------------------------------------------------------------- its voice
+ *
+ * A toddler's: delighted, easily amazed, a little wobbly in its spelling, proud of its things, and never once telling
+ * anyone what to do. No advice, no reminders to rest or drink water: it is company, not a coach. When it is fussed
+ * over (tapped a lot, carried about) it comes out with happy babble.
+ */
+
 /* ---------------------------------------------------------------- hellos */
 
+/** hellos for any time of day, so the hello at the same hour every day still changes */
+const HELLO_ANY = [
+  L('hy1', 'hiii! u came!'),
+  L('hy2', 'oh! hello! i was just... standing. very well.'),
+  L('hy3', 'yay yay yay. u.'),
+  L('hy4', 'hewwo! did u miss me? i missed u a medium amount.'),
+  L('hy5', 'knock knock! ...oh wait thats my job.'),
+  L('hy6', 'u here! best part of the day.'),
+  L('hy7', 'hello! i practised my wave. watch.'),
+  L('hy8', 'ooh, a visitor! its u!'),
+  L('hy9', 'hi! i kept the header warm.'),
+  L('hy10', 'there u are! i looked everywhere. (i looked here)'),
+  L('hy11', 'hiya! everything is where u left it. i checked twice.'),
+  L('hy12', 'hello hello! i did a tiny happy jump.'),
+];
 const HELLO_MORNING = [
-  L('hm1', 'Morning. The day is still in its wrapper.'),
-  L('hm2', 'Good morning. Slow start or dramatic start?'),
-  L('hm3', 'Morning! Fresh page. No crossings-out yet.'),
-  L('hm4', 'Up already? Respect.'),
-  L('hm5', 'Good morning. I already did my photosynthesis.', 'sprout'),
-  L('hm6', 'Morning. My leaves are still loading.', 'sprout'),
-  L('hm7', 'Morning! I bounced out of bed. Literally.', 'pip'),
-  L('hm8', 'Morning. Breakfast first. That is the rule.'),
-  L('hm9', 'Good morning. One good thing today is plenty.'),
-  L('hm10', 'Morning! I saved you the comfy spot on the header.'),
-  L('hm11', 'Ah, morning. The quietest hour for clever thoughts.'),
-  L('hm12', 'Good morning. Water first, then worries.'),
+  L('hm1', 'good mowning!!'),
+  L('hm2', 'hiii. sun is up. me is up. u is up!'),
+  L('hm3', 'mornin! i woke up first. i win.'),
+  L('hm4', 'ooh u here! best mowning.'),
+  L('hm5', 'mowning! my leafs are still stretchy.', 'sprout'),
+  L('hm6', 'i did sunshine for breakfast. nom.', 'sprout'),
+  L('hm7', 'mowning! i bounced out of bed. boing.', 'pip'),
+  L('hm8', 'hello hello hello. (one for each of us and one spare)'),
+  L('hm9', 'is it a new day? i love new days.'),
 ];
 const HELLO_AFTERNOON = [
-  L('ha1', 'Afternoon. Half the day gone, the better half left.'),
-  L('ha2', 'Oh, hi. Post-lunch brain? Me too.'),
-  L('ha3', 'Afternoon light is my favourite flavour.', 'sprout'),
-  L('ha4', 'Hi! I was practising sitting still. Nailed it.', 'pip'),
-  L('ha5', 'Afternoon. Good time for one small thing.'),
-  L('ha6', 'Hey. The day is still yours, I checked.'),
-  L('ha7', 'Afternoon! Did you drink water, or just think about it?'),
-  L('ha8', 'Hello again. I kept the list warm for you.'),
+  L('ha1', 'hiii! is it afternoon? sounds fancy.'),
+  L('ha2', 'oh! u came back. i was guarding the header.'),
+  L('ha3', 'afternoon sunshine is my favrit flavour.', 'sprout'),
+  L('ha4', 'hi! i was being very still. did u see? so still.', 'pip'),
+  L('ha5', 'yay, u! i saved u a spot.'),
+  L('ha6', 'hewwo. i counted the buttons. there is some.'),
 ];
 const HELLO_EVENING = [
-  L('he1', 'Evening. How did today treat you?'),
-  L('he2', 'Hi. Evenings are for finishing soft.'),
-  L('he3', 'Evening! My leaves fold up soon. Not yet though.', 'sprout'),
-  L('he4', 'Hi! I saved some bounce for the evening.', 'pip'),
-  L('he5', 'Evening. Whatever today was, it counts.'),
-  L('he6', 'Hey. The quiet part of the day. My favourite.'),
-  L('he7', 'Evening. One last thing, or none at all. Both fine.'),
-  L('he8', 'Good evening. Even the notifications are tired.'),
+  L('he1', 'evenin! the sky is orange. like a juice.'),
+  L('he2', 'hiii. it getting dark. cozy.'),
+  L('he3', 'evening! my leafs go all floppy soon. not yet tho.', 'sprout'),
+  L('he4', 'hi! i saved my last bounces for u.', 'pip'),
+  L('he5', 'ooh u here! evening buddies.'),
 ];
 const HELLO_LATE = [
-  L('hl1', "It's late. Be kind to tomorrow-you."),
-  L('hl2', 'Night owl mode? Hoot hoot.'),
-  L('hl3', "Still up? I'll keep you company."),
-  L('hl4', 'Even the Wi-Fi is asleep.'),
-  L('hl5', 'Shh. Everyone else is asleep.'),
-  L('hl6', 'Midnight study? Short, then bed. Deal?'),
+  L('hl1', 'it soooo dark. we is night owls now. hoot.'),
+  L('hl2', 'shhh. everybody sleeping. except us.'),
+  L('hl3', 'oh! hi! i was not sleeping. i was... blinking slow.'),
+  L('hl4', 'spooky night time. good thing u here.'),
 ];
 const HELLO_WEEKDAY: Record<number, Line[]> = {
-  1: [L('wd1a', 'Monday again? It keeps happening.'), L('wd1b', 'New week. Clean slate, same snacks.')],
-  5: [L('wd5a', 'Friday! The week is almost a story now.'), L('wd5b', 'Friday. Finish light.')],
-  6: [L('wd6a', 'Saturday. Rest counts as homework too.'), L('wd6b', 'Weekend. A little study, a lot of air?')],
-  0: [L('wd0a', 'A slow Sunday is allowed. Officially.'), L('wd0b', 'Sunday. Good day to peek at next week.')],
+  1: [L('wd1a', 'mundee! is it a fun day? it sound like fun day.')],
+  5: [L('wd5a', 'fwiday! i like how it sounds. fwiiiday.')],
+  6: [L('wd6a', 'saturday! the day with no school bell. ding? no ding.')],
+  0: [L('wd0a', 'sunday. sun-day. it has sun IN it. wow.')],
 };
 const BACK = [
-  L('bk1', "You're back! I watered the app while you were gone.", 'sprout'),
-  L('bk2', 'Hey, {away} days! I kept everything just as you left it.'),
-  L('bk3', 'Oh! Welcome back. I may have napped a little.'),
-  L('bk4', 'There you are. No catching up needed. Just today.'),
-  L('bk5', 'You were gone {away} days. I counted. Bounce count: many.', 'pip'),
+  L('bk1', 'u was gone {away} sleeps! i waited. mostly.'),
+  L('bk2', 'U BACK! i did a happy wiggle. two.'),
+  L('bk3', 'oh! hi! i kept everything right here. i did not touch. (i touched one thing)'),
+  L('bk4', 'i watered the app while u was gone. it fine.', 'sprout'),
+  L('bk5', 'i bounced {away} days worth of bounces. so tired. so happy.', 'pip'),
 ];
-const FIRST = [L('fs1', "Hi, I'm {name}. I live up here. I'll be quiet, mostly.")];
-const RUN = [L('rn1', "{run} days in a row. We're basically a routine now."), L('rn2', '{run} days straight. I would give you a medal, but I am a plant.', 'sprout'), L('rn3', '{run} days in a row! I did a bounce for each.', 'pip')];
+const FIRST = [L('fs1', "hi! i'm {name}. i live up here now. hewwo!")];
+const RUN = [
+  L('rn1', '{run} days in a row!! we is besties.'),
+  L('rn2', '{run} days! i counted on my leafs. i ran out of leafs.', 'sprout'),
+  L('rn3', '{run} days! i counted on my... i has no fingers. many days.', 'pip'),
+];
 
 /** special days (Tamil Nadu's own among them) */
 const DAYS: Record<string, Line[]> = {
-  '01-01': [L('d0101', 'Happy new year! New notebook energy.')],
-  '01-14': [L('d0114', 'Happy Pongal! Something sweet today?')],
-  '01-15': [L('d0115', 'Pongal greetings. Sugarcane and good marks.')],
-  '01-26': [L('d0126', 'Happy Republic Day.')],
-  '04-14': [L('d0414', 'Puthandu vazhthukal! Happy Tamil New Year.')],
-  '08-15': [L('d0815', 'Happy Independence Day.')],
-  '09-05': [L('d0905', "Happy Teachers' Day. Thank one today?")],
-  '11-14': [L('d1114', "Happy Children's Day. That's you, sort of.")],
+  '01-01': [L('d0101', 'happy new yeaw!! is it new? it look new.')],
+  '01-14': [L('d0114', 'happy pongal!! is there sweet pongal? i want a tiny bit.')],
+  '01-15': [L('d0115', 'pongal again! two pongals! best.')],
+  '01-26': [L('d0126', 'happy republic day! flag flag flag.')],
+  '04-14': [L('d0414', 'puthandu vazhthukal!! new yeaw again! i love new yeaws.')],
+  '08-15': [L('d0815', 'happy independence day! i is independent. i can stand by myself. look.')],
+  '09-05': [L('d0905', "happy teachers' day! teachers is like big smart people.")],
+  '11-14': [L('d1114', "children's day! that's me! and u! sort of!")],
 };
 /** Deepavali moves each year */
 const DEEPAVALI: Record<number, string> = { 2026: '11-08', 2027: '10-29', 2028: '10-17', 2029: '11-05', 2030: '10-26' };
@@ -113,135 +130,114 @@ const DEEPAVALI: Record<number, string> = { 2026: '11-08', 2027: '10-29', 2028: 
 /* ---------------------------------------------------------------- by itself */
 
 const IDLE_ANY = [
-  L('i1', 'Tiny steps still move you. Ask any snail.'),
-  L('i2', "You're doing better than your to-do list thinks."),
-  L('i3', 'Drink some water. I just did. Showing off, really.'),
-  L('i4', 'Shoulders down. They creep up when you focus.'),
-  L('i5', 'Hm. Just thinking. About nothing. Very busy.'),
-  L('i6', 'Remember to blink. I just did. Twice.'),
-  L('i7', 'Studying is future-you collecting gifts.'),
-  L('i8', 'Mistakes are just practice in a fake moustache.'),
-  L('i9', 'Look away from the screen for a bit. Far away. Further.'),
-  L('i10', 'Not every day has to be a great day. Some can be okay.'),
-  L('i11', 'If it feels hard, your brain is lifting weights.'),
-  L('i12', "A break isn't quitting. It's a pit stop."),
-  L('i13', 'One question at a time. Even the big ones.'),
-  L('i14', 'Nobody remembers everything. That is why notes exist.'),
-  L('i15', 'Sit up a little. There. Very scholarly.'),
-  L('i16', 'Reading it twice still counts as reading it.'),
-  L('i17', 'The hardest part is starting. The rest is just doing.'),
-  L('i18', 'I believe in you. Statistically, it is working.'),
+  L('i1', 'i found a pixel. it mine now.'),
+  L('i2', 'wha dat? oh. it the search button. hi search button.'),
+  L('i3', 'hmmm. thinking about... um. snacks.'),
+  L('i4', 'i can count to five. one, two, fwee, five.'),
+  L('i5', 'u type so fast. clicky clicky.'),
+  L('i6', 'i am being a good helper. (i am sitting)'),
+  L('i7', 'did u know? i am small. very small. but brave.'),
+  L('i8', 'la la la. oh u heard that.'),
+  L('i9', 'this header is my house. welcome to my house.'),
+  L('i10', 'u look smart today. smarter than yesterday? maybe!'),
+  L('i11', 'i like it when u is here.'),
+  L('i12', 'blink. blink. i am practising.'),
 ];
 const IDLE_SPROUT = [
-  L('s1', 'I grew a millimetre today. Probably. Do not measure.', 'sprout'),
-  L('s2', "I'm mostly water and optimism.", 'sprout'),
-  L('s3', 'If I stand very still, I am basically a houseplant.', 'sprout'),
-  L('s4', 'Roots first, then leaves. Learning works the same.', 'sprout'),
-  L('s5', 'I tried photosynthesising faster. It does not work.', 'sprout'),
-  L('s6', 'Rain is just the sky doing my chores.', 'sprout'),
-  L('s7', 'I leaned toward the light again. Old habit.', 'sprout'),
-  L('s8', 'Some days you sprout. Some days you stay potted. Both fine.', 'sprout'),
-  L('s9', 'My leaves are my hands. Typing is hard.', 'sprout'),
+  L('s1', 'i growed a tiny bit. dont measure. pls.', 'sprout'),
+  L('s2', 'my leafs are my hands. i wave with them. see? wave.', 'sprout'),
+  L('s3', 'i am a plant. i eat sunshine. u eat... noodles?', 'sprout'),
+  L('s4', 'raindrops tickle. hehe.', 'sprout'),
+  L('s5', 'i leaned to the light again. oops.', 'sprout'),
+  L('s6', 'one day i will be a big tree. a big tree with a big header.', 'sprout'),
 ];
 const IDLE_PIP = [
-  L('p1', 'I bounced into a wall earlier. On purpose. Mostly.', 'pip'),
-  L('p2', 'Round is a great shape. No corners to bump.', 'pip'),
-  L('p3', 'I hummed a whole song in my head. It was a banger.', 'pip'),
-  L('p4', "Practising my serious face. Nope. Can't.", 'pip'),
-  L('p5', 'Being small makes everything an adventure.', 'pip'),
-  L('p6', 'If I roll, I go faster. I am not allowed to roll.', 'pip'),
-  L('p7', 'Soft on the outside. Determined on the inside.', 'pip'),
-  L('p8', 'I counted my bounces today. Lost count at bounce.', 'pip'),
+  L('p1', 'i bounced into the wall. the wall said nothing. rude.', 'pip'),
+  L('p2', 'i am round. round is the best shape. no pointy bits.', 'pip'),
+  L('p3', 'boing. boing. sowwy. bouncy day.', 'pip'),
+  L('p4', 'i tried a serious face. it went squishy.', 'pip'),
+  L('p5', 'if i roll i go fast. i am not allowed to roll.', 'pip'),
+  L('p6', 'i am soft. pokey pokey. (dont actually)', 'pip'),
 ];
 const IDLE_GEAR: Record<string, Line[]> = {
-  ladybug: [L('g1', 'Dot landed on me again. I am an airport now.', 'sprout'), L('g2', 'Dot says hi. Dot is shy. Dot is also a ladybug.', 'sprout')],
-  firefly: [L('g3', 'My firefly only comes out at night. Like some students.', 'sprout')],
-  bloom: [L('g4', 'My bud opens as your list shrinks. No pressure. Some pressure.', 'sprout')],
-  glasses: [L('g5', 'These glasses make me look clever. They are not prescription.'), L('g6', 'I wear glasses so people think I read. I do read.')],
-  balloon: [L('g7', 'My balloon floats higher when your day goes well. Science.', 'pip')],
-  phones: [L('g8', 'My headphones are mostly for looking cool.', 'pip')],
+  ladybug: [
+    L('g1', 'dis is Dot. Dot is my fren. Dot has spots. i has no spots.', 'sprout'),
+    L('g2', 'Dot sat on my head. i am a Dot chair now.', 'sprout'),
+    L('g3', 'Dot! come back! ...ok Dot is back.', 'sprout'),
+  ],
+  firefly: [L('g4', 'my sparkly bug only comes out at night. it shy.', 'sprout'), L('g5', 'blinky bug! blink blink. i blink too.', 'sprout')],
+  bloom: [L('g6', 'my flower is gonna pop!! when? soon. maybe.', 'sprout'), L('g7', 'i has a bud. it on my head. it mine.', 'sprout')],
+  glasses: [L('g8', 'i has glasses. now i can see EVERYTHING. (i cannot)'), L('g9', 'my glasses make me clever. i am so clever. what is two plus two. fish.')],
+  bow: [L('g10', 'look at my bow!! i am so fancy.', 'pip'), L('g11', 'my bow is pretty. do u like my bow. u do. yay.', 'pip')],
+  phones: [L('g12', 'music in my ears. la la la. its a good one.', 'pip'), L('g13', 'my headphones is big. my ears is... wait do i has ears?', 'pip')],
+  balloon: [L('g14', 'my baloon!! dont take it. ok u can hold it. no.', 'pip'), L('g15', 'baloon goes up when ur day goes good. i dont know how. magic.', 'pip')],
 };
 
 /* ---------------------------------------------------------------- about the day */
 
 const CTX_MANY = [
-  L('c1', '{left} ToDos left. I counted twice. Still {left}.'),
-  L('c2', '{left} things on the list. We could pick the smallest and feel great.'),
-  L('c3', 'Next up: {next}. If you are up for it.'),
-  L('c4', '{left} to go. One at a time, like eating a pizza.'),
+  L('c1', '{left} todos! dat is... a lot of numbew.'),
+  L('c2', 'next is {next}! ooh. sounds important.'),
+  L('c3', 'i counted ur list. {left}! i used all my counting.'),
 ];
 const CTX_FEW = [
-  L('c5', 'Just {left} to go. I can see the finish line from here.'),
-  L('c6', 'Only {next} stands between you and glory.'),
-  L('c7', '{left} left. Nearly there. I am vibrating.', 'pip'),
+  L('c4', 'only {left} left! u is almost winning!'),
+  L('c5', 'just {next} left! ooooh. the last one!'),
 ];
 const CTX_CLEAR = [
-  L('c8', 'List clear. Anything now is a bonus round.'),
-  L('c9', 'Nothing left today. That feeling is called pride.'),
-  L('c10', 'All done! You could just rest. Revolutionary.'),
+  L('c6', 'ur list is empty! empty like my tummy. but happy.'),
+  L('c7', 'no more todos! where did they go? u did them!'),
 ];
-const CTX_LATE_LEFT = [L('c11', 'Whatever is left can wait for morning. It will not run away.'), L('c12', "It's late. The list keeps. You need sleep.")];
-const CTX_EXAM_FAR = [L('e1', '{exam} in {days} days. Plenty of time, if we start small.'), L('e2', '{exam} is {days} days off. A little a day beats a lot at once.')];
-const CTX_EXAM_NEAR = [
-  L('e3', '{exam} in {days} days. Revision mode: engaged.'),
-  L('e4', '{days} days to {exam}. You know more than you think.'),
-  L('e5', '{exam} in {days} days. Formulas will not learn themselves. Sadly.'),
-];
-const CTX_EXAM_TOMORROW = [L('e6', '{exam} is tomorrow. Light revision, early night.'), L('e7', '{exam} tomorrow. Sleep is part of the syllabus.')];
-const CTX_EXAM_TODAY = [L('e8', '{exam} today. Breathe. You prepared for this.'), L('e9', 'Exam day! Go show {exam} who is boss.')];
+const CTX_EXAM_FAR = [L('e1', '{exam} in {days} sleeps! i can count sleeps.'), L('e2', '{exam} is coming. in {days} days. i will cheer so loud.')];
+const CTX_EXAM_NEAR = [L('e3', '{exam} in {days} sleeps! u know so many things.'), L('e4', 'ooh {exam} soon! u gonna be so good. i just know.')];
+const CTX_EXAM_TOMORROW = [L('e5', '{exam} is tomorrow!! i will hold my leafs crossed.', 'sprout'), L('e6', '{exam} tomorrow!! i will bounce for luck.', 'pip')];
+const CTX_EXAM_TODAY = [L('e7', 'today is {exam}!! u got dis. i got u.'), L('e8', 'big day! {exam}! go go go!')];
 const CTX_FOCUS = [
-  L('f1', '{focusMin} minutes of focus today. My leaves are impressed. Both of them.', 'sprout'),
-  L('f2', '{focusMin} minutes of Deep Work so far. I did {focusMin} bounces in your honour.', 'pip'),
-  L('f3', '{focusMin} focused minutes. That adds up, you know.'),
+  L('f1', '{focusMin} minnits of focus! wow wow wow.'),
+  L('f2', 'u did {focusMin} minnits of thinking. my brain is tired just watching.'),
 ];
-const CTX_SUBJECT = [L('f4', 'More {subject} today? Your brain is getting {subject}-shaped.'), L('f5', 'That {subject} session earlier? Chef\'s kiss.')];
-const CTX_FOCUS_BIG = [L('f6', 'Over two hours of Deep Work today. Rest your eyes, legend.'), L('f7', 'That is a lot of focus today. Go stare at a tree.')];
-const CTX_NO_FOCUS = [L('f8', 'No Deep Work yet today. Ten minutes still counts.'), L('f9', 'A short session later? I will bring my book.')];
+const CTX_SUBJECT = [L('f3', 'u did {subject}! i dont know what {subject} is. it sounds hard. u is so smart.')];
+const CTX_FOCUS_BIG = [L('f4', 'so many minnits of focus today. u is a focus monster. a nice one.')];
 
 /* ---------------------------------------------------------------- moments */
 
 const TICK = [
-  L('t1', 'Nice.'), L('t2', 'One down!'), L('t3', 'Tick! Satisfying.'), L('t4', 'Look at you go.'), L('t5', 'Gone. Poof.'),
-  L('t6', 'That one never stood a chance.'), L('t7', 'Lighter already.'), L('t8', 'Neat.'), L('t9', 'Onward!'), L('t10', 'Smooth.'),
-  L('t11', 'Ooh, crisp tick.'), L('t12', 'And another!'), L('t13', 'The list fears you.'), L('t14', 'That felt good, right?'),
+  L('t1', 'yay!'), L('t2', 'boop! gone.'), L('t3', 'tick tick!'), L('t4', 'ooh shiny tick.'), L('t5', 'u did it!!'),
+  L('t6', 'one less! i can count to one.'), L('t7', 'bye bye todo!'), L('t8', 'wheee!'), L('t9', 'yesss.'),
+  L('t10', 'i clapped. with leafs. it quiet.', 'sprout'), L('t11', 'happy bounce!', 'pip'), L('t12', 'woo!'),
 ];
 const START = [
-  L('st1', "I'll study too. Quietly."), L('st2', 'Quiet mode. Go.'), L('st3', "Got my book. Let's go."),
-  L('st4', "Focus time. I'll be a very still plant.", 'sprout'), L('st5', 'Headphones on. Silent bounce mode.', 'pip'),
-  L('st6', "Let's do this together."), L('st7', 'Phone down, brain up.'), L('st8', 'See you on the other side.'),
-  L('st9', 'Deep breath. Begin.'),
+  L('st1', 'shhh. study time. i has my book.'), L('st2', 'i read too! (pictures)'), L('st3', 'quiet mode. shhhh.'),
+  L('st4', 'i got my book! it upside down. its fine.'), L('st5', 'headphones on. very serious now.', 'pip'),
 ];
-const DONE_SHORT = [L('ds1', 'Short and sweet. Still counts.'), L('ds2', 'A little session is still a session.'), L('ds3', 'Quick one! Good warm-up.')];
+const DONE_SHORT = [L('ds1', 'u did a study! a small one! still a study!'), L('ds2', 'done! that was quick like a bunny.')];
 const DONE_MID = [
-  L('dm1', 'Nice session. I finished a chapter too.'), L('dm2', 'That was a good stretch of focus.'), L('dm3', 'Focus, well spent.'),
-  L('dm4', 'Done! Water break?'), L('dm5', 'Look at that. Brain: fed.'),
+  L('dm1', 'we did it!! i read a whole page.'), L('dm2', 'high leaf!!', 'sprout'), L('dm3', 'high five! (i has nubs. high nub!)', 'pip'),
+  L('dm4', 'yaaay study done! u was so focused. i saw.'),
 ];
-const DONE_LONG = [
-  L('dl1', 'That was a proper session. Stretch with me.'), L('dl2', 'Long one! I read my book twice.'), L('dl3', 'Wow. Deep work, truly deep.'),
-  L('dl4', 'Impressive. Now rest your eyes. Doctor {name} says.'),
-];
+const DONE_LONG = [L('dl1', 'that was a BIG study. i read my book two times.'), L('dl2', 'wow!! so long! u is a study champion.')];
 const DAY = [
-  L('dy1', 'Every ToDo, done. Proud of you.'), L('dy2', 'Whole list, gone. Go do something nice.'), L('dy3', 'Clean sweep!'),
-  L('dy4', 'Today: completed it.'), L('dy5', 'You did all of it. ALL of it.'), L('dy6', 'The list is empty and my heart is full.'),
-  L('dy7', 'Look, my bud opened!', 'sprout'), L('dy8', 'My balloon is touching the sky!', 'pip'),
-  L('dy9', "That's everything. Brilliant."), L('dy10', 'Nothing left. You earned the evening.'),
+  L('dy1', 'ALL DONE?! yaaaaay!'), L('dy2', 'the whole list! gone! u did a magic.'),
+  L('dy3', 'my flower popped!! look look look!', 'sprout'), L('dy4', 'my baloon is in the sky!! almost!', 'pip'),
+  L('dy5', 'everything done!! happy dance! (i only know one dance)'), L('dy6', 'no more todos. u is the best.'),
 ];
-const STREAK = [L('sk1', 'That streak keeps growing!'), L('sk2', 'Day after day. That is a habit now.'), L('sk3', 'Another milestone. Gentle and steady.'), L('sk4', 'Look at that streak go.')];
-const WAVE = [L('wv1', 'Hi!'), L('wv2', 'Hey hey.'), L('wv3', 'Hello, you.'), L('wv4', 'Oi! Hi.'), L('wv5', 'Hiya.'), L('wv6', 'There you are.')];
-const BYE = [L('by1', 'Off for a bit. Knock if you need me!'), L('by2', 'Bye for now. My door is right there.'), L('by3', 'Going for a walk. Knock knock when you want me.')];
-const BACKIN = [L('bi1', 'You knocked! Hi again.'), L('bi2', 'Coming, coming!'), L('bi3', 'Back already? I missed you too.'), L('bi4', 'Who is there? Oh, it is you!')];
-const IDEA = [L('id1', 'I had an idea. It left.'), L('id2', 'Aha! ...no, never mind.'), L('id3', 'Eureka! Wait. Not quite.'), L('id4', 'Big idea incoming. Still loading.')];
-const NAP = [L('np1', 'Mm? Oh, hello!'), L('np2', 'I was resting my eyes. Both of them.'), L('np3', 'Not sleeping. Thinking. With my eyes closed.')];
-const SHH = [L('sh1', 'Shh. Studying.'), L('sh2', 'Shh, chapter seven.'), L('sh3', 'Focus! Me too.')];
+const STREAK = [L('sk1', 'so many days in a row!! i lost count. many!'), L('sk2', 'streak! streak! i dont know what it means but YAY.')];
+const WAVE = [L('wv1', 'hiii!'), L('wv2', 'hewwo!'), L('wv3', 'hi hi!'), L('wv4', 'wave wave!'), L('wv5', 'oh! hi!')];
+const BYE = [L('by1', 'bye bye! knock knock for me ok?'), L('by2', 'going on a walk! dont forget to knock!'), L('by3', 'byeee! i be right behind the door.')];
+const BACKIN = [L('bi1', 'who dat? oh it u!! hiii!'), L('bi2', 'coming coming coming!'), L('bi3', 'u knocked!! i heard! i came!'), L('bi4', 'ding dong! it me!')];
+const IDEA = [L('id1', 'i had a thinky! ...it went away.'), L('id2', 'idea!! ...banana? no.'), L('id3', 'oh! i know! ...i forgot.')];
+const SHH = [L('sh1', 'shhh. reading.'), L('sh2', 'shh, im on a good page.'), L('sh3', 'shhh. (my book has a dragon)')];
 
-/* ---------------------------------------------------------------- taps */
+/* ---------------------------------------------------------------- fussed over */
 
 const TAP_ONE = [
-  L('tp1', 'Hehe.'), L('tp2', 'Boop.'), L('tp3', 'That tickles.'), L('tp4', 'Yes, hello?'), L('tp5', "I'm awake! I promise."),
-  L('tp6', "I'm cheering for you. Silently. Loudly inside."), L('tp7', 'Hold me and I will go for a walk.'),
+  L('tp1', 'hehe!'), L('tp2', 'boop.'), L('tp3', 'that tickle!'), L('tp4', 'yes? hi?'), L('tp5', 'eep!'),
+  L('tp6', 'u poked me. i poke back. *poke*'), L('tp7', 'hewwo?'), L('tp8', 'mlem.'),
 ];
-const TAP_MANY = [L('tm1', 'Okay, okay!'), L('tm2', 'Hehe, stop!'), L('tm3', 'Again?'), L('tm4', 'I am not a button! Okay, a bit.')];
-const TAP_DIZZY = [L('tz1', 'Whoa. Two of you now.'), L('tz2', 'The room is spinning.'), L('tz3', 'I need to sit down. I am sitting.')];
+const TAP_MANY = [L('tm1', 'hehe stoppp'), L('tm2', 'bwah!'), L('tm3', 'nyeh? again?'), L('tm4', 'ehehe boop boop boop')];
+const TAP_DIZZY = [L('tz1', 'everyfing is spinny...'), L('tz2', 'wobble wobble. two of u now.'), L('tz3', 'blblblbl.'), L('tz4', 'wawawa... where am i. oh. header.')];
+const CARRY = [L('cy1', 'wheeee!'), L('cy2', 'up up up!'), L('cy3', 'whoa whoa whoa'), L('cy4', 'flyyyy!', 'sprout'), L('cy5', 'floaty floaty...', 'pip'), L('cy6', 'aaaa! fun!')];
+const LAND = [L('ld1', 'landed! ta-da.'), L('ld2', 'again again!'), L('ld3', 'i flewed!', 'sprout'), L('ld4', 'gentle landing. i am a pro.', 'pip'), L('ld5', 'whew.')];
 
 /* ---------------------------------------------------------------- the memory */
 
@@ -302,21 +298,21 @@ export function newDay(mem: Memory, key: string): Memory {
 /* ---------------------------------------------------------------- what to say */
 
 export type Moment =
-  | 'hello' | 'idle' | 'tick' | 'start' | 'done' | 'day' | 'streak' | 'wave' | 'bye' | 'back' | 'idea' | 'nap' | 'shh'
-  | 'tap' | 'taps' | 'dizzy';
+  | 'hello' | 'idle' | 'tick' | 'start' | 'done' | 'day' | 'streak' | 'wave' | 'bye' | 'back' | 'idea' | 'shh'
+  | 'tap' | 'taps' | 'dizzy' | 'carry' | 'land';
 
 /** The pool for a moment, in this context. */
 export function poolFor(m: Moment, ctx: Ctx, extra: { minutes?: number } = {}): Line[] {
   switch (m) {
     case 'hello': {
       if (ctx.first) return FIRST;
-      const special = DAYS[ctx.date] ?? (DEEPAVALI[ctx.year] === ctx.date ? [L('dvl' + ctx.year, 'Happy Deepavali! Light, sweets, and maybe one ToDo.')] : null);
+      const special = DAYS[ctx.date] ?? (DEEPAVALI[ctx.year] === ctx.date ? [L('dvl' + ctx.year, 'happy deepavali!! sparkly lights! boom boom (quiet boom)')] : null);
       if (special) return special;
       if (ctx.away >= 2) return BACK;
       if ([7, 30, 60, 90, 120, 180, 365].includes(ctx.run)) return RUN;
       const h = ctx.hour;
       const time = h >= 5 && h < 12 ? HELLO_MORNING : h >= 12 && h < 17 ? HELLO_AFTERNOON : h >= 17 && h < 22 ? HELLO_EVENING : HELLO_LATE;
-      return [...time, ...(HELLO_WEEKDAY[ctx.weekday] ?? [])];
+      return [...time, ...HELLO_ANY, ...(HELLO_WEEKDAY[ctx.weekday] ?? [])];
     }
     case 'idle': return [...idleFacts(ctx), ...idleOwn(ctx)];
     case 'tick': return TICK;
@@ -325,24 +321,24 @@ export function poolFor(m: Moment, ctx: Ctx, extra: { minutes?: number } = {}): 
       const min = extra.minutes ?? 25;
       return min < 15 ? DONE_SHORT : min >= 50 ? DONE_LONG : DONE_MID;
     }
-    case 'day': return DAY.filter((l) => (l.id !== 'dy7' || ctx.gear.includes('bloom')) && (l.id !== 'dy8' || ctx.gear.includes('balloon')));
+    case 'day': return DAY.filter((l) => (l.id !== 'dy3' || ctx.gear.includes('bloom')) && (l.id !== 'dy4' || ctx.gear.includes('balloon')));
     case 'streak': return STREAK;
     case 'wave': return WAVE;
     case 'bye': return BYE;
     case 'back': return BACKIN;
     case 'idea': return IDEA;
-    case 'nap': return NAP;
     case 'shh': return SHH;
     // a tap: about half the time, a word about the day (when there is one)
     case 'tap': { const f = idleFacts(ctx); return f.length && Math.random() < 0.5 ? f : TAP_ONE; }
     case 'taps': return TAP_MANY;
     case 'dizzy': return TAP_DIZZY;
+    case 'carry': return CARRY;
+    case 'land': return LAND;
   }
 }
 
 /** What is true today and worth a word: the list, an exam coming up, the focus so far. */
 function idleFacts(ctx: Ctx): Line[] {
-  const late = ctx.hour >= 22 || ctx.hour < 5;
   const facts: Line[] = [];
   if (ctx.exam) {
     const d = ctx.exam.days;
@@ -350,20 +346,19 @@ function idleFacts(ctx: Ctx): Line[] {
   }
   if (ctx.due > 0) {
     if (ctx.left === 0) facts.push(...CTX_CLEAR);
-    else if (late) facts.push(...CTX_LATE_LEFT);
-    else if (ctx.left <= 2) facts.push(...CTX_FEW.filter((l) => l.id !== 'c6' || (!!ctx.next && ctx.left === 1)));
-    else facts.push(...CTX_MANY.filter((l) => l.id !== 'c3' || !!ctx.next));
+    else if (ctx.left <= 2) facts.push(...CTX_FEW.filter((l) => l.id !== 'c5' || (!!ctx.next && ctx.left === 1)));
+    else facts.push(...CTX_MANY.filter((l) => l.id !== 'c2' || !!ctx.next));
   }
   if (ctx.focusMin >= 120) facts.push(...CTX_FOCUS_BIG);
   else if (ctx.focusMin >= 30) facts.push(...CTX_FOCUS, ...(ctx.subject ? CTX_SUBJECT : []));
-  else if (ctx.focusMin === 0 && ctx.hour >= 14 && ctx.hour < 21) facts.push(...CTX_NO_FOCUS);
   return facts;
 }
 
 /** Its own musings, and a word about what it keeps. */
 function idleOwn(ctx: Ctx): Line[] {
   const own = [...IDLE_ANY, ...(ctx.kind === 'sprout' ? IDLE_SPROUT : IDLE_PIP)];
-  for (const g of ctx.gear) own.push(...(IDLE_GEAR[g] ?? []));
+  // it is proud of its things, so it talks about them a lot
+  for (const g of ctx.gear) for (let k = 0; k < 3; k++) own.push(...(IDLE_GEAR[g] ?? []));
   return own;
 }
 
