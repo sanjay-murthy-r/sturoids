@@ -128,7 +128,35 @@ function sidewaysScrolling(): () => void {
     // at its end it lets the wheel go on to the page, so the page never feels stuck under a row
     if ((step > 0 && box.scrollLeft >= max - 1) || (step < 0 && box.scrollLeft <= 0)) return;
     e.preventDefault();
-    box.scrollBy({ left: step, behavior: Math.abs(step) > 60 ? 'smooth' : 'auto' });
+    glide(box, step * WHEEL_SIDEWAYS, max);
+  };
+  // A turn of the wheel moves a row by a little under half what it moves the page, and glides there: each frame closes
+  // part of the way to where the turns so far point, so quick turns add up into one smooth run rather than jumps.
+  const WHEEL_SIDEWAYS = 0.42;
+  const glides = new WeakMap<HTMLElement, { to: number; raf: number }>();
+  const glide = (box: HTMLElement, by: number, max: number) => {
+    const g = glides.get(box);
+    const to = Math.max(0, Math.min(max, (g ? g.to : box.scrollLeft) + by));
+    if (g) { g.to = to; return; }
+    const run = { to, raf: 0 };
+    glides.set(box, run);
+    const snap = box.style.scrollSnapType;
+    box.style.scrollSnapType = 'none';
+    const frame = () => {
+      const left = box.scrollLeft;
+      const gap = run.to - left;
+      if (Math.abs(gap) < 0.6) {
+        box.scrollLeft = run.to;
+        box.style.scrollSnapType = snap;
+        glides.delete(box);
+        return;
+      }
+      box.scrollLeft = left + gap * 0.16;
+      // a row that would not move (its end reached) stops the glide
+      if (box.scrollLeft === left) { run.to = left; }
+      run.raf = requestAnimationFrame(frame);
+    };
+    run.raf = requestAnimationFrame(frame);
   };
   let drag: { box: HTMLElement; x: number; left: number; moved: boolean } | null = null;
   const down = (e: MouseEvent) => {

@@ -414,8 +414,8 @@ const scenarios = {
     };
     await start(app);
     assert.equal(app.world.rows.get(USER).snapshot, other, 'the other phone\'s copy is kept');
-    assert.equal(app.cloudState().status, 'choice');
-    assert.equal(app.cloudState().reason, 'newer');
+    // the two are joined (now, or in a moment): never a question
+    assert.notEqual(app.cloudState().status, 'choice');
     assert.ok(app.world.files.has(USER + '/att/theirs'), 'its file is not cleared as unused: ' + app.world.log.join(' | '));
     assert.ok(!app.world.log.some((l) => l.startsWith('remove')), 'nothing was removed');
   },
@@ -482,10 +482,13 @@ const scenarios = {
     app.world.files.set(USER + '/att/d', Buffer.from('a different copy'));
     app.world.failDownload.add(USER + '/att/d');
     await start(app);
+    // signing in, the two copies were joined; what the restore itself fetches is counted from here
+    await until(() => app.cloudState().status !== 'syncing', 'the join');
+    app.world.log.length = 0;
     const { missing } = await app.cloud.restoreFromCloud();
     assert.equal(missing, 0);
-    const downloads = app.world.log.filter((l) => l.startsWith('download')).sort();
-    assert.deepEqual(downloads, ['download ' + USER + '/att/c', 'download ' + USER + '/att/d']);
+    const downloads = [...new Set(app.world.log.filter((l) => l.startsWith('download')))].sort();
+    assert.deepEqual(downloads, ['download ' + USER + '/att/c', 'download ' + USER + '/att/d'], JSON.stringify(downloads));
     assert.deepEqual(fs.readFileSync(app.toPath(a.uri)), here);
     assert.equal(fs.readFileSync(app.toPath(b.uri), 'utf8'), 'too large to go up');
     assert.equal(fs.readFileSync(app.toPath(c.uri), 'utf8'), 'from the cloud');

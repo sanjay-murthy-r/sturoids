@@ -1346,9 +1346,26 @@ async function meetNewer(s: Session, remote: RemoteCopy): Promise<void> {
     return;
   }
   // both changed: each device's changes are kept, joined
-  if (await follow(s, remote, true)) return;
+  if (await follow(s, remote, true)) { joinTries = 0; return; }
+  // Devices used side by side keep writing; a join that could not be made just now (something was being typed as the
+  // copy came down, a quiet follow's Undo still standing) is tried again in a moment rather than asked about. Only a
+  // copy the user once turned down, or data this device could not open, is ever a choice.
+  if (localDataState() === 'ok' && !meta.rescue && useCloud.getState().status !== 'choice'
+    && meta.declinedAt !== remote.updatedAt && joinTries < JOIN_TRIES) {
+    joinTries++;
+    patch({ status: 'idle', progress: null });
+    if (joinTimer) clearTimeout(joinTimer);
+    joinTimer = setTimeout(() => { joinTimer = null; check(false).catch(() => {}); }, 2500 * joinTries);
+    return;
+  }
+  joinTries = 0;
   patch({ status: 'choice', reason: 'newer', remote, hasCopy: true, error: null, progress: null });
 }
+
+/** a join put off is tried again this many times, a little later each time, before the user is asked */
+const JOIN_TRIES = 6;
+let joinTries = 0;
+let joinTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Follows a newer cloud copy written on another phone while this one has changed nothing: a copy of this phone's data
@@ -1361,9 +1378,10 @@ async function follow(s: Session, remote: RemoteCopy, merge = false): Promise<bo
   if (useCloud.getState().status === 'choice') return false;
   // a Deep Work session under way here is in no copy, and a replace ends it
   if (useStore.getState().deepWork) return false;
-  // a join needs the copy both last shared, and is never made over a copy the user once turned down
-  const base = merge ? await readBase() : null;
-  if (merge && (!base || meta.declinedAt === remote.updatedAt)) return false;
+  // a join is worked out against the copy both last shared; without one (a device that synced before joins were made)
+  // both sides' items are all kept. It is never made over a copy the user once turned down
+  if (merge && meta.declinedAt === remote.updatedAt) return false;
+  const base = merge ? (await readBase()) ?? {} : null;
   const facts = (localHash: string | null): NewerCopyFacts => ({
     remoteAt: remote.updatedAt, remoteDeviceId: remote.deviceId, lastRemoteAt: meta.lastRemoteAt, deviceId: meta.deviceId,
     localHash, lastHash: meta.lastHash, savePending: savePending(), declinedAt: meta.declinedAt,
@@ -1388,6 +1406,11 @@ async function follow(s: Session, remote: RemoteCopy, merge = false): Promise<bo
   // a kept copy of data that could not be opened is never replaced, and without a copy of its own there is no Undo
   let kept: string | null;
   try { kept = await AsyncStorage.getItem(RECOVERY_KEY); } catch { return false; }
+  // the copy kept for an earlier follow's Undo gives way to this one (its Undo would now undo two devices' work)
+  if (kept != null && isFollowCopy(kept)) {
+    if (followTimer) { clearTimeout(followTimer); followTimer = null; }
+    try { await AsyncStorage.removeItem(RECOVERY_KEY); kept = null; } catch { return false; }
+  }
   if (kept != null) return false;
   const safetyId = uid();
   try {
