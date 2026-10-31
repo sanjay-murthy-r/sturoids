@@ -18,7 +18,13 @@ const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 const LAST_KEY = 'sturoids-update-checked';
 const APK_PATH = 'sturoids-update.apk';
 
-export const appVersion = () => Constants.expoConfig?.version || '0.0.0';
+/**
+ * The version running: app.json's, bundled with the code itself, so it is always this build's. (The config a build
+ * carries can come from a stale build cache, and an old number there would make every release look newer.)
+ */
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const BUNDLED_VERSION: string = (require('../app.json') as { expo: { version: string } }).expo.version;
+export const appVersion = () => BUNDLED_VERSION || Constants.expoConfig?.version || '0.0.0';
 
 interface Desktop {
   stageUpdate: (url: string, version: string) => Promise<boolean>;

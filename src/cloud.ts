@@ -289,6 +289,7 @@ export function cloud(): SupabaseClient {
 }
 
 const deviceName = () => (Constants.deviceName || (Platform.OS === 'android' ? 'Android phone' : 'Phone')).slice(0, 60);
+// only a note in the cloud row of which version wrote it
 const appVersion = () => Constants.expoConfig?.version || '';
 
 /** A short fingerprint of a text (FNV-1a, two lanes), enough to tell whether anything changed. */

@@ -57,14 +57,14 @@ import { TWO_COL_AT, WIDE_MAX } from '../src/layout';
 import { startMakeover } from '../src/components/Makeover';
 import { CHEER } from '../src/components/Cheer';
 import { useCheerful } from '../src/components/Cheer';
-import { desktop, installApk, useUpdateReady } from '../src/autoUpdate';
+import { appVersion, desktop, installApk, useUpdateReady } from '../src/autoUpdate';
 import { MASCOTS } from '../src/components/Mascot';
 
 /** the list's column when Settings shows two panes */
 const SPLIT_LIST_W = 380;
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
-const APP_VERSION = Constants.expoConfig?.version || '1.7.0';
+const APP_VERSION = appVersion();
 
 // When the last backup file was made (LAST_EXPORT_KEY, src/backupNudge.ts) is kept apart from the data, so it never
 // reaches the cloud's fingerprint; Today's one-time backup card reads it too. Per profile.
