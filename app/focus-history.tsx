@@ -8,8 +8,8 @@ import { useStore } from '../src/store';
 import type { FocusSession } from '../src/store';
 import { fmtClockTime, focusMinutesByDay, focusStreak, todayKey, yesterdayKey } from '../src/utils';
 import {
-  ArrivalPulse, Card, Chip, EmptyState, Field, IconBtn, ListRow, ListSlice, PillButton, Row, ScreenBG, SectionTitle, Sheet,
-  contextLine, useTheme, useToolHeader,
+  ArrivalPulse, Card, Chip, EmptyState, Field, IconBtn, ListCard, ListRow, ListSlice, PillButton, Row, ScreenBG, SectionTitle,
+  Sheet, contextLine, useTheme, useToolHeader,
 } from '../src/components/UI';
 import { monthRange, useExport } from '../src/reports';
 import { Enter, FadeSwap } from '../src/components/Motion';
@@ -21,6 +21,8 @@ import { tap, tick } from '../src/haptics';
 import { fmtMins, sessionDay, sessionLength } from '../src/screens/FocusScreen';
 import { monthGrid, shiftMonthKey } from '../src/toolLogic';
 import { openSessionEditor } from '../src/components/SessionEditor';
+import { focusHours, quietSubjects, weekPace } from '../src/focusInsights';
+import { openPage, openTool } from '../src/toolNav';
 
 /** The list the header's scroll offset follows: Reanimated hands the offset to its handler on the UI thread. */
 const AnimatedSectionList = Animated.createAnimatedComponent(SectionList) as typeof SectionList;
@@ -78,8 +80,9 @@ const SessionRow = React.memo(function SessionRow({ s, first, last, enter, hour2
 
 /**
  * Every Deep Work session, opened from Deep Work's "See all" (or Sift, at one session: `session`, which is scrolled to
- * and pulses once). At the top, the daily goal with its streak, the month at a glance, and this week's focus per
- * subject; under them, the sessions by day, newest first. A session is logged by hand ("Log a session") or changed by
+ * and pulses once). At the top, the daily goal with its streak, the month at a glance, this week's focus per subject
+ * (and how it stands against last week by the same day), the subjects gone quiet and the time of day the focus comes
+ * at; under them, the sessions by day, newest first. A session is logged by hand ("Log a session") or changed by
  * tapping it; a delete can be taken back from its toast.
  */
 export default function FocusHistoryPage() {
@@ -146,6 +149,18 @@ export default function FocusHistoryPage() {
     }
     return out.sort((a, b) => b.key.localeCompare(a.key));
   }, [sessions, today]);
+
+  // what the sessions say beyond their totals (src/focusInsights.ts): this week against the last by the same day, the
+  // subjects let slip this week, and when in the day the focus of the last month began
+  const pace = React.useMemo(() => weekPace(sessions, today), [sessions, today]);
+  const quiet = React.useMemo(() => quietSubjects(sessions, today), [sessions, today]);
+  const hours = React.useMemo(() => focusHours(sessions, today), [sessions, today]);
+  const hoursMax = Math.max(1, ...hours.parts.map((p) => p.min));
+  // "in the evening", but "at night"
+  const inPart = (k: string | null) => (k === 'night' ? 'at night' : 'in the ' + (hours.parts.find((p) => p.key === k)?.label ?? '').toLowerCase());
+  const paceLine = !pace ? ''
+    : pace.aheadMin === 0 ? 'Level with last week by this day'
+      : fmtMins(Math.abs(pace.aheadMin)) + (pace.aheadMin > 0 ? ' ahead of' : ' behind') + ' last week by this day';
 
   // minutes per day, for the month and the streak; a day counts for the streak once it meets the goal (any focus without one)
   const perDay = React.useMemo(() => focusMinutesByDay(sessions), [sessions]);
@@ -330,6 +345,12 @@ export default function FocusHistoryPage() {
                 </View>
               </View>
             ))}
+            {paceLine ? (
+              <Text style={[T.caption, { marginTop: S.gap }]} accessibilityLabel={paceLine + ', ' + fmtMins(pace?.lastMin ?? 0) + ' in all of last week'}>
+                {paceLine}
+                <Text style={{ color: C.textFaint }}>{' · ' + fmtMins(pace?.lastMin ?? 0) + ' in all of last week'}</Text>
+              </Text>
+            ) : null}
           </Card>
         </View>
       ) : null}
@@ -348,6 +369,59 @@ export default function FocusHistoryPage() {
                 </View>
               </View>
             ))}
+          </Card>
+        </View>
+      ) : null}
+      {quiet.length > 0 ? (
+        <View style={st.week}>
+          <SectionTitle>Gone quiet</SectionTitle>
+          <ListCard>
+            {quiet.map((q) => (
+              <ListRow
+                key={q.key} style={st.row} onPress={() => { tick(); openPage('/subject', { key: q.key, name: q.name }); }}
+                accessibilityHint="Opens the subject"
+              >
+                <View
+                  style={st.rowText} accessible
+                  accessibilityLabel={q.name + ', last focused ' + q.daysSince + ' days ago, ' + fmtMins(q.min) + ' in the last four weeks'}
+                >
+                  <Text style={st.rowTitle} numberOfLines={1}>{q.name}</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>
+                    {'Last focused ' + q.daysSince + ' days ago · ' + fmtMins(q.min) + ' in the last four weeks'}
+                  </Text>
+                </View>
+                <IconBtn
+                  name="play-outline" size={18} color={C.accent}
+                  onPress={() => { tap(); openTool('focus', { subject: q.name }); }}
+                  accessibilityLabel={'Start Deep Work on ' + q.name}
+                />
+              </ListRow>
+            ))}
+          </ListCard>
+        </View>
+      ) : null}
+      {hours.totalMin >= 60 ? (
+        <View style={st.week}>
+          <SectionTitle right={<Text style={T.caption}>Last 30 days</Text>}>When you focus</SectionTitle>
+          <Card>
+            {hours.parts.map((p, i) => (
+              <View
+                key={p.key} style={i > 0 ? st.barGap : undefined}
+                accessible accessibilityLabel={p.label + ', ' + (p.min ? fmtMins(p.min) : 'nothing') + (p.deepMin ? ', ' + fmtMins(p.deepMin) + ' rated deep' : '')}
+              >
+                <View style={st.barHead}>
+                  <Text style={[st.barName, !p.min && { color: C.textDim }]} numberOfLines={1}>{p.label}</Text>
+                  <Text style={st.barValue}>{p.min ? fmtMins(p.min) : '0 min'}</Text>
+                </View>
+                <View style={[st.track, { backgroundColor: track }]}>
+                  {p.min ? <View style={[st.fill, { width: `${Math.max(2, Math.round((p.min / hoursMax) * 100))}%`, backgroundColor: C.accent }]} /> : null}
+                </View>
+              </View>
+            ))}
+            <Text style={[T.caption, { marginTop: S.gap }]}>
+              {'Most of your focus begins ' + inPart(hours.best) + '.'
+                + (hours.deepest ? ' The sessions you rated deep come most ' + inPart(hours.deepest) + '.' : '')}
+            </Text>
           </Card>
         </View>
       ) : null}
