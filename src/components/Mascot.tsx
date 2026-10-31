@@ -203,12 +203,14 @@ function Companion({ kind }: { kind: Kind }) {
 
   const spots = React.useMemo<Record<Perch, Spot>>(() => ({
     floor: { x: rail + 22 + SW / 2, y: H - bottomBar - 4, face: 1 },
-    header: { x: W - 78, y: insets.top + 64, face: -1 },
+    header: { x: W - 96, y: insets.top + 64, face: -1 },
     edgeR: { x: W - SW * 0.14, y: Math.round(H * 0.6), face: -1 },
     edgeL: { x: rail + SW * 0.14, y: Math.round(H * 0.44), face: 1 },
     edgeTop: { x: W - SW * 0.14, y: insets.top + 150, face: -1 },
   }), [W, H, insets.top, bottomBar, rail]);
   const allowed = perchesFor(path);
+  const spotsRef = React.useRef(spots);
+  spotsRef.current = spots;
 
   /* ---------------- moving parts */
   const x = useSharedValue(-SW);
@@ -233,7 +235,7 @@ function Companion({ kind }: { kind: Kind }) {
   const [chat, setChat] = React.useState(false);
   const [bud, setBud] = React.useState(() => Math.min(3, Math.floor(dayProgress() * 3.01)));
 
-  const spot = React.useRef<Perch>('floor');
+  const spot = React.useRef<Perch>(allowed[0]);
   const alive = React.useRef(true);
   const away = React.useRef(true); // out of sight (behind a door): before it first comes in, and while the keyboard is up
   const reading = React.useRef(false);
@@ -252,6 +254,7 @@ function Companion({ kind }: { kind: Kind }) {
   /** Runs one action at a time; a `force`d one (a celebration, a drag) stops the one under way. */
   const act = React.useCallback((fn: (step: (ms: number) => Promise<void>) => Promise<void>, force = false) => {
     if (busy.current && !force) return false;
+    if (busy.current) tidy();
     const my = ++token.current;
     busy.current = true;
     const step = (ms: number) => new Promise<void>((res, rej) => setTimeout(() => (alive.current && token.current === my ? res() : rej(CANCEL)), ms));
@@ -262,6 +265,27 @@ function Companion({ kind }: { kind: Kind }) {
     });
     return true;
   }, []);
+
+  /**
+   * An action cut short by another leaves nothing behind: a door half open goes, the little effects go, and if it was
+   * caught between doors it is simply back at its perch (unless it stepped out for the keyboard on purpose).
+   */
+  const tidy = () => {
+    setDoor(null);
+    doorGrow.value = 0;
+    setFxState(NO_FX);
+    napping.current = false;
+    sq.value = withTiming(1, { duration: 120 });
+    lift.value = withTiming(0, { duration: 120 });
+    if (!keyboardUp.current && (away.current || shown.value < 1)) {
+      const s = spotsRef.current[spot.current];
+      x.value = s.x;
+      y.value = s.y;
+      face.value = s.face;
+      away.current = false;
+      shown.value = withTiming(1, { duration: 160 });
+    }
+  };
 
   /** the pose it rests in: reading through Deep Work, otherwise just standing */
   const settle = () => {
@@ -555,6 +579,9 @@ function Companion({ kind }: { kind: Kind }) {
     hush();
     const atY = spot.current === 'floor' || spot.current === 'header' ? y.value : spots.floor.y;
     if (Math.abs(atY - y.value) > 2) await hop({ x: x.value, y: atY }, step, 10);
+    // far from the door (a wide screen): it hops most of the way, and walks the last steps in
+    const near = doorX(side) + (side === 'left' ? 40 : -40);
+    if (Math.abs(x.value - near) > 140) await hop({ x: near, y: atY }, step, 18);
     await openDoor(side, atY, step);
     await walk(doorX(side), step);
     shown.value = withTiming(0, { duration: 170 });
@@ -585,8 +612,15 @@ function Companion({ kind }: { kind: Kind }) {
       await openDoor(side, doorY, step);
       shown.value = withTiming(1, { duration: 180 });
       away.current = false;
-      await walk(s.x, step);
-      await closeDoor(side, doorY, step);
+      const near = doorX(side) + (side === 'left' ? 40 : -40);
+      if (Math.abs(s.x - x.value) > 140) {
+        await walk(near, step);
+        void closeDoor(side, doorY, step).catch(() => {});
+        await hop(s, step, 18);
+      } else {
+        await walk(s.x, step);
+        await closeDoor(side, doorY, step);
+      }
     }
     spot.current = to;
     face.value = withTiming(s.face, { duration: 160 });
@@ -631,7 +665,7 @@ function Companion({ kind }: { kind: Kind }) {
       keepMemory(newDay(memory, today));
       act(async (step) => {
         await step(900);
-        await enterBy('left', allowed[0], step);
+        await enterBy(spots[allowed[0]].x < W / 2 ? 'left' : 'right', allowed[0], step);
         if (firstToday && !focusing) {
           keepMemory({ ...memory, hello: today });
           if (say('hello', { spontaneous: false })) await wave(step);
@@ -706,7 +740,11 @@ function Companion({ kind }: { kind: Kind }) {
     const hide = Keyboard.addListener('keyboardDidHide', () => {
       keyboardUp.current = false;
       if (!away.current || chatRef.current) return;
-      act(async (step) => { await step(400); await enterBy('left', perchesFor(lastPath.current)[0], step); }, true);
+      act(async (step) => {
+        await step(400);
+        const to = perchesFor(lastPath.current)[0];
+        await enterBy(spotsRef.current[to].x < W / 2 ? 'left' : 'right', to, step);
+      }, true);
     });
     return () => { show.remove(); hide.remove(); };
   }, [spots]);
@@ -954,10 +992,9 @@ function Companion({ kind }: { kind: Kind }) {
     taps.current = [...taps.current.filter((t) => now - t < 2600), now];
     const n = taps.current.length;
     if (napping.current) {
+      tidy();
       token.current++;
       busy.current = false;
-      napping.current = false;
-      setFx({ zed: false });
       act(async (step) => {
         setPose({ eyes: 'wide', l: 'rest', r: 'rest' });
         lift.value = withSequence(withTiming(12, { duration: 150 }), withTiming(0, { duration: 170 }));
@@ -1029,6 +1066,7 @@ function Companion({ kind }: { kind: Kind }) {
   const dragFrom = React.useRef({ x: 0, y: 0 });
   const onDragStart = () => {
     if (away.current) return;
+    if (busy.current) tidy();
     token.current++;
     busy.current = true;
     dragging.current = true;
