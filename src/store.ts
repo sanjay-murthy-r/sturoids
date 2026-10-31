@@ -346,9 +346,17 @@ export interface Settings {
   /** look for a new version now and then, fetch it in the background and offer it (src/autoUpdate.ts) */
   autoUpdate: boolean;
   /** Cheerful's companion on the screen (src/components/Mascot.tsx), or none */
-  mascot: 'blok' | 'pip' | 'sprout' | 'hoot' | 'off';
+  mascot: 'sprout' | 'pip' | 'off';
   /** the day it was tucked away until tomorrow ('' for none) */
   mascotAwayOn: string;
+  /** what the companion is called ('' for its own name) */
+  mascotName: string;
+  /** its colours: one of its colour sets (src/mascot/art.ts), '' for its first */
+  mascotColors: string;
+  /** what it wears or keeps with it (src/mascot/art.ts GEAR), by key */
+  mascotGear: string[];
+  /** how much it says by itself: 'often', 'some' (now and then), or 'asked' (only when spoken to) */
+  mascotTalk: 'often' | 'some' | 'asked';
 }
 
 export type Mood = 'elite' | 'cheerful';
@@ -480,6 +488,10 @@ export const DEFAULT_SETTINGS: Settings = {
   autoUpdate: true,
   mascot: 'sprout',
   mascotAwayOn: '',
+  mascotName: '',
+  mascotColors: '',
+  mascotGear: [],
+  mascotTalk: 'some',
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -1126,6 +1138,12 @@ function cleanDaily(t: any): DailyTask {
 
 function cleanMission(m: any): Mission {
   const out = { ...m, done: m.done === true };
+  // text where text is read: a title or a deadline that is not would break the lists that sort and show them
+  if (typeof out.title !== 'string') out.title = out.title == null ? '' : String(out.title);
+  if (typeof out.deadline !== 'string') out.deadline = '';
+  out.subtasks = listOf(out.subtasks).filter(isRecord).map((x) => ({
+    ...x, title: typeof x.title === 'string' ? x.title : x.title == null ? '' : String(x.title), done: x.done === true,
+  }));
   if (!out.done || typeof out.doneOn !== 'string') delete out.doneOn;
   if (!validTime(out.time)) delete out.time;
   // 'Morning of' rings at 8 am with or without a time; 'An hour before' needs the time it is an hour before
@@ -1139,6 +1157,13 @@ function cleanMission(m: any): Mission {
 /** A Deep Work session as kept: `manual` only when true, a subject only as text. */
 function cleanSession(x: any): FocusSession {
   const out = { ...x };
+  // the length is a number of seconds and the end a moment, or the history's sums and order would read NaN
+  if (!(isFiniteNumber(out.netSeconds) && out.netSeconds >= 0)) out.netSeconds = 0;
+  if (!isFiniteNumber(out.endedAt)) {
+    const [y, mo, d] = String(out.dateKey).split('-').map(Number);
+    const at = new Date(y, mo - 1, d, 18, 0).getTime();
+    out.endedAt = Number.isFinite(at) ? at : 0;
+  }
   if (out.manual !== true) delete out.manual;
   if (out.subject !== undefined && typeof out.subject !== 'string') delete out.subject;
   if (out.note !== undefined && (typeof out.note !== 'string' || !out.note.trim())) delete out.note;
@@ -1313,6 +1338,14 @@ function cleanSettingsV6(s: any): Settings {
   st.writingFont = st.writingFont === 'serif' ? 'serif' : 'sans';
   if (!(Number.isInteger(st.focusGoalMin) && st.focusGoalMin >= 0 && st.focusGoalMin <= 600)) st.focusGoalMin = DEFAULT_SETTINGS.focusGoalMin;
   if (!(isFiniteNumber(st.backupNudgeAt) && st.backupNudgeAt >= 0)) st.backupNudgeAt = DEFAULT_SETTINGS.backupNudgeAt;
+  // a lock stays on for any damaged value (never opened by one), and its wait is a number of seconds or the usual
+  st.journalLocked = !!st.journalLocked;
+  st.notesLocked = !!st.notesLocked;
+  if (!(isFiniteNumber(st.lockGraceSec) && st.lockGraceSec >= 0)) st.lockGraceSec = DEFAULT_SETTINGS.lockGraceSec;
+  if (!(Number.isInteger(st.journalCutoffHour) && st.journalCutoffHour >= 0 && st.journalCutoffHour <= 23)) st.journalCutoffHour = DEFAULT_SETTINGS.journalCutoffHour;
+  if (!(Number.isInteger(st.journalWordGoal) && st.journalWordGoal >= 0)) st.journalWordGoal = DEFAULT_SETTINGS.journalWordGoal;
+  if (!validTime(st.todoReminderTime)) st.todoReminderTime = DEFAULT_SETTINGS.todoReminderTime;
+  if (st.journalReminderTime !== '' && !validTime(st.journalReminderTime)) st.journalReminderTime = DEFAULT_SETTINGS.journalReminderTime;
   st.siftPull = st.siftPull === 'top' || st.siftPull === 'off' ? st.siftPull : 'anywhere';
   st.tabNav = st.tabNav === 'bottom' ? 'bottom' : 'side';
   st.focusDropShort = st.focusDropShort !== false;
@@ -1320,7 +1353,14 @@ function cleanSettingsV6(s: any): Settings {
   st.mood = st.mood === 'cheerful' ? 'cheerful' : 'elite';
   st.cheerSounds = st.cheerSounds !== false;
   st.autoUpdate = st.autoUpdate !== false;
-  st.mascot = ['blok', 'pip', 'sprout', 'hoot', 'off'].includes(st.mascot) ? st.mascot : 'sprout';
+  // the first four friends became two: Pip stays, the others (and anything unknown) are Sprout
+  st.mascot = st.mascot === 'pip' || st.mascot === 'off' ? st.mascot : 'sprout';
+  st.mascotName = typeof st.mascotName === 'string' ? st.mascotName.replace(/\s+/g, ' ').trim().slice(0, 16) : '';
+  st.mascotColors = typeof st.mascotColors === 'string' && /^[a-z]{0,16}$/.test(st.mascotColors) ? st.mascotColors : '';
+  st.mascotGear = Array.isArray(st.mascotGear)
+    ? [...new Set(st.mascotGear.filter((g: unknown) => typeof g === 'string' && /^[a-z]{1,16}$/.test(g as string)))].slice(0, 6) as string[]
+    : [];
+  st.mascotTalk = st.mascotTalk === 'often' || st.mascotTalk === 'asked' ? st.mascotTalk : 'some';
   if (typeof st.mascotAwayOn !== 'string' || !/^(\d{4}-\d{2}-\d{2})?$/.test(st.mascotAwayOn)) st.mascotAwayOn = '';
   // no repo yet checks Sturoids' own releases; one saved under an earlier address follows the rename
   if (typeof st.githubRepo !== 'string' || !st.githubRepo.trim() || OLD_UPDATE_REPO.test(st.githubRepo.trim())) st.githubRepo = DEFAULT_UPDATE_REPO;
@@ -1396,7 +1436,10 @@ export function sanitizeV6(p: any): any {
   const out = { ...(p || {}) };
   if ('dailyTasks' in out) out.dailyTasks = listOf(out.dailyTasks).filter(isRecord).map(cleanDaily);
   if ('missions' in out) out.missions = listOf(out.missions).filter(isRecord).map(cleanMission);
-  if ('sessions' in out) out.sessions = listOf(out.sessions).filter(isRecord).map(cleanSession);
+  // a session needs the day it belongs to: without one it cannot be counted anywhere
+  if ('sessions' in out) {
+    out.sessions = listOf(out.sessions).filter((x) => isRecord(x) && typeof x.id === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x.dateKey)).map(cleanSession);
+  }
   if ('todayLayout' in out) out.todayLayout = cleanTodayLayout(out.todayLayout);
   if ('todayColumns' in out) out.todayColumns = cleanTodayColumns(out.todayColumns);
   if ('vaultVideos' in out) out.vaultVideos = listOf(out.vaultVideos).filter(isRecord).map(cleanVideo);
@@ -1769,7 +1812,12 @@ export async function clearSavedData(): Promise<void> {
 // leaving the app, or closing it from the background, writes whatever is still waiting
 AppLifecycle?.addEventListener?.('change', (next) => {
   if (next !== 'active') flushSaves();
-  else settleIfNewDay();
+  else {
+    settleIfNewDay();
+    // the midnight timer is set again from the clock as it reads now: after a sleep, or a change of time zone or clock,
+    // the one set before would still be counting to the wrong moment
+    if (useStore.persist.hasHydrated()) armMidnight();
+  }
 });
 
 /** Every persisted-shape migration, oldest first. Also restores the app's own saved blob on import. */

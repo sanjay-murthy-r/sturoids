@@ -12,7 +12,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import Constants from 'expo-constants';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import {
   C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, WritingFont, bgFor, neuInset, neuRaised, shadowsSupported,
@@ -58,7 +58,8 @@ import { startMakeover } from '../src/components/Makeover';
 import { CHEER } from '../src/components/Cheer';
 import { useCheerful } from '../src/components/Cheer';
 import { appVersion, desktop, installApk, useUpdateReady } from '../src/autoUpdate';
-import { MASCOTS } from '../src/components/Mascot';
+import { Sprite } from '../src/components/Mascot';
+import { NAMES, REST, colorSet } from '../src/mascot/art';
 
 /** the list's column when Settings shows two panes */
 const SPLIT_LIST_W = 380;
@@ -481,6 +482,9 @@ function MakeoverCard() {
   const mood = useStore((s) => s.settings.mood);
   const sounds = useStore((s) => s.settings.cheerSounds);
   const mascot = useStore((s) => s.settings.mascot);
+  const colors = useStore((s) => s.settings.mascotColors);
+  const gear = useStore((s) => s.settings.mascotGear);
+  const companionName = useStore((s) => s.settings.mascotName) || (mascot === 'pip' ? NAMES.pip : NAMES.sprout);
   const setSetting = useStore((s) => s.setSetting);
   const opt = (key: 'elite' | 'cheerful', title: string, line: string, icon: any, tint: string) => {
     const on = mood === key;
@@ -518,16 +522,24 @@ function MakeoverCard() {
             <Toggle value={sounds} onChange={(v) => setSetting('cheerSounds', v)} label="Cheerful sounds" />
           </View>
           <Hairline />
-          <Text style={[T.body, { fontFamily: F.med, marginTop: 10 }]}>Companion</Text>
-          <Text style={[T.caption, { marginTop: 2, marginBottom: 10 }]}>A small friend on your screen who joins in. Tap it to say hi, hold it to tuck it away for the day.</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {(['blok', 'pip', 'sprout', 'hoot', 'off'] as const).map((k) => (
-              <Chip
-                key={k} small label={k === 'off' ? 'None' : MASCOTS[k].name} active={mascot === k}
-                onPress={() => { setSetting('mascot', k); if (k !== 'off') setSetting('mascotAwayOn', ''); }}
-              />
-            ))}
-          </View>
+          <Pressable
+            onPress={() => router.push('/companion')} accessibilityRole="button"
+            accessibilityLabel={'Companion: ' + (mascot === 'off' ? 'none' : companionName)} accessibilityHint="Opens the companion's page"
+            style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', paddingTop: 12 }, pressed && { opacity: 0.7 }]}
+          >
+            {mascot !== 'off' ? (
+              <View style={{ marginRight: 12 }}>
+                <Sprite kind={mascot} pose={REST} gear={gear} bud={2} pal={colorSet(mascot, colors).pal} px={2} />
+              </View>
+            ) : null}
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={[T.body, { fontFamily: F.med }]}>Companion</Text>
+              <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={2}>
+                {mascot === 'off' ? 'None. A small friend can live on your screen and join in.' : companionName + ' · ' + colorSet(mascot, colors).name + '. Its name, colours, what it wears, how much it talks.'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+          </Pressable>
         </Card>
       ) : null}
     </>

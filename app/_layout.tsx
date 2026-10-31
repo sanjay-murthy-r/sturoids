@@ -11,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 // each face from its own file: a package's index would carry every one of its files into the app. Inter Tight speaks
 // and counts, Schibsted Grotesk sets the small words, Source Serif 4 titles the big screens and the writing, and the
 // intro keeps Rubik (the 1.8 pick)
+import { Nunito_700Bold, Nunito_800ExtraBold } from '@expo-google-fonts/nunito';
 import { useFonts } from '@expo-google-fonts/rubik/useFonts';
 import { Rubik_500Medium } from '@expo-google-fonts/rubik/500Medium';
 import { Rubik_600SemiBold } from '@expo-google-fonts/rubik/600SemiBold';
@@ -200,6 +201,7 @@ export default function RootLayout() {
     InterTight_300Light, InterTight_400Regular, InterTight_500Medium, InterTight_600SemiBold, InterTight_700Bold,
     SchibstedGrotesk_400Regular, SchibstedGrotesk_500Medium, SchibstedGrotesk_600SemiBold,
     SourceSerif4_400Regular, SourceSerif4_500Medium,
+    Nunito_700Bold, Nunito_800ExtraBold,
   });
   const introFonts = introLoaded || !!introError;
   const appFonts = appLoaded || !!appError;

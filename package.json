@@ -20,10 +20,12 @@
     "test:links": "node scripts/test-links.js",
     "test:report": "node scripts/test-report.js",
     "test:phone": "node scripts/test-phone-widgets.js",
-    "test:merge": "node scripts/test-merge.js"
+    "test:merge": "node scripts/test-merge.js",
+    "test:companion": "node scripts/test-companion.js"
   },
   "dependencies": {
     "@expo-google-fonts/inter-tight": "^0.4.2",
+    "@expo-google-fonts/nunito": "^0.4.2",
     "@expo-google-fonts/rubik": "^0.4.2",
     "@expo-google-fonts/schibsted-grotesk": "^0.4.2",
     "@expo-google-fonts/source-serif-4": "^0.4.2",
