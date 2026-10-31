@@ -2,7 +2,7 @@
 /*
  * Checks for the Planner's and Tasks' pure helpers, run against the real source in Node: src/blocks.ts (a block's Deep
  * Work, its subject's colour, its repeats on other days, overlaps, the next date of a weekday) and src/todos.ts (the
- * ToDo list's order, and the triage's leftovers).
+ * ToDo list's order, the triage's leftovers, and the moves a long-term task's deadline is offered).
  * Usage: node scripts/test-plan.js   (exit 1 on any failure)
  */
 const fs = require('fs');
@@ -137,6 +137,21 @@ test('the triage leaves out repeating ToDos and the ones made today', () => {
     T('kept', { createdAt: start - 1 }),
   ];
   assert.deepEqual(todos.leftoverTodos(list, today, '2026-10-23', ['kept']).map((t) => t.id), ['old']);
+});
+
+// ---------- deadlineMoves ----------
+test('a deadline moves to tomorrow, in three days or in a week, across a month end', () => {
+  assert.deepEqual(todos.deadlineMoves('2026-10-30').map((m) => m.label + ' ' + m.dateKey),
+    ['Tomorrow 2026-10-31', 'In 3 days 2026-11-02', 'In a week 2026-11-06']);
+});
+test('across a year end too', () => {
+  assert.deepEqual(todos.deadlineMoves('2026-12-31').map((m) => m.dateKey), ['2027-01-01', '2027-01-03', '2027-01-07']);
+});
+test('the deadline it already has is not offered', () => {
+  assert.deepEqual(todos.deadlineMoves('2026-10-30', '2026-11-02').map((m) => m.days), [1, 7]);
+});
+test('a day that cannot be read offers nothing', () => {
+  assert.deepEqual(todos.deadlineMoves('soon'), []);
 });
 
 console.log(passed + ' passed' + (failed ? ', ' + failed + ' failed' : ''));

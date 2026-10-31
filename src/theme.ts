@@ -167,6 +167,8 @@ export const C = {
   scrim: 'rgba(12,12,11,0.6)',
   /** the faint dim laid under a pressed carve */
   pressDim: darkSh(0.1),
+  /** the faint light a pointer resting over something lays on it (the PC) */
+  hover: 'rgba(250, 249, 245, 0.045)',
 };
 
 /** Runtime accent swap — the store keeps this in step with settings.accent. */

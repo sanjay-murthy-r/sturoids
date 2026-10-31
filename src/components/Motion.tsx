@@ -1,6 +1,7 @@
 import React from 'react';
 import {
-  AccessibilityInfo, AccessibilityRole, AccessibilityState, AppState, Pressable, PressableProps, StyleSheet, Text, View, ViewStyle,
+  AccessibilityInfo, AccessibilityRole, AccessibilityState, AppState, Platform, Pressable, PressableProps, StyleSheet, Text, View,
+  ViewStyle,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
@@ -24,6 +25,12 @@ export function useFocusKey() {
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+/** Only the PC has a pointer that rests over things without pressing them. */
+const HOVERS = Platform.OS === 'web';
+/** how quickly the light under a resting pointer comes and goes */
+const HOVER_IN = { duration: 120, easing: Easing.out(Easing.quad) };
+const HOVER_OUT = { duration: 200, easing: Easing.out(Easing.quad) };
 
 /**
  * The phone's own "remove animations" switch, kept live. Reanimated reads it once, at launch, so turning it on or off
@@ -532,7 +539,8 @@ export type PressRole = AccessibilityRole;
  *
  * It is always the same animated pressable: with motion off the press simply does not move, so changing the motion
  * level never swaps the element and remounts everything inside it. Anything it can press is a button to a screen
- * reader unless the caller names another role, and a disabled one says so.
+ * reader unless the caller names another role, and a disabled one says so. On the PC a pointer resting over it lays a
+ * faint light on it, so what a click would press is plain before the click.
  */
 export function Bouncy({
   onPress, onLongPress, children, style, disabled, scaleTo = 0.975, radius = 22, hitSlop, sink = true,
@@ -563,6 +571,11 @@ export function Bouncy({
     ] as const,
   }));
   const dimStyle = useAnimatedStyle(() => ({ opacity: p.value }));
+  const hv = useSharedValue(0); // 0 = no pointer over it, 1 = a pointer resting on it
+  const hoverStyle = useAnimatedStyle(() => ({ opacity: hv.value * (1 - p.value) }));
+  const hovers = HOVERS && !disabled && !!(onPress || onLongPress);
+  // one that stops taking clicks under the pointer (a key disabled by its own press) lets its light go
+  React.useEffect(() => { if (!hovers) hv.value = 0; }, [hovers]);
   const role = accessibilityRole ?? (onPress || onLongPress ? 'button' : undefined);
   const state = disabled ? { ...accessibilityState, disabled: true } : accessibilityState;
 
@@ -580,9 +593,17 @@ export function Bouncy({
       accessibilityState={state}
       onPressIn={still ? undefined : () => { p.value = withTiming(1, SINK_IN); }}
       onPressOut={still ? undefined : () => { p.value = withSpring(0, cheerful ? RISE_OUT_CHEER : RISE_OUT); }}
+      onHoverIn={hovers ? () => { hv.value = still ? 1 : withTiming(1, HOVER_IN); } : undefined}
+      onHoverOut={hovers ? () => { hv.value = still ? 0 : withTiming(0, HOVER_OUT); } : undefined}
       style={[style, aStyle]}
     >
       {children}
+      {hovers ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: C.hover, borderRadius: radius }, hoverStyle]}
+        />
+      ) : null}
       {/* pressed state = the kit's carved inner panel, not a flat dim */}
       <Animated.View
         pointerEvents="none"

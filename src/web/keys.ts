@@ -1,29 +1,51 @@
 // The PC version's keyboard: Ctrl+K (or / outside a text field) opens Sift, and Escape closes it, or else goes back a
-// page, as Back does on a phone; and sideways scrolling with a mouse. On a phone this does nothing.
+// page, as Back does on a phone; Ctrl+1 to Ctrl+5 go to the bar's five places, Ctrl+N adds a ToDo, Ctrl+Shift+N writes a
+// new note, Ctrl+Shift+F starts Deep Work, Ctrl+, opens Settings and ? lists them all (src/web/pc.ts says which key is
+// which). Also sideways scrolling with a mouse. On a phone this does nothing.
 import { useEffect } from 'react';
 import { Platform } from 'react-native';
 import { router } from 'expo-router';
 import { closeSift, openSift, useSearch } from '../search/store';
+import { useStore } from '../store';
+import { goTab, openPage } from '../toolNav';
+import { runAction } from '../actions';
+import { shortcutOf } from './pc';
+import { openShortcuts, shortcutsOpen } from './shortcutsSheet';
 
 const typing = (t: EventTarget | null) => {
   const el = t as HTMLElement | null;
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 };
 
+/** Whether a sheet or another window of the app's is up (each is a modal dialog on the page): it has the keys first. */
+const dialogUp = () => !!document.querySelector('[aria-modal="true"][role="dialog"]');
+
 /**
  * The page's own styles a desktop window needs: text fields draw the app's accent line, not the browser's focus ring;
- * scrollbars are thin and dark, on the material; text selected is the accent's tint.
+ * anything else reached with Tab shows a ring in the accent, so the keyboard always says where it is (a click shows
+ * none); scrollbars are thin and dark, on the material; text selected is the accent's tint.
  */
 const DESKTOP_CSS = `
 input:focus, textarea:focus, [contenteditable]:focus { outline: none !important; }
-:focus-visible { outline: none; }
+:focus-visible { outline: 2px solid var(--sturoids-ring, rgba(149, 136, 249, 0.75)); outline-offset: 2px; }
+input:focus-visible, textarea:focus-visible, [contenteditable]:focus-visible { outline: none; }
 * { scrollbar-width: thin; scrollbar-color: #4a4a46 transparent; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: #4a4a46; border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::selection { background: rgba(149, 136, 249, 0.35); }
+::selection { background: var(--sturoids-tint, rgba(149, 136, 249, 0.35)); }
 html, body { background: #262624; overscroll-behavior: none; }
 `;
+
+/** The accent as a ring and a selection tint, kept on the page's root so the styles above follow a new accent. */
+function paintAccent(hex: string) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return;
+  const n = parseInt(m[1], 16);
+  const rgb = (n >> 16) + ', ' + ((n >> 8) & 255) + ', ' + (n & 255);
+  document.documentElement.style.setProperty('--sturoids-ring', 'rgba(' + rgb + ', 0.75)');
+  document.documentElement.style.setProperty('--sturoids-tint', 'rgba(' + rgb + ', 0.35)');
+}
 
 export function useDesktopKeys() {
   useEffect(() => {
@@ -34,36 +56,56 @@ export function useDesktopKeys() {
       style.textContent = DESKTOP_CSS;
       document.head.appendChild(style);
     }
+    paintAccent(useStore.getState().settings.accent);
+    const offAccent = useStore.subscribe((st, prev) => {
+      if (st.settings.accent !== prev.settings.accent) paintAccent(st.settings.accent);
+    });
     const on = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        if (useSearch.getState().open) closeSift();
-        else openSift('shortcut');
-        return;
-      }
-      if (e.key === '/' && !typing(e.target) && !useSearch.getState().open) {
-        e.preventDefault();
-        openSift('shortcut');
-        return;
-      }
+      const sift = useSearch.getState().open;
       if (e.key === 'Escape') {
-        if (useSearch.getState().open) {
+        if (sift) {
           // heard first (capture), since Sift's own field would otherwise keep the key to itself
           e.preventDefault();
           e.stopPropagation();
           closeSift();
           return;
         }
-        // a sheet or a field handles its own Escape first; otherwise the page goes back, as Back would
-        if (typing(e.target) || e.defaultPrevented) return;
+        // a sheet closes itself on the key's release; the page behind it stays where it is. A field handles its own
+        // Escape first; otherwise the page goes back, as Back would
+        if (dialogUp() || typing(e.target) || e.defaultPrevented) return;
         if (router.canGoBack()) router.back();
+        return;
       }
+      if (e.repeat) return;
+      const id = shortcutOf({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey, typing: typing(e.target) });
+      if (!id) return;
+      if (id === 'sift') {
+        // Ctrl+K also closes Sift; a bare / never opens it over a sheet
+        if (sift) {
+          if (e.key !== '/') { e.preventDefault(); closeSift(); }
+          return;
+        }
+        if (dialogUp() && e.key === '/') return;
+        e.preventDefault();
+        openSift('shortcut');
+        return;
+      }
+      // the rest wait while Sift or a sheet is up: neither leaves the page behind it while it asks something
+      if (sift || dialogUp() || shortcutsOpen()) return;
+      e.preventDefault();
+      if (id === 'help') openShortcuts();
+      else if (id === 'settings') openPage('/settings');
+      else if (id === 'add-todo') runAction('add-todo', 'shortcut');
+      else if (id === 'new-note') runAction('new-note', 'shortcut');
+      else if (id === 'start-focus') runAction('start-focus', 'shortcut');
+      else goTab(Number(id.slice(3)) - 1);
     };
     window.addEventListener('keydown', on, true);
     const offSideways = sidewaysScrolling();
     const offDrags = dragsAreNotClicks();
     return () => {
       window.removeEventListener('keydown', on, true);
+      offAccent();
       offSideways();
       offDrags();
     };

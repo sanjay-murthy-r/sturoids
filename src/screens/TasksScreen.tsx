@@ -9,7 +9,7 @@ import { useStore, DailyTask, Mission, TodoReminder } from '../store';
 import { yesterdayKey, daysUntil, fmtShortDate, fmtClockTime, toMinutes, indexAfterNeighbours, daysLabel, todoDueOn } from '../utils';
 import {
   ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, useTheme, useToolHeader, contextLine,
-  ListCard, ListRow, StrikeText, TimeField, ArrivalPulse,
+  ListCard, ListRow, StrikeText, TimeField, ArrivalPulse, DotMenu,
 } from '../components/UI';
 import type { ContextPart } from '../components/UI';
 import { useExport } from '../reports';
@@ -25,7 +25,7 @@ import { useNow, useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { QuickTaskSheet, shortClock } from '../components/QuickTaskSheet';
 import { toastTrashed, toastTrashedMany } from '../trashToast';
-import { leftoverTodos, orderTodos } from '../todos';
+import { deadlineMoves, leftoverTodos, orderTodos } from '../todos';
 import { useBringIntoView } from '../hooks/useBringIntoView';
 import { useArrowsLift, useRail } from '../hooks/useRail';
 import { RAIL_W, READ_MAX, TWO_COL_AT, WIDE_MAX } from '../layout';
@@ -103,6 +103,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const missions = useStore((s) => s.missions);
   const toggleMission = useStore((s) => s.toggleMission);
   const trashMission = useStore((s) => s.trashMission);
+  const updateMission = useStore((s) => s.updateMission);
 
   const reminderOn = useStore((s) => s.settings.todoReminderEnabled);
   const hasCheckIns = useStore((s) => s.todoReminders.length > 0);
@@ -198,6 +199,28 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // a long-term task goes to Recently deleted, steps and all, and the toast's Undo puts it back where it was
   const deleteMission = useCallback((m: Mission) => { toastTrashed(trashMission(m.id)); }, [trashMission]);
   const toggleOpen = useCallback((id: string) => setExpanded((x) => (x === id ? null : id)), []);
+  // A task's pill moves its deadline in one tap more: tomorrow, in three days or in a week (or any day, in the task's
+  // own sheet). The toast's Undo puts the deadline back.
+  const [moving, setMoving] = useState<Mission | null>(null);
+  const onMove = useCallback((m: Mission) => { tap(); setMoving(m); }, []);
+  const moveTo = (m: Mission, dateKey: string) => {
+    const was = useStore.getState().missions.find((x) => x.id === m.id);
+    if (!was) return;
+    const before = was.deadline;
+    updateMission(m.id, { deadline: dateKey });
+    toast('Moved to ' + fmtShortDate(dateKey), {
+      label: 'Undo',
+      onPress: () => { if (useStore.getState().missions.some((x) => x.id === m.id)) updateMission(m.id, { deadline: before }); },
+    });
+  };
+  const moveItems = moving ? [
+    ...deadlineMoves(today, moving.deadline).map((mv) => ({
+      label: mv.label + ', ' + new Date(mv.dateKey + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }),
+      icon: 'calendar-outline',
+      onPress: () => moveTo(moving, mv.dateKey),
+    })),
+    { label: 'Another day', icon: 'create-outline', onPress: () => editMission(moving) },
+  ] : [];
   const clearDone = () => {
     const done = useStore.getState().missions.filter((m) => m.done);
     if (!done.length) return;
@@ -387,7 +410,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
               <MissionList
                 open={openMissions} done={doneMissions} expanded={expanded} today={today} hint={!anySteps} hour24={hour24}
                 arrive={arrive} onArrive={bring}
-                onToggle={toggleMission} onToggleOpen={toggleOpen} onEdit={editMission} onDelete={deleteMission}
+                onToggle={toggleMission} onToggleOpen={toggleOpen} onEdit={editMission} onDelete={deleteMission} onMove={onMove}
                 onStepFocus={revealStep} onClearDone={clearDone}
               />
     )
@@ -470,6 +493,10 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
       />
 
       <RemindersSheet visible={remindSheet} onClose={() => setRemindSheet(false)} />
+      <DotMenu
+        visible={!!moving} onClose={() => setMoving(null)} items={moveItems}
+        title={moving ? 'Move ' + moving.title : undefined}
+      />
       {exp.sheet}
     </ScreenBG>
   );
@@ -539,7 +566,7 @@ const DailyRow = React.memo(function DailyRow({ task, done, due, hour24, arrive,
  * with its list, so the fold starts closed each time the list is shown, and a part that turns up later fades in.
  */
 function MissionList({
-  open, done, expanded, today, hint, hour24, arrive, onArrive, onToggle, onToggleOpen, onEdit, onDelete, onStepFocus, onClearDone,
+  open, done, expanded, today, hint, hour24, arrive, onArrive, onToggle, onToggleOpen, onEdit, onDelete, onMove, onStepFocus, onClearDone,
 }: {
   open: Mission[]; done: Mission[]; expanded: string | null; today: string;
   /** no task has steps yet: say once, under the list, how to give one some */
@@ -549,7 +576,7 @@ function MissionList({
   arrive: string | null;
   onArrive: (view: View | null) => void;
   onToggle: (id: string) => void; onToggleOpen: (id: string) => void; onEdit: (m: Mission) => void; onDelete: (m: Mission) => void;
-  onStepFocus: (field: View | null) => void; onClearDone: () => void;
+  onMove: (m: Mission) => void; onStepFocus: (field: View | null) => void; onClearDone: () => void;
 }) {
   const level = useAnimLevel();
   const built = useBuilt();
@@ -564,7 +591,7 @@ function MissionList({
   const rows = (list: Mission[]) => list.map((m) => (
     <MissionRow
       key={m.id} m={m} today={today} open={expanded === m.id} hour24={hour24} arrive={arrive === m.id} onArrive={onArrive}
-      onToggle={onToggle} onToggleOpen={onToggleOpen} onEdit={onEdit} onDelete={onDelete} onStepFocus={onStepFocus}
+      onToggle={onToggle} onToggleOpen={onToggleOpen} onEdit={onEdit} onDelete={onDelete} onMove={onMove} onStepFocus={onStepFocus}
     />
   ));
   return (
@@ -604,7 +631,7 @@ function MissionList({
  * One long-term task, with its steps folding out beneath it. The step being typed lives here, so a keystroke
  * re-renders this row only, and a half-typed step never follows you to another task.
  */
-const MissionRow = React.memo(function MissionRow({ m, open, hour24, arrive, onArrive, onToggle, onToggleOpen, onEdit, onDelete, onStepFocus }: {
+const MissionRow = React.memo(function MissionRow({ m, open, hour24, arrive, onArrive, onToggle, onToggleOpen, onEdit, onDelete, onMove, onStepFocus }: {
   /** only compared, never read: a new day re-renders the row, so its countdown turns over at midnight */
   today: string;
   m: Mission; open: boolean; hour24: boolean;
@@ -612,6 +639,8 @@ const MissionRow = React.memo(function MissionRow({ m, open, hour24, arrive, onA
   arrive: boolean;
   onArrive: (view: View | null) => void;
   onToggle: (id: string) => void; onToggleOpen: (id: string) => void; onEdit: (m: Mission) => void; onDelete: (m: Mission) => void;
+  /** the pill was tapped: the screen offers to move the deadline */
+  onMove: (m: Mission) => void;
   /** the step field took focus: the screen keeps it clear of the bar */
   onStepFocus: (field: View | null) => void;
 }) {
@@ -671,9 +700,23 @@ const MissionRow = React.memo(function MissionRow({ m, open, hour24, arrive, onA
           <StrikeText done={m.done} style={st.taskText}>{m.title}</StrikeText>
           <Text style={[T.caption, { marginTop: 2 }]}>{line}</Text>
         </Pressable>
-        <View style={[st.pill, { borderColor: pillColor + '55', backgroundColor: pillColor + '18' }]}>
-          <Text style={[st.pillText, { color: pillColor }]}>{pillText}</Text>
-        </View>
+        {/* an open task's pill moves its deadline; a done one's only says so */}
+        {m.done ? (
+          <View style={[st.pill, { borderColor: pillColor + '55', backgroundColor: pillColor + '18' }]}>
+            <Text style={[st.pillText, { color: pillColor }]}>{pillText}</Text>
+          </View>
+        ) : (
+          <Pressable
+            onPress={() => onMove(m)} hitSlop={8}
+            style={(state: any) => [
+              st.pill, { borderColor: pillColor + (state.hovered ? '99' : '55'), backgroundColor: pillColor + '18' },
+              state.pressed && { opacity: 0.7 },
+            ]}
+            accessibilityRole="button" accessibilityLabel={'Move the deadline of ' + m.title + ', now ' + line}
+          >
+            <Text style={[st.pillText, { color: pillColor }]}>{pillText}</Text>
+          </Pressable>
+        )}
         <IconBtn name="trash-outline" size={18} onPress={() => onDelete(m)} accessibilityLabel={'Delete ' + m.title} />
       </Row>
 

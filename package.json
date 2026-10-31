@@ -21,7 +21,9 @@
     "test:report": "node scripts/test-report.js",
     "test:phone": "node scripts/test-phone-widgets.js",
     "test:merge": "node scripts/test-merge.js",
-    "test:companion": "node scripts/test-companion.js"
+    "test:companion": "node scripts/test-companion.js",
+    "test:pc": "node scripts/test-pc.js",
+    "test:focus": "node scripts/test-focus.js"
   },
   "dependencies": {
     "@expo-google-fonts/inter-tight": "^0.4.2",

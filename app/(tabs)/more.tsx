@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform, useWindowDimensions } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useScrollToTop } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +19,10 @@ import { useSiftAnchor } from '../../src/search/anchor';
 import { BACKUP_ATTENTION_TEXT, useBackupAttention } from '../../src/cloud';
 import { useOpen } from '../../src/lock';
 import { useCheerful } from '../../src/components/Cheer';
+import { openShortcuts } from '../../src/web/shortcutsSheet';
+
+/** the PC lists its keyboard shortcuts beside Settings; a phone has none to list */
+const KEYS = Platform.OS === 'web';
 
 /** what a tool's count is of, so a screen reader hears "12 notes" rather than a bare number */
 const COUNT_OF: Partial<Record<ToolKey, [string, string]>> = {
@@ -245,6 +249,12 @@ export default function More() {
                 width={tileW} icon="document-text-outline" iconColor={C.accent} label="Reports & exports"
                 desc="One summary, or the full progress report, as PDF or CSV" onPress={openReport}
               />
+              {KEYS ? (
+                <ToolTile
+                  width={tileW} icon="keypad-outline" iconColor={C.accent} label="Keyboard shortcuts"
+                  desc="Ctrl+1 to 5 for the bar, Ctrl+N for a ToDo, and the rest (or press ?)" onPress={openShortcuts}
+                />
+              ) : null}
             </View>
           ) : (
           <ListCard>
@@ -280,6 +290,18 @@ export default function More() {
               </View>
               <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
             </ListRow>
+            {KEYS ? (
+              <ListRow key="keys" style={st.row} onPress={openShortcuts}>
+                <View style={[st.iconWell, wellFor(theme)]}>
+                  <Ionicons name="keypad-outline" size={21} color={C.accent} />
+                </View>
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <Text style={st.title}>Keyboard shortcuts</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>Ctrl+1 to 5 for the bar, Ctrl+N for a ToDo, and the rest</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+              </ListRow>
+            ) : null}
           </ListCard>
           )}
         </Enter>
