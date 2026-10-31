@@ -141,12 +141,22 @@ const SOUNDS = {
       tone(o, 0.66, N(79), { parts: CELESTA, dec: 1.6, vol: 0.07, att: 0.02 });
     },
   },
-  // every ToDo for today done: two light ukulele strums and a ringing third
+  // every ToDo for today done: the marimba parade, a bouncing little tune in steps (C D E C, E G) that lands on the high
+  // C with a bright chord under it, and a soft roll on G carrying it out
   day: {
-    secs: 2.8, peak: -4, wet: 0.2,
+    secs: 2.4, peak: -4, wet: 0.2,
     make: (o) => {
-      [[67, 60, 64, 69], [67, 60, 64, 69]].forEach((ch, j) => ch.forEach((n, i) => pluck(o, 0.005 + j * 0.24 + i * 0.018, N(n), 1.6, { bright: 0.6, vol: 0.28 })));
-      [67, 72, 76, 79].forEach((n, i) => pluck(o, 0.565 + i * 0.022, N(n), 2.2, { bright: 0.6, vol: 0.28 }));
+      const mar = (t, n, vol, dec) => tone(o, t, N(n), { parts: MARIMBA, dec, vol });
+      [[72, 0], [74, 0.11], [76, 0.22], [72, 0.33], [76, 0.5], [79, 0.61], [84, 0.82]]
+        .forEach(([n, d], i) => mar(0.005 + d, n, 0.22, i === 6 ? 1.2 : 0.35));
+      [64, 67, 72].forEach((n) => mar(0.825, n, 0.15, 1.2));
+      // the roll: one bar struck every 62 ms, swelling in and dying away
+      const step = 0.062;
+      const k = Math.floor(1 / step);
+      for (let i = 0; i < k; i++) {
+        const env = Math.sin(Math.PI * Math.min(1, i / (k * 0.35))) * (i < k * 0.35 ? 1 : 1 - ((i - k * 0.35) / (k * 0.65)) * 0.75);
+        tone(o, 0.865 + i * step, N(79) * (1 + ((i % 2) - 0.5) * 0.0015), { parts: MARIMBA, dec: 0.35, vol: 0.06 * (0.35 + 0.65 * env) });
+      }
     },
   },
   // a streak milestone: a bell with a little shimmer over it
