@@ -32,6 +32,7 @@ import type { LoadNotice } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
 import { markAppDrawn, noteAppFonts, setIntroPhase } from '../src/intro';
 import { useDesktopKeys } from '../src/web/keys';
+import { AlertHost } from '../src/web/alert';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ToastHost } from '../src/components/Toast';
@@ -346,6 +347,8 @@ export default function RootLayout() {
       {showApp && <MakeoverHost />}
       {showApp && <AutoUpdate />}
       {showApp && <ToastHost />}
+      {/* the PC's own: its questions asked in a sheet (React Native's Alert shows nothing there) */}
+      {showApp && Platform.OS === 'web' && <AlertHost />}
       {/* covers everything while the app restarts into another profile */}
       <SwitchingOverlay />
       {/* a YouTube link shared to the app is offered to YT Vault, once the intro is over */}
