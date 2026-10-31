@@ -117,6 +117,18 @@ export function stepTab(dir: 1 | -1): boolean {
   return true;
 }
 
+/**
+ * Goes to one of the bar's five places (0 is Today, 4 is More), as a tap on it would: a full page open over the tabs
+ * closes, and a slot keeps whatever it had open. The PC's Ctrl+1 to Ctrl+5. Returns whether it could.
+ */
+export function goTab(index: number): boolean {
+  const name = TAB_ROUTES[index];
+  const stack = rootStack();
+  if (!name || !containerRef || !stack) return false;
+  containerRef.dispatch({ type: 'NAVIGATE', target: stack.key, payload: { name: TABS_GROUP, pop: true, params: { screen: name } } });
+  return true;
+}
+
 const SlotContext = React.createContext<number>(-1);
 
 /** Wraps a slot's Stack, so every page inside it (the tool, a note, a video) knows its bar slot. */

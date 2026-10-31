@@ -33,6 +33,7 @@ import { useHydrated } from '../src/hooks/useHydrated';
 import { markAppDrawn, noteAppFonts, setIntroPhase } from '../src/intro';
 import { useDesktopKeys } from '../src/web/keys';
 import { AlertHost } from '../src/web/alert';
+import { ShortcutsHost } from '../src/web/shortcutsSheet';
 import { StartScreen } from '../src/components/StartScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ToastHost } from '../src/components/Toast';
@@ -206,7 +207,8 @@ export default function RootLayout() {
   const appFonts = appLoaded || !!appError;
   // a skipped intro may wait a little longer for the app to draw while its faces are still loading (src/intro.ts)
   useEffect(() => { if (appFonts) noteAppFonts(); }, [appFonts]);
-  // the PC version's keyboard: Ctrl+K for Sift, Escape to close it or go back (nothing on a phone)
+  // the PC version's keyboard: Ctrl+K for Sift, Escape to close it or go back, and the shortcuts ? lists (nothing on a
+  // phone)
   useDesktopKeys();
   const splashHidden = useRef(false);
   // whether this launch is the one a profile switch started (null until the note has been read)
@@ -347,7 +349,8 @@ export default function RootLayout() {
       {showApp && <MakeoverHost />}
       {showApp && <AutoUpdate />}
       {showApp && <ToastHost />}
-      {/* the PC's own: its questions asked in a sheet (React Native's Alert shows nothing there) */}
+      {/* the PC's own: its questions asked in a sheet (React Native's Alert shows nothing there), and the shortcuts list */}
+      {showApp && Platform.OS === 'web' && <ShortcutsHost />}
       {showApp && Platform.OS === 'web' && <AlertHost />}
       {/* covers everything while the app restarts into another profile */}
       <SwitchingOverlay />
