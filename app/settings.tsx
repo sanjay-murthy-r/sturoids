@@ -476,6 +476,8 @@ function CategoryRow({ icon, title, summary, onPress, danger, current }: {
 function MakeoverCard() {
   const theme = useTheme();
   const mood = useStore((s) => s.settings.mood);
+  const sounds = useStore((s) => s.settings.cheerSounds);
+  const setSetting = useStore((s) => s.setSetting);
   const opt = (key: 'elite' | 'cheerful', title: string, line: string, icon: any, tint: string) => {
     const on = mood === key;
     const face = theme === 'minimal'
@@ -497,10 +499,23 @@ function MakeoverCard() {
     );
   };
   return (
-    <View style={{ flexDirection: 'row', gap: 12 }}>
-      {opt('elite', 'Elite', 'Calm, formal, precise', 'diamond-outline', C.accent)}
-      {opt('cheerful', 'Cheerful', 'Colour, sparks and confetti', 'sparkles-outline', CHEER.pink)}
-    </View>
+    <>
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        {opt('elite', 'Elite', 'Calm, formal, precise', 'diamond-outline', C.accent)}
+        {opt('cheerful', 'Cheerful', 'Warm motion, little sounds, celebrations', 'sparkles-outline', CHEER.pink)}
+      </View>
+      {mood === 'cheerful' ? (
+        <Card style={{ marginTop: 12 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <Text style={[T.body, { fontFamily: F.med }]}>Cheerful sounds</Text>
+              <Text style={[T.caption, { marginTop: 2 }]}>Soft notes for a tick, a session done, a day done. Haptics play either way.</Text>
+            </View>
+            <Toggle value={sounds} onChange={(v) => setSetting('cheerSounds', v)} label="Cheerful sounds" />
+          </View>
+        </Card>
+      ) : null}
+    </>
   );
 }
 

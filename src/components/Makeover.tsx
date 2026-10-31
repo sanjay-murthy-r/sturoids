@@ -5,12 +5,12 @@
 // time: a slow network never holds it).
 //
 // Elite arrives as calm precision: a hairline draws out from the middle, the word settles in from wide letter-spacing.
-// Cheerful arrives as a burst: colour blooms out, the letters pop in one by one, confetti falls.
+// Cheerful arrives as warmth: morning light rises from below, motes drift up, the letters lift in on a gentle wave.
 
 import React from 'react';
 import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, {
-  Easing, FadeIn, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming,
+  Easing, FadeIn, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSpring, withTiming,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
@@ -18,7 +18,8 @@ import { create } from 'zustand';
 import { C, F, MIN, TRACK, bgFor } from '../theme';
 import { Mood, flushSaves, useStore } from '../store';
 import { useAnimLevel } from './Motion';
-import { CHEER, celebrate } from './Cheer';
+import { CHEER } from './Cheer';
+import { cheer as playCheer } from '../cheerSound';
 import { useTheme } from './UI';
 import { tick } from '../haptics';
 
@@ -83,7 +84,8 @@ function MakeoverScreen({ to, onDone }: { to: Mood; onDone: () => void }) {
     // the mood changes under the cover, once it is whole
     const swap = setTimeout(() => {
       useStore.getState().setSetting('mood', to);
-      if (cheer) setTimeout(() => celebrate(true), 350);
+      // its little run plays as the letters lift in
+      if (cheer) setTimeout(() => playCheer('makeover'), 420);
     }, motion ? 360 : 0);
     // the jobs, one after another, each ticked off as it finishes; one that fails or is not for now is let go quietly
     const work = (async () => {
@@ -160,67 +162,85 @@ function EliteStage({ width, still }: { width: number; still: boolean }) {
 
 /* ---------------------------------------------------------------- Cheerful */
 
-function Bloom({ color, size, delay, still }: { color: string; size: number; delay: number; still: boolean }) {
-  const p = useSharedValue(still ? 1 : 0);
-  React.useEffect(() => {
-    if (still) return;
-    p.value = withDelay(delay, withTiming(1, { duration: 1300, easing: Easing.bezier(0.16, 1, 0.3, 1) }));
-  }, []);
-  const style = useAnimatedStyle(() => ({ opacity: p.value * 0.9, transform: [{ scale: 0.2 + 0.8 * p.value }] }));
-  const id = 'bloom' + color.replace('#', '');
-  return (
-    <Animated.View style={[{ position: 'absolute', width: size, height: size, left: -size / 2, top: -size / 2 }, style]}>
-      <Svg width={size} height={size}>
-        <Defs>
-          <RadialGradient id={id} cx="50%" cy="50%" r="50%">
-            <Stop offset="0" stopColor={color} stopOpacity={0.55} />
-            <Stop offset="0.5" stopColor={color} stopOpacity={0.18} />
-            <Stop offset="1" stopColor={color} stopOpacity={0} />
-          </RadialGradient>
-        </Defs>
-        <Rect x="0" y="0" width={size} height={size} fill={`url(#${id})`} />
-      </Svg>
-    </Animated.View>
-  );
-}
+// Warm, not loud: the cover stays the app's own dark, a soft warmth rises from below like morning light, a few motes of
+// light drift up through it, and the word lifts in letter by letter in a gentle wave, in the app's ink, with a line
+// drawing out under it in the accent. The colour is in the light, never on the letters, so every letter reads.
 
-function Letter({ ch, i, still, color }: { ch: string; i: number; still: boolean; color: string }) {
-  const p = useSharedValue(still ? 1 : 0);
+const MOTES = 12;
+
+function Mote({ i, width, height, still }: { i: number; width: number; height: number; still: boolean }) {
+  const p = useSharedValue(still ? 0.5 : 0);
+  // a seeded spread: each mote its own place, size, pace and colour
+  const r = (k: number) => ((Math.sin(i * 12.9898 + k * 78.233) * 43758.5453) % 1 + 1) % 1;
+  const x = width * (0.12 + 0.76 * r(1));
+  const size = 3 + 4 * r(2);
+  const rise = height * (0.22 + 0.2 * r(3));
+  const color = [C.accent, CHEER.sun, '#FFFFFF', CHEER.pink][i % 4];
   React.useEffect(() => {
     if (still) return;
-    p.value = withDelay(420 + i * 70, withSpring(1, { damping: 9, stiffness: 180, mass: 0.7 }));
+    p.value = withDelay(200 + r(4) * 700, withTiming(1, { duration: 2200 + r(5) * 800, easing: Easing.out(Easing.quad) }));
   }, []);
   const style = useAnimatedStyle(() => ({
-    opacity: Math.min(1, p.value * 1.6),
-    transform: [{ translateY: 26 * (1 - p.value) }, { scale: 0.4 + 0.6 * p.value }, { rotate: (1 - p.value) * (i % 2 ? 14 : -14) + 'deg' }] as const,
+    opacity: p.value < 0.2 ? p.value / 0.2 * 0.7 : 0.7 * (1 - (p.value - 0.2) / 0.8),
+    transform: [{ translateX: x + Math.sin(p.value * 5 + i) * 8 }, { translateY: height * 0.78 - rise * p.value }] as const,
   }));
-  return <Animated.Text style={[st.cheerLetter, { color }, style]}>{ch}</Animated.Text>;
+  return <Animated.View style={[{ position: 'absolute', left: 0, top: 0, width: size, height: size, borderRadius: size / 2, backgroundColor: color }, style]} />;
+}
+
+function Letter({ ch, i, still }: { ch: string; i: number; still: boolean }) {
+  const p = useSharedValue(still ? 1 : 0);
+  React.useEffect(() => {
+    if (still) return;
+    // a soft spring: a little lift past its place and back, never a wobble
+    p.value = withDelay(380 + i * 55, withSpring(1, { damping: 13, stiffness: 160, mass: 0.8 }));
+  }, []);
+  const style = useAnimatedStyle(() => ({
+    opacity: Math.min(1, p.value * 1.4),
+    transform: [{ translateY: 18 * (1 - p.value) }, { scale: 0.92 + 0.08 * p.value }] as const,
+  }));
+  return <Animated.Text style={[st.cheerLetter, style]}>{ch}</Animated.Text>;
 }
 
 function CheerStage({ width, height, still }: { width: number; height: number; still: boolean }) {
-  const s = Math.max(width, height) * 1.1;
-  const colors = [C.accent, CHEER.pink, CHEER.sun, CHEER.mint, CHEER.sky];
+  const warm = useSharedValue(still ? 1 : 0);
+  const line = useSharedValue(still ? 1 : 0);
   const sub = useSharedValue(still ? 1 : 0);
-  const spin = useSharedValue(0);
   React.useEffect(() => {
     if (still) return;
+    warm.value = withTiming(1, { duration: 1600, easing: Easing.out(Easing.cubic) });
+    line.value = withDelay(820, withTiming(1, { duration: 800, easing: Easing.bezier(0.2, 0, 0, 1) }));
     sub.value = withDelay(1150, withTiming(1, { duration: 500 }));
-    spin.value = withSequence(withDelay(300, withTiming(1, { duration: 1800, easing: Easing.out(Easing.cubic) })));
   }, []);
-  const subStyle = useAnimatedStyle(() => ({ opacity: sub.value, transform: [{ translateY: 8 * (1 - sub.value) }] }));
-  const ringStyle = useAnimatedStyle(() => ({ transform: [{ rotate: spin.value * 120 + 'deg' }] }));
+  const warmStyle = useAnimatedStyle(() => ({ opacity: warm.value, transform: [{ translateY: 60 * (1 - warm.value) }] }));
+  const lineStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: line.value }], opacity: line.value }));
+  const subStyle = useAnimatedStyle(() => ({ opacity: sub.value, transform: [{ translateY: 6 * (1 - sub.value) }] }));
+  const s = Math.max(width, height);
   return (
     <View style={st.center}>
-      <Animated.View style={[{ position: 'absolute', left: width / 2, top: height / 2 }, ringStyle]}>
-        <View style={{ position: 'absolute', left: -s * 0.18, top: -s * 0.12 }}><Bloom color={CHEER.pink} size={s * 0.7} delay={80} still={still} /></View>
-        <View style={{ position: 'absolute', left: s * 0.16, top: -s * 0.06 }}><Bloom color={CHEER.sun} size={s * 0.6} delay={180} still={still} /></View>
-        <View style={{ position: 'absolute', left: -s * 0.04, top: s * 0.16 }}><Bloom color={CHEER.mint} size={s * 0.62} delay={280} still={still} /></View>
-        <View style={{ position: 'absolute', left: 0, top: 0 }}><Bloom color={C.accent} size={s * 0.75} delay={0} still={still} /></View>
+      {/* morning light from below: warm, then the accent, both soft */}
+      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, warmStyle]}>
+        <Svg width={width} height={height}>
+          <Defs>
+            <RadialGradient id="mkwarm" cx="50%" cy="100%" r="75%">
+              <Stop offset="0" stopColor={CHEER.sun} stopOpacity={0.26} />
+              <Stop offset="0.45" stopColor={CHEER.pink} stopOpacity={0.12} />
+              <Stop offset="1" stopColor={CHEER.pink} stopOpacity={0} />
+            </RadialGradient>
+            <RadialGradient id="mkacc" cx="50%" cy="48%" r="45%">
+              <Stop offset="0" stopColor={C.accent} stopOpacity={0.16} />
+              <Stop offset="1" stopColor={C.accent} stopOpacity={0} />
+            </RadialGradient>
+          </Defs>
+          <Rect x="0" y="0" width={width} height={height} fill="url(#mkwarm)" />
+          <Rect x="0" y="0" width={width} height={height} fill="url(#mkacc)" />
+        </Svg>
       </Animated.View>
+      {Array.from({ length: still ? 0 : MOTES }, (_, i) => <Mote key={i} i={i} width={width} height={height} still={still} />)}
       <View style={{ flexDirection: 'row' }}>
-        {'Cheerful'.split('').map((ch, i) => <Letter key={i} ch={ch} i={i} still={still} color={colors[i % colors.length]} />)}
+        {'Cheerful'.split('').map((ch, i) => <Letter key={i} ch={ch} i={i} still={still} />)}
       </View>
-      <Animated.Text style={[st.sub, { color: '#F4F1EA' }, subStyle]}>Same app, a little more joy</Animated.Text>
+      <Animated.View style={[st.rule, { width: Math.min(220, s * 0.4), backgroundColor: C.accent }, lineStyle]} />
+      <Animated.Text style={[st.sub, subStyle]}>Same app, a little more joy</Animated.Text>
     </View>
   );
 }
@@ -230,7 +250,7 @@ const st = StyleSheet.create({
   eliteWord: { color: C.text, fontFamily: F.head, fontSize: 52, lineHeight: 62 },
   rule: { height: 1.5, borderRadius: 1, marginTop: 18 },
   sub: { color: C.textDim, fontFamily: F.smMed, fontSize: 14, letterSpacing: TRACK.small, marginTop: 18 },
-  cheerLetter: { fontFamily: F.brand, fontSize: 50, lineHeight: 62 },
+  cheerLetter: { color: '#F7F4EE', fontFamily: F.brand, fontSize: 48, lineHeight: 60, letterSpacing: 0.5 },
   jobs: { position: 'absolute', left: 0, right: 0, bottom: 64, alignItems: 'center', gap: 6 },
   job: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   jobText: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine },

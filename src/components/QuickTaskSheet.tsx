@@ -14,6 +14,7 @@ import { SegmentedControl } from './SegmentedControl';
 import { JournalCalendar } from './JournalCalendar';
 import { Appear, FadeSwap } from './Motion';
 import { toast } from './Toast';
+import { cheer } from '../cheerSound';
 
 export type TaskKind = 'daily' | 'mission';
 
@@ -239,12 +240,14 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
         ...(rem ? { remind: rem } : {}),
       });
       added.current = { kind, id };
+      cheer('add');
     } else {
       const id = addMission(t, due);
       if (at || rem || earlyKeep.length) {
         updateMission(id, { time: at || null, remind: rem, early: earlyKeep.length ? earlyKeep : null });
       }
       added.current = { kind, id };
+      cheer('add');
     }
     onClose();
     if (newReminder && !useStore.getState().settings.remindersEnabled) void turnOnReminders();

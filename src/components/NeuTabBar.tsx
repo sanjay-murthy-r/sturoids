@@ -17,6 +17,7 @@ import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { RAIL_W } from '../layout';
 import { openSift } from '../search/store';
 import { useBackupAttention } from '../cloud';
+import { Lift } from './Cheer';
 
 /** a second tap on the tab you are on within this many ms opens Sift (the first still does what it always did) */
 const DOUBLE_TAP_MS = 280;
@@ -96,7 +97,10 @@ function TabItem({ meta, focused, onPress, vertical, labelH, badge = false }: {
           <Ionicons name={meta.icon as any} size={ICON} color={C.textFaint} />
         </Animated.View>
         <Animated.View style={[st.glyph, lit]}>
-          <Ionicons name={meta.icon as any} size={ICON} color={C.accent} />
+          {/* Cheerful: the tab chosen gives a small lift as it lights */}
+          <Lift value={focused ? 1 : 0} when={focused}>
+            <Ionicons name={meta.icon as any} size={ICON} color={C.accent} />
+          </Lift>
         </Animated.View>
         {badge ? <View style={[st.badge, { backgroundColor: C.amber }]} /> : null}
       </Animated.View>

@@ -34,6 +34,7 @@
     "expo": "~53.0.0",
     "expo-asset": "~11.1.5",
     "expo-audio": "~0.4.9",
+    "expo-blur": "~14.1.5",
     "expo-brightness": "~13.1.4",
     "expo-clipboard": "~7.1.4",
     "expo-constants": "~17.1.6",

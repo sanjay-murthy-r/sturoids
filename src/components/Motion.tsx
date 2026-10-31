@@ -92,6 +92,12 @@ export const TAB_SHIFT = { duration: 260, easing: EASE_OUT };
 export const TAB_FADE = { duration: 200, easing: EASE_OUT };
 
 const ENTER = { duration: 540, easing: Easing.out(Easing.cubic) };
+/** Cheerful's entrance: the same rise, settled on a soft spring that lifts a hair past its place and back */
+const ENTER_CHEER = { damping: 17, stiffness: 150, mass: 0.9 };
+/** Cheerful's release: a touch more give than Elite's, never a wobble */
+const RISE_OUT_CHEER = { damping: 13, stiffness: 260, mass: 0.75 };
+/** Whether the app is in its Cheerful makeover (read here, not from Cheer.tsx, which builds on this file) */
+const useCheer = () => useStore((s) => s.settings.mood === 'cheerful');
 
 /**
  * How a page pushed onto a native stack comes and goes. Android plays fixed animations from react-native-screens' own
@@ -475,6 +481,7 @@ function useReadyToShow(active: boolean) {
  */
 export function useEntrance(index = 0, enabled = true) {
   const level = useAnimLevel();
+  const cheerful = useCheer();
   const focused = useIsFocused();
   const introOver = useIntro((s) => s.phase !== 'playing');
   const still = level === 'none' || !enabled;
@@ -495,13 +502,14 @@ export function useEntrance(index = 0, enabled = true) {
     playedFor.current = returns;
     if (again) shown.value = 0;
     shown.value = level === 'full'
-      ? withDelay(Math.min(index * 60, 360), withTiming(1, ENTER))
+      ? withDelay(Math.min(index * 60, 360), cheerful ? withSpring(1, ENTER_CHEER) : withTiming(1, ENTER))
       : withDelay(Math.min(index * 30, 150), withTiming(1, { duration: 200 }));
   }, [focused, introOver, ready, level, returns]);
   const rise = level === 'full' ? 14 : 0;
+  const grow = level === 'full' && cheerful ? 0.02 : 0;
   return useAnimatedStyle(() => ({
-    opacity: shown.value,
-    transform: [{ translateY: rise * (1 - shown.value) }],
+    opacity: Math.min(1, shown.value),
+    transform: [{ translateY: rise * (1 - shown.value) }, { scale: 1 - grow * (1 - shown.value) }] as const,
   }));
 }
 
@@ -543,6 +551,7 @@ export function Bouncy({
   accessibilityState?: AccessibilityState;
 }) {
   const level = useAnimLevel();
+  const cheerful = useCheer();
   const still = level === 'none';
   const p = useSharedValue(0); // 0 = rest, 1 = pressed
   // a level turned to none while a press was held leaves nothing carved
@@ -570,7 +579,7 @@ export function Bouncy({
       accessibilityRole={role}
       accessibilityState={state}
       onPressIn={still ? undefined : () => { p.value = withTiming(1, SINK_IN); }}
-      onPressOut={still ? undefined : () => { p.value = withSpring(0, RISE_OUT); }}
+      onPressOut={still ? undefined : () => { p.value = withSpring(0, cheerful ? RISE_OUT_CHEER : RISE_OUT); }}
       style={[style, aStyle]}
     >
       {children}

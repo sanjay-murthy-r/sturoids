@@ -341,6 +341,8 @@ export interface Settings {
   pageLayout: Record<string, PageLayout>;
   /** Makeover: Elite (calm, formal) or Cheerful (livelier motion, small celebrations, a gently moving backdrop) */
   mood: Mood;
+  /** Cheerful plays its little sounds (ticks, a session done, a day done); its haptics play either way */
+  cheerSounds: boolean;
 }
 
 export type Mood = 'elite' | 'cheerful';
@@ -468,6 +470,7 @@ export const DEFAULT_SETTINGS: Settings = {
   tabNav: 'side',
   pageLayout: {},
   mood: 'elite',
+  cheerSounds: true,
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -1306,6 +1309,7 @@ function cleanSettingsV6(s: any): Settings {
   st.focusDropShort = st.focusDropShort !== false;
   st.pageLayout = cleanPageLayout(st.pageLayout);
   st.mood = st.mood === 'cheerful' ? 'cheerful' : 'elite';
+  st.cheerSounds = st.cheerSounds !== false;
   // no repo yet checks Sturoids' own releases; one saved under an earlier address follows the rename
   if (typeof st.githubRepo !== 'string' || !st.githubRepo.trim() || OLD_UPDATE_REPO.test(st.githubRepo.trim())) st.githubRepo = DEFAULT_UPDATE_REPO;
   return st;

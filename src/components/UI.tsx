@@ -20,6 +20,7 @@ import { useStore } from '../store';
 import {
   ARRIVE, Bouncy, CHANGE, DIM_IN, DIM_OUT, EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, FadeSwap, LEAVE, PressRole, RISE_OUT, glide, rowIn,
   rowOut, useAnimLevel, useAppear, useBreath, useEntrance,
+  Sheen,
 } from './Motion';
 import { tap, tick } from '../haptics';
 import { stepTab } from '../toolNav';
@@ -28,6 +29,7 @@ import { SiftScope, openSift, siftPull } from '../search/store';
 import { TimeWheel, defaultTime, isTime, timeLabel } from './TimeWheel';
 import { ScrollMemoryMode, useScrollMemory } from '../hooks/useScrollMemory';
 import { Backdrop, Bob, Sparks, useCheerful } from './Cheer';
+import { cheer } from '../cheerSound';
 
 export { TimeWheel } from './TimeWheel';
 
@@ -696,43 +698,10 @@ export function PullArea({ gesture, children }: { gesture: ReturnType<typeof use
  * the pull; at the threshold its glyph and name take the accent ("let go to open"). Fades only with some motion; a
  * step with none.
  */
-export function PullPill({ progress }: { progress: SharedValue<number> }) {
-  const theme = useTheme();
-  const level = useAnimLevel();
-  const box = useAnimatedStyle(() => {
-    const p = Math.min(1, progress.value);
-    if (level === 'none') return { opacity: p > 0.15 ? 1 : 0 };
-    const opacity = interpolate(p, [0.08, 0.45], [0, 1], Extrapolation.CLAMP);
-    if (level === 'some') return { opacity };
-    return {
-      opacity,
-      transform: [
-        { translateY: -10 * (1 - p) + 4 * Math.max(0, progress.value - 1) },
-        { scale: 0.7 + 0.3 * p },
-      ] as const,
-    };
-  });
-  const lit = useAnimatedStyle(() => ({ opacity: progress.value >= 1 ? 1 : 0 }));
-  const unlit = useAnimatedStyle(() => ({ opacity: progress.value >= 1 ? 0 : 1 }));
-  const well = theme === 'minimal'
-    ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
-    : { backgroundColor: C.inset, ...neuInset('hairline') };
-  return (
-    <View pointerEvents="none" style={hdr.pillRoom} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-      <Animated.View style={[hdr.pill, well, box]}>
-        <View style={hdr.pillInk}>
-          <Animated.View style={[hdr.pillLayer, unlit]}>
-            <Ionicons name="search" size={15} color={C.textDim} />
-            <Text style={[hdr.pillText, { color: C.textDim }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Sift</Text>
-          </Animated.View>
-          <Animated.View style={[hdr.pillLayer, StyleSheet.absoluteFill, lit]}>
-            <Ionicons name="search" size={15} color={C.accent} />
-            <Text style={[hdr.pillText, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Sift</Text>
-          </Animated.View>
-        </View>
-      </Animated.View>
-    </View>
-  );
+export function PullPill(_: { progress: SharedValue<number> }) {
+  // Focus (picked in the Sift study): a pull shows nothing of its own under the bar. The app behind goes softly out of
+  // focus with the pull instead (AppFrame), and Sift's field comes into focus where it sits
+  return null;
 }
 
 /**
@@ -1113,7 +1082,7 @@ export function CheckCircle({ done, onPress, color = C.green, size = 26, label }
   React.useEffect(() => {
     if (was.current === done) return;
     was.current = done;
-    if (done) setSpark((n) => n + 1);
+    if (done) { setSpark((n) => n + 1); cheer('tick'); }
     if (level === 'none') {
       fill.value = done ? 1 : 0;
       settle.value = 1;
@@ -1175,11 +1144,17 @@ export function Toggle({ value, onChange, color, label }: {
   const theme = useTheme();
   const level = useAnimLevel();
   const c = color || C.accent;
+  const cheerful = useCheerful();
   const x = useSharedValue(value ? 1 : 0);
   React.useEffect(() => {
     x.value = level === 'none' ? (value ? 1 : 0) : withSpring(value ? 1 : 0, RISE_OUT);
   }, [value, level]);
-  const thumbStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value * KNOB_TRAVEL }] }));
+  // Cheerful: the knob stretches a little in the middle of its travel, like something soft on its way across
+  const stretch = cheerful && level === 'full' ? 0.22 : 0;
+  const thumbStyle = useAnimatedStyle(() => {
+    const mid = Math.sin(Math.PI * Math.min(1, Math.max(0, x.value)));
+    return { transform: [{ translateX: x.value * KNOB_TRAVEL }, { scaleX: 1 + stretch * mid }, { scaleY: 1 - stretch * 0.35 * mid }] as const };
+  });
   // the accent fills the knob as it travels, instead of flipping colour the moment it is tapped
   const knobFill = useAnimatedStyle(() => ({ opacity: Math.min(1, Math.max(0, x.value)) }));
   return (
@@ -1382,6 +1357,7 @@ export function EmptyState({ icon, title, body, actionLabel, onAction, compact }
 /** A carved hairline track with an eased accent fill. No glow: one accent, lit by the material. */
 export function ProgressBar({ value, color, height = 8 }: { value: number; color?: string; height?: number }) {
   const theme = useTheme();
+  const cheerful = useCheerful();
   const level = useAnimLevel();
   const c = color || C.accent;
   const v = Math.min(1, Math.max(0, value));
@@ -1415,7 +1391,10 @@ export function ProgressBar({ value, color, height = 8 }: { value: number; color
           },
           fillStyle,
         ]}
-      />
+      >
+        {/* Cheerful: a light passes along the fill now and then */}
+        {cheerful ? <Sheen radius={height / 2} /> : null}
+      </Animated.View>
     </View>
   );
 }

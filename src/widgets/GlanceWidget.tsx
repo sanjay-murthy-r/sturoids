@@ -6,6 +6,7 @@ import { Card, Row } from '../components/UI';
 import { SeenCount, FlowPlaceholder, Track, spokenMinutes, useBoardToday } from './kit';
 import { useFocusToday, useTodayItems, useTodaysHabits } from './data';
 import type { WidgetProps } from './types';
+import { Lift } from '../components/Cheer';
 
 /**
  * The glance: tasks left, today's habits ticked, and the minutes focused today, against the focus goal when one is set.
@@ -65,10 +66,13 @@ function Glance({ value, total, label, color, suffix, spoken, goal }: {
 }) {
   return (
     <View style={{ flex: 1, alignItems: 'center', paddingVertical: 16 }} accessible accessibilityLabel={spoken}>
-      <SeenCount value={value} style={[st.glanceValue, { color }]}>
-        {total != null ? '/' + total : null}
-        {suffix ? <Text style={st.suffix}>{suffix}</Text> : null}
-      </SeenCount>
+      {/* Cheerful: a figure that changes gives a small lift */}
+      <Lift value={value}>
+        <SeenCount value={value} style={[st.glanceValue, { color }]}>
+          {total != null ? '/' + total : null}
+          {suffix ? <Text style={st.suffix}>{suffix}</Text> : null}
+        </SeenCount>
+      </Lift>
       <Text style={st.glanceLabel}>{label}</Text>
       {goal != null ? (
         <View style={st.goal}>

@@ -37,6 +37,7 @@ import { toast } from '../components/Toast';
 import { TWO_COL_AT, WIDE_MAX, columnWidth } from '../layout';
 import { InOrder, SectionDef, useSections } from '../components/Arrange';
 import { noteUse, useKnown } from '../learn';
+import { Flicker } from '../components/Cheer';
 
 /** the Planner's parts below the day: the blocks always, the streaks if wanted, in either order */
 const PLANNER_SECTIONS: SectionDef[] = [
@@ -727,7 +728,7 @@ function Flame({ atRisk }: { atRisk: boolean }) {
   }));
   return (
     <Animated.View style={[st.subIcon, style]}>
-      <Ionicons name="flame-outline" size={13} color={C.textFaint} />
+      <Flicker><Ionicons name="flame-outline" size={13} color={C.textFaint} /></Flicker>
     </Animated.View>
   );
 }

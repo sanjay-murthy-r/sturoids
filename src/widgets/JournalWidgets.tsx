@@ -8,6 +8,7 @@ import { MOODS, journalDayFor, journalStreak, moodSeries, promptFor } from '../j
 import { openTool } from '../toolNav';
 import { Kicker, LockedNote, TILE_TEXT_MAX, Tile, kit, useBoardNow } from './kit';
 import type { WidgetProps } from './types';
+import { Flicker } from '../components/Cheer';
 
 /** Write today: today's page, its words or "Not yet", and the day's prompt. Opens the Journal. */
 export function WriteTodayWidget({ size }: WidgetProps) {
@@ -65,7 +66,7 @@ export function MoodStripWidget({ size }: WidgetProps) {
         <Kicker color={C.gold}>Mood · 14 days</Kicker>
         {streak ? (
           <View style={st.streak}>
-            <Ionicons name="flame-outline" size={13} color={C.gold} />
+            <Flicker><Ionicons name="flame-outline" size={13} color={C.gold} /></Flicker>
             <Text style={[kit.sub, { color: C.gold, marginLeft: 4 }]} maxFontSizeMultiplier={TILE_TEXT_MAX}>
               {streak + (streak === 1 ? ' day' : ' days')}
             </Text>

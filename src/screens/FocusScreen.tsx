@@ -40,9 +40,10 @@ import { minutesUntil } from '../toolLogic';
 import { openSessionEditor } from '../components/SessionEditor';
 import { TagPicker } from '../components/TagPicker';
 import { ParkedCard, TodayCard } from '../components/FocusExtras';
-import { celebrate } from '../components/Cheer';
+import { Halo, celebrate } from '../components/Cheer';
 import { InOrder, SectionDef, useSections } from '../components/Arrange';
 import { noteUse, useLearnt } from '../learn';
+import { cheer } from '../cheerSound';
 
 /** Deep Work's sections between sessions, in their usual order; the clock itself can move but never be put away */
 const IDLE_SECTIONS: SectionDef[] = [
@@ -406,6 +407,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     if (startedAtRef.current == null) {
       startedAtRef.current = Date.now();
       noteUse('focus.start');
+      cheer('start');
       if (subjectRef.current.trim()) noteUse('focus.subject');
       // a new session: a break or a next block still on offer has had its turn
       clearBetween();
@@ -1140,7 +1142,11 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               </Animated.View>
             )}
             <Row style={{ marginTop: 20, gap: 10 }}>
-              <PillButton label="Start" icon="play" onPress={start} />
+              {/* Cheerful: a soft ring swells out of Start now and then, an invitation */}
+              <View>
+                <Halo radius={999} every={5200} />
+                <PillButton label="Start" icon="play" onPress={start} />
+              </View>
             </Row>
           </GlassCard>
       </>
@@ -1538,6 +1544,7 @@ export function sessionDay(key: string): string {
 function savedToast(id: string, netSeconds: number, undo?: () => void, extra = '') {
   // Cheerful: confetti for a session done (nothing in Elite)
   celebrate(netSeconds >= 20 * 60);
+  cheer('done');
   const m = Math.max(1, Math.round(netSeconds / 60));
   const len = m >= 60 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '') : m + ' min';
   const message = 'Saved · ' + len + (extra ? ' · ' + extra : '');

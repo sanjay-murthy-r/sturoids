@@ -30,7 +30,8 @@ export function playSessionEnd(): void {
   } catch {
     // no vibrator
   }
-  if (!useStore.getState().settings.focusChime || AppState.currentState !== 'active') return;
+  // Cheerful has its own tune for a session done, played as it is saved
+  if (!useStore.getState().settings.focusChime || AppState.currentState !== 'active' || useStore.getState().settings.mood === 'cheerful') return;
   try {
     const p = chimePlayer();
     // a player that has played once rests at its end: it starts again from the top

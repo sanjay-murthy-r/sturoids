@@ -29,6 +29,7 @@ import { leftoverTodos, orderTodos } from '../todos';
 import { useBringIntoView } from '../hooks/useBringIntoView';
 import { useArrowsLift, useRail } from '../hooks/useRail';
 import { RAIL_W, READ_MAX, TWO_COL_AT, WIDE_MAX } from '../layout';
+import { Halo } from '../components/Cheer';
 
 type Tab = 'daily' | 'missions';
 
@@ -454,6 +455,8 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 : { backgroundColor: C.card, ...neuRaised('high') },
             ]}
           >
+            {/* Cheerful: a soft ring swells out of the button now and then */}
+            <Halo radius={999} />
             <Ionicons name="add" size={30} color={C.accent} />
           </Bouncy>
         </Animated.View>

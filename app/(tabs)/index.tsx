@@ -45,6 +45,7 @@ import { galleryGroups, sizesOf, widgetDef, widgetShown } from '../../src/widget
 import type { WidgetDef } from '../../src/widgets/types';
 import { rightClick } from '../../src/web/rightClick';
 import { markGesture } from '../../src/dragGuard';
+import { Twinkle } from '../../src/components/Cheer';
 
 // what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
 const NO_SESSIONS: FocusSession[] = [];
@@ -202,7 +203,11 @@ export default function Today() {
                 onPress={openAccount} several={severalProfiles}
                 onLongPress={() => { if (severalProfiles) { tap(); setSwitcher(true); } else openAccount(); }}
               >
-                <Text style={T.kicker}>{fmtDate(now)}</Text>
+                {/* Cheerful: a small sparkle twinkles beside the date */}
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Text style={T.kicker}>{fmtDate(now)}</Text>
+                  <Twinkle size={12} />
+                </View>
                 <FadeSwap swapKey={greetingKey}>
                   <Text style={[T.display, { marginTop: 8, marginBottom: greeting.sub ? 6 : 24 }]}>
                     {greeting.parts.map((part, i) => (

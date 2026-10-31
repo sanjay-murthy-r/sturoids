@@ -1,7 +1,9 @@
-// Makeover's Cheerful side: the same app, a little more alive. Never loud and never in the way: soft colour drifting
-// slowly behind the pages, a few sparks when something is ticked, confetti when a session or a day is done, a gentle
-// bob on an empty page's picture, and a friendlier word here and there. Elite (the default) has none of it. Everything
-// here stands still with motion off, and only moves at full motion.
+// Makeover's Cheerful side: the same app, a little more alive, warm without being childish. Never loud and never in the
+// way: soft colour drifting slowly behind the pages, a few sparks and a soft note when something is ticked, confetti
+// and a little tune when a session or a day is done, and small looping motion in the quiet places (an empty page's
+// picture floats, the running clock breathes, the add button glows now and then, a streak's flame flickers, the
+// greeting's sparkle twinkles). Elite (the default) has none of it. Everything here stands still with motion off, and
+// only moves at full motion. Sounds and haptics: src/cheerSound.ts.
 
 import React from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
@@ -16,6 +18,9 @@ import { useAnimLevel } from './Motion';
 import { toast } from './Toast';
 import { todayKey, todoDueOn } from '../utils';
 import { NavigationContext } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
+import { cheer } from '../cheerSound';
+import { streaks } from '../utils';
 
 /** Whether the app is in its Cheerful makeover. */
 export function useCheerful(): boolean {
@@ -163,6 +168,8 @@ function Piece({ x, w, h, color, delay, drift, spin, fall, ms }: {
   return <Animated.View style={[{ position: 'absolute', left: 0, top: 0, width: w, height: h, borderRadius: 2, backgroundColor: color }, style]} />;
 }
 
+const STREAK_MARKS = [7, 14, 21, 30, 50, 75, 100, 150, 200, 365];
+
 /** The open ToDos due today, and how many are due: a day is done when the first goes to none with some due. */
 function dayLeft(): [number, number] {
   const today = todayKey();
@@ -181,11 +188,28 @@ export function CelebrateHost() {
       const [now, due] = dayLeft();
       if (left > 0 && now === 0 && due > 0 && isCheerful()) {
         celebrate(true);
-        setTimeout(() => toast('Every ToDo for today, done 🎉'), 500);
+        cheer('day');
+        setTimeout(() => toast('Every ToDo for today, done. Lovely work.'), 500);
       }
       left = now;
     });
   }, []);
+  // a habit ticked today reaching a milestone streak: a little bell, a little confetti
+  React.useEffect(() => useStore.subscribe((s, prev) => {
+    if (s.habits === prev.habits || !isCheerful()) return;
+    const today = todayKey();
+    for (const h of s.habits) {
+      const before = prev.habits.find((x) => x.id === h.id);
+      if (!before || before.doneDates.includes(today) || !h.doneDates.includes(today)) continue;
+      const n = streaks(h.doneDates, h.days).current;
+      if (STREAK_MARKS.includes(n)) {
+        celebrate(false);
+        cheer('streak');
+        setTimeout(() => toast(n + ' days of ' + h.title + '. Keep it going.'), 400);
+        return;
+      }
+    }
+  }), []);
   const level = useAnimLevel();
   const { width, height } = useWindowDimensions();
   const [shown, setShown] = React.useState(0);
@@ -260,4 +284,101 @@ export function Breathe({ size, color }: { size: number; color?: string }) {
       </Svg>
     </Animated.View>
   );
+}
+
+/** A loop that runs only in Cheerful at full motion: the shared value t goes 0 → 1 → 0 on a gentle sine. */
+function useCheerLoop(ms: number, delay = 0, rest = 0) {
+  const cheerful = useCheerful();
+  const level = useAnimLevel();
+  const on = cheerful && level === 'full';
+  const t = useSharedValue(0);
+  React.useEffect(() => {
+    if (!on) { cancelAnimation(t); t.value = 0; return undefined; }
+    const half = { duration: ms / 2, easing: Easing.inOut(Easing.sin) };
+    t.value = withDelay(delay, withRepeat(withSequence(withTiming(1, half), withTiming(0, half), withTiming(0, { duration: rest })), -1));
+    return () => cancelAnimation(t);
+  }, [on]);
+  return { t, on };
+}
+
+/** A small sparkle that twinkles beside something (the greeting), in Cheerful. Nothing in Elite. */
+export function Twinkle({ size = 16, color }: { size?: number; color?: string }) {
+  const { t, on } = useCheerLoop(2600, 300, 1800);
+  const cheerful = useCheerful();
+  const style = useAnimatedStyle(() => ({
+    opacity: 0.55 + 0.45 * t.value,
+    transform: [{ scale: 0.82 + 0.26 * t.value }, { rotate: 14 * t.value + 'deg' }] as const,
+  }));
+  if (!cheerful) return null;
+  return (
+    <Animated.View pointerEvents="none" style={[{ marginLeft: 8 }, on ? style : null]}>
+      <Ionicons name="sparkles" size={size} color={color ?? C.accent} />
+    </Animated.View>
+  );
+}
+
+/**
+ * A soft ring that swells out of something and fades, now and then: the add button saying it is there. Put it first
+ * inside the thing, which must not clip (no overflow hidden). Cheerful, at full motion.
+ */
+export function Halo({ radius, color, every = 4200 }: { radius: number; color?: string; every?: number }) {
+  const cheerful = useCheerful();
+  const level = useAnimLevel();
+  const on = cheerful && level === 'full';
+  const t = useSharedValue(0);
+  React.useEffect(() => {
+    if (!on) { cancelAnimation(t); t.value = 0; return undefined; }
+    t.value = withDelay(1200, withRepeat(withSequence(
+      withTiming(1, { duration: 1400, easing: Easing.out(Easing.cubic) }),
+      withTiming(0, { duration: 0 }),
+      withTiming(0, { duration: every - 1400 }),
+    ), -1));
+    return () => cancelAnimation(t);
+  }, [on]);
+  const style = useAnimatedStyle(() => ({
+    opacity: t.value > 0 ? 0.5 * (1 - t.value) : 0,
+    transform: [{ scale: 1 + 0.35 * t.value }],
+  }));
+  if (!on) return null;
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[StyleSheet.absoluteFill, { borderRadius: radius, borderWidth: 2, borderColor: color ?? C.accent }, style]}
+    />
+  );
+}
+
+/** A flame (or any small icon) that flickers softly, as a streak's does in Cheerful; still in Elite. */
+export function Flicker({ children }: { children: React.ReactNode }) {
+  const { t, on } = useCheerLoop(1500, 0, 400);
+  const style = useAnimatedStyle(() => ({
+    transform: [{ scaleY: 1 + 0.12 * t.value }, { rotate: (t.value - 0.5) * 8 + 'deg' }] as const,
+    opacity: 0.85 + 0.15 * t.value,
+  }));
+  return <Animated.View style={on ? style : null}>{children}</Animated.View>;
+}
+
+/**
+ * A number (or any small thing) that gives a little lift when it changes: a count going up on Today. Keyed by its value;
+ * Cheerful only.
+ */
+export function Lift({ value, children, when = true }: { value: string | number; children: React.ReactNode; when?: boolean }) {
+  const cheerful = useCheerful();
+  const level = useAnimLevel();
+  const p = useSharedValue(0);
+  const first = React.useRef(true);
+  React.useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    if (!cheerful || level !== 'full' || !when) return;
+    p.value = withSequence(withTiming(1, { duration: 140, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: 360, easing: Easing.out(Easing.back(2.2)) }));
+  }, [value]);
+  const style = useAnimatedStyle(() => ({ transform: [{ translateY: -4 * p.value }, { scale: 1 + 0.12 * p.value }] as const }));
+  return <Animated.View style={style}>{children}</Animated.View>;
+}
+
+/** A gentle sway, for an icon that is waiting (a paused clock's mark). */
+export function Sway({ children, by = 6 }: { children: React.ReactNode; by?: number }) {
+  const { t, on } = useCheerLoop(3000);
+  const style = useAnimatedStyle(() => ({ transform: [{ rotate: (t.value - 0.5) * by + 'deg' }] }));
+  return <Animated.View style={on ? style : null}>{children}</Animated.View>;
 }

@@ -51,7 +51,8 @@ const DEFS: Record<SettingsPage, Def[]> = {
   ],
   appearance: [
     ['Appearance', 'Theme, accent colour and writing font', 'look style colours'],
-    ['Makeover', 'Elite or Cheerful: calm, or colour, sparks and confetti', 'mood cheerful elite fun playful animation celebrate confetti'],
+    ['Makeover', 'Elite or Cheerful: calm, or warm motion, little sounds and celebrations', 'mood cheerful elite fun playful animation celebrate confetti'],
+    ['Cheerful sounds', 'Soft notes in Cheerful', 'sound audio chime note music haptic cheerful'],
     ['Theme', 'Default or Minimalistic', 'dark theme minimal contrast look'],
     ['Accent colour', 'The colour of what is picked out', 'color accent iris aqua sky rose amber mint terracotta'],
     ['Writing font', 'Sans or Serif, for Notes and the Journal', 'font serif sans typeface writing'],

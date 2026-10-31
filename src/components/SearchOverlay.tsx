@@ -1,14 +1,15 @@
 import React from 'react';
 import {
-  BackHandler, InteractionManager, Keyboard, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  BackHandler, InteractionManager, Platform, Keyboard, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  Easing, FadeIn, FadeOut, LinearTransition, runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue,
-  withDelay, withTiming,
+  Easing, FadeIn, FadeOut, LinearTransition, runOnJS, useAnimatedReaction, useAnimatedScrollHandler, useAnimatedStyle,
+  useDerivedValue, useSharedValue, withDelay, withTiming,
 } from 'react-native-reanimated';
+import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, bgFor, neuInset, neuRaised, oneLine } from '../theme';
 import { useStore } from '../store';
@@ -45,7 +46,9 @@ const PILL_W = 96;
 /** the scrim's strength over the app when Sift is fully open */
 const SCRIM = 0.55;
 /** the app behind, fully open */
-const BACK_SCALE = 0.965;
+const BACK_SCALE = 0.955;
+/** how far out of focus a full pull takes the app, before Sift opens */
+const PULL_SOFTEN = 0.55;
 /** results are worked out this long after the last keystroke, then on the next frame */
 const TYPE_PAUSE = 40;
 /** a pull down of this much on the list, from its top, closes Sift */
@@ -82,10 +85,26 @@ const hostOf = (url: string) => url.replace(/^https?:\/\//i, '').split(/[/?#]/)[
  */
 export function AppFrame({ children }: { children: React.ReactNode }) {
   const level = useAnimLevel();
-  const style = useAnimatedStyle(() => (level === 'full' && siftShown.value > 0
-    ? { transform: [{ scale: 1 - (1 - BACK_SCALE) * siftShown.value }] }
+  // Focus: how far the app has gone out of focus. A pull takes it part of the way, as the finger goes; Sift opening
+  // takes it the rest
+  const away = useDerivedValue(() => Math.max(siftShown.value, Math.min(1, siftPull.value) * PULL_SOFTEN));
+  const style = useAnimatedStyle(() => (level === 'full' && away.value > 0
+    ? { transform: [{ scale: 1 - (1 - BACK_SCALE) * away.value }] }
     : { transform: [{ scale: 1 }] }));
-  return <Animated.View style={[{ flex: 1 }, style]}>{children}</Animated.View>;
+  const blurStyle = useAnimatedStyle(() => ({ opacity: level === 'none' ? 0 : away.value }));
+  // the blur is there only while it shows: a full-screen blur costs, even when clear
+  const [blurOn, setBlurOn] = React.useState(false);
+  useAnimatedReaction(() => away.value > 0.001, (on, was) => { if (on !== was) runOnJS(setBlurOn)(on); });
+  return (
+    <Animated.View style={[{ flex: 1 }, style]}>
+      {children}
+      {blurOn && level !== 'none' ? (
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, blurStyle]}>
+          <BlurView intensity={level === 'full' ? 28 : 14} tint="dark" experimentalBlurMethod="dimezisBlurView" style={StyleSheet.absoluteFill} />
+        </Animated.View>
+      ) : null}
+    </Animated.View>
+  );
 }
 
 /* ---------------------------------------------------------------- pieces */
@@ -698,14 +717,13 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     if (level !== 'full') return { opacity: siftShown.value };
     const p = siftShown.value;
     if (fromPull) {
+      // Focus: the field comes into focus where it sits, from a little larger and soft to its own size and sharp
+      const e = Math.min(1, Math.max(0, (p - 0.12) / 0.88));
       return {
-        opacity: Math.min(1, p * 2.4),
-        transform: [
-          { translateY: 10 * (1 - p) },
-          { scaleX: pillScale + (1 - pillScale) * p },
-          { scaleY: 0.82 + 0.18 * p },
-        ] as const,
-      };
+        opacity: e,
+        transform: [{ translateY: 0 }, { scaleX: 1.06 - 0.06 * e }, { scaleY: 1.06 - 0.06 * e }] as const,
+        ...(Platform.OS === 'web' ? { filter: 'blur(' + (8 * (1 - e)).toFixed(2) + 'px)' } : null),
+      } as any;
     }
     return { opacity: p, transform: [{ translateY: -22 * (1 - p) }, { scaleX: 1 }, { scaleY: 1 }] as const };
   });

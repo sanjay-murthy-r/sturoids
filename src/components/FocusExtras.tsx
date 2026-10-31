@@ -15,6 +15,8 @@ import { glide, rowIn, rowOut, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
 import { noteUse, useLearnt } from '../learn';
 import { todayKey } from '../utils';
+import { cheer } from '../cheerSound';
+import { Flicker } from './Cheer';
 
 const fmt = (min: number) => (min >= 60 ? Math.floor(min / 60) + ' h' + (min % 60 ? ' ' + (min % 60) + ' min' : '') : min + ' min');
 
@@ -56,7 +58,7 @@ export function TodayCard({ sessions, today, liveMin, goalMin, next }: {
         <Text style={T.kicker}>Today</Text>
         {streak > 1 ? (
           <View style={st.streak} accessibilityLabel={streak + ' days in a row'}>
-            <Ionicons name="flame-outline" size={13} color={C.amber} />
+            <Flicker><Ionicons name="flame-outline" size={13} color={C.amber} /></Flicker>
             <Text style={st.streakText}>{streak + ' days'}</Text>
           </View>
         ) : null}
@@ -106,6 +108,7 @@ export function ParkedCard({ parked, onPark, onUnpark }: { parked: string[]; onP
     if (!t) return;
     tick();
     noteUse('focus.park');
+    cheer('add');
     onPark(t);
     setText('');
   };
