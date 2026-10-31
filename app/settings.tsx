@@ -56,6 +56,8 @@ import { useBringIntoView } from '../src/hooks/useBringIntoView';
 import { TWO_COL_AT, WIDE_MAX } from '../src/layout';
 import { startMakeover } from '../src/components/Makeover';
 import { CHEER } from '../src/components/Cheer';
+import { useCheerful } from '../src/components/Cheer';
+import { desktop, installApk, useUpdateReady } from '../src/autoUpdate';
 
 /** the list's column when Settings shows two panes */
 const SPLIT_LIST_W = 380;
@@ -578,13 +580,14 @@ function SettingsSiftField({ active }: { active: boolean }) {
   const theme = useTheme();
   // only the list's bar: on a page of Settings, Sift arrives its usual way
   const anchor = useSiftAnchor('settings', active);
+  const cheerful = useCheerful();
   const well = theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') };
   return (
     <Animated.View ref={anchor.ref} style={anchor.style} collapsable={false}>
     <Pressable
       onPress={() => { tap(); openSift('other', { scope: 'settings' }); }}
       accessibilityRole="search" accessibilityLabel="Search settings" accessibilityHint="Opens Sift on its Settings filter"
-      style={({ pressed }) => [st.searchWell, well, pressed && { opacity: 0.8 }]}
+      style={({ pressed }) => [st.searchWell, well, cheerful && theme !== 'minimal' && { backgroundColor: C.inset + 'CC' }, pressed && { opacity: 0.8 }]}
     >
       <Ionicons name="search" size={15} color={C.textFaint} />
       <Text style={st.searchText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>Search settings</Text>
@@ -839,6 +842,8 @@ type UpdateState =
 
 const UpdatesCard = React.memo(function UpdatesCard() {
   const theme = useTheme();
+  const autoUpdate = useStore((s) => s.settings.autoUpdate);
+  const setSetting = useStore((s) => s.setSetting);
   const level = useAnimLevel();
   const repoDraft = useSettingDraft('githubRepo');
   const [state, setState] = useState<UpdateState>({ k: 'idle' });
@@ -871,8 +876,30 @@ const UpdatesCard = React.memo(function UpdatesCard() {
   const install = async (rel: Release) => {
     if (busy.current) return;
     const kind = installKind(rel);
+    // the desktop app installs its own update quietly and opens again on it
+    const pc = desktop();
+    if (kind === 'exe' && pc && rel.exe) {
+      busy.current = true;
+      tap();
+      setState({ k: 'downloading', rel, p: 0.5 });
+      try {
+        if (await pc.stageUpdate(rel.exe.url, rel.version)) { await pc.installNow(); return; }
+        setState({ k: 'available', rel });
+        Alert.alert('Install failed', 'The update could not be downloaded. Check your connection and try again.');
+      } finally {
+        busy.current = false;
+      }
+      return;
+    }
     if (kind !== 'apk') {
       openRelease(rel).catch(() => toast("Couldn't open GitHub"));
+      return;
+    }
+    // fetched already in the background: straight to Android's installer
+    const ready = useUpdateReady.getState();
+    if (ready.version === rel.version && ready.apk) {
+      tap();
+      installApk(ready.apk).then(() => setState({ k: 'handed', rel })).catch(() => {});
       return;
     }
     busy.current = true;
@@ -930,7 +957,7 @@ const UpdatesCard = React.memo(function UpdatesCard() {
       <View style={st.updKeys}>
         {rel && state.k !== 'handed' ? (
           <PillButton
-            label={state.k === 'downloading' ? 'Downloading…' : kind === 'apk' ? 'Install ' + rel.version : kind === 'exe' ? 'Download for PC' : 'Open on GitHub'}
+            label={state.k === 'downloading' ? 'Downloading…' : kind === 'apk' || (kind === 'exe' && desktop()) ? 'Install ' + rel.version : kind === 'exe' ? 'Download for PC' : 'Open on GitHub'}
             icon={kind === 'page' ? 'open-outline' : 'download-outline'} onPress={() => install(rel)}
           />
         ) : (
@@ -939,6 +966,19 @@ const UpdatesCard = React.memo(function UpdatesCard() {
             outline={state.k === 'handed'} onPress={check}
           />
         )}
+      </View>
+
+      {/* looking by itself: a little after launch and on coming back, at most every six hours */}
+      <View style={[st.updSource, { marginTop: 14 }]}>
+        <View style={{ flex: 1, marginRight: 12 }}>
+          <Text style={[T.body, { fontFamily: F.med }]}>Update by itself</Text>
+          <Text style={[T.caption, { marginTop: 2 }]}>
+            {Platform.OS === 'android'
+              ? 'Fetches a new version on Wi-Fi, then one tap and Android installs it.'
+              : desktop() ? 'Fetches a new version quietly and installs it when you close Sturoids.' : 'Looks for a new version now and then.'}
+          </Text>
+        </View>
+        <Toggle value={autoUpdate} onChange={(v) => setSetting('autoUpdate', v)} label="Update by itself" />
       </View>
 
       {/* where it looks: Sturoids' own releases, unless another repo is typed in */}

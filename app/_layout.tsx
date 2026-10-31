@@ -47,6 +47,13 @@ import { MakeoverHost } from '../src/components/Makeover';
 import { appIsUp } from '../src/actions';
 import { ShareIntake } from '../src/shareIntake';
 import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
+import { startAutoUpdate } from '../src/autoUpdate';
+
+/** Starts the quiet look for updates once the app is shown. */
+function AutoUpdate() {
+  React.useEffect(() => { startAutoUpdate(); }, []);
+  return null;
+}
 
 // the native splash stays up until the intro (or the app) has painted its first
 // frame — no bare-material gap between the splash icon and the first real frame
@@ -334,6 +341,7 @@ export default function RootLayout() {
       {showApp && <ArrangeHost />}
       {showApp && <CelebrateHost />}
       {showApp && <MakeoverHost />}
+      {showApp && <AutoUpdate />}
       {showApp && <ToastHost />}
       {/* covers everything while the app restarts into another profile */}
       <SwitchingOverlay />

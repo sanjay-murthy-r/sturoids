@@ -107,6 +107,7 @@ const DEFS: Record<SettingsPage, Def[]> = {
   updates: [
     ['Updates', 'Check for a new version', 'update version apk release'],
     ['Check for a new version', 'From the GitHub releases', 'update version github release apk download'],
+    ['Update by itself', 'Fetch new versions in the background', 'auto update automatic download install new version'],
   ],
   delete: [
     ['Delete', 'Your account, cloud data or this phone', 'erase wipe reset delete'],

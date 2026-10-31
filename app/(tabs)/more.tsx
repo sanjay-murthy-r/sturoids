@@ -17,6 +17,8 @@ import { openReport } from '../../src/reports';
 import { openSift } from '../../src/search/store';
 import { useSiftAnchor } from '../../src/search/anchor';
 import { BACKUP_ATTENTION_TEXT, useBackupAttention } from '../../src/cloud';
+import { useOpen } from '../../src/lock';
+import { useCheerful } from '../../src/components/Cheer';
 
 /** what a tool's count is of, so a screen reader hears "12 notes" rather than a bare number */
 const COUNT_OF: Partial<Record<ToolKey, [string, string]>> = {
@@ -33,8 +35,11 @@ const wellFor = (theme: ThemeMode) =>
  * One tool of the list, memoised: a count changing elsewhere re-renders its own row, not the list. It follows the
  * theme and the accent itself (a tool's colour can be the accent), since a memoised row is not repainted by the page.
  */
-const ToolRow = React.memo(function ToolRow({ tool, count, locked, onOpen, onMenu }: {
-  tool: Tool; count: number; locked: boolean; onOpen: (key: ToolKey) => void; onMenu: (tool: Tool) => void;
+const ToolRow = React.memo(function ToolRow({ tool, count, locked, open, onOpen, onMenu }: {
+  tool: Tool; count: number; locked: boolean;
+  /** a locked tool unlocked for now (its PIN entered this visit): the lock shows open */
+  open?: boolean;
+  onOpen: (key: ToolKey) => void; onMenu: (tool: Tool) => void;
 }) {
   const theme = useTheme();
   const countOf = COUNT_OF[tool.key];
@@ -48,7 +53,7 @@ const ToolRow = React.memo(function ToolRow({ tool, count, locked, onOpen, onMen
         <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{tool.desc}</Text>
       </View>
       {locked ? (
-        <Ionicons name="lock-closed-outline" size={15} color={C.textFaint} style={{ marginRight: 8 }} />
+        <Ionicons name={open ? 'lock-open-outline' : 'lock-closed-outline'} size={15} color={open ? C.accent : C.textFaint} style={{ marginRight: 8 }} />
       ) : null}
       {count ? (
         <Text style={st.count} accessibilityLabel={countOf ? count + ' ' + countOf[count === 1 ? 0 : 1] : undefined}>{count}</Text>
@@ -63,8 +68,8 @@ const ToolRow = React.memo(function ToolRow({ tool, count, locked, onOpen, onMen
  * shows every tool at once instead of one long narrow column. A pointer over it lifts it a little; a right click opens
  * its menu, as a long press does.
  */
-const ToolTile = React.memo(function ToolTile({ icon, iconColor, label, desc, count, locked, onPress, onMenu, width }: {
-  icon: string; iconColor: string; label: string; desc: string; count?: number; locked?: boolean;
+const ToolTile = React.memo(function ToolTile({ icon, iconColor, label, desc, count, locked, open, onPress, onMenu, width }: {
+  icon: string; iconColor: string; label: string; desc: string; count?: number; locked?: boolean; open?: boolean;
   onPress: () => void; onMenu?: () => void; width: number;
 }) {
   const theme = useTheme();
@@ -86,7 +91,7 @@ const ToolTile = React.memo(function ToolTile({ icon, iconColor, label, desc, co
           <Ionicons name={icon as any} size={22} color={iconColor} />
         </View>
         <View style={{ flex: 1 }} />
-        {locked ? <Ionicons name="lock-closed-outline" size={15} color={C.textFaint} style={{ marginRight: 6 }} /> : null}
+        {locked ? <Ionicons name={open ? 'lock-open-outline' : 'lock-closed-outline'} size={15} color={open ? C.accent : C.textFaint} style={{ marginRight: 6 }} /> : null}
         {count ? <Text style={st.count}>{count}</Text> : null}
       </View>
       <Text style={[st.title, { marginTop: 14 }]} numberOfLines={1}>{label}</Text>
@@ -153,6 +158,10 @@ export default function More() {
     notes: notesLocked ? 0 : notes, vault: videos, journal: journalLocked ? 0 : journalCount,
   };
   const lockedTool = (key: ToolKey) => (key === 'journal' && journalLocked) || (key === 'notes' && notesLocked);
+  // unlocked for now (the PIN entered this visit): the lock shows open until it locks again
+  const notesOpen = useOpen('notes');
+  const journalOpen = useOpen('journal');
+  const openTool_ = (key: ToolKey) => (key === 'notes' ? notesOpen : key === 'journal' ? journalOpen : false);
   const openMenu = React.useCallback((t: Tool) => { setMenuFor(t); setMenuOpen(true); }, []);
   const openArchive = React.useCallback(() => setArchiveSheet(true), []);
   // the page is a list: its header is the big title alone, with no line of context and nothing live
@@ -194,7 +203,7 @@ export default function More() {
               {tools.map((t) => (
                 <ToolTile
                   key={t.key} width={tileW} icon={t.icon} iconColor={colorOf(t.colorKey)} label={t.label} desc={t.desc}
-                  count={counts[t.key] || 0} locked={lockedTool(t.key)} onPress={() => openTool(t.key)} onMenu={() => openMenu(t)}
+                  count={counts[t.key] || 0} locked={lockedTool(t.key)} open={openTool_(t.key)} onPress={() => openTool(t.key)} onMenu={() => openMenu(t)}
                 />
               ))}
               {archivedTools.length ? (
@@ -208,7 +217,7 @@ export default function More() {
           <ListCard>
             {tools.map((t) => (
               <ToolRow
-                key={t.key} tool={t} count={counts[t.key] || 0} locked={lockedTool(t.key)}
+                key={t.key} tool={t} count={counts[t.key] || 0} locked={lockedTool(t.key)} open={openTool_(t.key)}
                 onOpen={openTool} onMenu={openMenu}
               />
             ))}
@@ -295,6 +304,8 @@ export default function More() {
  */
 function SiftField({ theme }: { theme: ThemeMode }) {
   const anchor = useSiftAnchor('more');
+  // Cheerful: the well lets the page's colour through a little, as the bars do
+  const cheerful = useCheerful();
   return (
     <Animated.View ref={anchor.ref} style={anchor.style} collapsable={false}>
     <Pressable
@@ -302,7 +313,7 @@ function SiftField({ theme }: { theme: ThemeMode }) {
       accessibilityRole="search"
       accessibilityLabel="Sift through everything"
       accessibilityHint="Opens Sift, the search across the whole app"
-      style={({ pressed }) => [st.sift, wellFor(theme), pressed && { opacity: 0.8 }]}
+      style={({ pressed }) => [st.sift, wellFor(theme), cheerful && theme !== 'minimal' && { backgroundColor: C.inset + 'CC' }, pressed && { opacity: 0.8 }]}
     >
       <Ionicons name="search" size={18} color={C.textFaint} />
       <Text style={st.siftText} numberOfLines={1}>Sift through everything</Text>

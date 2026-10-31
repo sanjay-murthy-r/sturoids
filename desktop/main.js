@@ -5,8 +5,11 @@
 // player only plays inside a page served over http. Only one copy runs at a time (a second launch brings the first
 // forward), so the address is always free for it.
 
-const { app, BrowserWindow, Menu, shell, session } = require('electron');
+const { app, BrowserWindow, Menu, shell, session, ipcMain } = require('electron');
 const http = require('http');
+const https = require('https');
+const os = require('os');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -63,7 +66,7 @@ function createWindow() {
     icon: path.join(__dirname, 'icon.png'),
     autoHideMenuBar: true,
     show: false,
-    webPreferences: { contextIsolation: true, sandbox: true, spellcheck: true },
+    webPreferences: { contextIsolation: true, sandbox: true, spellcheck: true, preload: path.join(__dirname, 'preload.js') },
   });
   if (kept?.maximized) win.maximize();
   win.once('ready-to-show', () => win.show());
@@ -89,6 +92,71 @@ function createWindow() {
   });
   win.loadURL('http://127.0.0.1:' + PORT + '/');
 }
+
+/* ---------------------------------------------------------------- updates */
+
+// A new version is fetched in the background (the page asks, having found it on GitHub), then installed quietly by the
+// installer's own silent mode: at once if the user says so (Sturoids closes and opens again on the new version), or
+// otherwise as Sturoids is closed, so the next launch is simply the new version. No window, no questions.
+
+/** only GitHub's own addresses are fetched from */
+const TRUSTED = /^https:\/\/(github\.com|objects\.githubusercontent\.com|release-assets\.githubusercontent\.com)\//;
+let staged = null; // { file, version }
+let installing = false;
+
+function fetchTo(url, file, hops = 0) {
+  return new Promise((resolve, reject) => {
+    if (hops > 6 || !TRUSTED.test(url)) { reject(new Error('untrusted address')); return; }
+    https.get(url, { headers: { 'User-Agent': 'Sturoids' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        fetchTo(res.headers.location, file, hops + 1).then(resolve, reject);
+        return;
+      }
+      if (res.statusCode !== 200) { res.resume(); reject(new Error('status ' + res.statusCode)); return; }
+      const out = fs.createWriteStream(file + '.part');
+      res.pipe(out);
+      out.on('finish', () => out.close(() => { fs.rename(file + '.part', file, (e) => (e ? reject(e) : resolve())); }));
+      out.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+ipcMain.handle('stage-update', async (_e, url, version) => {
+  if (typeof url !== 'string' || typeof version !== 'string' || !/^[\w.-]{1,32}$/.test(version)) return false;
+  if (staged && staged.version === version && fs.existsSync(staged.file)) return true;
+  const file = path.join(os.tmpdir(), 'Sturoids-Setup-' + version + '.exe');
+  try {
+    await fetchTo(url, file);
+    staged = { file, version };
+    return true;
+  } catch {
+    return false;
+  }
+});
+ipcMain.handle('staged-version', () => (staged && fs.existsSync(staged.file) ? staged.version : null));
+
+/** Runs the waiting installer quietly; `reopen` opens the new version once it is in. */
+function runInstaller(reopen) {
+  if (!staged || installing || !fs.existsSync(staged.file)) return false;
+  installing = true;
+  const args = ['/S'];
+  if (reopen) args.push('--force-run');
+  try {
+    spawn(staged.file, args, { detached: true, stdio: 'ignore' }).unref();
+    return true;
+  } catch {
+    installing = false;
+    return false;
+  }
+}
+ipcMain.handle('install-now', () => {
+  if (!runInstaller(true)) return false;
+  setTimeout(() => app.quit(), 300);
+  return true;
+});
+// closing Sturoids with a version waiting installs it, quietly, for next time
+app.on('will-quit', () => { if (staged && !installing) runInstaller(false); });
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();

@@ -18,7 +18,7 @@
     "appId": "com.sanjay.sturoids",
     "productName": "Sturoids",
     "artifactName": "Sturoids-Setup-${version}.${ext}",
-    "files": ["main.js", "icon.png", "app/**/*"],
+    "files": ["main.js", "preload.js", "icon.png", "app/**/*"],
     "directories": { "output": "dist" },
     "win": { "target": "nsis", "icon": "icon.png" },
     "nsis": {

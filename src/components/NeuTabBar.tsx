@@ -7,7 +7,7 @@ import { StackActions } from '@react-navigation/native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { C, CHROME_FONT_MAX, F, MIN, TRACK, bgFor } from '../theme';
 import { useTheme } from './UI';
-import { EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, RISE_OUT, SINK_IN, TAB_FADE, TAB_SHIFT, useAnimLevel } from './Motion';
+import { EASE_EMPHASISED, EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, RISE_OUT, SINK_IN, TAB_FADE, TAB_SHIFT, useAnimLevel } from './Motion';
 import { useStore } from '../store';
 import { normaliseSlots, toolByKey } from '../tools';
 import { TAB_ROUTES } from '../toolNav';
@@ -181,6 +181,8 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
   const focusIndex = routeNames.indexOf(focusedName as string);
   const [slotW, setSlotW] = React.useState(0);
   const dotAt = useSharedValue(Math.max(0, focusIndex));
+  const dotFrom = useSharedValue(Math.max(0, focusIndex));
+  const dotTo = useSharedValue(Math.max(0, focusIndex));
   const dotFade = useSharedValue(1);
   const lastIndex = React.useRef(focusIndex);
   React.useEffect(() => {
@@ -194,12 +196,22 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
       dotFade.value = withSequence(withTiming(0, { duration: 80, easing: EASE_EXIT }), withTiming(1, { duration: 120, easing: EASE_OUT }));
       dotAt.value = withDelay(80, withTiming(focusIndex, { duration: 1 }));
     } else {
-      dotAt.value = withTiming(focusIndex, TAB_SHIFT);
+      // it runs across: quick off the mark, settling into its place, stretched a little while it travels
+      dotFrom.value = dotAt.value;
+      dotTo.value = focusIndex;
+      const far = Math.abs(focusIndex - dotAt.value);
+      dotAt.value = withTiming(focusIndex, { duration: Math.min(460, 300 + far * 45), easing: EASE_EMPHASISED });
     }
   }, [focusIndex, level]);
-  const dotStyle = useAnimatedStyle(() => (vertical
-    ? { opacity: dotFade.value, transform: [{ translateY: dotAt.value * RAIL_PITCH }] }
-    : { opacity: dotFade.value, transform: [{ translateX: dotAt.value * slotW }] }), [slotW, vertical]);
+  const dotStyle = useAnimatedStyle(() => {
+    const span = Math.abs(dotTo.value - dotFrom.value);
+    const p = span > 0 ? Math.min(1, Math.abs(dotAt.value - dotFrom.value) / span) : 1;
+    // longest in the middle of the run, round again as it arrives
+    const stretch = 1 + Math.min(2.6, span * 1.1) * Math.sin(Math.PI * p);
+    return vertical
+      ? { opacity: dotFade.value, transform: [{ translateY: dotAt.value * RAIL_PITCH }, { scaleY: stretch }] as const }
+      : { opacity: dotFade.value, transform: [{ translateX: dotAt.value * slotW }, { scaleX: stretch }] as const };
+  }, [slotW, vertical]);
 
   const metaFor = (name: string): ItemMeta => {
     if (name === 'index') return TODAY;

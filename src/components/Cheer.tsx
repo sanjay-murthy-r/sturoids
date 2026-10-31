@@ -303,7 +303,7 @@ function useCheerLoop(ms: number, delay = 0, rest = 0) {
 
 /** A small sparkle that twinkles beside something (the greeting), in Cheerful. Nothing in Elite. */
 export function Twinkle({ size = 16, color }: { size?: number; color?: string }) {
-  const { t, on } = useCheerLoop(2600, 300, 1800);
+  const { t, on } = useCheerLoop(3400, 300, 1400);
   const cheerful = useCheerful();
   const style = useAnimatedStyle(() => ({
     opacity: 0.55 + 0.45 * t.value,
@@ -329,16 +329,18 @@ export function Halo({ radius, color, every = 4200 }: { radius: number; color?: 
   React.useEffect(() => {
     if (!on) { cancelAnimation(t); t.value = 0; return undefined; }
     t.value = withDelay(1200, withRepeat(withSequence(
-      withTiming(1, { duration: 1400, easing: Easing.out(Easing.cubic) }),
+      withTiming(1, { duration: 1800, easing: Easing.out(Easing.quad) }),
       withTiming(0, { duration: 0 }),
-      withTiming(0, { duration: every - 1400 }),
+      withTiming(0, { duration: Math.max(600, every - 1800) }),
     ), -1));
     return () => cancelAnimation(t);
   }, [on]);
-  const style = useAnimatedStyle(() => ({
-    opacity: t.value > 0 ? 0.5 * (1 - t.value) : 0,
-    transform: [{ scale: 1 + 0.35 * t.value }],
-  }));
+  // it eases in before it swells, and fades as it grows, so it never pops into view or snaps away
+  const style = useAnimatedStyle(() => {
+    const k = t.value;
+    const fadeIn = Math.min(1, k / 0.18);
+    return { opacity: 0.42 * fadeIn * (1 - k) * (1 - k), transform: [{ scale: 1 + 0.3 * k }] };
+  });
   if (!on) return null;
   return (
     <Animated.View
@@ -350,10 +352,10 @@ export function Halo({ radius, color, every = 4200 }: { radius: number; color?: 
 
 /** A flame (or any small icon) that flickers softly, as a streak's does in Cheerful; still in Elite. */
 export function Flicker({ children }: { children: React.ReactNode }) {
-  const { t, on } = useCheerLoop(1500, 0, 400);
+  const { t, on } = useCheerLoop(2200, 0, 0);
   const style = useAnimatedStyle(() => ({
-    transform: [{ scaleY: 1 + 0.12 * t.value }, { rotate: (t.value - 0.5) * 8 + 'deg' }] as const,
-    opacity: 0.85 + 0.15 * t.value,
+    transform: [{ scaleY: 1 + 0.08 * t.value }, { rotate: (t.value - 0.5) * 5 + 'deg' }] as const,
+    opacity: 0.88 + 0.12 * t.value,
   }));
   return <Animated.View style={on ? style : null}>{children}</Animated.View>;
 }

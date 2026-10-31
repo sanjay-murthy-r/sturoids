@@ -1,6 +1,6 @@
 // Updates from GitHub: the latest release of the repo Settings names (Sturoids' own unless another is typed in), and
-// on a phone, its APK downloaded and handed to Android's installer. On a PC the release's installer is opened in the
-// browser instead (the desktop app cannot replace itself while it runs).
+// on a phone, its APK downloaded and handed to Android's installer. The desktop app fetches its installer and runs it
+// quietly (desktop/main.js); in a plain browser the release's page opens. Looking by itself: src/autoUpdate.ts.
 
 import { Linking, Platform } from 'react-native';
 import { compareVersions } from './utils';

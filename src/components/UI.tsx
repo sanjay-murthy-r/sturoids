@@ -29,6 +29,7 @@ import { SiftScope, openSift, siftPull } from '../search/store';
 import { TimeWheel, defaultTime, isTime, timeLabel } from './TimeWheel';
 import { ScrollMemoryMode, useScrollMemory } from '../hooks/useScrollMemory';
 import { Backdrop, Bob, Sparks, useCheerful } from './Cheer';
+import { BlurView } from 'expo-blur';
 import { cheer } from '../cheerSound';
 
 export { TimeWheel } from './TimeWheel';
@@ -72,15 +73,32 @@ export function ScreenBG({ children, guard = false, fling = true, maxWidth = REA
       <Backdrop minimal={theme === 'minimal'} />
       {column ? <View style={{ flex: 1, width: '100%', maxWidth: maxWidth as number, alignSelf: 'center' }}>{children}</View> : children}
       {guard && (
-        <View
-          pointerEvents="none"
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: bg }}
-        />
+        <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top }}>
+          <Ground />
+        </View>
       )}
     </View>
   );
   if (!guard || !fling) return body;
   return <GestureDetector gesture={gesture}>{body}</GestureDetector>;
+}
+
+/**
+ * The ground of a bar (a header, the band under the status bar, the tab bar): the page's own colour. In Cheerful the
+ * page has colour drifting behind it, so a bar is frosted instead: the colour shows softly through it, and a bar never
+ * reads as a flat slab laid over the glow.
+ */
+export function Ground({ style }: { style?: ViewStyle }) {
+  const theme = useTheme();
+  const cheerful = useCheerful();
+  const bg = bgFor(theme);
+  if (!cheerful) return <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: bg }, style]} />;
+  return (
+    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden' }, style]}>
+      <BlurView intensity={26} tint="dark" experimentalBlurMethod="dimezisBlurView" style={StyleSheet.absoluteFill} />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: bg + 'C4' }]} />
+    </View>
+  );
 }
 
 /* ---------------------------------------------------------------- the tool header */
@@ -388,14 +406,13 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
       style={[
         hdr.bar, overlay && hdr.over,
         { paddingTop: insets.top + BAR_PAD, paddingLeft: back ? BAR_SIDE : S.pad },
-        !overlay && { backgroundColor: bgFor(theme) },
       ]}
     >
       {overlay ? (
-        <Animated.View
-          pointerEvents={solid ? 'auto' : 'none'} style={[StyleSheet.absoluteFill, { backgroundColor: bgFor(theme) }, groundStyle]}
-        />
-      ) : null}
+        <Animated.View pointerEvents={solid ? 'auto' : 'none'} style={[StyleSheet.absoluteFill, groundStyle]}>
+          <Ground />
+        </Animated.View>
+      ) : <Ground />}
       {/* the header band takes a one-finger drag down (Sift): from under the status bar, which is the phone's shade, to
           the bar's lower rim; the tray's buttons sit above it and keep their taps */}
       {bandPull ? (

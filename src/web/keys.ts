@@ -48,6 +48,9 @@ export function useDesktopKeys() {
       }
       if (e.key === 'Escape') {
         if (useSearch.getState().open) {
+          // heard first (capture), since Sift's own field would otherwise keep the key to itself
+          e.preventDefault();
+          e.stopPropagation();
           closeSift();
           return;
         }
@@ -56,11 +59,11 @@ export function useDesktopKeys() {
         if (router.canGoBack()) router.back();
       }
     };
-    window.addEventListener('keydown', on);
+    window.addEventListener('keydown', on, true);
     const offSideways = sidewaysScrolling();
     const offDrags = dragsAreNotClicks();
     return () => {
-      window.removeEventListener('keydown', on);
+      window.removeEventListener('keydown', on, true);
       offSideways();
       offDrags();
     };

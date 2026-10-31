@@ -10,6 +10,7 @@ import Animated, {
   useDerivedValue, useSharedValue, withDelay, withTiming,
 } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, bgFor, neuInset, neuRaised, oneLine } from '../theme';
 import { useStore } from '../store';
@@ -39,14 +40,16 @@ import { rightClick } from '../web/rightClick';
 // comes up once the motion has settled. Results are worked out a frame after typing pauses, and the last ones stay up
 // until the new ones are ready, so nothing flashes. Pull the list down at its top, Back or Cancel to close.
 
-const OPEN_MS = 340;
-const CLOSE_MS = 240;
+const OPEN_MS = 400;
+const CLOSE_MS = 300;
 /** the pill a pull draws under the bar, about this wide: Sift's field grows out of it */
 const PILL_W = 96;
 /** the scrim's strength over the app when Sift is fully open */
 const SCRIM = 0.55;
 /** the app behind, fully open */
 const BACK_SCALE = 0.955;
+/** the soft leading edge of the rising blur */
+const FEATHER = 48;
 /** how far out of focus a full pull takes the app, before Sift opens */
 const PULL_SOFTEN = 0.55;
 /** results are worked out this long after the last keystroke, then on the next frame */
@@ -91,7 +94,14 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const style = useAnimatedStyle(() => (level === 'full' && away.value > 0
     ? { transform: [{ scale: 1 - (1 - BACK_SCALE) * away.value }] }
     : { transform: [{ scale: 1 }] }));
-  const blurStyle = useAnimatedStyle(() => ({ opacity: level === 'none' ? 0 : away.value }));
+  // the blur rises from the bottom of the screen, a soft edge leading it, and recedes back down the same way
+  const { height: winH } = useWindowDimensions();
+  const blurStyle = useAnimatedStyle(() => {
+    if (level !== 'full') return { height: winH + FEATHER, opacity: level === 'none' ? 0 : away.value };
+    const k = Math.min(1, away.value / 0.62);
+    const e = 1 - Math.pow(1 - k, 3);
+    return { height: (winH + FEATHER) * e, opacity: 1 };
+  });
   // the blur is there only while it shows: a full-screen blur costs, even when clear
   const [blurOn, setBlurOn] = React.useState(false);
   useAnimatedReaction(() => away.value > 0.001, (on, was) => { if (on !== was) runOnJS(setBlurOn)(on); });
@@ -99,8 +109,10 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     <Animated.View style={[{ flex: 1 }, style]}>
       {children}
       {blurOn && level !== 'none' ? (
-        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, blurStyle]}>
-          <BlurView intensity={level === 'full' ? 28 : 14} tint="dark" experimentalBlurMethod="dimezisBlurView" style={StyleSheet.absoluteFill} />
+        <Animated.View pointerEvents="none" style={[st.rise, blurStyle]}>
+          <BlurView intensity={level === 'full' ? 30 : 14} tint="dark" experimentalBlurMethod="dimezisBlurView" style={[st.riseBlur, { height: winH + FEATHER }]} />
+          {/* the leading edge: a soft dimming that eases the line where the blur begins */}
+          <LinearGradient pointerEvents="none" colors={['rgba(12,12,11,0.14)', 'rgba(12,12,11,0)']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={st.riseEdge} />
         </Animated.View>
       ) : null}
     </Animated.View>
@@ -408,7 +420,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       done();
       return undefined;
     }
-    siftShown.value = withTiming(0, { duration: CLOSE_MS, easing: EASE_EXIT }, (fin) => { if (fin) runOnJS(done)(); });
+    siftShown.value = withTiming(0, { duration: CLOSE_MS, easing: Easing.inOut(Easing.cubic) }, (fin) => { if (fin) runOnJS(done)(); });
     return undefined;
   }, [open]);
 
@@ -706,7 +718,14 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   }, [hintOn, dq, enterTarget]);
 
   /* ---- the panel's motion */
-  const panelStyle = useAnimatedStyle(() => ({ opacity: siftShown.value }));
+  // The fold: the app's blur rises from the bottom (AppFrame) while Sift settles in from the top down, its ground a
+  // breath behind the blur, then the field, then the filters and the results, each coming into focus in turn. Closing
+  // plays it back: the results go first, the field last, and the blur sinks away
+  const span = (p: number, a: number, b: number) => {
+    'worklet';
+    return Math.min(1, Math.max(0, (p - a) / (b - a)));
+  };
+  const panelStyle = useAnimatedStyle(() => ({ opacity: level === 'full' ? span(siftShown.value, 0.12, 0.62) : siftShown.value }));
   const scrimStyle = useAnimatedStyle(() => ({ opacity: SCRIM * siftShown.value }));
   // From a pull, the field grows out of the pill the pull drew under the bar: it starts the pill's width and a little
   // lower, fully there almost at once, and opens out to its own width; closing, it draws back into the pill the same
@@ -716,16 +735,13 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     if (anchored) return { opacity: 1, transform: [{ translateY: 0 }, { scaleX: 1 }, { scaleY: 1 }] as const };
     if (level !== 'full') return { opacity: siftShown.value };
     const p = siftShown.value;
-    if (fromPull) {
-      // Focus: the field comes into focus where it sits, from a little larger and soft to its own size and sharp
-      const e = Math.min(1, Math.max(0, (p - 0.12) / 0.88));
-      return {
-        opacity: e,
-        transform: [{ translateY: 0 }, { scaleX: 1.06 - 0.06 * e }, { scaleY: 1.06 - 0.06 * e }] as const,
-        ...(Platform.OS === 'web' ? { filter: 'blur(' + (8 * (1 - e)).toFixed(2) + 'px)' } : null),
-      } as any;
-    }
-    return { opacity: p, transform: [{ translateY: -22 * (1 - p) }, { scaleX: 1 }, { scaleY: 1 }] as const };
+    // the field comes into focus where it sits, first of Sift's parts: from a hair larger and soft to sharp
+    const e = 1 - Math.pow(1 - span(p, 0.16, 0.66), 3);
+    return {
+      opacity: e,
+      transform: [{ translateY: -8 * (1 - e) }, { scaleX: 1.04 - 0.04 * e }, { scaleY: 1.04 - 0.04 * e }] as const,
+      ...(Platform.OS === 'web' ? { filter: 'blur(' + (7 * (1 - e)).toFixed(2) + 'px)' } : null),
+    } as any;
   });
   // the well itself, from the bar's place and size to its own: moved and sized (never scaled), so its corners and words
   // stay true the whole way
@@ -743,10 +759,17 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     };
   });
   const cancelStyle = useAnimatedStyle(() => ({ opacity: anchored ? Math.max(0, (siftShown.value - 0.4) / 0.6) : 1 }));
-  const bodyStyle = useAnimatedStyle(() => ({
-    opacity: level === 'none' ? 1 : Math.max(0, (siftShown.value - 0.35) / 0.65),
-    transform: [{ translateY: (level === 'full' ? 14 * (1 - siftShown.value) : 0) + drag.value }],
-  }));
+  const bodyStyle = useAnimatedStyle(() => {
+    if (level === 'none') return { opacity: 1, transform: [{ translateY: drag.value }] };
+    if (level !== 'full') return { opacity: span(siftShown.value, 0.3, 1), transform: [{ translateY: drag.value }] };
+    // the filters and the results, after the field, coming down into focus from just above their place
+    const e = 1 - Math.pow(1 - span(siftShown.value, 0.3, 0.92), 3);
+    return {
+      opacity: e,
+      transform: [{ translateY: -14 * (1 - e) + drag.value }],
+      ...(Platform.OS === 'web' ? { filter: e < 1 ? 'blur(' + (6 * (1 - e)).toFixed(2) + 'px)' : 'none' } : null),
+    } as any;
+  });
 
   /* ---- pull the list down at its top to close */
   const onScroll = useAnimatedScrollHandler((e) => { listY.value = e.contentOffset.y; });
@@ -1014,6 +1037,9 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
 
 
 const st = StyleSheet.create({
+  rise: { position: 'absolute', left: 0, right: 0, bottom: 0, overflow: 'hidden' },
+  riseBlur: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  riseEdge: { position: 'absolute', left: 0, right: 0, top: 0, height: FEATHER },
   fieldRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: S.pad, paddingBottom: 12 },
   field: { flex: 1, height: 48, borderRadius: 16, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 6, gap: 8, overflow: 'hidden' },
   input: { flex: 1, color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, paddingVertical: 0 },
