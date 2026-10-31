@@ -426,15 +426,22 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
   // the room the bar leaves on its row, between the title and the tray, where the companion stands
   const titleRef = React.useRef<View>(null);
   const trayRef = React.useRef<View>(null);
+  const rowRef = React.useRef<View>(null);
   const remeasure = useRoomPublisher((done) => {
     const y = insets.top + BAR_PAD + BAR_ROW - 1;
     const winW = Dimensions.get('window').width;
     const finish = (titleRight: number, trayLeft: number) => {
       done({ left: Math.max(titleRight, geo?.current.hero ?? 0) + 10, right: trayLeft - 8, y });
     };
+    // with no buttons the room runs to the row's own end: on a wide window that is the centred column's edge, not the
+    // window's, so the companion stays with the page rather than off at the far side
+    const rowEnd = (then: (end: number) => void) => {
+      if (!rowRef.current) { then(winW - S.pad); return; }
+      rowRef.current.measureInWindow((x, _y, w) => then(w > 0 ? Math.min(winW - S.pad, x + w) : winW - S.pad));
+    };
     const tray = (titleRight: number) => {
-      if (!trayRef.current) { finish(titleRight, winW - S.pad); return; }
-      trayRef.current.measureInWindow((x, _y, w) => finish(titleRight, w > 0 ? x : winW - S.pad));
+      if (!trayRef.current) { rowEnd((end) => finish(titleRight, end)); return; }
+      trayRef.current.measureInWindow((x, _y, w) => { if (w > 0) finish(titleRight, x); else rowEnd((end) => finish(titleRight, end)); });
     };
     if (!titleRef.current) { tray(0); return; }
     titleRef.current.measureInWindow((x, _y, w) => tray(w > 0 ? x + w : 0));
@@ -468,7 +475,7 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
           <Animated.View collapsable={false} style={[StyleSheet.absoluteFill, { top: insets.top }]} />
         </GestureDetector>
       ) : null}
-      <Animated.View pointerEvents={through} style={[hdr.row, contentStyle, (bandPull || pullProgress) && !contentStyle ? pullRow : null]}>
+      <Animated.View ref={rowRef as any} collapsable={false} pointerEvents={through} style={[hdr.row, contentStyle, (bandPull || pullProgress) && !contentStyle ? pullRow : null]}>
         {back ? (
           <Bouncy
             onPress={onBack || (() => router.back())} scaleTo={1} sink={false} radius={BACK_W / 2} hitSlop={4}

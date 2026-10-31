@@ -12,6 +12,7 @@ import { CUTE, CUTE_BOLD, GridArt, Sprite } from '../src/components/Mascot';
 import { COLOR_SETS, FLIERS, Kind, NAMES, PROPS, Pose, REST, colorSet, gearFor } from '../src/mascot/art';
 import { startMakeover } from '../src/components/Makeover';
 import { tick } from '../src/haptics';
+import { fmtClockTime } from '../src/utils';
 
 const TALK: { key: 'often' | 'some' | 'asked'; label: string; line: string }[] = [
   { key: 'often', label: 'Chatty', line: 'Up to six little lines a day, twenty minutes apart at least.' },
@@ -87,10 +88,17 @@ export default function CompanionPage() {
                 <Text style={[T.body, { color: C.accent, fontFamily: F.semi }]}>Switch to Cheerful</Text>
               </Pressable>
             </View>
-          ) : s.mascotOut && !off ? (
+          ) : (s.mascotOut || s.mascotHideUntil > Date.now()) && !off ? (
             <View style={[CARD, st.note]}>
-              <Text style={T.body}>{name} is out for a walk. Knock on the little door at the right edge of the screen, or:</Text>
-              <Pressable onPress={() => setSetting('mascotOut', false)} accessibilityRole="button" style={{ marginTop: 8 }}>
+              <Text style={T.body}>
+                {s.mascotOut
+                  ? name + ' is out for a walk. Knock on the little door at the right edge of the screen, or:'
+                  : (() => {
+                    const d = new Date(s.mascotHideUntil);
+                    return name + ' is hiding until ' + fmtClockTime(d.getHours() * 60 + d.getMinutes(), s.hour24) + '. Or:';
+                  })()}
+              </Text>
+              <Pressable onPress={() => { setSetting('mascotOut', false); setSetting('mascotHideUntil', 0); }} accessibilityRole="button" style={{ marginTop: 8 }}>
                 <Text style={[T.body, { color: C.accent, fontFamily: F.semi }]}>Call {name} back</Text>
               </Pressable>
             </View>

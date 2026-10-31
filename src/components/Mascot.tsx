@@ -188,8 +188,11 @@ function Companion({ kind }: { kind: Kind }) {
     const left = hideUntil - Date.now();
     setHidden(left > 0);
     if (left <= 0) return undefined;
-    const t = setTimeout(() => { setHidden(false); useStore.getState().setSetting('mascotHideUntil', 0); }, left);
-    return () => clearTimeout(t);
+    const back = () => { setHidden(false); useStore.getState().setSetting('mascotHideUntil', 0); };
+    const t = setTimeout(back, left);
+    // a phone asleep holds its timers back: coming back to the app after the time is up brings it back at once
+    const sub = AppState.addEventListener('change', (st) => { if (st === 'active' && Date.now() >= hideUntil) back(); });
+    return () => { clearTimeout(t); sub.remove(); };
   }, [hideUntil]);
   const out = settings.mascotOut || hidden;
   const level = useAnimLevel();
