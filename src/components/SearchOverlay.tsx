@@ -181,11 +181,15 @@ function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onLongP
 }
 
 /** A section's head: a kicker, sticky at the top of the list while its rows scroll under it. */
-function SectionHead({ label, theme, more }: { label: string; theme: ThemeMode; more?: number }) {
+function SectionHead({ label, theme, more, onMore }: { label: string; theme: ThemeMode; more?: number; onMore?: () => void }) {
   return (
     <View style={[st.head, { backgroundColor: bgFor(theme) }]} accessibilityRole="header">
       <Text style={T.kicker} maxFontSizeMultiplier={CHROME_FONT_MAX}>{label}</Text>
-      {more ? <Text style={st.headMore} maxFontSizeMultiplier={CHROME_FONT_MAX}>{'+' + more + ' more'}</Text> : null}
+      {more && onMore ? (
+        <Pressable onPress={onMore} hitSlop={10} accessibilityRole="button" accessibilityLabel={'Show more ' + label}>
+          <Text style={[st.headMore, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{'+' + more + ' more'}</Text>
+        </Pressable>
+      ) : more ? <Text style={st.headMore} maxFontSizeMultiplier={CHROME_FONT_MAX}>{'+' + more + ' more'}</Text> : null}
     </View>
   );
 }
@@ -218,7 +222,7 @@ function TopCard({ kicker, children, theme, onPress, onLongPress, label }: {
 /* ---------------------------------------------------------------- the list's items */
 
 type Item =
-  | { t: 'head'; key: string; label: string; more?: number }
+  | { t: 'head'; key: string; label: string; more?: number; onMore?: () => void }
   | { t: 'doc'; key: string; doc: SiftDoc; index: number }
   | { t: 'top'; key: string; doc: SiftDoc }
   | { t: 'math'; key: string; expr: string; answer: string }
@@ -362,6 +366,10 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   // a chosen filter moves to the front, so the row goes back to its start to show it there
   React.useEffect(() => { chipsRef.current?.scrollTo({ x: 0, animated: level !== 'none' }); }, [scopes.length]);
   const [dq, setDq] = React.useState(q);
+  // how many results past a section's first few have been asked for, by section (its "+N more"); a new search or filter
+  // starts them over
+  const [extra, setExtra] = React.useState<Record<string, number>>({});
+  React.useEffect(() => { setExtra({}); }, [dq, scopes]);
   const [pinFor, setPinFor] = React.useState<'notes' | 'journal' | null>(null);
 
   React.useEffect(() => { loadSiftMemory(); }, []);
@@ -469,7 +477,8 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     return sources.index.search(dq, {
       filter: (d) => inScope(d.section, scopes),
       usage: (k) => memory.uses[k] || 0,
-      perSection: isAll ? 5 : scopes.length === 1 ? 30 : 12,
+      // every hit of a section is kept; the list shows as many as have been asked for
+      perSection: 1000,
     });
   }, [dq, scopes, sources.rev, restore, memory.uses]);
 
@@ -539,7 +548,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
           }
         }
       }
-      if (has('settings')) {
+      if (isAll) {
         const recent = memory.recent.filter((r) => !pinnedKeys.has(queryPinKey(r)));
         if (recent.length) {
           out.push({ t: 'head', key: 'h-recent', label: 'Recent searches' });
@@ -592,22 +601,32 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     if (isAll) {
       // a day: what it holds
       const d = parseDay(query);
-      if (d) out.push({ t: 'day', key: 'day:' + d.key, day: dayCard(d.key, d.date, hour24, journalLocked, archived) });
+      // a sum is not a day: "10-5" is five (a slashed one, "23/10", is both)
+      if (d && (!math || query.includes('/'))) out.push({ t: 'day', key: 'day:' + d.key, day: dayCard(d.key, d.date, hour24, journalLocked, archived) });
     }
 
-    if (result?.top && !out.length) out.push({ t: 'top', key: 'top:' + result.top.doc.key, doc: result.top.doc });
-    const rest = result ? (out.length && result.top ? [{ section: result.top.doc.section, hits: [result.top], more: 0 }, ...result.sections] : result.sections) : [];
+    // the top hit leads the list as its own card, or, with a sum or a day above it, goes down into its section (decided
+    // before the card is added, so a top hit is never listed twice)
+    const topCard = !!result?.top && !out.length;
+    if (topCard) out.push({ t: 'top', key: 'top:' + result!.top!.doc.key, doc: result!.top!.doc });
+    const rest = result ? (!topCard && result.top ? [{ section: result.top.doc.section, hits: [result.top], more: 0 }, ...result.sections] : result.sections) : [];
     // a top hit pushed down by a sum or a day joins its own section, at its head
     const merged = new Map<string, { hits: SiftDoc[]; more: number }>();
+    const base = isAll ? 5 : scopes.length === 1 ? 30 : 12;
     for (const sec of rest) {
       const m = merged.get(sec.section) ?? { hits: [], more: 0 };
       for (const h of sec.hits) if (!m.hits.some((x) => x.key === h.doc.key)) m.hits.push(h.doc);
       m.more += sec.more;
       merged.set(sec.section, m);
     }
-    for (const [section, { hits, more }] of merged) {
-      out.push({ t: 'head', key: 'h:' + section, label: section, more: more || undefined });
-      for (const doc of hits) out.push({ t: 'doc', key: doc.key, doc, index: n++ });
+    for (const [section, { hits }] of merged) {
+      const shown = base + (extra[section] || 0);
+      const more = Math.max(0, hits.length - shown);
+      out.push({
+        t: 'head', key: 'h:' + section, label: section, more: more || undefined,
+        onMore: more ? () => { tick(); setExtra((x) => ({ ...x, [section]: (x[section] || 0) + 25 })); } : undefined,
+      });
+      for (const doc of hits.slice(0, shown)) out.push({ t: 'doc', key: doc.key, doc, index: n++ });
     }
 
     // the journal's texts are still being read
@@ -678,7 +697,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       });
     }
     return out;
-  }, [dq, scopes, isAll, has, result, math, memory, pinnedKeys, index, journalLoading, notesLocked, journalLocked, archived, subjects, hour24, aiLinks, go, run, openRecent]);
+  }, [dq, scopes, isAll, extra, has, result, math, memory, pinnedKeys, index, journalLoading, notesLocked, journalLocked, archived, subjects, hour24, aiLinks, go, run, openRecent]);
 
   /**
    * Enter: a sum goes to the Calculator, written in (even one with no answer yet, to be finished there); anything else
@@ -697,7 +716,39 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     const doc = fresh.top?.doc ?? fresh.sections[0]?.hits[0]?.doc;
     return doc ? { kind: 'doc', doc } : null;
   }, [dq, items, sources.index, scopes, memory.uses]);
+
+  /* ---- the PC's keyboard: Up and Down move a highlight through the results, Enter opens it, typing starts it over */
+  const [sel, setSel] = React.useState(0);
+  // the highlight is drawn only once a key has moved it; before that Enter opens the top result as ever
+  const [kbd, setKbd] = React.useState(false);
+  const selectable = React.useMemo(() => items.filter((x) => x.t === 'top' || x.t === 'doc' || x.t === 'row'), [items]);
+  React.useEffect(() => { setSel(0); setKbd(false); }, [dq, scopes]);
+  const selKey = kbd ? selectable[Math.min(sel, selectable.length - 1)]?.key : undefined;
+  const nodes = React.useRef(new Map<string, any>());
+  const onKey = (e: any) => {
+    const k = e.nativeEvent?.key;
+    if (Platform.OS !== 'web' || (k !== 'ArrowDown' && k !== 'ArrowUp') || !selectable.length) return;
+    e.preventDefault?.();
+    const next = kbd ? Math.max(0, Math.min(selectable.length - 1, Math.min(sel, selectable.length - 1) + (k === 'ArrowDown' ? 1 : -1))) : 0;
+    setKbd(true);
+    setSel(next);
+    // into view, clear of the sticky section head
+    const el = nodes.current.get(selectable[next].key) as HTMLElement | undefined;
+    let box: HTMLElement | null = el?.parentElement ?? null;
+    while (box && !(box.scrollHeight > box.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+    if (el && box) {
+      const r = el.getBoundingClientRect();
+      const c = box.getBoundingClientRect();
+      if (r.top < c.top + 48) box.scrollTop -= c.top + 48 - r.top;
+      else if (r.bottom > c.bottom - 8) box.scrollTop += r.bottom - (c.bottom - 8);
+    }
+  };
   const onSubmit = () => {
+    if (kbd && selKey) {
+      const x = selectable.find((i) => i.key === selKey);
+      if (x && (x.t === 'top' || x.t === 'doc')) { go(x.doc); return; }
+      if (x && x.t === 'row') { x.onPress(); return; }
+    }
     const target = enterTarget(q);
     if (!target) return;
     if (target.kind === 'sum') {
@@ -815,7 +866,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   const renderItem = (x: Item) => {
     switch (x.t) {
       case 'head':
-        return <SectionHead label={x.label} theme={theme} more={x.more} />;
+        return <SectionHead label={x.label} theme={theme} more={x.more} onMore={x.onMore} />;
       case 'doc':
         return (
           <ResultRow
@@ -912,13 +963,15 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   const rows = React.useMemo(() => items.map((x) => (
     <Animated.View
       key={x.key}
+      ref={(n: any) => { if (n) nodes.current.set(x.key, n); else nodes.current.delete(x.key); }}
+      style={x.key === selKey ? [st.picked, { backgroundColor: theme === 'minimal' ? MIN.inset : C.pressDim }] : undefined}
       entering={x.t === 'head' ? undefined : entering('index' in x ? x.index : 0)}
       exiting={exiting}
       layout={x.t === 'head' ? undefined : layout}
     >
       {renderItem(x)}
     </Animated.View>
-  )), [items, terms, theme, level, pinnedKeys]);
+  )), [items, terms, theme, level, pinnedKeys, selKey]);
 
   const column = width > PANEL_MAX + S.pad * 2 ? { width: PANEL_MAX, alignSelf: 'center' as const } : null;
   const fieldWell = theme === 'minimal'
@@ -938,6 +991,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
                 ref={inputRef}
                 value={q}
                 onChangeText={setQ}
+                onKeyPress={onKey}
                 placeholder="Sift through everything"
                 placeholderTextColor={C.textFaint}
                 selectionColor={C.accent}
@@ -1053,6 +1107,7 @@ const st = StyleSheet.create({
   enterHintRow: { position: 'absolute', left: S.pad + 4, right: S.pad + 4, top: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', gap: 6 },
   enterHintText: { flex: 1, color: C.textFaint, fontFamily: F.sm, ...oneLine(12), letterSpacing: TRACK.fine },
   hint: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, lineHeight: 17, letterSpacing: TRACK.fine, paddingHorizontal: S.pad, paddingTop: 22, opacity: 0.8 },
+  picked: { borderRadius: 14 },
   rowPin: { marginLeft: 8 },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: S.pad, paddingTop: 18, paddingBottom: 8 },
   headMore: { color: C.textFaint, fontFamily: F.sm, fontSize: 11, letterSpacing: TRACK.fine },

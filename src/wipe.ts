@@ -19,10 +19,11 @@ async function emptyFolder(dir: string) {
 /**
  * What the app leaves in its cache that holds the user's data: exported backups and kept copies (every tool, the
  * locked journal included, in plain text), the pieces an export or an import works with, the picker's copies of
- * imported backups and of chosen photos, and the photos the profile picture was made from.
+ * imported backups and of chosen photos, the photos the profile picture was made from, and the reports and PDFs made to
+ * be shared (they can hold the journal's words).
  */
 const CACHE_PREFIXES = ['sturoids-', 'backup-src-', 'backup-data-'];
-const CACHE_FOLDERS = ['DocumentPicker', 'ImagePicker', 'ImageManipulator'];
+const CACHE_FOLDERS = ['DocumentPicker', 'ImagePicker', 'ImageManipulator', 'reports', 'Print'];
 
 async function clearCache() {
   const dir = FileSystem.cacheDirectory;

@@ -50,7 +50,7 @@ const ToolRow = React.memo(function ToolRow({ tool, count, locked, open, onOpen,
       </View>
       <View style={{ flex: 1, marginLeft: 14 }}>
         <Text style={st.title} numberOfLines={1}>{tool.label}</Text>
-        <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>{tool.desc}</Text>
+        <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={2}>{tool.desc}</Text>
       </View>
       {locked ? (
         <Ionicons name={open ? 'lock-open-outline' : 'lock-closed-outline'} size={15} color={open ? C.accent : C.textFaint} style={{ marginRight: 8 }} />
@@ -276,7 +276,7 @@ export default function More() {
               </View>
               <View style={{ flex: 1, marginLeft: 14 }}>
                 <Text style={st.title}>Reports & exports</Text>
-                <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={1}>One summary, or the full progress report, as PDF or CSV</Text>
+                <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={2}>One summary, or the full progress report, as PDF or CSV</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
             </ListRow>

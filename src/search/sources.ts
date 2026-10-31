@@ -8,7 +8,7 @@ import { runAction } from '../actions';
 import { markFreshNote } from '../freshNotes';
 import { openReport } from '../reports';
 import { openScoreNode } from '../scoresNav';
-import { DAY_NAMES, DayName, daysLabel, fmtClockTime, fmtMediaTime, fmtShortDate, toMinutes } from '../utils';
+import { DAY_NAMES, DayName, daysLabel, fmtClockTime, fmtMediaTime, fmtShortDate, toMinutes, todayKey } from '../utils';
 import { formatJournalDate, readBody, requestJournalOpen } from '../journal';
 import { useOpen } from '../lock';
 import { useProfiles, profileName, activeProfile, ProfileInfo } from '../profiles';
@@ -221,7 +221,9 @@ function noteDoc(n: Note): SiftDoc {
   const tags = [n.folder, n.subject, ...(n.tags || [])].filter(Boolean).join(' ');
   return {
     key: 'note:' + n.id, kind: 'note', section: 'Notes', title: n.title.trim() || 'Untitled note',
-    subtitle: [n.folder, fmtShortDate(new Date(n.updatedAt).toISOString().slice(0, 10))].filter(Boolean).join(' · '),
+    // the day it was edited on the phone's own calendar (the ISO date is UTC's, a day off in the small hours), and nothing
+    // for a note whose time is missing or broken, which would otherwise throw and take the whole index down
+    subtitle: [n.folder, Number.isFinite(n.updatedAt) ? fmtShortDate(todayKey(new Date(n.updatedAt))) : ''].filter(Boolean).join(' · '),
     tags,
     // a locked note's text is never indexed
     body: n.locked ? undefined : n.body,
@@ -233,12 +235,16 @@ function noteDoc(n: Note): SiftDoc {
 
 function journalDoc(e: JournalEntry): SiftDoc {
   const cached = journalBodies.get(e.id);
-  const body = cached && cached.u === e.updatedAt ? cached.body : e.excerpt;
+  // a text that could not be read (readBody answers '') leaves the excerpt to be found by
+  const body = cached && cached.u === e.updatedAt && cached.body ? cached.body : e.excerpt;
   const date = formatJournalDate(e.dateKey);
+  // found by its weekday and month, never by its numbers: "10" or "24" would otherwise match every entry of a month (a
+  // date typed in full finds the day through the day card, and an untitled entry carries its date as its title)
+  const dateWords = date.replace(/\d+/g, '');
   return {
     key: 'journal:' + e.id, kind: 'journal', section: 'Journal', title: e.title.trim() || date,
     subtitle: e.title.trim() ? date : e.wordCount ? e.wordCount + (e.wordCount === 1 ? ' word' : ' words') : 'Journal',
-    tags: (e.tags || []).join(' '), body, meta: e.dateKey, at: e.updatedAt,
+    tags: (e.tags || []).join(' '), body, meta: dateWords, at: e.updatedAt,
     payload: {
       icon: 'journal-outline', color: colorOf('gold'),
       open: () => { requestJournalOpen(e.dateKey, e.id); openTool('journal'); },
@@ -330,11 +336,13 @@ const calcDoc = (c: CalcEntry): SiftDoc => ({
   payload: { icon: 'calculator-outline', color: colorOf('amber'), open: () => openTool('calculator', { expr: c.expr }) },
 });
 
-function trashDoc(t: TrashItem): SiftDoc {
+function trashDoc(t: TrashItem, notesLocked = false, journalLocked = false): SiftDoc {
   const [icon, label, lockedLabel] = TRASH_LABEL[t.kind] ?? ['trash-outline', 'Item', 'Locked item'];
+  // an item of a tool that is locked right now is as hidden as one locked itself
+  const hidden = t.locked || (notesLocked && (t.kind === 'note' || t.kind === 'attachment')) || (journalLocked && t.kind === 'journal');
   return {
     // a locked item is found by what it is, never by its title
-    key: 'trash:' + t.id, kind: 'trash', section: 'Recently deleted', title: t.locked ? lockedLabel : t.title || label,
+    key: 'trash:' + t.id, kind: 'trash', section: 'Recently deleted', title: hidden ? lockedLabel : t.title || label,
     subtitle: 'In Recently deleted · Restore', meta: label + ' deleted trash', at: t.deletedAt,
     payload: { icon, color: colorOf('danger'), open: () => openPage('/settings', { page: 'trash' }) },
   };
@@ -492,7 +500,7 @@ export function useSiftSources(active: boolean): SiftSources {
     index.setCollection('sessions', sessions, (x) => sessionDoc(x, ctx), hour24);
     index.setCollection('ai', aiLinks, aiDoc);
     index.setCollection('calc', calc, calcDoc);
-    index.setCollection('trash', trash, trashDoc);
+    index.setCollection('trash', trash, (t) => trashDoc(t, notesLocked, journalLocked), notesLocked + '|' + journalLocked);
     index.setCollection('profiles', profiles.filter((p) => p.id !== activeProfile), profileDoc);
     // a locked tool, or an archived one, keeps its content out
     const out = new Set<string>();

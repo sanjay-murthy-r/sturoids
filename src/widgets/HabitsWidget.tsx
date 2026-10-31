@@ -81,10 +81,10 @@ const HabitChip = React.memo(function HabitChip({ id, title, done, flame, onTogg
           </Animated.View>
         </View>
         {/* fixed chrome: chips sit in rows, so their words grow with the phone's font size only up to 1.3 */}
-        <View>
-          <Animated.Text style={[textStyle, restStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{title}</Animated.Text>
+        <View style={st.habitChipWords}>
+          <Animated.Text style={[textStyle, restStyle]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>{title}</Animated.Text>
           <Animated.Text
-            style={[textStyle, st.ink, { color: C.green }, litStyle]} maxFontSizeMultiplier={CHROME_FONT_MAX}
+            style={[textStyle, st.ink, { color: C.green }, litStyle]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}
             importantForAccessibility="no" accessibilityElementsHidden
           >
             {title}
@@ -102,10 +102,12 @@ const st = StyleSheet.create({
   // a habit chip, as a small chip is: flat, its hairline edge drawn by its two layers
   habitChip: {
     paddingVertical: 5, paddingHorizontal: 11, borderRadius: 999,
-    marginRight: 10, marginBottom: 10, overflow: 'hidden',
+    marginRight: 10, marginBottom: 10, overflow: 'hidden', maxWidth: '100%',
   },
   habitChipEdge: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999, borderWidth: 1 },
   habitChipRow: { flexDirection: 'row', alignItems: 'center' },
+  // a long title shortens with an ellipsis inside its chip instead of running past the edge of the board
+  habitChipWords: { flexShrink: 1 },
   habitChipIcon: { marginRight: 6 },
   habitChipText: { color: C.textDim, fontFamily: F.smMed, ...oneLine(12), letterSpacing: TRACK.fine },
   /** a second ink laid exactly over the first, for colours that cross over */

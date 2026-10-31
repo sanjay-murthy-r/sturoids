@@ -133,11 +133,14 @@ export function monthRange(ym: string, today: string): DateRange {
   return { from, to: to < from ? from : to, label: MONTHS_LONG[m - 1] + ' ' + y };
 }
 
-/** Every day of a range, oldest first (at most 800, so a damaged range can never run away). */
+/**
+ * Every day of a range, oldest first. At most 800, so a damaged range can never run away: a longer one keeps its last
+ * 800 days (the recent ones are what a report is read for), counted back from its end.
+ */
 export function daysIn(r: DateRange): string[] {
   const out: string[] = [];
-  for (let k = r.from; k <= r.to && out.length < 800; k = shiftKey(k, 1)) out.push(k);
-  return out;
+  for (let k = r.to; k >= r.from && out.length < 800; k = shiftKey(k, -1)) out.push(k);
+  return out.reverse();
 }
 
 const inRange = (k: string | undefined, r: DateRange) => !!k && k >= r.from && k <= r.to;

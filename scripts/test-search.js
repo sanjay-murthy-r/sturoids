@@ -342,4 +342,30 @@ test('Settings search groups matches by page', () => {
   assert.deepEqual(SI.searchSettings('  '), []);
 });
 
+/* ---------------------------------------------------------------- a real library */
+
+test('a library of many notes, sessions and odd queries: every hit is reachable and nothing throws', () => {
+  const docs = [];
+  for (let i = 0; i < 120; i++) docs.push(doc('n' + i, i % 10 === 0 ? 'Physics notes' : 'Chapter ' + i + ' revision', { body: i === 4 ? 'Newton (f=ma) [x] * + ? \\ secretword' : 'lorem ipsum', at: NOW - i * DAY }));
+  for (let i = 0; i < 80; i++) docs.push(doc('s' + i, 'Physics', { kind: 'session', section: 'Deep Work', at: NOW - i * DAY }));
+  docs.push(doc('t1', 'தமிழ் இலக்கணம்'), doc('c1', 'Café résumé'));
+  const ix = build(docs);
+  // a section keeps every hit when asked to: the overlay lists as many as the "+N more" has been tapped for
+  const all = ix.search('physics', { now: NOW, perSection: 1000 });
+  const deep = all.sections.find((s) => s.section === 'Deep Work');
+  assert.equal(deep.hits.length, 80);
+  assert.equal(deep.more, 0);
+  const capped = ix.search('physics', { now: NOW, perSection: 5 });
+  assert.equal(capped.sections.find((s) => s.section === 'Deep Work').more, 75);
+  // a lone hit is the top and is not in the sections as well
+  const one = ix.search('secretword', { now: NOW });
+  assert.equal(one.top.doc.key, 'n4');
+  assert.equal(keysOf(one).filter((k) => k === 'n4').length, 1);
+  for (const q of ['(', '[', '*', '+', '?', '\\', 'c++', '$^', '   ', 'தமிழ்', 'cafe', 'RÉSUMÉ', 'x'.repeat(500)]) {
+    assert.doesNotThrow(() => ix.search(q, { now: NOW }), q);
+  }
+  assert.equal(ix.search('cafe', { now: NOW }).top.doc.key, 'c1');
+  assert.equal(ix.search('தமிழ்', { now: NOW }).top.doc.key, 't1');
+});
+
 console.log(process.exitCode ? 'test-search: failures above' : 'test-search: ' + passed + ' checks passed');

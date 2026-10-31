@@ -75,6 +75,14 @@ test('ranges: fixed on a known day', () => {
   assert.equal(R.daysIn(R.rangeOf('30d', t)).length, 30);
 });
 
+test('ranges: a history longer than the cap keeps its most recent days, not its oldest', () => {
+  const t = '2026-10-26';
+  const days = R.daysIn(R.rangeOf('all', t, { earliest: '2020-01-01' }));
+  assert.equal(days.length, 800);
+  assert.equal(days[days.length - 1], t, 'ends on today');
+  assert.equal(days[0], '2024-08-18', 'and starts 799 days before it');
+});
+
 test('ranges: custom is ordered, cut at today; all and day', () => {
   const t = '2026-10-26';
   const c = R.rangeOf('custom', t, { from: '2026-12-01', to: '2026-08-01' });

@@ -296,7 +296,8 @@ export function todayItems(dailies: readonly DailyLike[], missions: readonly Mis
   }
   for (const m of missions) {
     const d = daysBetween(today, m.deadline);
-    if (d > 0 || (m.done && m.doneOn !== today)) continue;
+    // a task whose deadline cannot be read is on no day's list
+    if (!Number.isFinite(d) || d > 0 || (m.done && m.doneOn !== today)) continue;
     if (d < 0) {
       late.push({ kind: 'mission', id: m.id, title: m.title, done: m.done, overdue: true, time: '', deadline: m.deadline });
     } else {

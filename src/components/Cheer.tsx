@@ -13,7 +13,7 @@ import Animated, {
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { create } from 'zustand';
 import { C } from '../theme';
-import { useStore } from '../store';
+import { DailyTask, useStore } from '../store';
 import { useAnimLevel } from './Motion';
 import { toast } from './Toast';
 import { todayKey, todoDueOn } from '../utils';
@@ -171,29 +171,35 @@ function Piece({ x, w, h, color, delay, drift, spin, fall, ms }: {
 const STREAK_MARKS = [7, 14, 21, 30, 50, 75, 100, 150, 200, 365];
 
 /** The open ToDos due today, and how many are due: a day is done when the first goes to none with some due. */
-function dayLeft(): [number, number] {
+function dayLeft(list: readonly DailyTask[]): [number, number] {
   const today = todayKey();
-  const due = useStore.getState().dailyTasks.filter((t) => todoDueOn(t, today));
+  const due = list.filter((t) => todoDueOn(t, today));
   return [due.filter((t) => t.doneOn !== today).length, due.length];
 }
+
+/** The days and habits already celebrated, so ticking, unticking and ticking again does not cheer twice. */
+let cheeredDay = '';
+const cheeredStreaks = new Set<string>();
 
 /** Mounted once, over everything (the root layout). */
 export function CelebrateHost() {
   const { n, big } = useCelebrate();
-  // every ToDo due today ticked: the day is done, and Cheerful says so
-  React.useEffect(() => {
-    let [left] = dayLeft();
-    return useStore.subscribe((s, prev) => {
-      if (s.dailyTasks === prev.dailyTasks) return;
-      const [now, due] = dayLeft();
-      if (left > 0 && now === 0 && due > 0 && isCheerful()) {
-        celebrate(true);
-        cheer('day');
-        setTimeout(() => toast('Every ToDo for today, done. Lovely work.'), 500);
-      }
-      left = now;
-    });
-  }, []);
+  // every ToDo due today ticked: the day is done, and Cheerful says so. Worked out from the change itself, never from
+  // a count kept since launch, which would be a day old after midnight; and only a tick counts, not a delete, an
+  // import or the data loading
+  React.useEffect(() => useStore.subscribe((s, prev) => {
+    if (s.dailyTasks === prev.dailyTasks) return;
+    const today = todayKey();
+    const [was] = dayLeft(prev.dailyTasks);
+    const [now, due] = dayLeft(s.dailyTasks);
+    if (was === 0 || now !== 0 || due === 0 || !isCheerful() || cheeredDay === today) return;
+    const ticked = s.dailyTasks.some((t) => t.doneOn === today && prev.dailyTasks.find((x) => x.id === t.id)?.doneOn !== today);
+    if (!ticked) return;
+    cheeredDay = today;
+    celebrate(true);
+    cheer('day');
+    setTimeout(() => toast('Every ToDo for today, done. Lovely work.'), 500);
+  }), []);
   // a habit ticked today reaching a milestone streak: a little bell, a little confetti
   React.useEffect(() => useStore.subscribe((s, prev) => {
     if (s.habits === prev.habits || !isCheerful()) return;
@@ -202,7 +208,9 @@ export function CelebrateHost() {
       const before = prev.habits.find((x) => x.id === h.id);
       if (!before || before.doneDates.includes(today) || !h.doneDates.includes(today)) continue;
       const n = streaks(h.doneDates, h.days).current;
-      if (STREAK_MARKS.includes(n)) {
+      const mark = h.id + '@' + today;
+      if (STREAK_MARKS.includes(n) && !cheeredStreaks.has(mark)) {
+        cheeredStreaks.add(mark);
         celebrate(false);
         cheer('streak');
         setTimeout(() => toast(n + ' days of ' + h.title + '. Keep it going.'), 400);

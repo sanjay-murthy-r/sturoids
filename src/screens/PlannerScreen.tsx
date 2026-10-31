@@ -996,7 +996,7 @@ function BlockSheet({ visible, day, editing, onClose, onClosed, onSaved }: {
         <TimeField label="Starts" value={start} onChange={pickStart} placeholder="Pick a time" style={{ flex: 1 }} />
         <TimeField label="Ends" value={end} onChange={setEnd} placeholder="Pick a time" allowEndOfDay style={{ flex: 1 }} />
       </Row>
-      <Row style={{ flexWrap: 'wrap', gap: 10, marginBottom: 12, marginTop: 2 }}>
+      <Row style={{ flexWrap: 'wrap', gap: 2, justifyContent: 'space-between', marginBottom: 12, marginTop: 2 }}>
         {BLOCK_COLORS.map((c) => (
           <Swatch key={c} color={c} active={color === c} onPress={() => { tick(); colorPicked.current = true; setColor(c); }} />
         ))}

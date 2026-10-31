@@ -21,7 +21,10 @@ function load() {
     const j = raw ? JSON.parse(raw) : null;
     const counts: Record<string, number> = {};
     if (j && typeof j === 'object') for (const [k, v] of Object.entries(j)) if (typeof v === 'number' && v > 0) counts[k] = Math.min(999, Math.floor(v));
-    useLearn.setState({ loaded: true, counts: { ...counts, ...useLearn.getState().counts } });
+    // uses counted before the saved counts arrived are added to them, never in place of them
+    const merged = { ...counts };
+    for (const [k, v] of Object.entries(useLearn.getState().counts)) merged[k] = Math.min(999, (merged[k] ?? 0) + v);
+    useLearn.setState({ loaded: true, counts: merged });
   }).catch(() => { useLearn.setState({ loaded: true }); });
   return loading;
 }
@@ -34,7 +37,10 @@ export function noteUse(key: string, by = 1) {
   if ((counts[key] ?? 0) >= 999) return;
   useLearn.setState({ counts: { ...counts, [key]: (counts[key] ?? 0) + by } });
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { AsyncStorage.setItem(KEY, JSON.stringify(useLearn.getState().counts)).catch(() => {}); }, 600);
+  // written only once the saved counts are in, so a slow read never lets the new ones replace them
+  saveTimer = setTimeout(() => {
+    void load().then(() => AsyncStorage.setItem(KEY, JSON.stringify(useLearn.getState().counts))).catch(() => {});
+  }, 600);
 }
 
 /** How many times a feature has been used. */

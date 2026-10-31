@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { create } from 'zustand';
 import { useStore } from './store';
-import { Release, installKind, isNewer, latestRelease } from './updates';
+import { Release, UpdateError, installKind, isNewer, latestRelease } from './updates';
 import { toast } from './components/Toast';
 
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -101,8 +101,9 @@ export async function checkForUpdate(force = false) {
       const last = Number(await AsyncStorage.getItem(LAST_KEY)) || 0;
       if (Date.now() - last < CHECK_EVERY_MS) return;
     }
-    await AsyncStorage.setItem(LAST_KEY, String(Date.now())).catch(() => {});
     const rel = await latestRelease(s.githubRepo);
+    // stamped only once GitHub has answered: a look that found no network is tried again at the next return
+    await AsyncStorage.setItem(LAST_KEY, String(Date.now())).catch(() => {});
     if (!isNewer(rel, appVersion())) return;
     const kind = installKind(rel);
     if (kind === 'exe' && rel.exe) {
@@ -114,8 +115,10 @@ export async function checkForUpdate(force = false) {
       const apk = await fetchApk(rel);
       if (apk) offer(rel.version, apk);
     }
-  } catch {
-    // no network, GitHub busy: the next look tries again
+  } catch (e) {
+    // no network: the next return tries again. GitHub that answered with a refusal (busy, no releases) is left alone for
+    // the usual wait, so a busy GitHub is not asked again at every return
+    if (e instanceof UpdateError) await AsyncStorage.setItem(LAST_KEY, String(Date.now())).catch(() => {});
   } finally {
     running = false;
   }

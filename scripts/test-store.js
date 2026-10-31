@@ -1237,6 +1237,41 @@ const scenarios = {
     assert.ok(!('early' in st().missions.find((x) => x.id === m)));
   },
 
+  async '2.0: damaged settings, sessions and long-term tasks cannot reach a screen as NaN, null or a lock left open'() {
+    const dirty = {
+      _app: 'student-hub', _v: 4,
+      settings: {
+        lockGraceSec: 'soon', journalCutoffHour: 99, journalWordGoal: -3, todoReminderTime: '7am', journalReminderTime: 'late',
+        journalLocked: 'yes', notesLocked: 1,
+      },
+      sessions: [
+        { id: 'ok', dateKey: '2026-10-01', endedAt: 5, netSeconds: 600, taskTitles: [] },
+        { id: 'bad', dateKey: '2026-10-02', endedAt: 'x', netSeconds: 'lots' },
+        { id: 'nodate', endedAt: 5, netSeconds: 60 },
+        { dateKey: '2026-10-03', endedAt: 5, netSeconds: 60 },
+      ],
+      missions: [{ id: 'm', title: null, deadline: 7, done: false, subtasks: [{ id: 's', title: 4, done: 'yes' }, null] }],
+    };
+    const read = (v) => {
+      const r = boot().store.readSnapshot(JSON.stringify(dirty, null, v));
+      return r.data;
+    };
+    const d = read(0);
+    assert.equal(d.settings.lockGraceSec, 90, 'a damaged wait is the usual one, never NaN (which would never lock again)');
+    assert.equal(d.settings.journalCutoffHour, 11);
+    assert.equal(d.settings.journalWordGoal, 0);
+    assert.equal(d.settings.todoReminderTime, '07:00');
+    assert.equal(d.settings.journalReminderTime, '');
+    assert.equal(d.settings.journalLocked, true, 'a damaged lock stays on');
+    assert.equal(d.settings.notesLocked, true);
+    assert.deepEqual(d.sessions.map((x) => x.id), ['ok', 'bad'], 'a session with no id or no day is dropped');
+    assert.equal(d.sessions[1].netSeconds, 0);
+    assert.ok(Number.isFinite(d.sessions[1].endedAt), 'an end that is not a moment is the evening of its day');
+    assert.equal(d.missions[0].title, '');
+    assert.equal(d.missions[0].deadline, '');
+    assert.deepEqual(d.missions[0].subtasks, [{ id: 's', title: '4', done: false }]);
+  },
+
   async '2.0: habits, long-term tasks and exams go to Recently deleted and come back in their place'() {
     const app = boot();
     await settled(app);

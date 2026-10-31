@@ -149,7 +149,8 @@ export default function FocusHistoryPage() {
 
   // minutes per day, for the month and the streak; a day counts for the streak once it meets the goal (any focus without one)
   const perDay = React.useMemo(() => focusMinutesByDay(sessions), [sessions]);
-  const streak = React.useMemo(() => focusStreak(sessions, goal > 0 ? goal : 1), [sessions, goal]);
+  // worked out again on a new day too: a run is counted back from today
+  const streak = React.useMemo(() => focusStreak(sessions, goal > 0 ? goal : 1), [sessions, goal, today]);
 
   const remove = React.useCallback((id: string) => {
     const gone = useStore.getState().removeSession(id);
@@ -234,7 +235,7 @@ export default function FocusHistoryPage() {
   const streakLine = streak.current > 0 || streak.best > 0
     ? [
       streak.current > 0 ? streak.current + (streak.current === 1 ? ' day' : ' days') + (goal > 0 ? ' at your goal' : ' in a row') : '',
-      streak.best > streak.current ? 'best ' + streak.best : streak.best > 1 && streak.current === streak.best ? 'your best yet' : '',
+      streak.best > streak.current ? 'best ' + streak.best + (streak.best === 1 ? ' day' : ' days') : streak.best > 1 && streak.current === streak.best ? 'your best yet' : '',
     ].filter(Boolean).join(' · ')
     : '';
   const head = (
