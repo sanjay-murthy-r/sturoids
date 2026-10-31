@@ -345,6 +345,10 @@ export interface Settings {
   cheerSounds: boolean;
   /** look for a new version now and then, fetch it in the background and offer it (src/autoUpdate.ts) */
   autoUpdate: boolean;
+  /** Cheerful's companion on the screen (src/components/Mascot.tsx), or none */
+  mascot: 'blok' | 'pip' | 'sprout' | 'hoot' | 'off';
+  /** the day it was tucked away until tomorrow ('' for none) */
+  mascotAwayOn: string;
 }
 
 export type Mood = 'elite' | 'cheerful';
@@ -474,6 +478,8 @@ export const DEFAULT_SETTINGS: Settings = {
   mood: 'elite',
   cheerSounds: true,
   autoUpdate: true,
+  mascot: 'blok',
+  mascotAwayOn: '',
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -1314,6 +1320,8 @@ function cleanSettingsV6(s: any): Settings {
   st.mood = st.mood === 'cheerful' ? 'cheerful' : 'elite';
   st.cheerSounds = st.cheerSounds !== false;
   st.autoUpdate = st.autoUpdate !== false;
+  st.mascot = ['blok', 'pip', 'sprout', 'hoot', 'off'].includes(st.mascot) ? st.mascot : 'blok';
+  if (typeof st.mascotAwayOn !== 'string' || !/^(\d{4}-\d{2}-\d{2})?$/.test(st.mascotAwayOn)) st.mascotAwayOn = '';
   // no repo yet checks Sturoids' own releases; one saved under an earlier address follows the rename
   if (typeof st.githubRepo !== 'string' || !st.githubRepo.trim() || OLD_UPDATE_REPO.test(st.githubRepo.trim())) st.githubRepo = DEFAULT_UPDATE_REPO;
   return st;

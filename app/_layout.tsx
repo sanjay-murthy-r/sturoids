@@ -48,6 +48,7 @@ import { appIsUp } from '../src/actions';
 import { ShareIntake } from '../src/shareIntake';
 import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
 import { startAutoUpdate } from '../src/autoUpdate';
+import { MascotHost } from '../src/components/Mascot';
 
 /** Starts the quiet look for updates once the app is shown. */
 function AutoUpdate() {
@@ -335,6 +336,8 @@ export default function RootLayout() {
         </AppFrame>
       )}
       {/* Sift, the app-wide search, over the tabs and every page; and the app-wide "Add a task" sheet */}
+      {/* Cheerful's companion, over the tabs and pages, under Sift and the sheets */}
+      {showApp && <MascotHost />}
       {showApp && <SearchOverlay />}
       {showApp && <QuickAddHost />}
       {showApp && <SessionEditorHost />}

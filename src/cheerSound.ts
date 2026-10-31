@@ -2,6 +2,7 @@ import { AppState, Platform, Vibration } from 'react-native';
 import type { AudioPlayer } from 'expo-audio';
 import { useStore } from './store';
 import { tick } from './haptics';
+import { mascotCue } from './components/Mascot';
 
 // Cheerful's sounds and haptics, one of each per moment, as picked in the sound study: short, musical, and only in
 // Cheerful, with the app in front and its sounds on (Settings, Appearance). Elite stays silent. The files are made by
@@ -58,6 +59,8 @@ export function cheerOn(): boolean {
 export function cheer(m: CheerMoment) {
   const s = useStore.getState().settings;
   if (s.mood !== 'cheerful') return;
+  // the companion takes part too
+  mascotCue(m);
   try {
     if (Platform.OS === 'android') Vibration.vibrate(HAPTIC[m]);
     else tick();

@@ -27,7 +27,7 @@ import { openPage } from '../src/toolNav';
 import { useToday } from '../src/hooks/useNow';
 import { SignatureStill } from '../src/components/Signature';
 import {
-  ScreenBG, Card, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu,
+  ScreenBG, Card, Chip, SectionTitle, Field, PillButton, Row, Hairline, Toggle, InfoDot, NeuHeader, Sheet, ListCard, ListRow, DotMenu,
   EdgeScroll, EmptyState, RowIcon, useTheme, ScrollEdge, edgeStrength, ArrivalPulse, IconBtn, PullArea, useContentPull,
 } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
@@ -58,6 +58,7 @@ import { startMakeover } from '../src/components/Makeover';
 import { CHEER } from '../src/components/Cheer';
 import { useCheerful } from '../src/components/Cheer';
 import { desktop, installApk, useUpdateReady } from '../src/autoUpdate';
+import { MASCOTS } from '../src/components/Mascot';
 
 /** the list's column when Settings shows two panes */
 const SPLIT_LIST_W = 380;
@@ -479,6 +480,7 @@ function MakeoverCard() {
   const theme = useTheme();
   const mood = useStore((s) => s.settings.mood);
   const sounds = useStore((s) => s.settings.cheerSounds);
+  const mascot = useStore((s) => s.settings.mascot);
   const setSetting = useStore((s) => s.setSetting);
   const opt = (key: 'elite' | 'cheerful', title: string, line: string, icon: any, tint: string) => {
     const on = mood === key;
@@ -514,6 +516,17 @@ function MakeoverCard() {
               <Text style={[T.caption, { marginTop: 2 }]}>Soft notes for a tick, a session done, a day done. Haptics play either way.</Text>
             </View>
             <Toggle value={sounds} onChange={(v) => setSetting('cheerSounds', v)} label="Cheerful sounds" />
+          </View>
+          <Hairline />
+          <Text style={[T.body, { fontFamily: F.med, marginTop: 10 }]}>Companion</Text>
+          <Text style={[T.caption, { marginTop: 2, marginBottom: 10 }]}>A small friend on your screen who joins in. Tap it to say hi, hold it to tuck it away for the day.</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {(['blok', 'pip', 'sprout', 'hoot', 'off'] as const).map((k) => (
+              <Chip
+                key={k} small label={k === 'off' ? 'None' : MASCOTS[k].name} active={mascot === k}
+                onPress={() => { setSetting('mascot', k); if (k !== 'off') setSetting('mascotAwayOn', ''); }}
+              />
+            ))}
           </View>
         </Card>
       ) : null}
