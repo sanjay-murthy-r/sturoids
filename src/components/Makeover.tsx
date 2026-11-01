@@ -4,16 +4,17 @@
 // screen as it is done, and the screen lifts once the motion has played and the jobs are through (or have had their
 // time: a slow network never holds it).
 //
-// Elite arrives as calm precision: a hairline draws out from the middle, the word settles in from wide letter-spacing.
+// Elite arrives as calm precision: a hairline draws out from the middle, the word's letters settle in from wide apart.
 // Cheerful arrives as warmth: morning light rises from below, motes drift up, the letters lift in on a gentle wave.
 
 import React from 'react';
-import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Platform, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, {
   Easing, FadeIn, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSpring, withTiming,
 } from 'react-native-reanimated';
+import type { SharedValue } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
+import Svg, { Defs, LinearGradient, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { create } from 'zustand';
 import { C, F, MIN, TRACK, bgFor } from '../theme';
 import { Mood, flushSaves, useStore } from '../store';
@@ -92,7 +93,8 @@ function MakeoverScreen({ to, onDone }: { to: Mood; onDone: () => void }) {
       for (const j of list) {
         try {
           const r = await Promise.race([j.run(), new Promise((res) => setTimeout(() => res('slow'), 2500))]);
-          if (r === 'skip') continue;
+          // only work that is through gets its tick: one still going when its time ran out carries on unseen
+          if (r === 'skip' || r === 'slow') continue;
         } catch {
           continue;
         }
@@ -118,7 +120,7 @@ function MakeoverScreen({ to, onDone }: { to: Mood; onDone: () => void }) {
 
   return (
     <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: bg, zIndex: 9999 }, coverStyle]} accessibilityViewIsModal accessibilityLabel={cheer ? 'Switching to Cheerful' : 'Switching to Elite'}>
-      {cheer ? <CheerStage width={width} height={height} still={level !== 'full'} /> : <EliteStage width={width} still={level !== 'full'} />}
+      {cheer ? <CheerStage width={width} height={height} still={level !== 'full'} bg={bg} /> : <EliteStage width={width} still={level !== 'full'} />}
       <View style={st.jobs}>
         {list.map((j) => {
           const ok = done.includes(j.label);
@@ -136,6 +138,21 @@ function MakeoverScreen({ to, onDone }: { to: Mood; onDone: () => void }) {
 
 /* ---------------------------------------------------------------- Elite */
 
+const ELITE = 'Elite'.split('');
+/** the word's final spacing, and how far apart its letters start */
+const ELITE_TRACK = 2;
+const ELITE_SPREAD = 18;
+
+/**
+ * One letter of the word. The letters arrive spread wide and draw together; each is set at the word's final spacing
+ * and moves by transform alone, so no frame re-lays out the text and the word stays centred as it settles.
+ */
+function EliteLetter({ ch, i, word }: { ch: string; i: number; word: SharedValue<number> }) {
+  const spread = (i - (ELITE.length - 1) / 2) * ELITE_SPREAD;
+  const style = useAnimatedStyle(() => ({ transform: [{ translateX: spread * (1 - word.value) }] }));
+  return <Animated.Text style={[st.eliteWord, style]}>{ch}</Animated.Text>;
+}
+
 function EliteStage({ width, still }: { width: number; still: boolean }) {
   const line = useSharedValue(still ? 1 : 0);
   const word = useSharedValue(still ? 1 : 0);
@@ -147,13 +164,15 @@ function EliteStage({ width, still }: { width: number; still: boolean }) {
   const lineStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: line.value }], opacity: 0.25 + 0.75 * line.value }));
   const wordStyle = useAnimatedStyle(() => ({
     opacity: word.value,
-    letterSpacing: 18 * (1 - word.value) + 2,
     transform: [{ translateY: 6 * (1 - word.value) }],
   }));
   const subStyle = useAnimatedStyle(() => ({ opacity: Math.max(0, (word.value - 0.5) / 0.5) }));
   return (
     <View style={st.center}>
-      <Animated.Text style={[st.eliteWord, wordStyle]}>Elite</Animated.Text>
+      {/* the spacing trails each letter, the last one too, so as much again before the first keeps the word centred */}
+      <Animated.View style={[st.eliteRow, wordStyle]}>
+        {ELITE.map((ch, i) => <EliteLetter key={i} ch={ch} i={i} word={word} />)}
+      </Animated.View>
       <Animated.View style={[st.rule, { width: Math.min(260, width * 0.6), backgroundColor: C.accent }, lineStyle]} />
       <Animated.Text style={[st.sub, subStyle]}>Calm. Precise. Yours.</Animated.Text>
     </View>
@@ -201,7 +220,7 @@ function Letter({ ch, i, still }: { ch: string; i: number; still: boolean }) {
   return <Animated.Text style={[st.cheerLetter, style]}>{ch}</Animated.Text>;
 }
 
-function CheerStage({ width, height, still }: { width: number; height: number; still: boolean }) {
+function CheerStage({ width, height, still, bg }: { width: number; height: number; still: boolean; bg: string }) {
   const warm = useSharedValue(still ? 1 : 0);
   const line = useSharedValue(still ? 1 : 0);
   const sub = useSharedValue(still ? 1 : 0);
@@ -230,9 +249,15 @@ function CheerStage({ width, height, still }: { width: number; height: number; s
               <Stop offset="0" stopColor={C.accent} stopOpacity={0.16} />
               <Stop offset="1" stopColor={C.accent} stopOpacity={0} />
             </RadialGradient>
+            {/* on Android the navigation bar below is the page's own colour: the light settles into it at the edge */}
+            <LinearGradient id="mkfloor" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0.86" stopColor={bg} stopOpacity={0} />
+              <Stop offset="1" stopColor={bg} stopOpacity={1} />
+            </LinearGradient>
           </Defs>
           <Rect x="0" y="0" width={width} height={height} fill="url(#mkwarm)" />
           <Rect x="0" y="0" width={width} height={height} fill="url(#mkacc)" />
+          {Platform.OS === 'android' ? <Rect x="0" y="0" width={width} height={height} fill="url(#mkfloor)" /> : null}
         </Svg>
       </Animated.View>
       {Array.from({ length: still ? 0 : MOTES }, (_, i) => <Mote key={i} i={i} width={width} height={height} still={still} />)}
@@ -247,10 +272,12 @@ function CheerStage({ width, height, still }: { width: number; height: number; s
 
 const st = StyleSheet.create({
   center: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
-  eliteWord: { color: C.text, fontFamily: F.head, fontSize: 52, lineHeight: 62 },
+  eliteRow: { flexDirection: 'row', paddingLeft: ELITE_TRACK },
+  eliteWord: { color: C.text, fontFamily: F.head, fontSize: 52, lineHeight: 62, letterSpacing: ELITE_TRACK },
   rule: { height: 1.5, borderRadius: 1, marginTop: 18 },
   sub: { color: C.textDim, fontFamily: F.smMed, fontSize: 14, letterSpacing: TRACK.small, marginTop: 18 },
-  cheerLetter: { color: '#F7F4EE', fontFamily: F.brand, fontSize: 48, lineHeight: 60, letterSpacing: 0.5 },
+  // in Cheerful's own round face, like its titles
+  cheerLetter: { color: C.text, fontFamily: F.cuteBold, fontSize: 48, lineHeight: 60, letterSpacing: 0.5 },
   jobs: { position: 'absolute', left: 0, right: 0, bottom: 64, alignItems: 'center', gap: 6 },
   job: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   jobText: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, letterSpacing: TRACK.fine },

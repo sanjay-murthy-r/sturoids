@@ -14,21 +14,10 @@ import { Card, useTheme } from './UI';
 import { glide, rowIn, rowOut, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
 import { noteUse, useLearnt } from '../learn';
-import { todayKey } from '../utils';
+import { focusStreak } from '../utils';
+import { fmtMins as fmt } from '../deepWork';
 import { cheer } from '../cheerSound';
 import { Flicker } from './Cheer';
-
-const fmt = (min: number) => (min >= 60 ? Math.floor(min / 60) + ' h' + (min % 60 ? ' ' + (min % 60) + ' min' : '') : min + ' min');
-
-/** Days in a row, up to today, with at least one session (today counts once it has one, and does not break a run yet). */
-export function streakOf(sessions: FocusSession[], today: string): number {
-  const days = new Set(sessions.map((s) => s.dateKey));
-  const d = new Date(today + 'T00:00:00');
-  if (!days.has(today)) d.setDate(d.getDate() - 1);
-  let n = 0;
-  while (days.has(todayKey(d))) { n++; d.setDate(d.getDate() - 1); }
-  return n;
-}
 
 export function TodayCard({ sessions, today, liveMin, goalMin, next }: {
   sessions: FocusSession[]; today: string;
@@ -49,7 +38,9 @@ export function TodayCard({ sessions, today, liveMin, goalMin, next }: {
   }
   const subjects = [...bySubject.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
   const top = subjects[0]?.[1] ?? 1;
-  const streak = streakOf(sessions, today);
+  // days in a row, counted as the history page counts them: with a goal set, only the days that met it (today counts
+  // once it has, and does not break a run yet)
+  const streak = focusStreak(sessions, goalMin > 0 ? goalMin : 1, new Date(today + 'T12:00:00')).current;
   const share = goalMin > 0 ? Math.min(1, min / goalMin) : 0;
   const track = theme === 'minimal' ? MIN.inset : C.inset;
   return (

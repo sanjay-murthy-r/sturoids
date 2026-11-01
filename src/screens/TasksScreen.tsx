@@ -19,6 +19,7 @@ import {
 } from '../components/Motion';
 import { useSwapIn } from '../components/Swap';
 import { tap } from '../haptics';
+import { rightClick } from '../web/rightClick';
 import { rescheduleAllReminders, turnOnReminders } from '../notifications';
 import { toast } from '../components/Toast';
 import { useNow, useToday } from '../hooks/useNow';
@@ -263,6 +264,8 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const now = useNow();
   // a weekly ToDo off its days is not open today
   const openDaily = useMemo(() => dailyTasks.filter((t) => t.doneOn !== today && todoDueOn(t, today)).length, [dailyTasks, today]);
+  // 'All done' only once something due today has been ticked; a day off for every ToDo is not one
+  const doneDaily = useMemo(() => dailyTasks.filter((t) => t.doneOn === today && todoDueOn(t, today)).length, [dailyTasks, today]);
   const openCount = useMemo(() => missions.filter((m) => !m.done).length, [missions]);
   const dueToday = useMemo(() => missions.filter((m) => !m.done && daysUntil(m.deadline) === 0).length, [missions, today]);
   // Today counts these as due too, so the ToDos' line never leaves out a task that is past its day
@@ -305,20 +308,28 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return d < 0 ? 'overdue since ' + fmtShortDate(nextDue.deadline)
       : d === 0 ? 'next due today' : d === 1 ? 'next due tomorrow' : 'next due ' + fmtShortDate(nextDue.deadline);
   })();
-  const context = tab === 'daily'
-    ? contextLine(
-      openDaily > 0 ? openDaily + ' open' : dailyTasks.length > 0 && 'All done',
-      overdue > 0 && overdue + (overdue === 1 ? ' task overdue' : ' tasks overdue'),
-      dueSoonLine ?? (dueToday > 0 && dueToday + (dueToday === 1 ? ' task due today' : ' tasks due today')),
-    )
-    : contextLine(openCount > 0 ? openCount + ' open' : missions.length > 0 && 'All done', dueSoonLine ?? nextDueLine);
-
   const tabMode = mode === 'tab';
   // a wide window (a tablet turned sideways, the PC) shows both lists side by side, with no switch between them
   const { width: winW } = useWindowDimensions();
   const rail = useRail();
   const twoCol = winW - (rail && tabMode ? RAIL_W : 0) >= TWO_COL_AT;
-  const exp = useExport(tab === 'daily' ? ['todos', 'longterm'] : ['longterm', 'todos'], { range: tab === 'daily' ? 'week' : '30d' });
+  // the header, the add button and the export speak for the list on show, or for both side by side
+  const context = twoCol
+    ? contextLine(
+      openDaily > 0 ? openDaily + (openDaily === 1 ? ' ToDo open' : ' ToDos open')
+        : openCount === 0 && (doneDaily > 0 || missions.length > 0) && 'All done',
+      openCount > 0 && openCount + (openCount === 1 ? ' task open' : ' tasks open'),
+      dueSoonLine ?? nextDueLine,
+    )
+    : tab === 'daily'
+    ? contextLine(
+      openDaily > 0 ? openDaily + ' open' : doneDaily > 0 ? 'All done' : dailyTasks.length > 0 && 'Nothing due today',
+      overdue > 0 && overdue + (overdue === 1 ? ' task overdue' : ' tasks overdue'),
+      dueSoonLine ?? (dueToday > 0 && dueToday + (dueToday === 1 ? ' task due today' : ' tasks due today')),
+    )
+    : contextLine(openCount > 0 ? openCount + ' open' : missions.length > 0 && 'All done', dueSoonLine ?? nextDueLine);
+  const daysFirst = twoCol || tab === 'daily';
+  const exp = useExport(daysFirst ? ['todos', 'longterm'] : ['longterm', 'todos'], { range: daysFirst ? 'week' : '30d' });
   const header = useToolHeader({ contentPull: 'todos', scrollRef,
     title: twoCol ? 'Tasks' : tab === 'daily' ? 'ToDos' : 'Tasks',
     mode: tabMode ? 'tab' : 'page',
@@ -469,7 +480,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
             onPress={() => { tap(); setEditTask(null); setAddSheet(true); }}
             scaleTo={0.9}
             radius={999}
-            accessibilityLabel={tab === 'daily' ? 'Add a ToDo' : 'Add a task'}
+            accessibilityLabel={twoCol ? 'Add a task' : tab === 'daily' ? 'Add a ToDo' : 'Add a task'}
             accessibilityRole="button"
             style={[
               st.fab,
@@ -488,7 +499,7 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <QuickTaskSheet
         visible={addSheet}
         onClose={() => setAddSheet(false)}
-        initialKind={tab === 'daily' ? 'daily' : 'mission'}
+        initialKind={daysFirst ? 'daily' : 'mission'}
         editing={editTask}
       />
 
@@ -691,9 +702,9 @@ const MissionRow = React.memo(function MissionRow({ m, open, hour24, arrive, onA
     <View style={st.missionRow} ref={arriveRef} collapsable={false}>
       <Row>
         <CheckCircle done={m.done} color={C.amber} onPress={() => onToggle(m.id)} label={m.title} />
-        {/* a tap folds the steps out; a long press opens the task for editing, as a ToDo's does */}
+        {/* a tap folds the steps out; a long press (a right click on the PC) opens the task for editing, as a ToDo's does */}
         <Pressable
-          style={st.taskWrap} onPress={() => onToggleOpen(m.id)} onLongPress={() => onEdit(m)}
+          style={st.taskWrap} onPress={() => onToggleOpen(m.id)} onLongPress={() => onEdit(m)} {...rightClick(() => onEdit(m))}
           accessibilityRole="button" accessibilityState={{ expanded: open }} accessibilityLabel={'Steps for ' + m.title + ', ' + line}
           accessibilityHint="Double tap and hold to edit"
         >

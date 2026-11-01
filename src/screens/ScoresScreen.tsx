@@ -515,12 +515,14 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   // Only actions that act on what is in view: the notebook and Analytics each manage what they filter by, and a group,
   // an exam or a subject has its own menu beside the way into the notebook.
-  // Export follows the page in view: Analytics' exams, one exam, one subject across exams, or a group's exams
+  // Export follows the page in view: Analytics' exams, one exam, one subject across exams, or a group's exams. A group
+  // and the whole tool keep the range chips: their exams are the ones sat in the range picked
   const exp = useExport('scores', (): SummaryOpts => {
     if (analytics && focus) return { examIds: focus.pts.map((p) => p.id), scopeLabel: focus.label };
     if (here && isTopExam(ix, here)) return { examId: here.id };
     if (here && here.kind === 'exam') return { subject: here.title, range: 'all' };
-    return { examIds: examsUnder(ix, here?.id ?? null).map((n) => n.id), scopeLabel: here ? nameOf(ix, here) : undefined };
+    if (here) return { groupId: here.id, scopeLabel: nameOf(ix, here) };
+    return { range: 'all' };
   });
   const tray: ToolAction[] = [];
   if (aside) {
@@ -1183,7 +1185,10 @@ function ExamView({
               {gap != null ? (
                 <Text style={[T.caption, { color: gap >= 0 ? C.green : C.danger }]}>
                   Target {fmtPct(exam.target as number)}
-                  {Math.round(gap * 10) === 0 ? ', on target' : ', ' + Math.abs(Math.round(gap * 10) / 10) + (gap > 0 ? ' above' : ' below')}
+                  {Math.round(gap * 10) === 0
+                    ? ', on target'
+                    // the gap is in percentage points, said so beside the target's own percentage
+                    : ', ' + Math.abs(Math.round(gap * 10) / 10) + (Math.abs(Math.round(gap * 10) / 10) === 1 ? ' point ' : ' points ') + (gap > 0 ? 'above' : 'below')}
                 </Text>
               ) : null}
               {moved ? (

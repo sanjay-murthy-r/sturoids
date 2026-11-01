@@ -1,6 +1,7 @@
 import React from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useFocusEffect } from 'expo-router';
+import { NavigationContext } from '@react-navigation/native';
 import { allowScreenCaptureAsync, preventScreenCaptureAsync } from 'expo-screen-capture';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -86,6 +87,12 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other 
   const resetFrom = React.useRef<Stage>('enter');
   const [forgot, setForgot] = React.useState<{ email: string } | null>(null);
   const busy = React.useRef(false);
+  // the code waiting out its short beat before it is checked, and the digits on screen now: a delete in that beat
+  // takes the last digit back, and the code is never checked
+  const pending = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shownDigits = React.useRef('');
+  shownDigits.current = digits;
+  React.useEffect(() => () => { if (pending.current) clearTimeout(pending.current); }, []);
   const shake = useSharedValue(0);
   const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }));
 
@@ -215,6 +222,7 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other 
     if (waitS > 0 || busy.current || !stage) return;
     if (k === 'del') {
       tick();
+      if (pending.current) { clearTimeout(pending.current); pending.current = null; }
       setDigits((d) => d.slice(0, -1));
       return;
     }
@@ -231,8 +239,42 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other 
     tap();
     const next = digits + k;
     setDigits(next);
-    if (next.length === len) setTimeout(() => complete(next), 90);
+    if (next.length === len) {
+      pending.current = setTimeout(() => {
+        pending.current = null;
+        if (shownDigits.current === next) complete(next);
+      }, 90);
+    }
   };
+
+  // On the PC the keyboard types the PIN too: the digits, Backspace, and Enter for an older, longer code. Only the
+  // keypad in front listens: not one on a page out of view (a tab behind), nor one under a sheet, nor while a field
+  // has the keys (the password asked for a forgotten PIN)
+  // Enter is the OK key, which only an older code has
+  const keyPress = (k: string) => { if (k !== 'ok' || stage === 'legacy') press(k); };
+  const pressRef = React.useRef(keyPress);
+  pressRef.current = keyPress;
+  const padRef = React.useRef<View>(null);
+  const nav = React.useContext(NavigationContext);
+  const forgotUp = !!forgot;
+  React.useEffect(() => {
+    if (Platform.OS !== 'web' || !active || forgotUp) return undefined;
+    const on = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (nav && !nav.isFocused()) return;
+      const el = padRef.current as unknown as HTMLElement | null;
+      if (!el || !el.offsetParent) return;
+      if (!el.closest?.('[aria-modal="true"]') && document.querySelector('[aria-modal="true"][role="dialog"]')) return;
+      const k = /^[0-9]$/.test(e.key) ? e.key : e.key === 'Backspace' ? 'del' : e.key === 'Enter' ? 'ok' : '';
+      if (!k || (e.repeat && k !== 'del')) return;
+      e.preventDefault();
+      pressRef.current(k);
+    };
+    window.addEventListener('keydown', on);
+    return () => window.removeEventListener('keydown', on);
+  }, [active, forgotUp, nav]);
 
   const screenKey = !other && !!onScreenLock && mode === 'enter' && stage === 'enter';
   const prompt = !stage ? ' '
@@ -266,7 +308,7 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other 
     : { backgroundColor: C.card, ...NEU.raisedLow };
 
   return (
-    <View style={st.pad}>
+    <View ref={padRef} style={st.pad}>
       {/* a new step (choose, then confirm) changes its words in place: they dip out and come back */}
       <FadeSwap swapKey={prompt}>
         <Text style={st.prompt}>{prompt}</Text>

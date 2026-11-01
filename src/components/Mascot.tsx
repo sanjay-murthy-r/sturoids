@@ -12,18 +12,25 @@
 //
 // What it does: mostly it lives in place, breathing, blinking, looking about, thinking (eyes up, dots rising, sometimes
 // a bulb), stretching, ruffling its leaves or squishing, humming or watering itself; never yawning or dozing, in an
-// app for getting things done. Dragged, Sprout flies on its leaves and Pip floats down under an umbrella from nowhere,
-// to the nearest good place in the room.
-// It joins in (a hop for a tick, a cheer for a session or a day done), and through Deep Work it reads at its place and
-// says nothing until the session ends. A tap gets a reaction, and sometimes a word about the day. It speaks by itself
-// only a few times a day (src/mascot/lines.ts rests every line it says for weeks). Only in Cheerful, with motion on.
+// app for getting things done. Dragged, Sprout flies on its leaves and Pip is carried by a balloon (its own, puffed up,
+// if it keeps one; else one from nowhere that floats off once it has landed), to the nearest good place in the room.
+// It joins in (a hop for a tick, a cheer for a session or a day done), and through Deep Work it sets a book open on the
+// floor at its feet and reads down at it, eyes running along the lines and a page turning now and then, saying nothing
+// until the session ends. A tap gets a reaction, and sometimes a word about the day. It speaks by itself only a few
+// times a day (src/mascot/lines.ts rests every line it says for weeks), in small bubbles: an aside in brackets comes as
+// its own bubble straight after. Only in Cheerful, with motion on.
+//
+// Sides: the drawing faces the grid's right, and is mirrored when it faces left (`facing`), so a limb or a look named
+// for the grid lands on the screen's side only through `limbToward` and `lookToward`. Pip keeps its balloon in its back
+// hand (art.ts BALLOON_HAND), so a wave or a page turn always uses the free one, and the string stays tied to that hand
+// through every pose, squash, tilt and turn (Balloon works the hand's place out on the UI thread).
 
 import React from 'react';
 import { AppState, PixelRatio, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
-  Easing, FadeIn, FadeOut, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence,
-  withSpring, withTiming,
+  Easing, FadeIn, FadeOut, SharedValue, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat,
+  withSequence, withSpring, withTiming,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -38,9 +45,14 @@ import { WIDE_AT } from '../layout';
 import { indexScores, upcoming } from '../scores';
 import { pkey } from '../profiles';
 import { knock } from '../cheerSound';
-import { useRoom } from '../mascot/room';
-import { COLS, Cell, FLIERS, Kind, NAMES, PROPS, Palette, Pose, REST, ROWS, colorSet, compose, runs } from '../mascot/art';
-import { Ctx, Memory, Moment, choose, chooseIdle, dayNo, fill, freshMemory, maySpeak, newDay, poolFor, remember } from '../mascot/lines';
+import { Room, useRoom } from '../mascot/room';
+import {
+  BALLOON_HAND, BOOK_PAL, BOOK_PROP, COLS, Cell, FLIERS, HAND, Kind, Limb, NAMES, PROPS, Palette, Pose, REST, ROWS, colorSet,
+  compose, runs,
+} from '../mascot/art';
+import {
+  Ctx, Memory, Moment, beats, choose, chooseIdle, dayNo, fill, freshMemory, maySpeak, newDay, poolFor, remember,
+} from '../mascot/lines';
 
 /** the companion's own face for its words: Nunito, round and small (loaded with the app's faces) */
 export const CUTE = 'Nunito_700Bold';
@@ -50,6 +62,14 @@ export const CUTE_BOLD = 'Nunito_800ExtraBold';
 const PX = Math.max(2, Math.round(2.25 * PixelRatio.get()) / PixelRatio.get());
 const SW = COLS * PX;
 const SH = ROWS * PX;
+/** the book on the floor, at the companion's own squares; it overlaps the companion's edge by a square */
+const BOOK_W = BOOK_PROP.open[0].length * PX;
+const BOOK_H = BOOK_PROP.open.length * PX;
+const BOOK_IN = PX;
+/** the balloon: its squares, and its size at rest */
+const BALLOON_PX = 2.5;
+const BW = PROPS.balloon.grid[0].length * BALLOON_PX;
+const BH = PROPS.balloon.grid.length * BALLOON_PX;
 
 /* ---------------------------------------------------------------- drawing */
 
@@ -165,9 +185,13 @@ const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 type Step = (ms: number) => Promise<void>;
 type Side = 'left' | 'right';
 type Spot = { x: number; y: number };
-type Bubble = { text: string; key: number; size?: { w: number; h: number } };
-type Fx = { dots: number; bulb: boolean; notes: boolean; cloud: boolean; heart: number; sparks: number; umbrella: boolean };
-const NO_FX: Fx = { dots: 0, bulb: false, notes: false, cloud: false, heart: 0, sparks: 0, umbrella: false };
+type Bubble = { text: string; aside: boolean; key: number; size?: { w: number; h: number } };
+type Fx = { dots: number; bulb: boolean; notes: boolean; cloud: boolean; heart: number; sparks: number };
+const NO_FX: Fx = { dots: 0, bulb: false, notes: false, cloud: false, heart: 0, sparks: 0 };
+/** a balloon from nowhere for Pip's flight, when it keeps none of its own: held, then let go to float off */
+type Air = 'none' | 'held' | 'off';
+/** how long a bubble stays: long enough to read, never long */
+const beatMs = (b: { text: string; aside: boolean }) => Math.max(1300, Math.min(3200, (b.aside ? 1000 : 1150) + b.text.length * 46));
 const TABS = ['/', '/slot1', '/slot2', '/slot3', '/more'];
 const tabOf = (path: string) => {
   if (path === '/') return 0;
@@ -227,6 +251,41 @@ function Companion({ kind }: { kind: Kind }) {
   const doorOpen = useSharedValue(0);
   const [bubble, setBubble] = React.useState<Bubble | null>(null);
   const [bud, setBud] = React.useState(budOf);
+  // Pip's balloon: puffed up to carry it (inflate), and a borrowed one floating off once it has landed (drift)
+  const [air, setAirState] = React.useState<Air>('none');
+  const airRef = React.useRef<Air>('none');
+  // the borrowed one's own timer, to let it go: a new flight before it has floated off starts it over
+  const airTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setAir = (a: Air) => {
+    if (airTimer.current) { clearTimeout(airTimer.current); airTimer.current = null; }
+    airRef.current = a;
+    setAirState(a);
+  };
+  const inflate = useSharedValue(0);
+  const drift = useSharedValue(0);
+  const ownBalloon = kind === 'pip' && gear.includes('balloon');
+  /** whether Pip keeps a balloon of its own, read fresh (a timer or an action set up before the gear changed counts it) */
+  const keepsBalloon = () => kind === 'pip' && useStore.getState().settings.mascotLooks.pip.gear.includes('balloon');
+
+  /*
+   * ---------------- sides. The drawing faces the grid's right; facing left, it is mirrored. `facing` is where it is
+   * turned (or turning) to, so a limb or a look meant for one side of the screen is named right in the grid.
+   */
+  const facing = React.useRef<1 | -1>(-1);
+  const turn = (dir: 1 | -1, ms = 0) => {
+    facing.current = dir;
+    face.value = ms ? withTiming(dir, { duration: ms }) : dir;
+  };
+  /** a quick turn about and back (a spin, a dizzy shake), always ending turned the way it was */
+  const spinBack = (ms: number) => {
+    const f = facing.current;
+    face.value = withSequence(withTiming(-f, { duration: ms }), withTiming(f, { duration: ms }));
+  };
+  /** the grid's limb that shows on the screen's `side` */
+  const limbToward = (side: 'left' | 'right'): 'l' | 'r' => ((side === 'left') === (facing.current > 0) ? 'l' : 'r');
+  /** eyes looking toward the screen's `side` */
+  const lookToward = (side: 'left' | 'right'): 'left' | 'right' => ((side === 'left') === (facing.current > 0) ? 'left' : 'right');
+  const holdsBalloon = () => keepsBalloon() || (kind === 'pip' && airRef.current === 'held');
 
   const alive = React.useRef(true);
   const away = React.useRef(true); // behind a wall: before it first comes in, when sent off, on a screen with no room
@@ -249,33 +308,57 @@ function Companion({ kind }: { kind: Kind }) {
   React.useEffect(() => () => {
     alive.current = false;
     token.current++;
-    if (drag.current?.flap) clearInterval(drag.current.flap);
+    stopFlap();
     if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
+    if (noRoomTimer.current) clearTimeout(noRoomTimer.current);
+    if (airTimer.current) clearTimeout(airTimer.current);
   }, []);
 
-  /** its place in the room in front: at the room's right end, by the header's buttons; null with no room fit for it */
+  /** how far in from the header's buttons it keeps, with a balloon in its back hand (that hand is on the buttons' side) */
+  const edge = () => (keepsBalloon() ? 6 : 0);
+  /**
+   * the stretch of the room its middle may stand on: from the room's left end to its right end by the header's buttons
+   * (a little in from them with a balloon in its back hand, so the balloon never floats over a button); while it
+   * studies, far enough along for the book on the floor beside it to lie inside the room too
+   */
+  const span = (r: Room) => {
+    let lo = r.left + SW / 2;
+    const hi = Math.max(lo, r.right - SW / 2 - edge());
+    if (reading.current && bookFits(r)) lo = Math.min(hi, lo + BOOK_W - BOOK_IN);
+    return { lo, hi };
+  };
+  /** its place in the room in front, along that stretch. Null with no room fit for it. */
   const home = (r = roomRef.current): Spot | null => {
     if (!r || r.right - r.left < SW * 0.8) return null;
-    const lo = r.left + SW / 2;
-    const hi = Math.max(lo, r.right - SW / 2);
+    const { lo, hi } = span(r);
     // where it was set down on this screen, if it was carried; else the room's right end, by the buttons
     const f = placed.current.get(useRoom.getState().key ?? '');
     return { x: f == null ? hi : lo + (hi - lo) * f, y: r.y };
   };
+  /** whether the room is long enough for the book to lie beside it (to its left, toward the title) */
+  const bookFits = (r = roomRef.current) => !!r && r.right - r.left >= SW + BOOK_W - BOOK_IN + edge();
   const placed = React.useRef(new Map<string, number>());
-  const nearWall = (atX: number): Side => (atX < (W + rail) / 2 ? 'left' : 'right');
+  // the middle of the screen, read fresh: a long-lived timer (the idle one, the welcome back) still sees a PC window
+  // resized since, or the side bar turned on
+  const middle = React.useRef(0);
+  middle.current = (W + rail) / 2;
+  const nearWall = (atX: number): Side => (atX < middle.current ? 'left' : 'right');
 
-  /** Runs one action at a time; a `force`d one stops the one under way and cleans up after it. */
+  /**
+   * Runs one action at a time; a `force`d one stops the one under way and cleans up after it. Nothing starts while it
+   * is held: the drop's flight takes it on from wherever things then stand.
+   */
   const act = React.useCallback((fn: (step: Step) => Promise<void>, force = false) => {
+    if (drag.current) return false;
     if (busy.current && !force) return false;
-    if (busy.current) tidy();
+    if (busy.current) later.current.tidy();
     const my = ++token.current;
     busy.current = true;
     const step: Step = (ms) => new Promise<void>((res, rej) => setTimeout(() => (alive.current && token.current === my ? res() : rej(CANCEL)), ms));
     fn(step).catch(() => {}).finally(() => {
       if (token.current !== my || !alive.current) return;
       busy.current = false;
-      settle();
+      later.current.settle();
     });
     return true;
   }, []);
@@ -288,11 +371,17 @@ function Companion({ kind }: { kind: Kind }) {
     setDoor(null);
     doorOpen.value = 0;
     setFxState(NO_FX);
+    stopFlap();
+    setAir('none');
+    cancelAnimation(inflate);
+    inflate.value = withTiming(0, { duration: 160 });
+    drift.value = 0;
     sq.value = withTiming(1, { duration: 120 });
     lift.value = withTiming(0, { duration: 120 });
     tilt.value = withTiming(0, { duration: 120 });
     const h = home();
-    if (outRef.current || !h) { shown.value = 0; away.current = true; return; }
+    // gone behind its wall, it is out of the way too: never an unseen something over the header's buttons
+    if (outRef.current || !h) { shown.value = 0; away.current = true; x.value = W + SW; return; }
     if (away.current || shown.value < 1) {
       x.value = h.x;
       y.value = h.y;
@@ -301,20 +390,42 @@ function Companion({ kind }: { kind: Kind }) {
     }
   };
 
-  /** the pose it rests in: reading through Deep Work, otherwise just standing */
+  /**
+   * the pose it rests in: through Deep Work, the book open on the floor on the side it faces and its eyes down on it,
+   * leaning a little over it (or, with no room for a book, just concentrating); otherwise just standing
+   */
   const settle = () => {
-    tilt.value = withTiming(0, { duration: 200 });
-    if (reading.current) setPose({ ...REST, book: 'open', eyes: 'read', phones: true });
-    else setPose(REST);
+    if (reading.current) {
+      const book = bookFits();
+      // the book lies on its left, toward the title, where its place leaves room for it (never over the buttons)
+      if (book && facing.current > 0) turn(-1, 160);
+      tilt.value = withTiming(book ? facing.current * 3 : 0, { duration: 260 });
+      setPose({ ...REST, book: book ? 'open' : 'none', eyes: book ? 'read' : 'focus', phones: true });
+    } else {
+      tilt.value = withTiming(0, { duration: 200 });
+      setPose(REST);
+    }
   };
+  // the action runner is made once; it tidies and settles with this render's own, so they never go stale
+  const later = React.useRef({ tidy, settle });
+  later.current = { tidy, settle };
 
   /* ---------------- words */
 
+  /** says a line in small bubbles, one after another: an aside in brackets straight after the words before it */
   const sayText = (text: string) => {
     if (!alive.current || away.current) return;
     if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
-    setBubble({ text, key: Date.now() });
-    bubbleTimer.current = setTimeout(() => setBubble(null), Math.min(5400, 1800 + text.length * 55));
+    const parts = beats(text);
+    let i = 0;
+    const next = () => {
+      if (!alive.current) return;
+      const b = parts[i++];
+      if (!b) { setBubble(null); return; }
+      setBubble({ text: b.text, aside: b.aside, key: Date.now() + i });
+      bubbleTimer.current = setTimeout(next, beatMs(b));
+    };
+    next();
   };
   /**
    * Says a line from a moment's pool, as Settings allows: by itself (`spontaneous`) only within the day's budget; a
@@ -341,7 +452,7 @@ function Companion({ kind }: { kind: Kind }) {
   const hop = async (to: Spot, step: Step, height = 18) => {
     const dist = Math.hypot(to.x - x.value, to.y - y.value);
     const d = Math.max(260, Math.min(640, 220 + dist * 0.9));
-    if (Math.abs(to.x - x.value) > 2) face.value = to.x > x.value ? 1 : -1;
+    if (Math.abs(to.x - x.value) > 2) turn(to.x > x.value ? 1 : -1);
     sq.value = withSequence(withTiming(0.84, { duration: 110 }), withTiming(1.08, { duration: d * 0.5 }), withTiming(1, { duration: d * 0.5 }), withTiming(0.86, { duration: 80 }), withTiming(1, { duration: 150 }));
     x.value = withDelay(110, withTiming(to.x, { duration: d, easing: Easing.inOut(Easing.quad) }));
     y.value = withDelay(110, withTiming(to.y, { duration: d, easing: Easing.inOut(Easing.quad) }));
@@ -360,7 +471,7 @@ function Companion({ kind }: { kind: Kind }) {
   const walk = async (toX: number, step: Step) => {
     const dist = Math.abs(toX - x.value);
     if (dist < 2) return;
-    face.value = toX > x.value ? 1 : -1;
+    turn(toX > x.value ? 1 : -1);
     const steps = Math.max(2, Math.min(14, Math.round(dist / 6)));
     const total = Math.min(1100, Math.max(260, dist * 4.2));
     const per = total / steps;
@@ -379,23 +490,31 @@ function Companion({ kind }: { kind: Kind }) {
     else await hop(to, step, 16);
   };
 
-  /** the limb on the side it would wave from: toward the middle of the screen */
-  const waveSide = (): 'l' | 'r' => (x.value < W / 2 ? 'r' : 'l');
+  /**
+   * the limb it would wave (or think) with: the one toward the middle of the screen, unless that hand holds Pip's
+   * balloon, then the free one
+   */
+  const waveSide = (): 'l' | 'r' => {
+    const side = limbToward(x.value < middle.current ? 'right' : 'left');
+    return holdsBalloon() && side === BALLOON_HAND ? (side === 'l' ? 'r' : 'l') : side;
+  };
+  /** a lean toward the screen's side the limb `side` shows on */
+  const leanOf = (side: 'l' | 'r', deg: number) => ((side === 'r') === (facing.current > 0) ? deg : -deg);
 
   const wave = async (step: Step, big = false) => {
     const side = waveSide();
     const other = side === 'l' ? 'r' : 'l';
     setPose({ eyes: 'happy', mouth: 'smile', [side]: 'out' });
-    tilt.value = withTiming(side === 'r' ? 5 : -5, { duration: 180 });
+    tilt.value = withTiming(leanOf(side, 5), { duration: 180 });
     await step(110);
     setPose({ [side]: 'up' });
     await step(120);
     for (let i = 0; i < 4; i++) {
       setPose({ [side]: 'swing', ...(big ? { [other]: i % 2 ? 'up' : 'out' } : {}) });
-      tilt.value = withTiming(side === 'r' ? 7 : -7, { duration: 140 });
+      tilt.value = withTiming(leanOf(side, 7), { duration: 140 });
       await step(150);
       setPose({ [side]: 'up', ...(big ? { [other]: i % 2 ? 'out' : 'up' } : {}) });
-      tilt.value = withTiming(side === 'r' ? 4 : -4, { duration: 140 });
+      tilt.value = withTiming(leanOf(side, 4), { duration: 140 });
       await step(150);
     }
     setPose({ [side]: 'out', [other]: 'rest' });
@@ -408,7 +527,7 @@ function Companion({ kind }: { kind: Kind }) {
   const think = async (step: Step) => {
     const side = waveSide();
     setPose({ eyes: 'up', mouth: 'flat', [side]: 'up' });
-    tilt.value = withTiming(-6, { duration: 420, easing: Easing.inOut(Easing.quad) });
+    tilt.value = withTiming(leanOf(side, -6), { duration: 420, easing: Easing.inOut(Easing.quad) });
     await step(420);
     for (let i = 1; i <= 3; i++) { setFx({ dots: i }); await step(380); }
     setPose({ eyes: 'left' });
@@ -440,7 +559,7 @@ function Companion({ kind }: { kind: Kind }) {
       sq.value = withSequence(withTiming(0.82, { duration: 100 }), withTiming(1.1, { duration: 210 }), withTiming(1, { duration: 210 }));
       lift.value = withDelay(100, withSequence(withTiming(spin && i === 1 ? 24 : 16, { duration: 210, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: 210, easing: Easing.in(Easing.quad) })));
       setPose({ feet: 'tuck', l: i % 2 ? 'swing' : 'up', r: i % 2 ? 'up' : 'swing' });
-      if (spin && i === 1) face.value = withSequence(withTiming(-face.value, { duration: 180 }), withTiming(face.value, { duration: 180 }));
+      if (spin && i === 1) spinBack(180);
       await step(310);
       setPose({ feet: 'stand' });
       await step(220);
@@ -530,13 +649,14 @@ function Companion({ kind }: { kind: Kind }) {
   /** walks to the wall on `side`, through its door, and is gone behind it */
   const exitBy = async (side: Side, step: Step) => {
     hush();
+    setPose({ book: 'none' });
     const atY = y.value;
     const inside = side === 'left' ? wallX(side) + SW * 0.75 : wallX(side) - SW * 0.75;
     // across the header's buttons it hops; along an empty row it walks
     if (Math.abs(inside - x.value) > 70) await hop({ x: inside, y: atY }, step, 18);
     else await walk(inside, step);
     await openDoor(side, atY, step);
-    face.value = side === 'left' ? -1 : 1;
+    turn(side === 'left' ? -1 : 1);
     await walk(side === 'left' ? wallX(side) - SW * 0.6 : wallX(side) + SW * 0.6, step);
     shown.value = 0;
     away.current = true;
@@ -546,7 +666,7 @@ function Companion({ kind }: { kind: Kind }) {
   const enterBy = async (side: Side, to: Spot, step: Step) => {
     x.value = side === 'left' ? wallX(side) - SW * 0.6 : wallX(side) + SW * 0.6;
     y.value = to.y;
-    face.value = side === 'left' ? 1 : -1;
+    turn(side === 'left' ? 1 : -1);
     setPose(REST);
     await openDoor(side, to.y, step);
     shown.value = 1;
@@ -554,7 +674,7 @@ function Companion({ kind }: { kind: Kind }) {
     await walk(side === 'left' ? wallX(side) + SW * 0.75 : wallX(side) - SW * 0.75, step);
     await closeDoor(step);
     if (Math.abs(to.x - x.value) > 4) await goTo(to, step);
-    face.value = withTiming(to.x > W / 2 ? -1 : 1, { duration: 160 });
+    turn(to.x > middle.current ? -1 : 1, 160);
   };
 
   /* ---------------- coming in, and following the screen in front */
@@ -609,15 +729,17 @@ function Companion({ kind }: { kind: Kind }) {
     const to = tabOf(path);
     act(async (step) => {
       hush();
+      // studying, it picks its book up to go, and sets it down again where it lands
+      if (reading.current) setPose({ book: 'none' });
       if (from >= 0 && to >= 0 && from !== to && full) {
         // a tab over: it looks the way the screen went, then goes along to its new place
-        setPose({ eyes: to > from ? 'right' : 'left' });
+        setPose({ eyes: lookToward(to > from ? 'right' : 'left') });
         await step(160);
       }
       const at = home();
       if (at) await goTo(at, step);
-      face.value = withTiming(-1, { duration: 160 });
-      if (reading.current) setPose({ book: 'open', eyes: 'read' });
+      turn(-1, 160);
+      await step(160);
     }, true);
   }, [roomN]);
 
@@ -687,43 +809,74 @@ function Companion({ kind }: { kind: Kind }) {
       act(async (step) => {
         hush();
         if (away.current) return;
-        await step(900);
-        setPose({ eyes: 'focus' });
-        await step(500);
-        setPose({ book: 'open', eyes: 'read', phones: true, l: 'rest', r: 'rest' });
+        await step(700);
+        // along its row far enough for the book to lie beside it, facing where it will lie
+        const at = home();
+        if (at && Math.abs(at.x - x.value) > 3) await goTo(at, step);
+        turn(-1, 160);
+        setPose({ eyes: 'focus', l: 'rest', r: 'rest' });
+        await step(420);
+        // headphones on (if it has them), then the book set down open on the floor, and its eyes go down to it
+        setPose({ phones: true });
+        await step(260);
+        settle();
+        sq.value = withSequence(withTiming(0.95, { duration: 140 }), withTiming(1, { duration: 200 }));
+        await step(400);
       }, true);
     } else if (reading.current) {
       reading.current = false;
-      // paused or ended: the book goes down and it stretches; an end is cheered for when its moment comes
+      // paused or ended: the book is closed and put away, it goes back to its place and stretches; an end is cheered
+      // for when its moment comes
       act(async (step) => {
         setPose({ book: 'none', eyes: 'open', phones: false });
+        tilt.value = withTiming(0, { duration: 200 });
         await step(300);
+        const at = home();
+        if (at && !away.current && Math.abs(at.x - x.value) > 3) { await goTo(at, step); turn(-1, 160); }
         if (inSession && !away.current) await stretch(step);
       }, true);
     }
   }, [focusing]);
+  /*
+   * studying: like a small someone at a desk, never quite still. Its eyes run along a line and back, now and then the
+   * free hand reaches down and turns a page, and once in a while it looks up, pleased, and goes back to it.
+   */
   React.useEffect(() => {
     if (!focusing || !full) return undefined;
+    let n = 0;
     const iv = setInterval(() => {
       if (busy.current || !reading.current || away.current) return;
+      const p = poseRef.current;
+      if (p.book === 'none') return;
+      n++;
       const r = Math.random();
-      if (r < 0.08) {
+      if (n % 9 === 0 || (n > 4 && r < 0.05)) {
+        n = 0;
+        // the page turns: the front hand (Pip's reaches down; Sprout's leaf flicks, a little breeze) and over it goes
         act(async (step) => {
+          setPose({ r: kind === 'pip' ? 'down' : 'out', eyes: 'read' });
+          await step(180);
           setPose({ book: 'turn' });
           await step(260);
-          setPose({ book: 'open' });
+          setPose({ book: 'open', r: 'rest', eyes: 'read2' });
           sq.value = withSequence(withTiming(0.97, { duration: 120 }), withTiming(1, { duration: 140 }));
-          await step(200);
+          await step(240);
         });
-      } else if (r < 0.095) {
+      } else if (r < 0.06) {
+        // looks up, happy to be at it together, and back down
         act(async (step) => {
-          setPose({ eyes: 'open', book: 'open' });
-          await step(1300);
-          setPose({ eyes: 'happy' });
-          await step(500);
+          tilt.value = withTiming(0, { duration: 200 });
+          setPose({ eyes: 'open' });
+          await step(900);
+          setPose({ eyes: 'happy', mouth: 'smile' });
+          await step(600);
+          setPose({ mouth: 'none' });
         });
+      } else {
+        // along the line, and back to the start of the next
+        setPose({ eyes: n % 3 === 1 ? 'read2' : 'read' });
       }
-    }, 4000);
+    }, 1100);
     return () => clearInterval(iv);
   }, [focusing, full]);
 
@@ -782,7 +935,7 @@ function Companion({ kind }: { kind: Kind }) {
           await step(500);
           const back = home();
           if (back) await walk(back.x, step);
-          face.value = withTiming(-1, { duration: 160 });
+          turn(-1, 160);
           break;
         }
         case 'rain': rainedOn.current = today; await rain(step); break;
@@ -892,7 +1045,7 @@ function Companion({ kind }: { kind: Kind }) {
       if (n >= 6) {
         taps.current = [];
         setPose({ eyes: 'wide', mouth: 'o' });
-        for (let i = 0; i < 3; i++) { face.value = withSequence(withTiming(-face.value, { duration: 110 }), withTiming(face.value, { duration: 110 })); await step(230); }
+        for (let i = 0; i < 3; i++) { spinBack(110); await step(230); }
         setPose({ eyes: 'sleepy', mouth: 'flat' });
         tilt.value = withSequence(withTiming(-8, { duration: 220 }), withTiming(8, { duration: 300 }), withTiming(-5, { duration: 260 }), withTiming(0, { duration: 260 }));
         say('dizzy', { always: true });
@@ -920,7 +1073,7 @@ function Companion({ kind }: { kind: Kind }) {
         await heart(step);
       } else if (r < 0.84) {
         setPose({ eyes: 'happy' });
-        face.value = withSequence(withTiming(-face.value, { duration: 160 }), withTiming(face.value, { duration: 160 }));
+        spinBack(160);
         lift.value = withSequence(withTiming(14, { duration: 160 }), withTiming(0, { duration: 160 }));
         word();
         await step(700);
@@ -936,14 +1089,15 @@ function Companion({ kind }: { kind: Kind }) {
 
   /* ---------------- carried: picked up and let go, it makes its own way to the nearest good place */
 
-  const drag = React.useRef<{ x: number; y: number; flap: ReturnType<typeof setInterval> | null } | null>(null);
+  const drag = React.useRef<{ x: number; y: number } | null>(null);
+  /** Sprout beats its leaves like wings while it is held and while it flies (stopped the moment anything else starts) */
+  const flap = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopFlap = () => { if (flap.current) { clearInterval(flap.current); flap.current = null; } };
   const flapStart = () => {
+    stopFlap();
+    if (kind !== 'sprout') return;
     let i = 0;
-    return setInterval(() => {
-      i++;
-      // Sprout beats its leaves like wings; Pip holds its umbrella's handle up
-      if (kind === 'sprout') setPose({ l: i % 2 ? 'up' : 'swing', r: i % 2 ? 'swing' : 'up' });
-    }, 90);
+    flap.current = setInterval(() => { i++; setPose({ l: i % 2 ? 'up' : 'swing', r: i % 2 ? 'swing' : 'up' }); }, 90);
   };
   const onLift = () => {
     if (away.current) return;
@@ -951,19 +1105,26 @@ function Companion({ kind }: { kind: Kind }) {
     token.current++;
     busy.current = true;
     hush();
-    setFxState({ ...NO_FX, umbrella: kind === 'pip' });
     cancelAnimation(x); cancelAnimation(y); cancelAnimation(lift);
     lift.value = 0;
-    setPose({ ...REST, eyes: 'wide', mouth: 'o', feet: 'tuck', l: kind === 'pip' ? 'up' : 'out', r: kind === 'pip' ? 'rest' : 'out' });
-    drag.current = { x: x.value, y: y.value, flap: flapStart() };
+    if (kind === 'pip') {
+      // its balloon (or one from nowhere) puffs up in its raised back hand and holds it up
+      if (!holdsBalloon()) { drift.value = 0; setAir('held'); }
+      inflate.value = withSpring(1, { damping: 9, stiffness: 160 });
+      setPose({ ...REST, eyes: 'wide', mouth: 'o', feet: 'tuck', [BALLOON_HAND]: 'up', [BALLOON_HAND === 'l' ? 'r' : 'l']: 'out' });
+    } else {
+      setPose({ ...REST, eyes: 'wide', mouth: 'o', feet: 'tuck', l: 'out', r: 'out' });
+    }
+    drag.current = { x: x.value, y: y.value };
+    flapStart();
     if (Math.random() < 0.6) say('carry', { always: true });
   };
   const onCarry = (dx: number, dy: number) => {
     const d = drag.current;
     if (!d) return;
     const sy = scroll ? scroll.value : 0;
-    x.value = Math.max(SW / 2, Math.min(W - SW / 2, d.x + dx));
-    y.value = Math.max(insets.top + SH + sy, Math.min(H - 8 + sy, d.y + dy));
+    x.value = Math.max(rail + SW / 2, Math.min(W - SW / 2, d.x + dx));
+    y.value = Math.max(insets.top + SH + sy + (kind === 'pip' ? BH : 0), Math.min(H - 8 + sy, d.y + dy));
     tilt.value = Math.max(-14, Math.min(14, dx * 0.04));
   };
   const onDrop = () => {
@@ -974,16 +1135,26 @@ function Companion({ kind }: { kind: Kind }) {
     const my = ++token.current;
     busy.current = true;
     const step: Step = (ms) => new Promise<void>((res, rej) => setTimeout(() => (alive.current && token.current === my ? res() : rej(CANCEL)), ms));
+    /** down: its own balloon goes back to its size; a borrowed one is let go, and floats up and away */
+    const landBalloon = () => {
+      if (kind !== 'pip') return;
+      inflate.value = withTiming(0, { duration: 380, easing: Easing.out(Easing.quad) });
+      if (airRef.current === 'held') {
+        setAir('off');
+        drift.value = withTiming(1, { duration: 1700, easing: Easing.in(Easing.quad) });
+        airTimer.current = setTimeout(() => { airTimer.current = null; if (alive.current && airRef.current === 'off') setAir('none'); }, 1750);
+      }
+    };
     const flight = async () => {
-      if (!r || r.right - r.left < SW * 0.8) {
-        if (d.flap) clearInterval(d.flap);
-        setFx({ umbrella: false });
+      // no room here (or sent off while it was held): it goes out by its door
+      if (outRef.current || !r || r.right - r.left < SW * 0.8) {
+        stopFlap();
+        landBalloon();
         await exitBy(nearWall(x.value), step);
         return;
       }
-      // the nearest place along the room's row
-      const lo = r.left + SW / 2;
-      const hi = Math.max(lo, r.right - SW / 2);
+      // the nearest place along the room's row (studying, with room left for the book beside it)
+      const { lo, hi } = span(r);
       const tx = Math.max(lo, Math.min(hi, x.value));
       placed.current.set(useRoom.getState().key ?? '', hi > lo ? (tx - lo) / (hi - lo) : 1);
       const dist = Math.hypot(tx - x.value, r.y - y.value);
@@ -991,31 +1162,34 @@ function Companion({ kind }: { kind: Kind }) {
         // it flies: a gentle rise and glide, leaves beating, then a soft landing
         setPose({ eyes: 'happy', mouth: 'smile' });
         const ms = Math.max(450, Math.min(1300, dist * 1.8));
-        face.value = tx > x.value ? 1 : -1;
+        turn(tx > x.value ? 1 : -1);
         x.value = withTiming(tx, { duration: ms, easing: Easing.inOut(Easing.quad) });
         y.value = withTiming(r.y, { duration: ms, easing: Easing.inOut(Easing.quad) });
         lift.value = withSequence(withTiming(10, { duration: ms * 0.4, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: ms * 0.6, easing: Easing.in(Easing.quad) }));
         tilt.value = withTiming(tx > x.value ? 8 : -8, { duration: 200 });
         await step(ms);
       } else {
-        // Pip floats down under its umbrella, swaying
-        setPose({ eyes: 'happy', mouth: 'smile', l: 'up' });
-        const ms = Math.max(700, Math.min(1700, dist * 2.4));
-        x.value = withTiming(tx, { duration: ms, easing: Easing.out(Easing.sin) });
-        y.value = withTiming(r.y, { duration: ms, easing: Easing.out(Easing.quad) });
-        tilt.value = withRepeat(withSequence(withTiming(7, { duration: 300, easing: Easing.inOut(Easing.sin) }), withTiming(-7, { duration: 300, easing: Easing.inOut(Easing.sin) })), Math.max(1, Math.round(ms / 600)), false);
-        await step(ms);
+        // Pip drifts along under its balloon, swaying, and is set down softly on its feet
+        setPose({ eyes: 'happy', mouth: 'smile' });
+        const ms = Math.max(800, Math.min(1900, dist * 2.6));
+        if (Math.abs(tx - x.value) > 6) turn(tx > x.value ? 1 : -1);
+        x.value = withTiming(tx, { duration: ms, easing: Easing.inOut(Easing.sin) });
+        y.value = withTiming(r.y, { duration: ms, easing: Easing.inOut(Easing.quad) });
+        tilt.value = withRepeat(withSequence(withTiming(6, { duration: 340, easing: Easing.inOut(Easing.sin) }), withTiming(-6, { duration: 340, easing: Easing.inOut(Easing.sin) })), Math.max(1, Math.round(ms / 680)), false);
+        await step(ms - 120);
+        setPose({ feet: 'stand' });
+        await step(120);
       }
-      if (d.flap) clearInterval(d.flap);
-      setFx({ umbrella: false });
+      stopFlap();
       tilt.value = withTiming(0, { duration: 160 });
       setPose({ ...REST, eyes: 'happy', mouth: 'smile', feet: 'stand' });
       sq.value = withSequence(withTiming(0.86, { duration: 90 }), withTiming(1, { duration: 160 }));
+      landBalloon();
       if (Math.random() < 0.45) say('land', { always: true });
-      face.value = withTiming(-1, { duration: 160 });
+      turn(-1, 160);
       await step(500);
     };
-    flight().catch(() => { if (d.flap) clearInterval(d.flap); }).finally(() => {
+    flight().catch(() => {}).finally(() => {
       if (token.current !== my || !alive.current) return;
       busy.current = false;
       settle();
@@ -1072,21 +1246,29 @@ function Companion({ kind }: { kind: Kind }) {
     const mid = y.value - sy - SH / 2;
     const top = Math.max(insets.top + 2, mid - h / 2);
     const tailAt = Math.max(8, Math.min(h - 8, mid - top));
-    const leftOf = mx - SW / 2 - 9 - w;
-    if (leftOf >= 8) return { left: leftOf, top, side: 'right' as const, tailAt };
-    return { left: Math.min(W - w - 8, mx + SW / 2 + 9), top, side: 'left' as const, tailAt };
+    // beside it, clear of the book on the floor while it studies (the book lies on the left at its place)
+    const gap = 8 + (poseRef.current.book !== 'none' && facing.current < 0 ? BOOK_W - BOOK_IN : 0);
+    const leftOf = mx - SW / 2 - gap - w;
+    if (leftOf >= rail + 8) return { left: leftOf, top, side: 'right' as const, tailAt };
+    return { left: Math.min(W - w - 8, mx + SW / 2 + 8), top, side: 'left' as const, tailAt };
   };
   const place = bubble ? bubbleAt(bubble) : null;
 
   const flier = gear.find((g) => FLIERS.includes(g));
-  const hasBalloon = kind === 'pip' && gear.includes('balloon');
+  const showBalloon = kind === 'pip' && (ownBalloon || air !== 'none');
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
       {door ? <WallDoor side={door.side} wall={wallX(door.side)} y={door.y - (scroll ? scroll.value : 0)} open={doorOpen} /> : null}
       <Animated.View pointerEvents="box-none" style={[st.anchor, anchor]}>
         <Effects fx={fx} />
-        {hasBalloon ? <Balloon pal={pal} rise={bud / 3} /> : null}
+        {showBalloon ? (
+          <Balloon
+            pal={pal} hand={HAND[pose[BALLOON_HAND]]} mirror={BALLOON_HAND !== 'l'} rise={ownBalloon && air === 'none' ? bud / 3 : 0.4}
+            face={face} sq={sq} breath={breath} tilt={tilt} inflate={inflate} drift={drift}
+          />
+        ) : null}
+        {pose.book !== 'none' ? <FloorBook page={pose.book} face={face} lift={lift} /> : null}
         <GestureDetector gesture={gesture}>
           <Animated.View
             style={body} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -1105,17 +1287,22 @@ function Companion({ kind }: { kind: Kind }) {
         <View
           key={bubble.key} pointerEvents="box-none"
           style={[st.bubbleWrap, place ? { left: place.left, top: place.top } : { left: -999, top: -999, opacity: 0 }]}
-          onLayout={(e) => { if (!bubble.size) { const { width, height } = e.nativeEvent.layout; setBubble({ ...bubble, size: { w: width, h: height } }); } }}
+          onLayout={(e) => {
+            // measured once, and only for the bubble it belongs to (never a late measure over the next one's words)
+            const { width, height } = e.nativeEvent.layout;
+            const key = bubble.key;
+            setBubble((b) => (b && b.key === key && !b.size ? { ...b, size: { w: width, h: height } } : b));
+          }}
         >
           {place ? (
-            <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(160)}>
-              <View pointerEvents="none" style={[st.tail, place.side === 'right' ? { right: -4 } : { left: -4 }, { top: place.tailAt - 5 }]} />
+            <Animated.View entering={FadeIn.duration(180)}>
+              <View pointerEvents="none" style={[st.tail, place.side === 'right' ? { right: -3 } : { left: -3 }, { top: place.tailAt - 4 }]} />
               <Pressable onPress={hush} accessibilityRole="text" accessibilityLabel={name + ' says: ' + bubble.text} style={st.bubble}>
-                <Text style={st.bubbleText}>{bubble.text}</Text>
+                <Text style={[st.bubbleText, bubble.aside && st.aside]}>{bubble.text}</Text>
               </Pressable>
             </Animated.View>
           ) : (
-            <View style={st.bubble}><Text style={st.bubbleText}>{bubble.text}</Text></View>
+            <View style={st.bubble}><Text style={[st.bubbleText, bubble.aside && st.aside]}>{bubble.text}</Text></View>
           )}
         </View>
       ) : null}
@@ -1208,17 +1395,16 @@ function Effects({ fx }: { fx: Fx }) {
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
       {[0, 1, 2].map((i) => (fx.dots > i ? (
-        <Animated.View key={i} entering={FadeIn.duration(160)} exiting={FadeOut.duration(140)}
+        <Animated.View key={i} entering={FadeIn.duration(160)}
           style={[st.dot, { width: 3 + i * 1.5, height: 3 + i * 1.5, left: -6 - i * 6, top: 4 - i * 7 }]} />
       ) : null))}
       {fx.bulb ? (
-        <Animated.View entering={FadeIn.duration(140)} exiting={FadeOut.duration(200)} style={{ position: 'absolute', left: -16, top: -14 }}>
+        <Animated.View entering={FadeIn.duration(140)} style={{ position: 'absolute', left: -16, top: -14 }}>
           <GridArt grid={PROPS.bulb.grid} pal={PROPS.bulb.pal} px={2.5} />
         </Animated.View>
       ) : null}
       {fx.notes ? <Rising grid={PROPS.note.grid} pal={PROPS.note.pal} left={-10} top={4} every={900} /> : null}
       {fx.cloud ? <Cloud /> : null}
-      {fx.umbrella ? <Umbrella /> : null}
       {fx.heart ? <Rising key={fx.heart} grid={PROPS.heart.grid} pal={PROPS.heart.pal} left={-12} top={0} every={1600} once /> : null}
     </View>
   );
@@ -1242,22 +1428,12 @@ function Rising({ grid, pal, left, top, every, once = false }: { grid: string[];
   );
 }
 
-/** Pip's umbrella, popped out of nowhere: it opens above Pip's raised hand, and folds away on landing */
-function Umbrella() {
-  const pal = useStore((s) => colorSet('pip', s.settings.mascotLooks.pip.colors).pal);
-  return (
-    <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(180)} style={{ position: 'absolute', left: SW / 2 - 9 * 1.25 - PX * 3, top: -8 * 2.5 + PX * 4 }}>
-      <GridArt grid={PROPS.umbrella.grid} pal={{ ...PROPS.umbrella.pal, a: pal.a, A: pal.A }} px={2.5} />
-    </Animated.View>
-  );
-}
-
 function Cloud() {
   const d = useSharedValue(0);
   React.useEffect(() => { d.value = withRepeat(withTiming(1, { duration: 520, easing: Easing.in(Easing.quad) }), -1, false); return () => cancelAnimation(d); }, []);
   const drops = useAnimatedStyle(() => ({ transform: [{ translateY: 10 * d.value }] as const, opacity: 1 - d.value * 0.7 }));
   return (
-    <Animated.View entering={FadeIn.duration(220)} exiting={FadeOut.duration(260)} style={{ position: 'absolute', left: SW / 2 - 9, top: -14 }}>
+    <Animated.View entering={FadeIn.duration(220)} style={{ position: 'absolute', left: SW / 2 - 9, top: -14 }}>
       <GridArt grid={PROPS.cloud.grid} pal={PROPS.cloud.pal} px={2.5} />
       <Animated.View style={[{ position: 'absolute', top: 10, left: 1, flexDirection: 'row', gap: 4 }, drops]}>
         {[0, 1, 2].map((i) => <View key={i} style={{ marginTop: i % 2 ? 3 : 0 }}><GridArt grid={PROPS.drop.grid} pal={PROPS.drop.pal} px={1.5} /></View>)}
@@ -1268,18 +1444,22 @@ function Cloud() {
 
 /**
  * Dot the ladybug: flits about Sprout in little curves and, every so often, lands on top of its head with its wings
- * folded, then takes off again. During Deep Work (or a nap) it stays landed.
+ * folded, then takes off again. During Deep Work it stays landed.
  */
+/** where Dot lands: on the crown of Sprout's head, beside the stem (and clear of a bud on it), feet on the top row */
+const BUG_SQ = 1.75;
+const BUG_X = 10 * PX;
+const BUG_Y = 8 * PX - PROPS.ladybug.grid.length * BUG_SQ + 0.5;
 function Ladybug({ resting, full }: { resting: boolean; full: boolean }) {
-  const bx = useSharedValue(SW / 2 - 4);
-  const by = useSharedValue(SH * 0.42);
+  const bx = useSharedValue(BUG_X);
+  const by = useSharedValue(BUG_Y);
   const flap = useSharedValue(0);
   const [landed, setLanded] = React.useState(true);
   React.useEffect(() => {
     if (!full || resting) {
       setLanded(true);
-      bx.value = withTiming(SW / 2 - 4, { duration: 700 });
-      by.value = withTiming(SH * 0.42, { duration: 700 });
+      bx.value = withTiming(BUG_X, { duration: 700 });
+      by.value = withTiming(BUG_Y, { duration: 700 });
       return undefined;
     }
     let live = true;
@@ -1287,8 +1467,8 @@ function Ladybug({ resting, full }: { resting: boolean; full: boolean }) {
     const fly = (n: number) => {
       if (!live) return;
       if (n <= 0) {
-        bx.value = withTiming(SW / 2 - 4, { duration: 900, easing: Easing.inOut(Easing.quad) });
-        by.value = withTiming(SH * 0.42, { duration: 900, easing: Easing.inOut(Easing.quad) });
+        bx.value = withTiming(BUG_X, { duration: 900, easing: Easing.inOut(Easing.quad) });
+        by.value = withTiming(BUG_Y, { duration: 900, easing: Easing.inOut(Easing.quad) });
         t = setTimeout(() => { if (!live) return; setLanded(true); t = setTimeout(() => { if (live) { setLanded(false); fly(Math.round(rnd(4, 9))); } }, rnd(6000, 16000)); }, 950);
         return;
       }
@@ -1311,7 +1491,7 @@ function Ladybug({ resting, full }: { resting: boolean; full: boolean }) {
   return (
     <Animated.View pointerEvents="none" style={[st.flier, pos]}>
       {!landed ? <Animated.View style={[st.wings, wings]} /> : null}
-      <GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={1.75} />
+      <GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={BUG_SQ} />
     </Animated.View>
   );
 }
@@ -1353,17 +1533,80 @@ function Firefly({ full }: { full: boolean }) {
   );
 }
 
-/** Pip's balloon, on its string from Pip's hand, bobbing; it floats higher as the day's ToDos get done */
-function Balloon({ pal, rise }: { pal: Palette; rise: number }) {
+/**
+ * Pip's balloon, on its string tied to Pip's back hand: wherever that hand is in a pose, and through every squash, tilt
+ * and turn of the body (the hand's place is worked out here, on the UI thread, the way the body's own transform moves
+ * it). It bobs and hangs plumb whatever the body does, floats higher as the day's ToDos get done (`rise`, 0 to 1),
+ * puffs up to carry Pip when it flies (`inflate`), and a borrowed one floats up and away when let go (`drift`).
+ */
+function Balloon({ pal, hand, mirror, rise, face, sq, breath, tilt, inflate, drift }: {
+  pal: Palette; hand: [number, number]; mirror: boolean; rise: number;
+  face: SharedValue<number>; sq: SharedValue<number>; breath: SharedValue<number>; tilt: SharedValue<number>;
+  inflate: SharedValue<number>; drift: SharedValue<number>;
+}) {
   const bob = useSharedValue(0);
   React.useEffect(() => { bob.value = withRepeat(withTiming(1, { duration: 1700, easing: Easing.inOut(Easing.sin) }), -1, true); return () => cancelAnimation(bob); }, []);
-  const len = 8 + Math.round(rise * 8);
-  const style = useAnimatedStyle(() => ({ transform: [{ translateY: -2 * bob.value }, { rotate: (bob.value - 0.5) * 9 + 'deg' }] as const }));
+  const hx = (mirror ? COLS - hand[0] : hand[0]) * PX;
+  const hy = hand[1] * PX;
+  const len0 = 9 + Math.round(rise * 9);
+  // the hand, carried through the body's transform (translateY, rotate, scaleX by facing, scaleY, about its middle)
+  const at = useAnimatedStyle(() => {
+    const s = sq.value * (1 + 0.025 * breath.value);
+    const px = (hx - SW / 2) * (face.value / Math.sqrt(s));
+    const py = (hy - SH / 2) * s;
+    const a = (tilt.value * Math.PI) / 180;
+    const d = drift.value;
+    return {
+      opacity: 1 - d,
+      transform: [
+        // let go, it floats up and a little back over the room, away from the header's buttons
+        { translateX: SW / 2 + px * Math.cos(a) - py * Math.sin(a) - 14 * d },
+        { translateY: SH / 2 + px * Math.sin(a) + py * Math.cos(a) + SH * (1 - s) / 2 - 170 * d },
+        // it hangs plumb against the body's tilt, and sways a little on its own
+        { rotate: (bob.value - 0.5) * 8 - tilt.value * 0.5 + 'deg' },
+      ] as const,
+    };
+  }, [hx, hy]);
+  const string = useAnimatedStyle(() => {
+    const len = len0 * (1 - 0.45 * inflate.value);
+    return { height: len, transform: [{ translateY: -len }] as const };
+  }, [len0]);
+  const ball = useAnimatedStyle(() => {
+    const len = len0 * (1 - 0.45 * inflate.value);
+    const sc = 1 + 0.7 * inflate.value;
+    return { transform: [{ translateY: -len - BH * (1 + sc) / 2 + 1 - 2 * bob.value }, { scale: sc }] as const };
+  }, [len0]);
   return (
-    // on Pip's left (it lives at the right end of the header, by the buttons), clear of them
-    <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: -6, top: 11 * PX - len - 15, width: 13, height: len + 15, alignItems: 'center', transformOrigin: 'bottom' } as any, style]}>
-      <GridArt grid={PROPS.balloon.grid} pal={{ a: pal.a, A: pal.A, h: '#FFFFFF' }} px={2.5} />
-      <View style={{ width: 1, height: len, backgroundColor: 'rgba(120,110,100,0.7)' }} />
+    <Animated.View pointerEvents="none" style={[st.balloonAt, at]}>
+      <Animated.View style={[st.string, string]} />
+      <Animated.View style={[st.ball, ball]}>
+        <GridArt grid={PROPS.balloon.grid} pal={{ a: pal.a, A: pal.A, h: '#FFFFFF' }} px={BALLOON_PX} />
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
+/**
+ * The book it studies at, open on the floor at its feet on the side it faces, overlapping its edge by a square so it
+ * reads as right there in front of it. It stays on the floor through the companion's little lifts (it is drawn in the
+ * companion's own frame, so it takes the lift back off), and it is set down and picked up with a quick fade.
+ */
+export function FloorBook({ page, face, lift, px = PX }: {
+  page: 'open' | 'turn'; face: SharedValue<number>; lift?: SharedValue<number>; px?: number;
+}) {
+  const w = BOOK_PROP.open[0].length * px;
+  const h = BOOK_PROP.open.length * px;
+  const sw = COLS * px;
+  const sh = ROWS * px;
+  const style = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: face.value >= 0 ? sw - px : -w + px },
+      { translateY: sh - h + (lift ? lift.value : 0) },
+    ] as const,
+  }), [w, h, sw, sh, px]);
+  return (
+    <Animated.View pointerEvents="none" entering={FadeIn.duration(200)} style={[st.book, style]}>
+      <GridArt grid={BOOK_PROP[page]} pal={BOOK_PAL} px={px} />
     </Animated.View>
   );
 }
@@ -1373,14 +1616,19 @@ const PAPER = '#FFF8EE';
 const WOOD = '#B9814F';
 const st = StyleSheet.create({
   anchor: { position: 'absolute', left: 0, top: 0, width: SW, height: SH },
-  bubbleWrap: { position: 'absolute', maxWidth: 210 },
+  bubbleWrap: { position: 'absolute', maxWidth: 164 },
   bubble: {
-    backgroundColor: PAPER, borderRadius: 13, paddingHorizontal: 11, paddingVertical: 7,
-    shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 4,
+    backgroundColor: PAPER, borderRadius: 11, paddingHorizontal: 9, paddingVertical: 4,
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3,
   },
-  bubbleText: { color: INK, fontFamily: CUTE, fontSize: 13, lineHeight: 17 },
-  tail: { position: 'absolute', width: 10, height: 10, backgroundColor: PAPER, transform: [{ rotate: '45deg' }], borderRadius: 2 },
-  dot: { position: 'absolute', borderRadius: 1, backgroundColor: '#FFF8EE', opacity: 0.9 },
+  bubbleText: { color: INK, fontFamily: CUTE, fontSize: 12, lineHeight: 15 },
+  aside: { color: '#8C7466', fontFamily: CUTE, fontSize: 11, lineHeight: 14 },
+  tail: { position: 'absolute', width: 8, height: 8, backgroundColor: PAPER, transform: [{ rotate: '45deg' }], borderRadius: 1.5 },
+  balloonAt: { position: 'absolute', left: 0, top: 0, width: 0, height: 0 },
+  string: { position: 'absolute', left: -0.5, top: 0, width: 1, backgroundColor: 'rgba(120,110,100,0.75)' },
+  ball: { position: 'absolute', left: -BW / 2, top: 0, width: BW, height: BH },
+  book: { position: 'absolute', left: 0, top: 0 },
+  dot: { position: 'absolute', borderRadius: 1, backgroundColor: 'rgba(255,248,238,0.9)' },
   flier: { position: 'absolute', left: 0, top: 0 },
   wings: { position: 'absolute', left: 1, top: -3, width: 6, height: 3, borderRadius: 3, backgroundColor: '#FFFFFF' },
   halo: { position: 'absolute', left: -5, top: -5, width: 13, height: 13, borderRadius: 7, backgroundColor: '#FFE68A' },

@@ -1,14 +1,10 @@
-// The one door between the app's page and the desktop: updates. The page asks for a release's installer to be fetched
-// in the background, and to be installed now (Sturoids closes, installs quietly and opens again) or when it is next
-// closed. Nothing else of the computer is reachable from the page.
+// The one door between the app's page and the desktop: making a report's PDF. The page hands over the report's HTML and
+// gets the PDF back; nothing else of the computer is reachable from the page. (Updates on the PC are a download of the
+// installer, opened in the browser from Settings, so there is no bridge for them.)
 
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('sturoidsDesktop', {
-  /** Fetches the installer at `url` (a GitHub release file) for version `version`; resolves true once it is ready. */
-  stageUpdate: (url, version) => ipcRenderer.invoke('stage-update', url, version),
-  /** The version fetched and waiting, or null. */
-  stagedVersion: () => ipcRenderer.invoke('staged-version'),
-  /** Closes Sturoids, installs the waiting version quietly and opens it again. */
-  installNow: () => ipcRenderer.invoke('install-now'),
+  /** Lays out `html` as A4 pages and resolves with the PDF, base64. */
+  printToPDF: (html) => ipcRenderer.invoke('print-to-pdf', String(html)),
 });

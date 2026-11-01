@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, Pressable, InteractionManager, BackHandler, Platform, useWindowDimensions,
+  View, Text, ScrollView, StyleSheet, Pressable, InteractionManager, BackHandler, Platform, StatusBar, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from 'expo-router';
@@ -203,11 +203,16 @@ export default function Today() {
     const at = scrollY.value;
     dateRef.current?.measureInWindow((dx, dy, dw, dh) => {
       if (dw <= 0) { done(null); return; }
-      const finish = (right: number) => done({ left: dx + dw + 8, right: right - 6, y: dy + dh + at, scroll: scrollY });
+      // on Android a window position leaves out the status bar the page is drawn under (the bars elsewhere place their
+      // room from the insets for the same reason)
+      const top = Platform.OS === 'android' ? StatusBar.currentHeight ?? 0 : 0;
+      const finish = (right: number) => done({ left: dx + dw + 8, right: right - 6, y: dy + dh + at + top, scroll: scrollY });
       if (!searchRef.current) { finish(dx + dw + 200); return; }
       searchRef.current.measureInWindow((sx, _sy, sw) => finish(sw > 0 ? sx : dx + dw + 200));
     });
   });
+  // the page rises into place as the intro ends (a move, not a layout), so the row is measured again once it has
+  React.useEffect(() => { if (introDone) { remeasureRoom(); const t = setTimeout(remeasureRoom, 700); return () => clearTimeout(t); } return undefined; }, [introDone]);
 
   const header = (
     <Enter index={0}>
@@ -924,15 +929,15 @@ function Gallery({ visible, onClose, onClosed, archived, onTypes, onAdd, onRemov
 }) {
   const [ready, setReady] = useState(false);
   const [picked, setPicked] = useState<ReadonlyMap<string, TodayWidget['size']>>(() => new Map());
+  // the previews read a sample day, made fresh each time the gallery opens, never the app's own data. It is kept
+  // while the sheet slides away, so the previews stay as they were until it has gone
+  const [sample, setSample] = useState<ReturnType<typeof makeSampleStore> | null>(null);
   useEffect(() => {
-    if (!visible) setReady(false);
-    else setPicked(new Map());
+    if (visible) { setSample(makeSampleStore()); setPicked(new Map()); }
   }, [visible]);
   const groups = useMemo(() => galleryGroups(archived), [archived]);
   const { width: winW } = useWindowDimensions();
   const room = Math.min(winW, 560) - 48;
-  // the previews read a sample day, made fresh each time the gallery opens, never the app's own data
-  const sample = useMemo(() => (visible ? makeSampleStore() : null), [visible]);
 
   const toggle = (def: WidgetDef, size: TodayWidget['size']) => {
     tick();
@@ -957,7 +962,7 @@ function Gallery({ visible, onClose, onClosed, archived, onTypes, onAdd, onRemov
 
   return (
     <Sheet
-      visible={visible} onClose={onClose} onClosed={onClosed} onRisen={() => setReady(true)} title="Add widgets"
+      visible={visible} onClose={onClose} onClosed={() => { setReady(false); onClosed(); }} onRisen={() => setReady(true)} title="Add widgets"
       action={picked.size ? <ConfirmKey count={picked.size} onPress={confirm} /> : null}
     >
       <StoreOverride.Provider value={sample}>

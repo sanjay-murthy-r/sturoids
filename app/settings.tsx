@@ -57,12 +57,15 @@ import { TWO_COL_AT, WIDE_MAX } from '../src/layout';
 import { startMakeover } from '../src/components/Makeover';
 import { CHEER } from '../src/components/Cheer';
 import { useCheerful } from '../src/components/Cheer';
-import { appVersion, desktop, installApk, useUpdateReady } from '../src/autoUpdate';
+import { appVersion, installApk, useUpdateReady } from '../src/autoUpdate';
 import { Sprite } from '../src/components/Mascot';
 import { NAMES, REST, colorSet } from '../src/mascot/art';
 
 /** the list's column when Settings shows two panes */
 const SPLIT_LIST_W = 380;
+
+/** the PC version (the web build the desktop app wraps): no buzz, no phone settings to send anyone to */
+const ON_PC = Platform.OS === 'web';
 
 // keep this fallback in step with app.json — it also seeds the update check's comparison below
 const APP_VERSION = appVersion();
@@ -482,6 +485,7 @@ function MakeoverCard() {
   const mood = useStore((s) => s.settings.mood);
   const sounds = useStore((s) => s.settings.cheerSounds);
   const mascot = useStore((s) => s.settings.mascot);
+  const mascotLast = useStore((s) => s.settings.mascotLast);
   const look = useStore((s) => s.settings.mascotLooks[s.settings.mascot === 'pip' ? 'pip' : 'sprout']);
   const colors = look.colors;
   const gear = look.gear;
@@ -536,10 +540,16 @@ function MakeoverCard() {
             <View style={{ flex: 1, marginRight: 8 }}>
               <Text style={[T.body, { fontFamily: F.med }]}>Companion</Text>
               <Text style={[T.caption, { marginTop: 2 }]} numberOfLines={2}>
-                {mascot === 'off' ? 'None. A small friend can live on your screen and join in.' : companionName + ' · ' + colorSet(mascot, colors).name + '. Its name, colours, what it wears, how much it talks.'}
+                {mascot === 'off' ? 'Off. A small friend can live on your screens and join in.' : companionName + ' · ' + colorSet(mascot, colors).name + '. Its name, colours, what it wears, how much it talks.'}
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={C.textFaint} />
+            <Toggle
+              value={mascot !== 'off'} label="Companion"
+              onChange={(v) => {
+                if (v) { setSetting('mascot', mascotLast); setSetting('mascotOut', false); setSetting('mascotHideUntil', 0); }
+                else { setSetting('mascotLast', mascot === 'pip' ? 'pip' : 'sprout'); setSetting('mascot', 'off'); }
+              }}
+            />
           </Pressable>
         </Card>
       ) : null}
@@ -859,8 +869,9 @@ const ToolsSection = React.memo(function ToolsSection() {
 
 /**
  * Updates: the version running, one key to check GitHub for a newer release, and one to install it. On a phone the
- * new APK downloads here, a bar showing how far, and Android's installer takes it from there; on a PC the release's
- * installer opens in the browser. The repo it reads is Sturoids' own, shown under the version, and can be changed.
+ * new APK downloads here, a bar showing how far, and Android's installer takes it from there, and Update by itself can
+ * fetch it unasked. The PC never updates by itself: Download opens the release's installer in the browser. The repo it
+ * reads is Sturoids' own, shown under the version, and can be changed.
  */
 type UpdateState =
   | { k: 'idle' } | { k: 'checking' } | { k: 'current' } | { k: 'available'; rel: Release }
@@ -902,23 +913,10 @@ const UpdatesCard = React.memo(function UpdatesCard() {
   const install = async (rel: Release) => {
     if (busy.current) return;
     const kind = installKind(rel);
-    // the desktop app installs its own update quietly and opens again on it
-    const pc = desktop();
-    if (kind === 'exe' && pc && rel.exe) {
-      busy.current = true;
-      tap();
-      setState({ k: 'downloading', rel, p: 0.5 });
-      try {
-        if (await pc.stageUpdate(rel.exe.url, rel.version)) { await pc.installNow(); return; }
-        setState({ k: 'available', rel });
-        Alert.alert('Install failed', 'The update could not be downloaded. Check your connection and try again.');
-      } finally {
-        busy.current = false;
-      }
-      return;
-    }
+    // the PC: the installer downloads in the browser; running it updates Sturoids in place, keeping everything
     if (kind !== 'apk') {
-      openRelease(rel).catch(() => toast("Couldn't open GitHub"));
+      tap();
+      openRelease(rel).then(() => { if (kind === 'exe') setState({ k: 'handed', rel }); }).catch(() => toast("Couldn't open GitHub"));
       return;
     }
     // fetched already in the background: straight to Android's installer
@@ -951,7 +949,8 @@ const UpdatesCard = React.memo(function UpdatesCard() {
   const rel = state.k === 'available' || state.k === 'downloading' || state.k === 'handed' ? state.rel : null;
   const kind = rel ? installKind(rel) : 'page';
   const status = state.k === 'current' ? 'You have the newest version.'
-    : state.k === 'handed' ? "Finish in Android's installer. Your data stays as it is."
+    : state.k === 'handed'
+      ? (kind === 'exe' ? 'Run the installer once it has downloaded. Your data stays as it is.' : "Finish in Android's installer. Your data stays as it is.")
       : rel ? 'Version ' + rel.version + ' is out.' : 'Checks GitHub for a newer release.';
   return (
     <Card>
@@ -962,7 +961,6 @@ const UpdatesCard = React.memo(function UpdatesCard() {
             <Text style={[T.caption, { marginTop: 2 }, state.k === 'available' ? { color: C.accent } : null]}>{status}</Text>
           </FadeSwap>
         </View>
-        {state.k === 'checking' ? <Text style={[T.caption, { color: C.textFaint }]}>Checking…</Text> : null}
       </View>
 
       {rel && rel.notes && state.k === 'available' ? (
@@ -983,7 +981,7 @@ const UpdatesCard = React.memo(function UpdatesCard() {
       <View style={st.updKeys}>
         {rel && state.k !== 'handed' ? (
           <PillButton
-            label={state.k === 'downloading' ? 'Downloading…' : kind === 'apk' || (kind === 'exe' && desktop()) ? 'Install ' + rel.version : kind === 'exe' ? 'Download for PC' : 'Open on GitHub'}
+            label={state.k === 'downloading' ? 'Downloading…' : kind === 'apk' ? 'Install ' + rel.version : kind === 'exe' ? 'Download ' + rel.version : 'Open on GitHub'}
             icon={kind === 'page' ? 'open-outline' : 'download-outline'} onPress={() => install(rel)}
           />
         ) : (
@@ -994,18 +992,16 @@ const UpdatesCard = React.memo(function UpdatesCard() {
         )}
       </View>
 
-      {/* looking by itself: a little after launch and on coming back, at most every six hours */}
-      <View style={[st.updSource, { marginTop: 14 }]}>
-        <View style={{ flex: 1, marginRight: 12 }}>
-          <Text style={[T.body, { fontFamily: F.med }]}>Update by itself</Text>
-          <Text style={[T.caption, { marginTop: 2 }]}>
-            {Platform.OS === 'android'
-              ? 'Fetches a new version on Wi-Fi, then one tap and Android installs it.'
-              : desktop() ? 'Fetches a new version quietly and installs it when you close Sturoids.' : 'Looks for a new version now and then.'}
-          </Text>
+      {/* looking by itself, on a phone: a little after launch and on coming back, at most every six hours */}
+      {Platform.OS === 'android' ? (
+        <View style={[st.updSource, { marginTop: 14 }]}>
+          <View style={{ flex: 1, marginRight: 12 }}>
+            <Text style={[T.body, { fontFamily: F.med }]}>Update by itself</Text>
+            <Text style={[T.caption, { marginTop: 2 }]}>Fetches a new version on Wi-Fi, then one tap and Android installs it.</Text>
+          </View>
+          <Toggle value={autoUpdate} onChange={(v) => setSetting('autoUpdate', v)} label="Update by itself" />
         </View>
-        <Toggle value={autoUpdate} onChange={(v) => setSetting('autoUpdate', v)} label="Update by itself" />
-      </View>
+      ) : null}
 
       {/* where it looks: Sturoids' own releases, unless another repo is typed in */}
       <Pressable onPress={() => setEditRepo((v) => !v)} hitSlop={8} style={st.updSource} accessibilityRole="button" accessibilityHint="Change the GitHub repo updates come from">
@@ -1343,6 +1339,11 @@ export default function Settings() {
     if (v) {
       const ok = await ensurePermission();
       if (!ok) {
+        // the PC has no settings page the app can open: it says where the switch is
+        if (ON_PC) {
+          Alert.alert('Notifications are off', 'Allow notifications for Sturoids in Windows settings, under System, Notifications, then turn reminders on here.');
+          return;
+        }
         // a way to the switch that is off, not only a word about it
         Alert.alert('Notifications are off', 'Allow notifications for Sturoids in the phone\'s settings, then turn reminders on here.', [
           { text: 'Not now', style: 'cancel' },
@@ -1905,7 +1906,7 @@ export default function Settings() {
               <Row style={{ justifyContent: 'space-between' }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[T.body, { fontFamily: F.med }]}>Chime when a block ends</Text>
-                  <Text style={[T.caption, { marginTop: 2 }]}>The phone always buzzes. This adds a soft chime.</Text>
+                  <Text style={[T.caption, { marginTop: 2 }]}>{ON_PC ? 'A soft chime as the block ends.' : 'The phone always buzzes. This adds a soft chime.'}</Text>
                 </View>
                 <Toggle value={settings.focusChime} onChange={(v) => setSetting('focusChime', v)} color={C.accent} label="Chime when a block ends" />
               </Row>
@@ -2090,7 +2091,13 @@ export default function Settings() {
       case 'updates':
         return (
           <>
-            <SectionTitle right={<InfoDot text="Sideloaded APKs don't auto-update. This checks the GitHub Releases of the repo below for a newer version tag and links you to the download." />}>
+            <SectionTitle
+              right={<InfoDot
+                text={ON_PC
+                  ? 'This checks the GitHub Releases of the repo below for a newer version. Download opens its installer in your browser; running it updates Sturoids in place and keeps your data.'
+                  : 'This checks the GitHub Releases of the repo below for a newer version. Install downloads it here and hands it to Android, and Update by itself can fetch it for you on Wi-Fi.'}
+              />}
+            >
               Check for a new version
             </SectionTitle>
             <Anchor ids={[sid('updates', 'Check for a new version')]} radius={S.radius}><UpdatesCard /></Anchor>

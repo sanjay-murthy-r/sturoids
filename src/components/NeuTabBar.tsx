@@ -6,7 +6,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withDelay, withSequence, wi
 import { StackActions } from '@react-navigation/native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { C, CHROME_FONT_MAX, F, MIN, TRACK, bgFor } from '../theme';
-import { useTheme } from './UI';
+import { Ground, useTheme } from './UI';
 import { EASE_EMPHASISED, EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, RISE_OUT, SINK_IN, TAB_FADE, TAB_SHIFT, useAnimLevel } from './Motion';
 import { useStore } from '../store';
 import { normaliseSlots, toolByKey } from '../tools';
@@ -15,9 +15,9 @@ import { useIntro } from '../intro';
 import { tick } from '../haptics';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { RAIL_W } from '../layout';
-import { openSift } from '../search/store';
+import { openSift, useSearch } from '../search/store';
 import { useBackupAttention } from '../cloud';
-import { Lift } from './Cheer';
+import { Lift, useCheerful } from './Cheer';
 
 /** a second tap on the tab you are on within this many ms opens Sift (the first still does what it always did) */
 const DOUBLE_TAP_MS = 280;
@@ -134,7 +134,13 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
   // the bar steps aside while the keyboard is up, so a text field never sits under a row of tabs; the rail, beside
   // the screen rather than under it, stays
   const keyboardOpen = useKeyboardOpen();
-  const stepAside = keyboardOpen && !vertical;
+  // ...but not for Sift's own keyboard: the bar is behind Sift then, and stepping aside there would only have it come
+  // back up into view as Sift goes. The keyboard belongs to whatever was open when it came up.
+  const siftOpen = useSearch((s) => s.open);
+  const kbFor = React.useRef<'sift' | 'page' | null>(null);
+  if (!keyboardOpen) kbFor.current = null;
+  else if (kbFor.current == null) kbFor.current = siftOpen ? 'sift' : 'page';
+  const stepAside = keyboardOpen && !vertical && kbFor.current === 'page';
 
   const routeNames = TAB_ROUTES as readonly string[];
   const focusedName = state.routes[state.index]?.name;
@@ -190,9 +196,14 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
     const moved = lastIndex.current !== focusIndex;
     lastIndex.current = focusIndex;
     if (level === 'none' || (!vertical && slotW === 0)) {
+      // the run's ends meet where it now stands, so a dot that does not travel is round, not left stretched by the last run
+      dotFrom.value = focusIndex;
+      dotTo.value = focusIndex;
       dotAt.value = focusIndex;
     } else if (level === 'some') {
       if (!moved) return;
+      dotFrom.value = focusIndex;
+      dotTo.value = focusIndex;
       dotFade.value = withSequence(withTiming(0, { duration: 80, easing: EASE_EXIT }), withTiming(1, { duration: 120, easing: EASE_OUT }));
       dotAt.value = withDelay(80, withTiming(focusIndex, { duration: 1 }));
     } else {
@@ -221,12 +232,18 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
   };
 
   const hairline = theme === 'minimal' ? MIN.hairline : C.hairline;
+  // Cheerful: the bar and the rail carry the page's drifting colour on through them (see Ground), lined up from where
+  // they stand beside the page: the rail to its left, the bar under it
+  const cheerful = useCheerful();
+  const [barY, setBarY] = React.useState(0);
+  const beside = React.useMemo(() => (vertical ? { x: -RAIL_W, y: 0 } : { x: 0, y: barY }), [vertical, barY]);
   return (
     <Animated.View
       pointerEvents={stepAside ? 'none' : 'auto'}
       accessibilityRole="tablist"
       onLayout={vertical ? undefined : (e) => {
         barH.value = e.nativeEvent.layout.height;
+        setBarY(e.nativeEvent.layout.y);
         setSlotW((e.nativeEvent.layout.width - BAR_PAD_X * 2) / routeNames.length);
       }}
       style={vertical ? [
@@ -244,6 +261,7 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
         slideStyle,
       ]}
     >
+      {cheerful ? <Ground beside={beside} /> : null}
       {TAB_ROUTES.map((name) => {
         const route = state.routes.find((r) => r.name === name);
         if (!route) return null;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Pressable, ScrollView, SectionList, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,7 +22,7 @@ import {
   shiftKey,
 } from '../journal';
 import { openTool } from '../toolNav';
-import { expectAway } from '../lock';
+import { shareMessage } from '../share';
 import { tick } from '../haptics';
 import { Appear, Bouncy, CountUp, EASE_OUT, useAnimLevel } from '../components/Motion';
 import { swapIn } from '../components/Swap';
@@ -201,14 +201,16 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   const settledQ = React.useDeferredValue(q);
   const tokens = React.useMemo(() => searchTokens(settledQ), [settledQ]);
 
-  // full-text search reads every entry's text once, then stays in memory
+  // full-text search reads every entry's text once, then stays in memory. A change to the journal (a pin, a moved day,
+  // a delete) reads them again, and the texts already read keep matching meanwhile: a result found deep in an entry
+  // never drops out of the list for a moment and comes back
+  const searching = tokens.length > 0;
   React.useEffect(() => {
-    if (!tokens.length || bodies) return;
+    if (!searching) return;
     let live = true;
     loadBodies(journal.map((e) => e.id)).then((m) => { if (live) setBodies(m); });
     return () => { live = false; };
-  }, [tokens.length, bodies, journal]);
-  React.useEffect(() => { setBodies(null); }, [journal]);
+  }, [searching, journal]);
 
   const visible = React.useMemo(() => {
     const out = journal.filter((e) =>
@@ -299,7 +301,8 @@ function Archive({ tabMode }: { tabMode: boolean }) {
     if (!tokens.length || !text) return e.excerpt;
     const low = text.toLowerCase();
     const at = Math.min(...tokens.map((t) => { const i = low.indexOf(t); return i < 0 ? Infinity : i; }));
-    if (!isFinite(at) || at < 80) return text.replace(/\s+/g, ' ').slice(0, 200);
+    // trimmed as the excerpt is, so an untitled row still finds its first sentence at the start and never shows it twice
+    if (!isFinite(at) || at < 80) return text.replace(/\s+/g, ' ').trim().slice(0, 200);
     // a little before the match, from the start of a word
     let from = at - 60;
     while (from > 0 && !/\s/.test(text[from - 1])) from--;
@@ -308,9 +311,8 @@ function Archive({ tabMode }: { tabMode: boolean }) {
 
   const shareEntry = async (e: JournalEntry) => {
     const body = await readBody(e.id);
-    // the share sheet takes the app out of view; coming back from it never locks the journal
-    expectAway(() => Share.share({ message: [formatJournalDate(e.dateKey), e.title, body.trim()].filter(Boolean).join('\n\n') }))
-      .catch(() => {});
+    // the share sheet on the phone, and the text copied on the PC (share.ts)
+    shareMessage([formatJournalDate(e.dateKey), e.title, body.trim()].filter(Boolean).join('\n\n'));
   };
   const confirmDelete = (e: JournalEntry) => {
     Alert.alert('Delete this entry?', 'You can restore it from Recently deleted for 30 days.', [

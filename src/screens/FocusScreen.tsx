@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Alert, AppState, Dimensions, Linking, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Alert, AppState, Dimensions, Linking, Platform, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
@@ -12,7 +12,7 @@ import { todayKey, yesterdayKey, uid, toMinutes, fmtClockTime, dayName, todoDueO
 import { subjectKey, useSubjects } from '../subjects';
 import {
   ScreenBG, GlassCard, SectionTitle, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, ProgressBar,
-  ListCard, ListRow, StrikeText, TimeWheel, useToolHeader, contextLine,
+  ListCard, ListRow, StrikeText, TimeWheel, useToolHeader, contextLine, SectionTopTrim,
 } from '../components/UI';
 import { defaultTime, hhmm, parseTime } from '../components/TimeWheel';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -27,7 +27,7 @@ import {
   scheduleCountdownEnd,
 } from '../notifications';
 import { playSessionEnd } from '../chime';
-import { FINISH_NOTIF_ID, TimerState, displayOf, elapsedOf } from '../deepWork';
+import { FINISH_NOTIF_ID, TimerState, displayOf, elapsedOf, fmtMins } from '../deepWork';
 import { AmbientView } from '../components/AmbientView';
 import { ClockDigits } from '../components/ClockDigits';
 import { BreakStage, SessionStage } from '../components/SessionStage';
@@ -63,6 +63,8 @@ const RUN_SECTIONS: SectionDef[] = [
 ];
 /** the sections that sit in the left column on a wide screen, beside the rest */
 const MAIN = new Set(['mode', 'timer', 'subject', 'break', 'stage']);
+/** the sections that leave their own gap below them, so a card under one goes straight beneath it */
+const SPACED = new Set(['mode', 'timer', 'subject', 'break']);
 
 interface Attached { key: string; kind: 'custom' | 'daily' | 'mission'; refId?: string; title: string; done: boolean }
 type ReviewChoice = 'done' | 'pending' | 'drop';
@@ -72,8 +74,10 @@ interface Resume {
   startedAt: number | null; finishAt: number | null; chosen: number; running: boolean; tags: string[];
 }
 
-/** the idle stopwatch's clock sits in the slot the clock has always had, so the card keeps its height */
-const CLOCK_SLOT_H = 60;
+/** the countdown's wheel, and the idle stopwatch's clock in a slot of the same height, so the card keeps its height */
+const WHEEL_H = 72;
+/** the idle stopwatch's clock line */
+const CLOCK_LINE_H = 60;
 /** a stopwatch left running with no finish line (a killed app, a forgotten session) logs at most this much */
 const STOPWATCH_CAP_SEC = 12 * 3600;
 
@@ -138,7 +142,9 @@ function startBreak(min: number) {
     // heard only as it ends with the app open; a phone that was away was told by the notification, with its own buzz
     if (AppState.currentState !== 'active' || Date.now() - endAt > FRESH_MS) return;
     playSessionEnd();
-    if (!deepWorkSeen()) toastWhenSeen('Break over', { label: 'Open', onPress: () => openTool('focus') }, () => !deepWorkSeen());
+    // seen ending on Deep Work itself: the heads-up for a phone away has nothing left to say
+    if (deepWorkSeen()) cancelBreakEnd();
+    else toastWhenSeen('Break over', { label: 'Open', onPress: () => openTool('focus') }, () => !deepWorkSeen());
   }, Math.max(0, endAt - Date.now()));
 }
 
@@ -365,7 +371,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       // Deep Work screen was open (its toast's Open brought this one up)
       const fresh = Date.now() - endAt < FRESH_MS && endAt !== heardEndAt;
       // the buzz, and the chime when it is on, wherever in the app the student is
-      if (fresh && AppState.currentState === 'active') playSessionEnd();
+      if (fresh && AppState.currentState === 'active') playSessionEnd(!toReviewRef.current);
       // the completion pulse is a scale: only full motion plays it, and a resumed session that ran out ends at once
       if (level !== 'full' || !fresh || !navigation.isFocused()) {
         endSessionRef.current();
@@ -455,7 +461,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       renewEndNotice();
       return;
     }
-    // refused, or blocked in the phone's settings, where Android stops asking: the settings are the way to allow them
+    // refused, or blocked in the phone's settings, where Android stops asking: the settings are the way to allow them.
+    // A PC has no settings page to open from here, so it says where they are
+    if (Platform.OS === 'web') { toast('Allow notifications for Sturoids in Windows Settings, under Notifications'); return; }
     Linking.openSettings().catch(() => {});
   };
   const dismissAlert = () => {
@@ -849,6 +857,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     }
     return done === a.done ? a : { ...a, done };
   });
+  // whether a block running out now opens its review, rather than being saved at once
+  const toReviewRef = useRef(false);
+  toReviewRef.current = live.some((a) => !a.done);
   // today's ToDos only: one that repeats on some weekdays is offered on those days
   const pickableDaily = dailyTasks.filter((t) => t.doneOn !== today && todoDueOn(t, today) && !attached.some((a) => a.refId === t.id));
   const pickableMissions = missions.filter((m) => !m.done && !attached.some((a) => a.refId === m.id));
@@ -1055,10 +1066,22 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const liveMin = started ? Math.floor(elapsedOf(timer) / 60) : 0;
   const nextLine = blocks.next ? (blocks.next.subject || 'A block') + ' at ' + fmtClockTime(toMinutes(blocks.next.start), hour24) : undefined;
 
+  // what shows now: the time between blocks takes the setup's place while it lasts
+  const order = idle
+    ? (gap ? ['break', ...idleSec.shown.filter((k) => k !== 'mode' && k !== 'timer' && k !== 'subject')] : idleSec.shown)
+    : runSec.shown;
+  // whether a card goes straight under what is above it: it starts a column, or follows a section that leaves its own
+  // gap below. A wide screen's two columns are counted apart
+  const flush = (k: string) => {
+    const col = twoCol ? order.filter((x) => MAIN.has(x) === MAIN.has(k)) : order;
+    const i = col.indexOf(k);
+    return i <= 0 || SPACED.has(col[i - 1]);
+  };
+
   // every section of the screen, by key; the page's arrangement says which show and in what order
   const sections: Record<string, React.ReactNode> = {
     break: gap ? (
-      <>
+      <View style={{ marginBottom: S.section / 2 }}>
           <BreakStage
             stage={gap.stage}
             subject={nextName}
@@ -1074,8 +1097,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
             hold={!focused || !appActive}
           />
           {gap.stage === 'break' ? silentLine('break') : null}
-        {gap.stage === 'break' ? silentLine('break') : null}
-      </>
+      </View>
     ) : null,
     mode: (
       <>
@@ -1107,7 +1129,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
                   minScale={0.42}
                   colorOn={C.text}
                   colorOff={C.textFaint}
-                  height={72}
+                  height={WHEEL_H}
                   textStyle={st.wheelText}
                   accessibilityLabel="Countdown length in minutes"
                   onPressCenter={openCustomLength}
@@ -1115,7 +1137,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               </Animated.View>
             ) : (
               <Animated.View entering={modeIn} style={st.clockSlot}>
-                <ClockDigits text="0:00" size={48} lineHeight={CLOCK_SLOT_H} roll={false} />
+                <ClockDigits text="0:00" size={48} lineHeight={CLOCK_LINE_H} roll={false} />
               </Animated.View>
             )}
             {/* the line under the time changes with the mode: it dips over with it */}
@@ -1126,19 +1148,21 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
               </Text>
             </FadeSwap>
             {timerMode === 'stopwatch' && (
-              <Animated.View entering={modeIn} style={{ marginTop: 10 }}>
-                <Chip
-                  small
-                  label={finishAt ? `Finish ${fmtClockTime(new Date(finishAt).getHours() * 60 + new Date(finishAt).getMinutes(), hour24)}` : 'Finish line'}
-                  active={!!finishAt}
-                  color={C.accent}
-                  onPress={openFinishSheet}
-                />
+              <Animated.View entering={modeIn} style={st.underTime}>
+                <View style={st.chipBox}>
+                  <Chip
+                    small
+                    label={finishAt ? `Finish ${fmtClockTime(new Date(finishAt).getHours() * 60 + new Date(finishAt).getMinutes(), hour24)}` : 'Finish line'}
+                    active={!!finishAt}
+                    color={C.accent}
+                    onPress={openFinishSheet}
+                  />
+                </View>
               </Animated.View>
             )}
             {timerMode === 'countdown' && (
-              <Animated.View entering={modeIn} style={{ alignSelf: 'stretch', marginTop: 12 }}>
-                <ProgressBar value={0} />
+              <Animated.View entering={modeIn} style={st.underTime}>
+                <View style={st.barBox}><ProgressBar value={0} /></View>
               </Animated.View>
             )}
             <Row style={{ marginTop: 20, gap: 10 }}>
@@ -1186,7 +1210,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </>
     ),
     parked: (
-      <View style={{ marginTop: S.section / 2 }}>
+      <View style={{ marginTop: flush('parked') ? 0 : S.section / 2 }}>
         <ParkedCard
           parked={parked}
           onPark={(t) => setParked((l) => [...l, t].slice(-20))}
@@ -1195,7 +1219,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </View>
     ),
     today: (
-      <View style={{ marginTop: idle ? 0 : S.section / 2 }}>
+      <View style={{ marginTop: flush('today') ? 0 : S.section / 2 }}>
         <TodayCard sessions={sessions} today={today} liveMin={liveMin} goalMin={focusGoal} next={idle ? nextLine : undefined} />
       </View>
     ),
@@ -1272,14 +1296,13 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       </>
     ) : null,
   };
-  // what shows now: the time between blocks takes the setup's place while it lasts
-  const order = idle
-    ? (gap ? ['break', ...idleSec.shown.filter((k) => k !== 'mode' && k !== 'timer' && k !== 'subject')] : idleSec.shown)
-    : runSec.shown;
   const stateKey = idle ? (gap ? 'between' : 'idle') : 'running';
+  // on a wide screen, a column that opens with a heading drops the space above it, so both columns start level
   const block = (k: string, i: number) => (
     <Enter key={k} index={Math.min(i, 4)}>
-      <Animated.View key={stateKey + ':' + k} entering={switchIn}>{sections[k]}</Animated.View>
+      <SectionTopTrim.Provider value={twoCol && i === 0}>
+        <Animated.View key={stateKey + ':' + k} entering={switchIn}>{sections[k]}</Animated.View>
+      </SectionTopTrim.Provider>
     </Enter>
   );
   const mainKeys = order.filter((k) => MAIN.has(k) && sections[k] != null);
@@ -1315,7 +1338,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           {twoCol ? (
             <View style={st.cols}>
               <View style={st.col}><InOrder shown={mainKeys}>{mainKeys.map(block)}</InOrder></View>
-              <View style={[st.col, st.colSide]}><InOrder shown={sideKeys}>{sideKeys.map(block)}</InOrder></View>
+              <View style={st.col}><InOrder shown={sideKeys}>{sideKeys.map(block)}</InOrder></View>
             </View>
           ) : (
             <InOrder shown={order.filter((k) => sections[k] != null)}>{order.filter((k) => sections[k] != null).map(block)}</InOrder>
@@ -1480,7 +1503,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
       {/* finish line reached — approval window */}
       <Sheet
         visible={finishPrompt && !held}
-        onClose={() => { if (autoConcludeTimer.current) clearTimeout(autoConcludeTimer.current); clearFinishLine(); }}
+        // put aside, not answered: the finish line stands, and the session still wraps up on its own as the sheet says
+        onClose={() => setFinishPrompt(false)}
         title="Finish line reached"
       >
         <Text style={{ color: C.textDim, fontFamily: F.sm, fontSize: 13, letterSpacing: TRACK.small, marginBottom: 14 }}>
@@ -1504,13 +1528,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   );
 }
 
-/** A length of time, the one way Deep Work writes it: "45 min", "1 h", "1 h 35 min", never a zero part. */
-export function fmtMins(min: number): string {
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  if (h === 0) return m + ' min';
-  return m === 0 ? h + ' h' : h + ' h ' + m + ' min';
-}
+// kept in deepWork.ts, where the plate can reach it too; still offered here for the pages that take it from Deep Work
+export { fmtMins };
 
 /** Today's focused time for the header. */
 function focusedToday(min: number): string {
@@ -1577,7 +1596,12 @@ const st = StyleSheet.create({
   silent: { flexDirection: 'row', alignItems: 'center', marginTop: 14, paddingHorizontal: 4 },
   silentAllow: { color: C.accent, fontFamily: F.smSemi, fontSize: 12, letterSpacing: TRACK.fine },
 
-  clockSlot:{ height: CLOCK_SLOT_H, alignItems: 'center', justifyContent: 'center' },
+  clockSlot:{ height: WHEEL_H, alignItems: 'center', justifyContent: 'center' },
+  /** the bar under the countdown and the finish line chip under the stopwatch take the same room, so Start stays put */
+  underTime: { alignSelf: 'stretch', marginTop: 10, minHeight: 30, alignItems: 'center', justifyContent: 'center' },
+  /** a chip carries its own margins for a row of chips; this one sits alone, on the card's centre line */
+  chipBox: { marginRight: -10, marginBottom: -10 },
+  barBox: { alignSelf: 'stretch' },
   wheelBox: { alignSelf: 'stretch' },
   wheelText: { ...T.numWheel },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body },
@@ -1595,6 +1619,4 @@ const st = StyleSheet.create({
   quietText: { color: C.textDim, fontFamily: F.med, fontSize: 14, letterSpacing: TRACK.small },
   cols: { flexDirection: 'row', alignItems: 'flex-start', gap: 28 },
   col: { flex: 1, minWidth: 0 },
-  /** the side column's first title lines up with the top of the session instead of a section's gap below it */
-  colSide: { marginTop: -S.section },
 });

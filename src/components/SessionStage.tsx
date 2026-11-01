@@ -5,7 +5,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, neuRaised, oneLine } from '../theme';
 import { fmtClockTime } from '../utils';
-import { TimerState, displayOf, shownSecondsOf, spokenTimeOf, useSessionTick } from '../deepWork';
+import { TimerState, displayOf, fmtMins, shownSecondsOf, spokenTimeOf, useSessionTick } from '../deepWork';
 import { WIDE_AT } from '../layout';
 import { Appear, Bouncy, CHANGE, EASE_OUT, FadeSwap, useAnimLevel, useBuilt, useLoop } from './Motion';
 import { ClockDigits, clockWidth } from './ClockDigits';
@@ -164,7 +164,7 @@ export function SessionStage({
     moon.value = level === 'none' ? (timer.running ? 1 : 0) : withTiming(timer.running ? 1 : 0, CHANGE);
   }, [timer.running, level]);
   const moonStyle = useAnimatedStyle(() => ({ opacity: moon.value }));
-  const block = timer.mode === 'countdown' ? `${timer.targetMin} min block` : 'Stopwatch';
+  const block = timer.mode === 'countdown' ? fmtMins(timer.targetMin) + ' block' : 'Stopwatch';
   // what the plate is built with is simply there; a current task that turns up later (the first task attached
   // mid-session) fades in where it stands
   const built = useBuilt();

@@ -11,6 +11,9 @@
  *   - a session ended elsewhere is said; deleting the account ends every session
  *   - a newer copy from another phone is followed only when this phone changed nothing (the decision, tested on its
  *     own), with a copy kept for the Undo; when both changed, the choice stays
+ *   - settings follow the account: a change to them alone goes up (this device's own ones never), another device's
+ *     come in joined setting by setting, a first sign-in takes the account's over untouched defaults, and they come in
+ *     even while a Deep Work session holds the rest of the join back
  *   - attachments kept to Wi-Fi wait on mobile data while the data goes, and go once allowed or on Wi-Fi
  *   - a password reset by emailed code, and the password check behind Forgot PIN
  *   - when the backup needs the user (paused, or signed out elsewhere), for More's dot and Today's banner
@@ -585,10 +588,14 @@ const scenarios = {
     const t = app.world.toasts.find((x) => x.message === 'Updated from Tablet');
     assert.ok(t && t.action && t.action.label === 'Undo', 'a toast offers the Undo: ' + JSON.stringify(app.world.toasts));
     assert.equal(app.world.log.filter((l) => l === 'upsert').length, 1, 'nothing went up');
+    const baseFile = app.toPath('file:///doc/sturoids-cloud-base.json');
+    assert.equal(JSON.parse(fs.readFileSync(baseFile, 'utf8')).settings.name, 'From the tablet', 'the copy that came is shared now');
 
     t.action.onPress();
     await until(() => app.state().settings.name === 'Sam', 'the Undo');
     await until(() => app.cloudState().status === 'choice', 'the choice after the Undo');
+    // undone, it is shared no more: joined against it, what the tablet added would read as deleted here
+    assert.equal(JSON.parse(fs.readFileSync(baseFile, 'utf8')).settings.name, 'Sam', 'the copy shared before is back');
     assert.equal(app.cloudState().reason, 'newer');
     assert.equal(app.storage.has(app.store.RECOVERY_KEY), false, 'the kept copy goes once used');
     assert.equal(app.meta().declinedAt, later);
@@ -638,9 +645,95 @@ const scenarios = {
     app.store.flushSaves();
     await app.cloud.check(false);
     assert.notEqual(app.cloudState().status, 'choice', 'the join waits for the session, without asking');
-    assert.equal(app.state().settings.name, 'Sam');
     assert.ok(app.state().deepWork && app.state().deepWork.running, 'the session runs on');
     assert.equal(app.storage.has(app.store.RECOVERY_KEY), false);
+    // the settings come in meanwhile; the rest of the copy waits for the join
+    assert.equal(app.state().settings.name, 'From the tablet', 'the tablet\'s settings are taken during the session');
+    assert.notEqual(app.meta().lastRemoteAt, app.world.rows.get(USER).updated_at, 'the copy itself is not joined yet');
+    assert.equal(app.world.log.filter((l) => l === 'upsert').length, 1, 'and nothing went up over it');
+  },
+
+  async 'a change to the settings alone goes up, without this device\'s own'() {
+    const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(app);
+    const ups = app.world.log.filter((l) => l === 'upsert').length;
+    app.state().setSetting('mood', 'cheerful');
+    app.state().setSetting('mascotName', 'Bun');
+    app.state().setSetting('backupNudgeAt', 12345);
+    assert.equal(app.cloudState().pending, true, 'a setting is a change worth sending');
+    await app.cloud.syncNow();
+    assert.equal(app.world.log.filter((l) => l === 'upsert').length, ups + 1, 'it went up');
+    const up = JSON.parse(app.world.rows.get(USER).snapshot).settings;
+    assert.equal(up.mood, 'cheerful');
+    assert.equal(up.mascotName, 'Bun');
+    for (const k of app.store.DEVICE_SETTINGS) assert.equal(k in up, false, k + ' stays on this device');
+  },
+
+  async 'settings changed on another device come here, each one joined with this device\'s'() {
+    const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(app);
+    const shared = JSON.parse(app.world.rows.get(USER).snapshot);
+    // here: the clock and how much the companion talks; there: the look, the companion's colours, its talk, and that
+    // device's own note about backups, which never travels
+    app.state().setSetting('hour24', true);
+    app.state().setSetting('mascotTalk', 'often');
+    const there = {
+      ...shared,
+      settings: {
+        ...shared.settings, mood: 'cheerful', theme: 'dark', mascotTalk: 'asked', backupNudgeAt: 999,
+        mascotLooks: { ...shared.settings.mascotLooks, pip: { colors: 'mint', gear: ['hat'] } },
+      },
+    };
+    app.world.rows.set(USER, {
+      user_id: USER, snapshot: JSON.stringify(there), device: 'PC', device_id: 'dev-2', bytes: 900, files: 0,
+      updated_at: new Date(Date.now() + 60 * 1000).toISOString(),
+    });
+    app.store.flushSaves();
+    await app.cloud.check(false);
+    await sleep(700);
+    const s = app.state().settings;
+    assert.notEqual(app.cloudState().status, 'choice', 'nobody is asked');
+    assert.equal(s.mood, 'cheerful', 'the PC\'s look came in');
+    assert.equal(s.theme, 'dark');
+    assert.deepEqual(s.mascotLooks.pip, { colors: 'mint', gear: ['hat'] });
+    assert.equal(s.hour24, true, 'this device\'s own change stands');
+    assert.equal(s.mascotTalk, 'often', 'both changed it: this device\'s stands');
+    assert.equal(s.backupNudgeAt, 0, 'the other device\'s own note stays there');
+    // the join goes up, so the PC follows this device's changes in turn
+    await until(() => JSON.parse(app.world.rows.get(USER).snapshot).settings.hour24 === true, 'the join to go up');
+    const up = JSON.parse(app.world.rows.get(USER).snapshot).settings;
+    assert.equal(up.mood, 'cheerful');
+    assert.equal(up.mascotTalk, 'often');
+  },
+
+  async 'a device signing in for the first time takes the account\'s settings over its own untouched ones'() {
+    // this phone has data of its own but has never shared a copy with the account
+    const app = boot({
+      seed: { [KEY]: saved({ ...SAM, settings: { name: 'Sam', hour24: true } }) },
+      rows: {
+        [USER]: {
+          ...bigRow(800), device: 'PC', device_id: 'dev-2',
+          snapshot: backupOf({ settings: { name: 'Sam', mood: 'cheerful', mascotTalk: 'asked' }, dailyTasks: [{ id: 'd2', title: 'Revise', doneOn: null, createdAt: 2 }] }),
+        },
+      },
+    });
+    await start(app);
+    await sleep(700);
+    const s = app.state().settings;
+    assert.notEqual(app.cloudState().status, 'choice');
+    assert.equal(s.mood, 'cheerful', 'the account\'s look, not this phone\'s default');
+    assert.equal(s.mascotTalk, 'asked');
+    assert.equal(s.hour24, true, 'what this phone chose itself stays');
+    assert.deepEqual(app.state().dailyTasks.map((t) => t.id).sort(), ['d1', 'd2'], 'both sides\' items are kept');
+  },
+
+  async 'forgetting what was synced forgets the copy shared with the account too'() {
+    const app = boot({ seed: { [KEY]: saved(SAM) }, rows: { [USER]: bigRow(800) }, meta: { lastRemoteAt: T0, lastHash: 'old', dirty: true } });
+    await start(app);
+    const baseFile = app.toPath('file:///doc/sturoids-cloud-base.json');
+    assert.equal(fs.existsSync(baseFile), true, 'the backup keeps the copy it shared');
+    await app.cloud.signOut({ forget: true });
+    assert.equal(fs.existsSync(baseFile), false, 'an erased phone joined against it would take the account\'s data out');
   },
 
   async 'the open time stamped on a return, still waiting to be saved, does not stop a quiet follow'() {

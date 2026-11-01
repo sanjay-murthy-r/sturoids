@@ -348,6 +348,14 @@ const scenarios = {
     again.state().setSetting('name', 'Priya Rao');
     await sleep(700);
     assert.equal(again.registry().list.find((p) => p.id === A).name, 'Priya Rao', 'and from then on they stay in step');
+    assert.equal('renamed' in again.registry().list.find((p) => p.id === A), false, 'the rename is taken once');
+    // a name the settings took elsewhere (synced from another device) before the registry heard of it stands
+    await again.store.flushSaves();
+    await sleep(700);
+    const key = 'student-hub-v2__' + A + ':settings';
+    storage.set(key, JSON.stringify({ ...JSON.parse(storage.get(key)), name: 'Priya Synced' }));
+    const later = await start({ active: A, storage });
+    assert.equal(later.state().settings.name, 'Priya Synced', 'the registry name never turns it back');
   },
 
   async 'a switch writes what waits, cancels every reminder, names the new profile and restarts'() {

@@ -16,9 +16,11 @@ const CELL = 40;
  * A month of days, kept flat: a day with an entry carries a small dot, the picked day wears an accent ring, and
  * days outside `minKey`..`maxKey` (either may be left open) cannot be picked. Only the month arrows are raised. A
  * new month glides in from the side it was reached from. With no day picked (`value` empty) it opens on this month.
+ * In a sheet that stays mounted, `active` says when it is open: each opening comes back to the picked day's month,
+ * never the one last browsed to and left without a pick.
  */
-export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
-  value: string; onPick: (key: string) => void; marked?: Set<string>; maxKey?: string; minKey?: string;
+export function JournalCalendar({ value, onPick, marked, maxKey, minKey, active }: {
+  value: string; onPick: (key: string) => void; marked?: Set<string>; maxKey?: string; minKey?: string; active?: boolean;
 }) {
   useTheme(); // repaints on a new accent: the ring and the picked day read it
   const level = useAnimLevel();
@@ -26,11 +28,12 @@ export function JournalCalendar({ value, onPick, marked, maxKey, minKey }: {
   const start = keyToDate(value || todayKey());
   const [ym, setYm] = React.useState({ y: start.getFullYear(), m: start.getMonth() });
   React.useEffect(() => {
-    if (!value) return;
+    // a sheet on its way down keeps the month it showed
+    if (!value || active === false) return;
     const d = keyToDate(value);
     dir.current = 0;
     setYm((cur) => (cur.y === d.getFullYear() && cur.m === d.getMonth() ? cur : { y: d.getFullYear(), m: d.getMonth() }));
-  }, [value]);
+  }, [value, active]);
 
   // the side the new month was reached from; 0 when it was set from outside (it is simply there)
   const dir = React.useRef<0 | 1 | -1>(0);

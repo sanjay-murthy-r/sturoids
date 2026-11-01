@@ -64,10 +64,10 @@ const SHEEN_SLANT = Math.tan((-SHINE_SKEW * Math.PI) / 180) * PLATE;
 
 /* ------------------------------------------------------------------ plate extrusion tiers */
 
-// NEU.raisedHigh is the kit pair: lite alpha .25 / blur 6, dark alpha .48 / blur 15, offsets LX/LY.
+// NEU.raisedHigh is the kit pair: lite alpha .25 (at the kit's 0.9 light, .225) / blur 6, dark alpha .48 / blur 15, offsets LX/LY.
 // The plate rises through three static tiers of that pair scaled by extrusion h and crossfades
 // between them, so no shadow string is ever animated.
-const HIGH = { liteA: 0.25, liteBlur: 6, darkA: 0.48, darkBlur: 15 };
+const HIGH = { liteA: 0.225, liteBlur: 6, darkA: 0.48, darkBlur: 15 };
 const n2 = (v: number) => +v.toFixed(2);
 const n3 = (v: number) => +v.toFixed(3);
 function plateShadow(h: number): string {

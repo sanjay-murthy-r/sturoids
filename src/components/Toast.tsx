@@ -2,7 +2,7 @@ import React from 'react';
 import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { C, F, MIN, NEU, TRACK } from '../theme';
+import { C, F, MIN, TRACK, neuRaised } from '../theme';
 import { useTheme } from './UI';
 import { EASE_EXIT, EASE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
@@ -131,7 +131,7 @@ export function ToastHost() {
           st.card,
           theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
-            : { backgroundColor: C.card, ...NEU.raisedMid },
+            : { backgroundColor: C.card, ...neuRaised('mid') },
         ]}
       >
         <Animated.View style={[action || opts?.second ? st.rowWithAction : null, wordsStyle]}>

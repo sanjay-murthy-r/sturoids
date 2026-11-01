@@ -23,15 +23,19 @@ function chimePlayer(): AudioPlayer {
   return player;
 }
 
-/** A countdown block has ended while the app is open: the buzz, and the chime when it is on. */
-export function playSessionEnd(): void {
+/**
+ * A countdown block or a break has ended while the app is open: the buzz, and the chime when it is on. `savedNow` when
+ * the block is saved at once, where Cheerful with its sounds on plays its own tune for a session done instead; a break,
+ * or a block that opens its review first, has the chime in Cheerful too, so its end is never silent (a PC has no buzz).
+ */
+export function playSessionEnd(savedNow = false): void {
   try {
     Vibration.vibrate(PATTERN);
   } catch {
     // no vibrator
   }
-  // Cheerful has its own tune for a session done, played as it is saved
-  if (!useStore.getState().settings.focusChime || AppState.currentState !== 'active' || useStore.getState().settings.mood === 'cheerful') return;
+  const s = useStore.getState().settings;
+  if (!s.focusChime || AppState.currentState !== 'active' || (savedNow && s.mood === 'cheerful' && s.cheerSounds)) return;
   try {
     const p = chimePlayer();
     // a player that has played once rests at its end: it starts again from the top

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, AppState, Platform, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, AppState, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
@@ -30,7 +30,8 @@ import type { DayFact, DayHabit, DayRecord } from '../journal';
 import { useToolNav } from '../toolNav';
 import { tap, tick } from '../haptics';
 import { ensurePermission, rescheduleAllReminders } from '../notifications';
-import { expectAway, markOpen, pinStatus } from '../lock';
+import { markOpen, pinStatus } from '../lock';
+import { shareMessage } from '../share';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { useNow } from '../hooks/useNow';
 import { DayCheckout } from '../components/DayCheckout';
@@ -476,9 +477,8 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
   // the menu reads the page when an action runs, so typing never rebuilds it
   const shareText = () => {
     const d = draft.current;
-    const text = [formatJournalDate(d.dateKey), d.title.trim(), d.body.trim()].filter(Boolean).join('\n\n');
-    // the share sheet takes the app out of view; coming back from it never locks the journal
-    expectAway(() => Share.share({ message: text })).catch(() => {});
+    // the share sheet on the phone, and the text copied on the PC (share.ts)
+    shareMessage([formatJournalDate(d.dateKey), d.title.trim(), d.body.trim()].filter(Boolean).join('\n\n'));
   };
   const confirmDelete = () => {
     if (!entryId) return;
@@ -497,6 +497,10 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
           // Recently deleted could not take it: the entry stays, and so does its page
           if (!trashId) { toastTrashed(null); return; }
           draft.current.dirty = false;
+          // the page lets go of the entry in the same step, so the watch on the journal never lays out a blank page of
+          // its own while the day's next entry is read: one page turn, straight to it
+          draft.current.id = null;
+          setEntryId(null);
           // back from an Undo, it takes its page again if the page has nothing else on it
           toastTrashed(trashId, () => {
             const d = draft.current;
@@ -567,7 +571,7 @@ function WritingSpace({ tabMode }: { tabMode: boolean }) {
         <Chip label="Yesterday" icon="arrow-undo-outline" active={dateKey === shiftKey(today, -1)} onPress={() => pickDay(shiftKey(today, -1))} />
         <Chip label="Today" icon="today-outline" active={dateKey === today} onPress={() => pickDay(today)} />
       </Row>
-      <JournalCalendar value={dateKey} onPick={pickDay} marked={marked} maxKey={today} />
+      <JournalCalendar value={dateKey} onPick={pickDay} marked={marked} maxKey={today} active={dateSheet} />
     </Sheet>
   ), [dateSheet, dateKey, today, marked, pickDay]);
   // ---- a tag held in the sheet: rename it, or delete it from every entry, one sheet at a time ----

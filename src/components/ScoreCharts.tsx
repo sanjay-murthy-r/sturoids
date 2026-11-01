@@ -359,7 +359,12 @@ export function TrendChart({ points, moving, target, selected, onSelect, height 
       ) : null}
       <Pressable
         style={StyleSheet.absoluteFill}
-        onPress={(e) => pick(e.nativeEvent.locationX)}
+        onPress={(e) => {
+          // a click on the PC carries the place as offsetX (the chart's own box), not locationX
+          const ne = e.nativeEvent as any;
+          const lx = ne.locationX ?? ne.offsetX;
+          if (Number.isFinite(lx)) pick(lx);
+        }}
         accessibilityRole="adjustable"
         accessibilityLabel={accessibilityLabel}
         accessibilityValue={valueText ? { text: valueText } : undefined}

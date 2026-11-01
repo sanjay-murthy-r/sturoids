@@ -21,14 +21,14 @@ import { create } from 'zustand';
 import type { RealtimeChannel, Session, SupabaseClient } from '@supabase/supabase-js';
 import {
   useStore, exportSnapshot, readSnapshot, applySnapshot, flushSaves, hasAnyUserData, localDataState, isDeviceOnlyChange,
-  withoutDeviceSettings, Attachment, RECOVERY_KEY, trashedAttachments, savePending, SAVE_PAUSE_MS,
+  withoutDeviceSettings, Attachment, RECOVERY_KEY, trashedAttachments, savePending, SAVE_PAUSE_MS, initialData, DEVICE_SETTINGS,
 } from './store';
 import { journalForBackup, restoreBodies } from './journal';
 import { restoredPath } from './backup';
 import { ATT_DIR } from './attachments';
 import { toast } from './components/Toast';
 import { uid } from './utils';
-import { mergeSnapshots } from './merge';
+import { mergeSnapshots, same } from './merge';
 import { accountTakenBy, noteActiveEmail, pkey, sessionKey, takenMessage } from './profiles';
 
 // A copy of this phone's data is kept while it follows the cloud quietly, so the toast's Undo can bring it back. It
@@ -43,14 +43,40 @@ const BASE_FILE = () => FileSystem.documentDirectory + pkey('sturoids-cloud-base
 async function saveBase(json: string) {
   try { await FileSystem.writeAsStringAsync(BASE_FILE(), json); } catch { /* the next join asks instead */ }
 }
-async function readBase(): Promise<any | null> {
+/** the shared copy as kept, its text; null when there is none (or it could not be read) */
+async function readBaseText(): Promise<string | null> {
   try {
     const info = await FileSystem.getInfoAsync(BASE_FILE());
     if (!info.exists) return null;
-    return JSON.parse(await FileSystem.readAsStringAsync(BASE_FILE()));
+    return await FileSystem.readAsStringAsync(BASE_FILE());
   } catch {
     return null;
   }
+}
+async function readBase(text?: string | null): Promise<any | null> {
+  if (text === undefined) text = await readBaseText();
+  if (text == null) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+/**
+ * The shared copy is forgotten with the record of what was synced (another account, data about to be erased): joined
+ * against it, everything this device no longer holds would read as deleted here and be taken out of the cloud too.
+ */
+async function dropBase() {
+  try { await FileSystem.deleteAsync(BASE_FILE(), { idempotent: true }); } catch { /* nothing to drop */ }
+}
+/**
+ * What a device that has changed nothing holds, as the cloud keeps it: the base of a join when no copy was shared yet
+ * (a first sign-in on this device). Whatever is still as it came here (the settings, the shortcuts, the AI links) then
+ * takes the account's, instead of a new phone's defaults standing over what was chosen on the others.
+ */
+function freshBase(): any {
+  const { deepWork, ...fresh } = initialData();
+  return { ...fresh, settings: withoutDeviceSettings(fresh.settings) };
 }
 
 /** following another device is said at most this often */
@@ -270,6 +296,7 @@ export async function forgetSyncRecord() {
     filesWaiting: false, declinedAt: null,
   };
   await saveMeta();
+  await dropBase();
 }
 
 function patch(p: Partial<CloudState>) { useCloud.setState(p); }
@@ -436,6 +463,7 @@ async function adopt(session: Session | null) {
       ...meta, userId: session.user.id, lastRemoteAt: null, lastSyncedAt: null, lastHash: null, rescue: false,
       filesWaiting: false, declinedAt: null,
     };
+    await dropBase();
   }
   meta.email = session.user.email ?? null;
   meta.lost = false;
@@ -703,6 +731,7 @@ export async function signOut({ forget = false, scope = 'local' }: { forget?: bo
   meta = { ...meta, email: null, lost: false };
   if (forget) meta = { ...meta, userId: null, lastRemoteAt: null, lastSyncedAt: null, lastHash: null, rescue: false, dirty: true };
   await saveMeta();
+  if (forget) await dropBase();
   patch({
     status: 'signed-out', email: null, remote: null, reason: null, hasCopy: null, pending: false, usedBytes: null, error: null,
     note: null, lastSyncedAt: null, lost: false,
@@ -1196,8 +1225,6 @@ async function bringDown(
   // the copy comes down whole and is read before anything here is replaced; it is parsed once for both steps
   let parsed: any = null;
   try { parsed = JSON.parse(data.snapshot); } catch { /* refused just below */ }
-  // what the cloud holds is what this device now shares with it, joined or not
-  if (parsed) await saveBase(data.snapshot);
   if (parsed && transform) parsed = transform(parsed);
   const read = readSnapshot(parsed);
   if (!read) throw said('The cloud copy could not be read by this version of the app.');
@@ -1207,6 +1234,10 @@ async function bringDown(
   applySnapshot(read);
   if (ownBoard) for (const k of Object.keys(ownBoard)) useStore.getState().setTodayColumns(k, ownBoard[k]);
   onReplaced?.();
+  // what the cloud holds is what this device now shares with it, joined or not. Kept only now that it is here: a copy
+  // that came down and was not taken (something typed meanwhile) taken for the base would make the other device's
+  // changes look like nothing, and the join tried again would turn them back
+  await saveBase(data.snapshot);
   let missing = 0;
   try {
     try { await restoreBodies(parsed?.journal); } catch { /* the index is back either way */ }
@@ -1340,8 +1371,9 @@ function pcColumns(): Record<string, string[][]> | null {
 async function meetNewer(s: Session, remote: RemoteCopy): Promise<void> {
   if (await follow(s, remote)) return;
   // a Deep Work session under way here is in no copy, and replacing the data ends it: the join waits for it to end,
-  // quietly, and this device's changes go up after
+  // quietly, and this device's changes go up after. The settings come in meanwhile
   if (useStore.getState().deepWork && localDataState() === 'ok' && !meta.rescue) {
+    await takeSettings(s, remote).catch(() => {});
     patch({ status: 'idle', progress: null });
     return;
   }
@@ -1362,6 +1394,41 @@ async function meetNewer(s: Session, remote: RemoteCopy): Promise<void> {
   patch({ status: 'choice', reason: 'newer', remote, hasCopy: true, error: null, progress: null });
 }
 
+/** the cloud copy whose settings were taken in during a Deep Work session, so a look every half minute never fetches it again */
+let settingsTakenFrom: string | null = null;
+
+/**
+ * While a Deep Work session runs here, a newer copy is not joined (the replace would end the session), but its
+ * settings are, one by one as the join would: a look, a companion or a reminder changed on another device shows here
+ * at once. The rest comes in with the join once the session ends, against the same base, so nothing is taken twice
+ * and nothing of this device's is lost. Runs inside `running`.
+ */
+async function takeSettings(s: Session, remote: RemoteCopy) {
+  if (settingsTakenFrom === remote.updatedAt) return;
+  // a copy the user turned down (a follow undone), or one waiting for their choice, is never taken in, even in part
+  if (meta.declinedAt === remote.updatedAt || useCloud.getState().status === 'choice') return;
+  const { data, error } = await cloud().from('backups').select('snapshot, updated_at').eq('user_id', s.user.id).maybeSingle();
+  if (error || !data || data.updated_at !== remote.updatedAt) return;
+  let theirs: any = null;
+  try { theirs = JSON.parse(data.snapshot); } catch { return; }
+  if (!theirs || typeof theirs.settings !== 'object' || !theirs.settings) return;
+  const base = (await readBase()) ?? freshBase();
+  // read only now, after the waits, so a setting changed here meanwhile is joined too, never undone
+  const own: any = useStore.getState().settings;
+  if (!useStore.getState().deepWork) return;
+  const joined = mergeSnapshots({ settings: base.settings }, { settings: withoutDeviceSettings(own) }, { settings: theirs.settings }).settings;
+  // read as any copy is (an old app's settings brought up to date, anything damaged put right)
+  const read = readSnapshot({ _app: theirs._app, _v: theirs._v, settings: joined });
+  if (!read) return;
+  settingsTakenFrom = remote.updatedAt;
+  const next: any = { ...read.data.settings };
+  for (const k of DEVICE_SETTINGS) {
+    if (own[k] !== undefined) next[k] = own[k];
+    else delete next[k];
+  }
+  if (!same(next, own)) useStore.setState({ settings: next });
+}
+
 /** a join put off is tried again this many times, a little later each time, before the user is asked */
 const JOIN_TRIES = 6;
 let joinTries = 0;
@@ -1378,10 +1445,12 @@ async function follow(s: Session, remote: RemoteCopy, merge = false): Promise<bo
   if (useCloud.getState().status === 'choice') return false;
   // a Deep Work session under way here is in no copy, and a replace ends it
   if (useStore.getState().deepWork) return false;
-  // a join is worked out against the copy both last shared; without one (a device that synced before joins were made)
-  // both sides' items are all kept. It is never made over a copy the user once turned down
+  // a join is worked out against the copy both last shared; without one (a first sign-in here, a device that synced
+  // before joins were made) against what a device that changed nothing holds, so both sides' items are all kept and
+  // what this device never changed takes the account's. It is never made over a copy the user once turned down
   if (merge && meta.declinedAt === remote.updatedAt) return false;
-  const base = merge ? (await readBase()) ?? {} : null;
+  const baseText = merge ? await readBaseText() : null;
+  const base = merge ? (await readBase(baseText)) ?? freshBase() : null;
   const facts = (localHash: string | null): NewerCopyFacts => ({
     remoteAt: remote.updatedAt, remoteDeviceId: remote.deviceId, lastRemoteAt: meta.lastRemoteAt, deviceId: meta.deviceId,
     localHash, lastHash: meta.lastHash, savePending: savePending(), declinedAt: meta.declinedAt,
@@ -1423,7 +1492,12 @@ async function follow(s: Session, remote: RemoteCopy, merge = false): Promise<bo
     await dropSafetyCopy(safetyId);
     return false;
   }
-  const before = { lastRemoteAt: meta.lastRemoteAt, lastHash: meta.lastHash, lastSyncedAt: meta.lastSyncedAt, filesWaiting: !!meta.filesWaiting };
+  // the copy shared before is kept with the rest for the Undo: a follow undone shares nothing new with the cloud, and the
+  // copy that came down, left as the base, would make what it added read as deleted here at the next join
+  const before = {
+    lastRemoteAt: meta.lastRemoteAt, lastHash: meta.lastHash, lastSyncedAt: meta.lastSyncedAt, filesWaiting: !!meta.filesWaiting,
+    base: merge ? baseText : await readBaseText(),
+  };
   const startedAt = Date.now();
   let replaced = false;
   // something done here while the copy was on its way down (a tick, a note saved) is a change of this phone's own: then
@@ -1471,7 +1545,7 @@ async function follow(s: Session, remote: RemoteCopy, merge = false): Promise<bo
  */
 async function undoFollow(
   safetyId: string, remoteAt: string,
-  before: { lastRemoteAt: string | null; lastHash: string | null; lastSyncedAt: number | null; filesWaiting: boolean },
+  before: { lastRemoteAt: string | null; lastHash: string | null; lastSyncedAt: number | null; filesWaiting: boolean; base: string | null },
 ) {
   if (followTimer) { clearTimeout(followTimer); followTimer = null; }
   if (running) await running.catch(() => {});
@@ -1497,6 +1571,8 @@ async function undoFollow(
     meta.filesWaiting = before.filesWaiting;
     meta.declinedAt = remoteAt;
     await saveMeta();
+    if (before.base != null) await saveBase(before.base);
+    else await dropBase();
     await dropSafetyCopy(safetyId);
     patch({ lastSyncedAt: meta.lastSyncedAt, status: 'idle', note: null });
   })().finally(() => { running = null; });

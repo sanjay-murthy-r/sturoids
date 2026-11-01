@@ -1,5 +1,6 @@
 // The two small arrows at the bottom right of a wide screen whose tabs sit in the side rail (Settings > Tabs and tools).
-// Back: inside a tool, out of the page open in it; at a tab's own screen, the tab before. Forward: back into the page
+// Back: inside a tool, out of the page open in it (on the PC, a page open within a screen, as Settings' pages over its
+// list, closes first, as Escape does); at a tab's own screen, the tab before. Forward: back into the page
 // just left (inside a tool, or a full page), else the tab after. An arrow with nothing to do is dimmed and takes no tap.
 // Read from the navigation state, so they are right whichever way a page was opened or closed (the arrows, the system
 // back, a link).
@@ -19,6 +20,7 @@ import { useSearch } from '../search/store';
 import { Bouncy, EASE_OUT, useAnimLevel } from './Motion';
 import { useTheme } from './UI';
 import { tick } from '../haptics';
+import { handledBack } from '../web/keys';
 
 const TABS_GROUP = '(tabs)';
 
@@ -125,6 +127,7 @@ export function NavArrows() {
   const back = () => {
     if (!canBack) return;
     tick();
+    if (handledBack()) return;
     if (pageBack && where.stackKey) nav.dispatch({ ...StackActions.pop(), target: where.stackKey });
     else stepTab(-1);
   };

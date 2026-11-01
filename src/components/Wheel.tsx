@@ -38,7 +38,7 @@ export interface WheelLabel {
  */
 export const Wheel = React.memo(function Wheel({
   count, index, onChange, label, spacing, minScale, loop = false, colorOn, colorOff, height, textStyle,
-  accessibilityLabel, onPressCenter,
+  accessibilityLabel, onPressCenter, wheelAxis = 'both',
 }: {
   count: number;
   index: number;
@@ -56,6 +56,12 @@ export const Wheel = React.memo(function Wheel({
   accessibilityLabel: string;
   /** a tap on the value at the centre */
   onPressCenter?: () => void;
+  /**
+   * Which way a mouse wheel turns it on the PC. 'both' takes an up-and-down scroll too, for a wheel in a sheet; 'x'
+   * leaves that to the page, so a wheel at the top of a long page does not catch the scroll on its way down, and turns
+   * only on a sideways swipe or a scroll with Shift held.
+   */
+  wheelAxis?: 'both' | 'x';
 }) {
   const level = useAnimLevel();
   const still = level === 'none';
@@ -167,7 +173,7 @@ export const Wheel = React.memo(function Wheel({
   const box = React.useRef<View>(null);
   const aim = React.useRef(index);
   const stepRef = React.useRef(step); stepRef.current = step;
-  const boundsRef = React.useRef({ loop, count }); boundsRef.current = { loop, count };
+  const boundsRef = React.useRef({ loop, count, wheelAxis }); boundsRef.current = { loop, count, wheelAxis };
   React.useEffect(() => {
     if (Platform.OS !== 'web') return undefined;
     const el = box.current as unknown as HTMLElement | null;
@@ -176,7 +182,10 @@ export const Wheel = React.memo(function Wheel({
     let quietAt = 0;
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey) return;
-      const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      const across = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      // with 'x', a plain scroll up or down is the page's, and is left alone
+      if (boundsRef.current.wheelAxis === 'x' && !across && !e.shiftKey) return;
+      const d = across ? e.deltaX : e.deltaY;
       if (!d) return;
       e.preventDefault();
       // a fresh turn of the wheel starts from where the wheel is going, not from where it is mid-glide

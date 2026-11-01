@@ -63,10 +63,13 @@ export function makeScope(deg: boolean, ans: any) {
 
 export function toEngine(expr: string): string {
   return expr
+    // π and e are numbers of their own, bracketed so they sit next to anything: π2, 2π(3), πe and e2 multiply, and the
+    // keys 2, e, 3 are 2×e×3, never 2e3 (the keypad writes a power of ten as ×10^, so a bare e is always Euler's)
+    .replace(/π/g, '(pi)').replace(/[a-zA-Z]+/g, (w) => (/^e+$/.test(w) ? '(e)'.repeat(w.length) : w))
     // ×10^ makes one number, as on any scientific calculator: 1÷6.02×10^23 divides by the whole of 6.02×10^23
     .replace(/(\d+(?:\.\d*)?|\.\d+)×10\^([−-]?\d+)/g, (_, m: string, x: string) => '(' + m + 'e' + x.replace('−', '-') + ')')
     .replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-')
-    .replace(/π/g, 'pi').replace(/√\(/g, 'sqrt(');
+    .replace(/√\(/g, 'sqrt(');
 }
 
 /** Every bracket a sum leaves open is closed at its end: each function key types its own, as on a scientific calculator. */
@@ -131,7 +134,8 @@ export function keypadSum(q: string): string | null {
   if (!/[+−×÷^%!√(]|mod/.test(s.replace(/^−/, ''))) return null;
   // "e" only as Euler's number, never stuck to a number as in 1e5 (which is fine) or in a word
   if (/[a-df-z]/.test(rest)) return null;
-  return s;
+  // 1e5 typed here is a power of ten: the keypad writes it as ×10^ (on the keypad a bare e is Euler's number)
+  return s.replace(/(\d)e\+?(−?\d)/g, '$1×10^$2');
 }
 
 /**

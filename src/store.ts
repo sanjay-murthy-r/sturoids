@@ -350,6 +350,8 @@ export interface Settings {
   autoUpdate: boolean;
   /** Cheerful's companion on the screen (src/components/Mascot.tsx), or none */
   mascot: 'sprout' | 'pip' | 'off';
+  /** the companion chosen last, for turning it back on after it was turned off */
+  mascotLast: 'sprout' | 'pip';
   /** sent off (held, it waves and leaves by its door) until a knock on its little door brings it back */
   mascotOut: boolean;
   /** hidden for a while (from Sift) until this moment, in ms; 0 for not */
@@ -493,6 +495,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cheerSounds: true,
   autoUpdate: true,
   mascot: 'sprout',
+  mascotLast: 'sprout',
   mascotOut: false,
   mascotHideUntil: 0,
   mascotName: '',
@@ -1361,6 +1364,7 @@ function cleanSettingsV6(s: any): Settings {
   st.autoUpdate = st.autoUpdate !== false;
   // the first four friends became two: Pip stays, the others (and anything unknown) are Sprout
   st.mascot = st.mascot === 'pip' || st.mascot === 'off' ? st.mascot : 'sprout';
+  st.mascotLast = st.mascot === 'pip' || (st.mascot === 'off' && st.mascotLast === 'pip') ? 'pip' : 'sprout';
   st.mascotName = typeof st.mascotName === 'string' ? st.mascotName.replace(/\s+/g, ' ').trim().slice(0, 16) : '';
   // one look per companion; the single look of 3.0.x becomes the look of the companion chosen then
   const look = (v: any): MascotLook => ({

@@ -36,7 +36,7 @@ const ctx = (over = {}) => ({
 
 check('every pose of both companions stays inside its grid, and every colour is in each palette', () => {
   const limbs = ['rest', 'out', 'up', 'swing', 'down'];
-  const eyes = ['open', 'blink', 'happy', 'up', 'left', 'right', 'read', 'sleepy', 'focus', 'wide'];
+  const eyes = ['open', 'blink', 'happy', 'up', 'left', 'right', 'read', 'read2', 'sleepy', 'focus', 'wide'];
   for (const kind of ['sprout', 'pip']) {
     for (const set of art.COLOR_SETS[kind]) {
       for (const l of limbs) for (const e of eyes) for (const book of ['none', 'open', 'turn']) {
@@ -140,6 +140,48 @@ check('every line fills in: no braces are left, and no line is long for a bubble
       assert.ok(t.length <= 84, l.id + ' is ' + t.length + ' long');
     }
   }
+});
+
+check('a line is said in small bubbles: an aside in brackets comes straight after, and no line takes more than two', () => {
+  assert.deepEqual(lines.beats('i am helping! (sitting very nicely)'), [{ text: 'i am helping!', aside: false }, { text: 'sitting very nicely', aside: true }]);
+  assert.deepEqual(lines.beats('hehe!'), [{ text: 'hehe!', aside: false }]);
+  const long = lines.beats('a long first sentence goes here. and then a second one.');
+  assert.equal(long.length, 2);
+  assert.ok(long.every((b) => b.text.length <= lines.BEAT_MAX), JSON.stringify(long));
+  const c = ctx({ subject: 'Physics', focusMin: 70, next: 'Finish the extremely long physics worksheet' });
+  for (const m of ['hello', 'idle', 'tick', 'start', 'done', 'day', 'streak', 'wave', 'bye', 'back', 'idea', 'shh', 'tap', 'taps', 'dizzy', 'carry', 'land']) {
+    for (const k of ['sprout', 'pip']) for (const l of lines.poolFor(m, { ...c, kind: k })) {
+      const b = lines.beats(lines.fill(l.text, { ...c, kind: k }));
+      assert.ok(b.length >= 1 && b.length <= 2, l.id + ' takes ' + b.length + ' bubbles');
+      for (const x of b) assert.ok(x.text.length <= lines.BEAT_MAX, l.id + ': "' + x.text + '" is ' + x.text.length + ' long');
+    }
+  }
+});
+
+check('what it keeps sits right through its poses: the bow over the headphone band, the cups over a raised arm, glasses pushed up to think', () => {
+  const at = (cells) => { const m = new Map(); for (const [c, r, k] of cells) m.set(c + ',' + r, k); return m; };
+  const pip = at(art.compose('pip', { ...art.REST, phones: true, l: 'up', r: 'swing' }, ['phones', 'bow'], 0));
+  assert.equal(pip.get('1,9'), 'H', 'the left cup over the raised arm');
+  assert.equal(pip.get('16,10'), 'H', 'the right cup over the swung arm');
+  assert.equal(pip.get('10,5'), 'A', 'the bow over the band');
+  const think = at(art.compose('pip', { ...art.REST, eyes: 'up' }, ['glasses'], 0));
+  assert.ok(![...think.entries()].some(([k, v]) => v === 'T' && +k.split(',')[1] >= 9), 'no lens over the eyes while thinking');
+  assert.equal(think.get('5,7'), 'G', 'the frames up on the brow');
+  const read = at(art.compose('sprout', { ...art.REST, eyes: 'read', book: 'open' }, ['glasses'], 0));
+  assert.equal(read.get('7,11'), 'd', 'eyes down toward the book on its side');
+});
+
+check("Pip's hand is inside the grid in every pose, and the floor book's squares are all in its palette", () => {
+  for (const l of ['rest', 'out', 'up', 'swing', 'down']) {
+    const [x, y] = art.HAND[l];
+    assert.ok(x >= 0 && x <= art.COLS && y >= 0 && y <= art.ROWS, l);
+  }
+  for (const page of ['open', 'turn']) {
+    const g = art.BOOK_PROP[page];
+    assert.ok(g.every((row) => row.length === g[0].length), page + ': rows of one width');
+    for (const row of g) for (const ch of row) assert.ok(ch === '.' || ch in art.BOOK_PAL, page + ': ' + ch);
+  }
+  assert.equal(art.BOOK_PROP.open.length, art.BOOK_PROP.turn.length);
 });
 
 check('a companion says only its own lines', () => {

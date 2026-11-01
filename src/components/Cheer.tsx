@@ -47,24 +47,49 @@ function useMaybeFocused(): boolean {
   return focused;
 }
 
+/** the one clock every glow keeps, so each copy of the backdrop (a page's, and its bars') drifts in step */
+const CLOCK0 = Date.now();
+/** where a glow's loop stands at a moment: its place along its way (0 to 1), which way it is going, and the ms left of this leg */
+function loopAt(at: number, ms: number, delay: number) {
+  const run = Math.max(0, at - CLOCK0 - delay) / ms;
+  const leg = Math.floor(run);
+  const f = run - leg;
+  const up = leg % 2 === 0;
+  return { v: up ? f : 1 - f, up, left: (1 - f) * ms };
+}
+/** a glow coming back to the front eases onto the clock over this long, instead of jumping to its place */
+const JOIN_MS = 600;
+
 /** One soft glow: a radial fade of a colour, drifting on a long loop. */
 function Glow({ color, size, from, to, ms, delay, strength, still }: {
   color: string; size: number; from: [number, number]; to: [number, number]; ms: number; delay: number; strength: number; still: boolean;
 }) {
-  const t = useSharedValue(0);
+  // the loop runs evenly and is eased as it is drawn, so a glow can join the shared clock part way along a leg
+  const t = useSharedValue(still ? 0.5 : loopAt(Date.now(), ms, delay).v);
   React.useEffect(() => {
-    if (still) { t.value = 0.5; return undefined; }
-    t.value = withDelay(delay, withRepeat(withTiming(1, { duration: ms, easing: Easing.inOut(Easing.sin) }), -1, true));
+    if (still) { cancelAnimation(t); t.value = 0.5; return undefined; }
+    const p = loopAt(Date.now() + JOIN_MS, ms, delay);
+    t.value = withSequence(
+      withTiming(p.v, { duration: JOIN_MS, easing: Easing.inOut(Easing.quad) }),
+      withTiming(p.up ? 1 : 0, { duration: p.left, easing: Easing.linear }),
+      withRepeat(withTiming(p.up ? 0 : 1, { duration: ms, easing: Easing.linear }), -1, true),
+    );
     return () => cancelAnimation(t);
   }, [still]);
-  const style = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: from[0] + (to[0] - from[0]) * t.value - size / 2 },
-      { translateY: from[1] + (to[1] - from[1]) * t.value - size / 2 },
-      { scale: 0.9 + 0.2 * t.value },
-    ] as const,
-  }));
-  const id = 'g' + color.replace('#', '');
+  const style = useAnimatedStyle(() => {
+    // a gentle sine in and out at each end of the way
+    const e = (1 - Math.cos(Math.PI * t.value)) / 2;
+    return {
+      transform: [
+        { translateX: from[0] + (to[0] - from[0]) * e - size / 2 },
+        { translateY: from[1] + (to[1] - from[1]) * e - size / 2 },
+        { scale: 0.9 + 0.2 * e },
+      ] as const,
+    };
+  });
+  // an id of its own: every mounted screen draws a backdrop, and on the PC a gradient's id is looked up across the
+  // whole page, so a shared one would paint with a hidden tab's gradient, which shows nothing
+  const id = 'g' + color.replace('#', '') + React.useId().replace(/[^a-zA-Z0-9]/g, '');
   return (
     <Animated.View style={[{ position: 'absolute', left: 0, top: 0, width: size, height: size }, style]}>
       <Svg width={size} height={size}>
@@ -83,9 +108,10 @@ function Glow({ color, size, from, to, ms, delay, strength, still }: {
 
 /**
  * The page's backdrop in Cheerful: three soft glows of colour drifting slowly behind everything, seen between the
- * cards. Fainter on the minimal look. Nothing in Elite.
+ * cards. Fainter on the minimal look. Nothing in Elite. A bar's own copy (see Ground) passes where it stands from the
+ * page's top-left corner, `dx` and `dy`, so its glows carry on from the page's across its edge.
  */
-export function Backdrop({ minimal }: { minimal: boolean }) {
+export function Backdrop({ minimal, dx = 0, dy = 0 }: { minimal: boolean; dx?: number; dy?: number }) {
   const cheerful = useCheerful();
   const level = useAnimLevel();
   const { width, height } = useWindowDimensions();
@@ -97,9 +123,11 @@ export function Backdrop({ minimal }: { minimal: boolean }) {
   const k = minimal ? 0.1 : 0.16;
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]}>
-      <Glow color={C.accent} size={s} from={[width * 0.1, height * 0.12]} to={[width * 0.45, height * 0.3]} ms={17000} delay={0} strength={k} still={still} />
-      <Glow color={CHEER.pink} size={s * 0.9} from={[width * 0.95, height * 0.55]} to={[width * 0.6, height * 0.75]} ms={21000} delay={1200} strength={k * 0.85} still={still} />
-      <Glow color={CHEER.mint} size={s * 0.8} from={[width * 0.2, height * 0.95]} to={[width * 0.5, height * 0.7]} ms={19000} delay={2400} strength={k * 0.7} still={still} />
+      <View style={{ position: 'absolute', left: -dx, top: -dy, width, height }}>
+        <Glow color={C.accent} size={s} from={[width * 0.1, height * 0.12]} to={[width * 0.45, height * 0.3]} ms={17000} delay={0} strength={k} still={still} />
+        <Glow color={CHEER.pink} size={s * 0.9} from={[width * 0.95, height * 0.55]} to={[width * 0.6, height * 0.75]} ms={21000} delay={1200} strength={k * 0.85} still={still} />
+        <Glow color={CHEER.mint} size={s * 0.8} from={[width * 0.2, height * 0.95]} to={[width * 0.5, height * 0.7]} ms={19000} delay={2400} strength={k * 0.7} still={still} />
+      </View>
     </View>
   );
 }
@@ -270,6 +298,7 @@ export function Breathe({ size, color }: { size: number; color?: string }) {
   const cheerful = useCheerful();
   const level = useAnimLevel();
   const t = useSharedValue(0);
+  const id = 'breathe' + React.useId().replace(/[^a-zA-Z0-9]/g, '');
   const on = cheerful && level === 'full';
   React.useEffect(() => {
     if (!on) return undefined;
@@ -283,12 +312,12 @@ export function Breathe({ size, color }: { size: number; color?: string }) {
     <Animated.View pointerEvents="none" style={[{ position: 'absolute', alignSelf: 'center', width: size, height: size }, style]}>
       <Svg width={size} height={size}>
         <Defs>
-          <RadialGradient id="breathe" cx="50%" cy="50%" r="50%">
+          <RadialGradient id={id} cx="50%" cy="50%" r="50%">
             <Stop offset="0" stopColor={c} stopOpacity={0.28} />
             <Stop offset="1" stopColor={c} stopOpacity={0} />
           </RadialGradient>
         </Defs>
-        <Rect x="0" y="0" width={size} height={size} fill="url(#breathe)" />
+        <Rect x="0" y="0" width={size} height={size} fill={`url(#${id})`} />
       </Svg>
     </Animated.View>
   );

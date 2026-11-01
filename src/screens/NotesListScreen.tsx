@@ -25,11 +25,12 @@ import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { useArrowsLift } from '../hooks/useRail';
 
 /**
- * A note with nothing in it: no title, no words, no attachment. Deleting one takes it away for good, on the list and
- * in the note alike, since Recently deleted would only keep an "Untitled note" with nothing to bring back.
+ * A note with nothing in it: no title, no words, no attachment, no subject and no tag. Deleting one takes it away for
+ * good, on the list and in the note alike, since Recently deleted would only keep an "Untitled note" with nothing to
+ * bring back. A subject or a tag the user chose is something to keep, so a note with one goes to Recently deleted.
  */
-export function isBlankNote(n: Pick<Note, 'title' | 'body' | 'attachments'>): boolean {
-  return !n.title.trim() && !n.body.trim() && !(n.attachments?.length);
+export function isBlankNote(n: Pick<Note, 'title' | 'body' | 'attachments' | 'subject' | 'tags'>): boolean {
+  return !n.title.trim() && !n.body.trim() && !(n.attachments?.length) && !n.subject && !(n.tags?.length);
 }
 
 /** A second tap on a row or on New note while the first one's page is on its way is the same tap. */
@@ -212,8 +213,10 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const settledQ = React.useDeferredValue(q);
   // Every word of the search, in any order, across the title, the text, the tags, the subject and the folder, each as
   // forgiving as Sift is (toolLogic.matchNote). A locked note is found by everything but its text, which never surfaces
-  // outside the note. Each note's hit is kept while the note and the search hold, so only what changed is read again
-  const hitCache = React.useRef({ q: '', map: new Map<string, { at: number; locked: boolean; hit: NoteHit | null }>() });
+  // outside the note. Each note's hit is kept while the note and the search hold, so only what changed is read again.
+  // The store makes a new note on every change (a tag, a subject, a move, a renamed folder, a lock), so the note itself
+  // is the key: a change that leaves the edited time alone still reads the note again
+  const hitCache = React.useRef({ q: '', map: new Map<string, { note: Note; hit: NoteHit | null }>() });
   const { filtered, hits } = useMemo(() => {
     const query = settledQ.trim();
     const inFolder = notes.filter((n) => (folder ? n.folder === folder : true));
@@ -224,8 +227,8 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
     const found = new Map<string, NoteHit>();
     for (const n of inFolder) {
       let c = cache.get(n.id);
-      if (!c || c.at !== n.updatedAt || c.locked !== !!n.locked) {
-        c = { at: n.updatedAt, locked: !!n.locked, hit: matchNote(n, query) };
+      if (!c || c.note !== n) {
+        c = { note: n, hit: matchNote(n, query) };
         cache.set(n.id, c);
       }
       if (c.hit) found.set(n.id, c.hit);

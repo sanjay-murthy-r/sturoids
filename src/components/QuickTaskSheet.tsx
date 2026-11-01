@@ -200,8 +200,14 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
   const earlyShown = EARLY.filter((e) => left > e.days || (left === e.days && !pastEarlyToday()));
   const isLong = kind === 'mission';
   const shownEarly = early.filter((e) => earlyShown.some((o) => o.key === e));
+  // On a long-term task due today, the morning of it and an hour before are left out once their moment has gone, as
+  // the early ones are: they would never ring
+  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+  const morningGone = isLong && (left < 0 || (left === 0 && nowMin >= MORNING_MIN));
+  const hourGone = isLong && (left < 0 || (left === 0 && nowMin >= toMinutes(time) - 60));
+  const remindGone = (remind === 'morning' && morningGone) || (remind === 'hour' && hourGone);
   // a long-term task's morning reminder rings with or without a time; any other reminder needs one
-  const remNow: TaskRemind | '' = remind && (time || (isLong && remind === 'morning')) ? remind : '';
+  const remNow: TaskRemind | '' = remind && !remindGone && (time || (isLong && remind === 'morning')) ? remind : '';
 
   const add = () => {
     if (done.current) return;
@@ -349,8 +355,9 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
           <Text style={[st.linkText, { color: C.accent }]}>Add a time</Text>
         </Pressable>
       )}
-      {/* a long-term task's reminders need no time: days before it, and the morning of its day */}
-      {isLong ? (
+      {/* a long-term task's reminders need no time: days before it, and the morning of its day; with all of them gone by,
+          there is nothing to offer */}
+      {isLong && (earlyShown.length > 0 || !morningGone || (!!time && !hourGone)) ? (
         <Appear>
           <Text style={st.label}>Reminders</Text>
           <Row style={{ flexWrap: 'wrap' }}>
@@ -360,11 +367,13 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
                 accessibilityRole="checkbox" accessibilityState={{ checked: early.includes(e.key) }}
               />
             ))}
-            <Chip
-              small label="Morning of" active={remind === 'morning'} onPress={() => toggleRemind('morning')}
-              accessibilityRole="checkbox" accessibilityState={{ checked: remind === 'morning' }}
-            />
-            {time ? (
+            {morningGone ? null : (
+              <Chip
+                small label="Morning of" active={remind === 'morning'} onPress={() => toggleRemind('morning')}
+                accessibilityRole="checkbox" accessibilityState={{ checked: remind === 'morning' }}
+              />
+            )}
+            {time && !hourGone ? (
               <Chip
                 small label="An hour before" active={remind === 'hour'} onPress={() => toggleRemind('hour')}
                 accessibilityRole="checkbox" accessibilityState={{ checked: remind === 'hour' }}

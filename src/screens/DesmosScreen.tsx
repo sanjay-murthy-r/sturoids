@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, ActivityIndicator, AppState, BackHandler, Linking, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, AppState, BackHandler, Linking, Platform, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { WebViewMessageEvent } from 'react-native-webview';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -108,7 +108,8 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
   failedRef.current = failed;
   const [attempt, setAttempt] = useState(0);
   // after a failed load, one more try from what the WebView has kept of an earlier visit (a classroom with no
-  // signal); every other load goes to the network as usual, so updates still arrive
+  // signal); once that page is up, what follows goes to the network again, so updates still arrive and a graph
+  // opened later is fetched rather than looked for in the cache
   const [cacheOnly, setCacheOnly] = useState(false);
   // the first load of each attempt: the plate covers the page until Desmos has drawn, then fades off it
   const [loading, setLoading] = useState(true);
@@ -263,10 +264,21 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
               }}
               // Android ends a heavy page's renderer now and then while the app is away. The WebView survives it but
               // the page does not, so a fresh one loads under the plate instead of leaving the tool blank for good
-              onRenderProcessGone={() => { setLoading(true); setAttempt((a) => a + 1); }}
+              onRenderProcessGone={() => { setCacheOnly(false); setLoading(true); setAttempt((a) => a + 1); }}
               // later navigations inside Desmos keep the page in view: only the first load waits under the plate, until
               // the page says the calculator is ready (see onMessage), or a moment after it has loaded
-              onLoadEnd={() => revealSoon(attempt)}
+              onLoadEnd={() => {
+                // on the PC the page is in a frame from another site, which the app cannot reach into: it never says
+                // it is ready, so the plate lifts as soon as it has loaded, and a load with no connection says so
+                if (Platform.OS === 'web') {
+                  if (typeof navigator !== 'undefined' && navigator.onLine === false) setFailed(true);
+                  else reveal();
+                  return;
+                }
+                revealSoon(attempt);
+              }}
+              // the kept copy has loaded: the network is tried again from here on
+              onLoad={() => { if (cacheOnly) setCacheOnly(false); }}
               injectedJavaScript={PAGE_JS}
               onMessage={onMessage}
               onNavigationStateChange={(s) => {

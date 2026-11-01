@@ -647,8 +647,11 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         multiline minHeight={60} label="Save"
         onSave={(text) => {
           if (!editSheet) return;
-          if (editSheet.isBookmark) updateBookmark(video.id, editSheet.item.id, text.trim());
-          else updateTimedNote(video.id, editSheet.item.id, text.trim());
+          // as when it was made: a bookmark left with no name is called Bookmark, and a note needs its words
+          const v = text.trim();
+          if (editSheet.isBookmark) updateBookmark(video.id, editSheet.item.id, v || 'Bookmark');
+          else if (v) updateTimedNote(video.id, editSheet.item.id, v);
+          else return;
           setEditSheet(null);
         }}
       />

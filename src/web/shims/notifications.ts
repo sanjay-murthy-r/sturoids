@@ -61,7 +61,25 @@ function nextFire(t: any, from: Date): Date | null {
   return null;
 }
 
+/** the app's own say on what shows, as on a phone: a session's alerts keep quiet while the app is in front */
+let handler: { handleNotification?: (n: any) => Promise<any> } | null = null;
+
+/** Whether the app asks for `r` to stay quiet, and the window is the one in front, where the app has already said so. */
+async function quietFor(r: Req): Promise<boolean> {
+  try {
+    const b = handler?.handleNotification ? await handler.handleNotification({ request: r, date: Date.now() }) : null;
+    // a window open behind others still shows it: the clock in it is not seen
+    return !!b && b.shouldShowBanner === false && typeof document !== 'undefined' && document.hasFocus();
+  } catch {
+    return false;
+  }
+}
+
 function show(r: Req) {
+  void quietFor(r).then((quiet) => { if (!quiet) present(r); });
+}
+
+function present(r: Req) {
   try {
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       const n = new Notification(r.content.title || 'Sturoids', { body: r.content.body || '', tag: r.identifier });
@@ -152,7 +170,7 @@ export async function requestPermissionsAsync(_o?: any) {
   return perm();
 }
 export async function setNotificationChannelAsync(_id: string, _c: any) { return null; }
-export function setNotificationHandler(_h: any) {}
+export function setNotificationHandler(h: any) { handler = h; }
 export async function getLastNotificationResponseAsync() { return lastResponse; }
 export async function clearLastNotificationResponseAsync() { lastResponse = null; }
 export function addNotificationResponseReceivedListener(l: (r: any) => void) {

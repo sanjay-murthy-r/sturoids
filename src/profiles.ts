@@ -26,6 +26,11 @@ export interface ProfileInfo {
    * in the registry, so the first-frame read stays small: the photo itself is read from the file by whoever shows it.
    */
   avatarRev?: number;
+  /**
+   * Renamed from another profile while this one was not in use: its own settings take the name on its next launch. Only
+   * then does the registry's name win; otherwise the profile's settings do (a name synced from another device included).
+   */
+  renamed?: true;
 }
 
 export const MAX_PROFILES = 5;
@@ -145,6 +150,7 @@ export function cleanRegistry(raw: unknown, main: ProfileInfo, found: readonly s
       createdAt: typeof p.createdAt === 'number' && Number.isFinite(p.createdAt) ? p.createdAt : 0,
     };
     if (typeof p.avatarRev === 'number' && Number.isFinite(p.avatarRev) && p.avatarRev > 0) entry.avatarRev = p.avatarRev;
+    if (p.renamed === true) entry.renamed = true;
     if (entry.id === 'main') first = entry;
     else rest.push(entry);
   }
@@ -330,8 +336,12 @@ function patchActive(p: Partial<Omit<ProfileInfo, 'id'>>) {
   if (at < 0) return;
   const cur = list[at];
   const next = { ...cur, ...p };
-  if (next.name === cur.name && next.color === cur.color && next.email === cur.email && next.avatarRev === cur.avatarRev) return;
+  if (
+    next.name === cur.name && next.color === cur.color && next.email === cur.email && next.avatarRev === cur.avatarRev
+    && next.renamed === cur.renamed
+  ) return;
   if (!next.avatarRev) delete next.avatarRev;
+  if (!next.renamed) delete next.renamed;
   useProfiles.setState({ list: list.map((x, i) => (i === at ? next : x)) });
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => {
@@ -388,9 +398,18 @@ async function doLoad() {
       // a profile on its first launch takes the name and colour it was made with
       if (me.name && !settings.name.trim()) setSetting('name', me.name);
       if (isColor(me.color) && settings.accent !== me.color) setSetting('accent', me.color);
-    } else if (trusted && me.name && me.name !== settings.name) {
-      // renamed from another profile: the registry's name wins once, and from here the two stay in step
+    } else if (trusted && me.renamed && me.name && me.name !== settings.name) {
+      // renamed from another profile: the registry's name wins once, and from here the two stay in step. Any other
+      // difference is the settings' (a name another device synced, which the registry had not heard before the app
+      // closed): it is never turned back
       setSetting('name', me.name);
+    }
+    if (trusted && me.renamed) {
+      // the rename is taken: the entry follows the settings from here. Written at once with the rest below, so an app
+      // closed straight after never takes the registry's name again over one synced meanwhile
+      const taken: ProfileInfo = { ...me };
+      delete taken.renamed;
+      list = list.map((p) => (p.id === activeProfile ? taken : p));
     }
     useProfiles.setState({ list, loaded: true });
     // written back once it has been read cleanly, when cleaning it (or adding this profile) changed it
@@ -536,7 +555,7 @@ export async function renameProfile(id: ProfileId, name: string): Promise<'ok' |
   }
   await flushRegistry();
   if (!(await ensureRegistry())) return 'error';
-  const next = useProfiles.getState().list.map((p) => (p.id === id ? { ...p, name: clean } : p));
+  const next = useProfiles.getState().list.map((p): ProfileInfo => (p.id === id ? { ...p, name: clean, renamed: true } : p));
   if (!(await writeRegistry(next))) return 'error';
   useProfiles.setState({ list: next });
   return 'ok';

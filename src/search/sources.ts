@@ -439,6 +439,8 @@ export function useSiftSources(active: boolean): SiftSources {
     let live = true;
     let task: { cancel: () => void } | null = null;
     setJournalLoading(true);
+    // what has been read joins the results a few times a second at most (each time the results are worked out again)
+    let shown = Date.now();
     const step = (from: number) => {
       task = InteractionManager.runAfterInteractions(async () => {
         const batch = todo.slice(from, from + 20);
@@ -446,8 +448,9 @@ export function useSiftSources(active: boolean): SiftSources {
           try { journalBodies.set(id, { u, body: await readBody(id) }); } catch { /* the excerpt stands in */ }
         }));
         if (!live) return;
-        setBodiesRev((n) => n + 1);
-        if (from + 20 < todo.length) step(from + 20);
+        const more = from + 20 < todo.length;
+        if (!more || Date.now() - shown > 450) { shown = Date.now(); setBodiesRev((n) => n + 1); }
+        if (more) step(from + 20);
         else setJournalLoading(false);
       });
     };

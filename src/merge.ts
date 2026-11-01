@@ -90,6 +90,21 @@ function mergeKeys(base: Json, mine: Json, theirs: Json, deep: boolean): Json {
   return out;
 }
 
+/** a list of plain names (note folders, tags) */
+const names = (v: Json) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+/**
+ * A list of names joined as a set: a name added on either device is kept, one removed on either is gone; this device's
+ * order first, the other's new names after.
+ */
+function mergeNames(base: string[], mine: string[], theirs: string[]): string[] {
+  const b = new Set(base);
+  const m = new Set(mine);
+  const t = new Set(theirs);
+  const keep = (x: string) => (b.has(x) ? m.has(x) && t.has(x) : m.has(x) || t.has(x));
+  return [...new Set([...mine, ...theirs])].filter(keep);
+}
+
 function mergeValue(base: Json, mine: Json, theirs: Json, deep: boolean): Json {
   if (same(mine, theirs)) return mine;
   if (same(mine, base)) return theirs;
@@ -113,7 +128,11 @@ export function mergeSnapshots(base: Json, mine: Json, theirs: Json): Json {
     const bv = isObj(base) ? base[k] : undefined;
     if (!(k in mine)) { out[k] = theirs[k]; continue; }
     if (!(k in theirs)) { out[k] = mine[k]; continue; }
-    out[k] = mergeValue(bv, mine[k], theirs[k], true);
+    // a collection of plain names (note folders, journal tags) is a set; a list of names inside settings (the tab
+    // slots, a page's order) keeps its shape and is joined whole
+    out[k] = names(mine[k]) && names(theirs[k]) && !same(mine[k], theirs[k]) && !same(mine[k], bv) && !same(theirs[k], bv)
+      ? mergeNames(names(bv) ? bv : [], mine[k], theirs[k])
+      : mergeValue(bv, mine[k], theirs[k], true);
   }
   return out;
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Alert, Pressable, TextInput } from 'react-native';
+import { View, Text, StyleSheet, Alert, Platform, Pressable, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, T, TRACK } from '../theme';
 import { useStore, exportSnapshot, hasAnyUserData } from '../store';
@@ -41,6 +41,9 @@ const mb = (bytes: number) => (bytes < 1024 * 1024 ? 'under 1' : String(Math.rou
 const withFiles = (n: number) => (n > 0 ? ', with ' + n + (n === 1 ? ' attachment' : ' attachments') : '');
 
 const looksLikeEmail = (v: string) => /^\S+@\S+\.\S+$/.test(v.trim());
+
+/** the PC version: always on a cable or Wi-Fi as far as the app can tell, so attachments never wait for Wi-Fi there */
+const ON_PC = Platform.OS === 'web';
 
 /** how long a reset step may wait for the cloud before it is taken for no connection, so a button never hangs */
 const RESET_WAIT_MS = 20 * 1000;
@@ -215,8 +218,9 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
     if (c.status === 'choice') { toast('Choose which copy to keep first.'); return; }
     sizingRef.current = true;
     setSizing(true);
-    // on mobile data with attachments kept for Wi-Fi, a backup asked for by hand asks once whether to send them now
-    const cost = await mobileDataCost().catch(() => null);
+    // on mobile data with attachments kept for Wi-Fi, a backup asked for by hand asks once whether to send them now;
+    // the PC has no mobile data, so its attachments simply go
+    const cost = ON_PC ? null : await mobileDataCost().catch(() => null);
     const go = (mobileData: boolean) => {
       sizingRef.current = false;
       setSizing(false);
@@ -226,7 +230,7 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
         else if (st === 'choice') toast('Choose which copy to keep first.');
       });
     };
-    if (!cost) { go(false); return; }
+    if (!cost) { go(ON_PC); return; }
     Alert.alert(
       'Send ' + mb(cost.bytes) + ' MB of attachments over mobile data?',
       'Your data backs up either way. ' + (cost.files === 1 ? 'The attachment' : 'The ' + cost.files + ' attachments')
@@ -280,7 +284,7 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
   return (
     <>
       {title ? (
-        <SectionTitle right={<InfoDot text="An account keeps a copy of everything in your own private space in the cloud: only you can read it, and it comes back on a new phone. Attachments go up to 20 MB each, 120 MB in all. Your data stays on this phone too." />}>
+        <SectionTitle right={<InfoDot text="An account keeps a copy of everything, your settings included, in your own private space in the cloud: only you can read it, it comes back on a new phone, and every phone or PC signed in to it stays in step. Attachments go up to 20 MB each, 120 MB in all. Your data stays on this phone too." />}>
           {title}
         </SectionTitle>
       ) : null}
@@ -328,17 +332,22 @@ export function CloudSection({ title = 'Account' }: { title?: string | null }) {
               <Toggle value={c.auto} onChange={(v) => { setAuto(v); }} color={C.accent} label="Back up automatically" />
             </Row>
             <Hairline />
-            <Row style={{ justifyContent: 'space-between', marginVertical: 12 }}>
-              <View style={{ flex: 1, paddingRight: 12 }}>
-                <Text style={[T.body, { fontFamily: F.med }]}>Attachments on Wi-Fi only</Text>
-                <Text style={[T.caption, { marginTop: 2 }]}>Your data backs up on any connection. Attachments wait for Wi-Fi.</Text>
-              </View>
-              <Toggle
-                value={wifiOnly} onChange={(v) => setSetting('attachmentsWifiOnly', v)} color={C.accent}
-                label="Attachments on Wi-Fi only"
-              />
-            </Row>
-            <Hairline />
+            {/* a phone's choice: the PC has no mobile data to keep them from */}
+            {ON_PC ? null : (
+              <>
+                <Row style={{ justifyContent: 'space-between', marginVertical: 12 }}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={[T.body, { fontFamily: F.med }]}>Attachments on Wi-Fi only</Text>
+                    <Text style={[T.caption, { marginTop: 2 }]}>Your data backs up on any connection. Attachments wait for Wi-Fi.</Text>
+                  </View>
+                  <Toggle
+                    value={wifiOnly} onChange={(v) => setSetting('attachmentsWifiOnly', v)} color={C.accent}
+                    label="Attachments on Wi-Fi only"
+                  />
+                </Row>
+                <Hairline />
+              </>
+            )}
 
             <PillButton
               label={syncing || sizing ? 'Backing up' : 'Back up now'} icon="cloud-upload-outline"

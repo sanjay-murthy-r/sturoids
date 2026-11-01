@@ -1,7 +1,8 @@
 // The companion's drawing: Sprout (a little plant with two leaves for hands) and Pip (a round, soft blob with nub arms),
 // each made of parts on one 18 by 16 grid of squares, so a part can move on its own: the eyes and mouth change with
-// what it feels, a leaf or an arm takes a pose (resting, out, raised, swung), the feet shuffle as it walks, a book comes
-// out for Deep Work, and what it wears sits on top. Everything is symmetric about the grid's middle (between columns 8
+// what it feels, a leaf or an arm takes a pose (resting, out, raised, swung), the feet shuffle as it walks, and what it
+// wears sits on top. For Deep Work a book lies open on the floor at its feet, on the side it faces (PROPS.book, drawn
+// beside it by the screen), and it reads down at it. Everything is symmetric about the grid's middle (between columns 8
 // and 9), so the right side is the left one mirrored. Pure: the screen (src/components/Mascot.tsx) draws the squares.
 
 export type Kind = 'sprout' | 'pip';
@@ -11,7 +12,7 @@ export const ROWS = 16;
 /** One square: its column, its row, and its colour's letter in the palette. */
 export type Cell = [number, number, string];
 
-export type Eyes = 'open' | 'blink' | 'happy' | 'up' | 'left' | 'right' | 'read' | 'sleepy' | 'focus' | 'wide';
+export type Eyes = 'open' | 'blink' | 'happy' | 'up' | 'left' | 'right' | 'read' | 'read2' | 'sleepy' | 'focus' | 'wide';
 export type Mouth = 'none' | 'smile' | 'grin' | 'o' | 'flat';
 /** a leaf's (Sprout) or an arm's (Pip) pose */
 export type Limb = 'rest' | 'out' | 'up' | 'swing' | 'down';
@@ -25,6 +26,7 @@ export interface Pose {
   l: Limb;
   r: Limb;
   feet: Feet;
+  /** the book on the floor beside it (drawn by the screen, beside the companion, not in its grid) */
   book: Book;
   blush: boolean;
   /** Pip's headphones are on (only with the headphones among its gear) */
@@ -94,6 +96,20 @@ const ARM: Record<Limb, Cell[]> = {
   down: [[2, 13, 'b'], [2, 14, 's']],
 };
 
+/**
+ * Where Pip's left hand is in each pose, in grid squares (the middle of the nub's end), for a string tied to it: the
+ * balloon's. The right hand is the mirror, at COLS minus x.
+ */
+export const HAND: Record<Limb, [number, number]> = {
+  rest: [1.5, 12.6],
+  out: [0.4, 11.5],
+  up: [1.5, 8.1],
+  swing: [0.5, 8.1],
+  down: [2.5, 14],
+};
+/** the hand Pip keeps its balloon in: its back one (the grid's left), so the front one is free to wave, think and read */
+export const BALLOON_HAND = 'l' as const;
+
 /* ---------------------------------------------------------------- the face (the same place on both) */
 
 const EYES: Record<Eyes, Cell[]> = {
@@ -104,8 +120,11 @@ const EYES: Record<Eyes, Cell[]> = {
   up: [[6, 9, 'd'], [6, 10, 'd'], [11, 9, 'd'], [11, 10, 'd']],
   left: [[5, 10, 'd'], [5, 11, 'd'], [10, 10, 'd'], [10, 11, 'd']],
   right: [[7, 10, 'd'], [7, 11, 'd'], [12, 10, 'd'], [12, 11, 'd']],
-  // looking down at a page
-  read: [[6, 10, 'd'], [11, 10, 'd']],
+  // looking down at the book on the floor, on the side it faces (the grid's right): eyes low and to that side, under
+  // lids lowered in the body's own shade
+  read: [[7, 11, 'd'], [12, 11, 'd'], [7, 10, 's'], [12, 10, 's']],
+  // reading along the line: the eyes a square back toward the page's start
+  read2: [[6, 11, 'd'], [11, 11, 'd'], [6, 10, 's'], [11, 10, 's']],
   sleepy: [[5, 11, 'd'], [6, 11, 'd'], [11, 11, 'd'], [12, 11, 'd']],
   // open, with brows set: concentrating
   focus: [[6, 10, 'd'], [6, 11, 'd'], [11, 10, 'd'], [11, 11, 'd'], [5, 9, 'd'], [6, 9, 'd'], [11, 9, 'd'], [12, 9, 'd']],
@@ -123,25 +142,6 @@ const MOUTH: Record<Mouth, Cell[]> = {
 const CHEEKS: Cell[] = [[5, 12, 'p'], [12, 12, 'p']];
 const BLUSH: Cell[] = [[4, 12, 'p'], [5, 12, 'p'], [12, 12, 'p'], [13, 12, 'p']];
 
-/** an open book held up in front, its pages ('K'), their shade ('q') and cover ('k') */
-const BOOK: Record<Book, Cell[]> = {
-  none: [],
-  // a small open book held up under the eyes: two white pages with a line of print on each and the gutter between
-  // them, the blue cover's edge below
-  open: [
-    [5, 11, 'K'], [6, 11, 'K'], [7, 11, 'K'], [8, 11, 'q'], [9, 11, 'q'], [10, 11, 'K'], [11, 11, 'K'], [12, 11, 'K'],
-    [4, 12, 'K'], [5, 12, 'n'], [6, 12, 'n'], [7, 12, 'K'], [8, 12, 'q'], [9, 12, 'q'], [10, 12, 'K'], [11, 12, 'n'], [12, 12, 'n'], [13, 12, 'K'],
-    ...row(13, 4, 13, 'k'),
-  ],
-  // the right page lifting as it turns, its shadow on the page under it
-  turn: [
-    [5, 11, 'K'], [6, 11, 'K'], [7, 11, 'K'], [8, 11, 'q'], [9, 11, 'q'], [10, 11, 'q'], [11, 11, 'q'],
-    [10, 10, 'K'], [11, 10, 'K'], [12, 10, 'K'],
-    [4, 12, 'K'], [5, 12, 'n'], [6, 12, 'n'], [7, 12, 'K'], [8, 12, 'q'], [9, 12, 'q'], [10, 12, 'K'], [11, 12, 'K'], [12, 12, 'K'], [13, 12, 'K'],
-    ...row(13, 4, 13, 'k'),
-  ],
-};
-
 /* ---------------------------------------------------------------- gear */
 
 export interface Gear { key: string; name: string; line: string; for: Kind[] }
@@ -152,13 +152,13 @@ export interface Gear { key: string; name: string; line: string; for: Kind[] }
  * headphones go on for Deep Work, the balloon bobs about and shows how the day is going.
  */
 export const GEAR: Gear[] = [
-  { key: 'ladybug', name: 'Ladybug', line: 'Dot flits about and lands on a leaf now and then', for: ['sprout'] },
+  { key: 'ladybug', name: 'Ladybug', line: 'Dot flits about and lands on its head now and then', for: ['sprout'] },
   { key: 'firefly', name: 'Firefly', line: 'A soft light that keeps it company after dark', for: ['sprout'] },
   { key: 'bloom', name: 'Bud', line: "Opens, petal by petal, as today's ToDos get done", for: ['sprout'] },
   { key: 'glasses', name: 'Reading glasses', line: 'Pushed up to think, worn to read', for: ['sprout', 'pip'] },
   { key: 'bow', name: 'Bow', line: 'A ribbon bow, in a shade that suits it', for: ['pip'] },
   { key: 'phones', name: 'Headphones', line: 'On for Deep Work, and for humming along', for: ['pip'] },
-  { key: 'balloon', name: 'Balloon', line: 'Floats higher as the day gets done', for: ['pip'] },
+  { key: 'balloon', name: 'Balloon', line: 'Floats higher as the day gets done, and carries Pip when it flies', for: ['pip'] },
 ];
 export const gearFor = (kind: Kind) => GEAR.filter((g) => g.for.includes(kind));
 /** the ladybug and the firefly are each a friend that flies about: one at a time */
@@ -174,6 +174,11 @@ const LENS_LEFT: Cell[] = [
   [5, 10, 'W'], [7, 10, 'T'], [5, 11, 'T'], [7, 11, 'T'],
 ];
 const GLASSES: Cell[] = [...LENS_LEFT, ...LENS_LEFT.map(([c, r, k]): Cell => [COLS - 1 - c, r, k === 'W' ? 'T' : k]), [10, 10, 'W'], [12, 10, 'T']];
+/** pushed up on its head to think (eyes up): just the frames' tops, on the brow, out of the eyes' way */
+const GLASSES_UP = (kind: Kind): Cell[] => {
+  const r = kind === 'pip' ? 7 : 8;
+  return [...row(r, 5, 7, 'G'), ...row(r, 10, 12, 'G'), [4, r + 1, 'G'], [13, r + 1, 'G'], [6, r, 'W'], [11, r, 'W']];
+};
 
 const BOW: Cell[] = [
   [9, 4, 'a'], [10, 4, 'a'], [12, 4, 'a'], [13, 4, 'a'],
@@ -181,8 +186,8 @@ const BOW: Cell[] = [
   [10, 6, 'a'], [12, 6, 'a'],
 ];
 
-const PHONES: Cell[] = [
-  ...row(5, 5, 12, 'H'), [4, 6, 'H'], [13, 6, 'H'], [3, 7, 'H'], [14, 7, 'H'],
+const PHONES: Cell[] = [...row(5, 5, 12, 'H'), [4, 6, 'H'], [13, 6, 'H'], [3, 7, 'H'], [14, 7, 'H']];
+const PHONE_CUPS: Cell[] = [
   [1, 9, 'H'], [2, 9, 'a'], [1, 10, 'H'], [2, 10, 'a'],
   [16, 9, 'H'], [15, 9, 'a'], [16, 10, 'H'], [15, 10, 'a'],
 ];
@@ -259,14 +264,18 @@ export function compose(kind: Kind, pose: Pose, gear: string[], bud: number): Ce
   out.push(...(kind === 'sprout' ? SPROUT_BODY : PIP_BODY));
   out.push(...FEET[pose.feet]);
   out.push(...(pose.blush ? BLUSH : CHEEKS));
-  if (has('glasses')) out.push(...GLASSES);
+  const up = pose.eyes === 'up';
+  if (has('glasses') && !up) out.push(...GLASSES);
   out.push(...EYES[pose.eyes]);
-  if (pose.book === 'none') out.push(...MOUTH[pose.mouth]);
-  if (kind === 'pip' && has('bow')) out.push(...BOW);
+  if (has('glasses') && up) out.push(...GLASSES_UP(kind));
+  out.push(...MOUTH[pose.mouth]);
+  // the band over the head, then the bow on it (the bow is tied over the band, never cut by it)
   if (kind === 'pip' && has('phones') && pose.phones) out.push(...PHONES);
-  out.push(...BOOK[pose.book]);
-  // leaves are drawn last (they are in front of the stem and the bud); a book is held by them, so they rest on it
+  if (kind === 'pip' && has('bow')) out.push(...BOW);
+  // leaves and arms last: they are in front of the stem, the bud and the body
   out.push(...limbs[pose.l], ...mirror(limbs[pose.r]));
+  // the ear cups sit over a raised arm (the arm goes up behind the head)
+  if (kind === 'pip' && has('phones') && pose.phones) out.push(...PHONE_CUPS);
   return out;
 }
 
@@ -301,13 +310,34 @@ export const PROPS = {
   heart: { grid: ['.h.h.', 'hhhhh', 'hhhhh', '.hhh.', '..h..'], pal: { h: '#FF8FB1' } },
   cloud: { grid: ['..ww..', '.wwwww', 'wwwwwww', '.wwwww.'], pal: { w: '#DCE7F2' } },
   drop: { grid: ['d', 'd'], pal: { d: '#8CC8FF' } },
-  // Pip's umbrella, out of nowhere, for floating down when it is carried and let go
-  umbrella: {
-    grid: ['..aaAaa..', '.aaaAaaa.', 'aaaaAaaaa', 'a.a.h.a.a', '....h....', '....h....', '....h....', '...hh....'],
-    pal: { h: '#5B463A' } as Palette,
-  },
   balloon: { grid: ['.aaa.', 'ahaaa', 'aaaaa', 'aaaaa', '.aaa.', '..A..'], pal: {} as Palette },
 } satisfies Record<string, Prop>;
+
+/**
+ * The book it studies at: lying open on the floor at its feet, its two pages rising a little from the gutter, a line
+ * of print on each, its cover under them; turning, the right page stands up on its way over.
+ */
+export const BOOK_PROP: Record<'open' | 'turn', string[]> = {
+  open: [
+    '..........',
+    '..........',
+    '..........',
+    '.KKK..KKK.',
+    'KnnKqqKnnK',
+    'KKKKqqKKKK',
+    'kkkkkkkkkk',
+  ],
+  turn: [
+    '......K...',
+    '......KK..',
+    '......KKK.',
+    '.KKK..qKK.',
+    'KnnKqqqqqK',
+    'KKKKqqKKKK',
+    'kkkkkkkkkk',
+  ],
+};
+export const BOOK_PAL: Palette = { K: '#FFF8EE', q: '#D8CDBD', n: '#A9A3B8', k: '#4F7FD1' };
 
 /** A door, as it stands at the edge of the screen: closed, ajar, open (dark inside, the door folded to its hinge). */
 export const DOOR: Record<'closed' | 'ajar' | 'open', string[]> = {

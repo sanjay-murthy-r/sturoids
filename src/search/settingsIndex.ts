@@ -117,9 +117,26 @@ const DEFS: Record<SettingsPage, Def[]> = {
   ],
 };
 
+/**
+ * rows Settings shows only on a phone: the PC never updates by itself, has no mobile data to spare, and has no screen
+ * lock the app can ask
+ */
+const PHONE_ONLY = new Set(['updates:update-by-itself', 'account:attachments-on-wi-fi-only', 'privacy:your-screen-lock-can-also-open']);
+/** whether this is a phone; true where no platform can be read (Node, in the tests) */
+const onPhone = (): boolean => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const os = require('react-native').Platform?.OS;
+    return !os || os === 'android' || os === 'ios';
+  } catch {
+    return true;
+  }
+};
+
 /** Every setting, page by page in the order Settings lists them. */
 export const SETTINGS_INDEX: SettingRow[] = (Object.keys(DEFS) as SettingsPage[]).flatMap((page) =>
-  DEFS[page].map(([label, caption, keywords]) => ({ id: settingId(page, label), page, label, caption, keywords })));
+  DEFS[page].map(([label, caption, keywords]) => ({ id: settingId(page, label), page, label, caption, keywords })))
+  .filter((r) => !PHONE_ONLY.has(r.id) || onPhone());
 
 /** A setting by its id. */
 export const settingById = (id: string): SettingRow | undefined => SETTINGS_INDEX.find((r) => r.id === id);

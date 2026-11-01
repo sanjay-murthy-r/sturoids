@@ -35,6 +35,14 @@ export function spokenTimeOf(t: TimerState): string {
   return words + (countdown ? ' left' : ' so far');
 }
 
+/** A length of time, the one way Deep Work writes it: "45 min", "1 h", "1 h 35 min", never a zero part. */
+export function fmtMins(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h === 0) return m + ' min';
+  return m === 0 ? h + ' h' : h + ' h ' + m + ' min';
+}
+
 /** The one-off notifications a session posts, each under a fixed id so a later launch can still replace or cancel it. */
 export const COUNTDOWN_NOTIF_ID = 'sturoids-countdown-end';
 export const FINISH_NOTIF_ID = 'sturoids-finish-line';

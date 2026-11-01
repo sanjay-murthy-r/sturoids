@@ -19,6 +19,7 @@ const WEB_SHIMS = {
   'expo-navigation-bar': shim('navigationBar.ts'),
   'expo-intent-launcher': shim('intentLauncher.ts'),
   'expo-sharing': shim('sharing.ts'),
+  'expo-print': shim('print.ts'),
   'expo-share-intent': shim('shareIntent.ts'),
   'expo-notifications': shim('notifications.ts'),
   'react-native-android-widget': shim('androidWidget.tsx'),

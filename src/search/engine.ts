@@ -389,7 +389,9 @@ export class SearchIndex<P = unknown> {
       const v = [version, iv];
       const cacheable = item !== null && typeof item === 'object';
       const hit = cacheable ? cache.get(item as unknown as object) : undefined;
-      if (hit && hit.v[0] === v[0] && hit.v[1] === v[1]) {
+      // with an item's own version, that alone says whether its documents still stand: the collection's version then
+      // only makes the collection be walked again (the journal's texts arriving in batches), never every item rebuilt
+      if (hit && (itemVersion ? hit.v[1] === v[1] : hit.v[0] === v[0] && hit.v[1] === v[1])) {
         docs.push(...hit.prepared);
         continue;
       }

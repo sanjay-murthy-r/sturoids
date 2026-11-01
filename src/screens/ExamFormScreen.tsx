@@ -400,8 +400,10 @@ export function ExamFormScreen() {
   // tapped the exam follows the global switch (the evening before), and the chips say so; a reminder whose evening has
   // already gone is not offered
   const remindNow: ExamRemind[] = d.remind ?? (examReminders ? ['eve'] : []);
-  const canWeek = !!d.date && shiftKey(d.date, -7) >= today;
-  const canEve = !!d.date && d.date > today;
+  // by the clock, not the day: at 9 pm the evening before tomorrow's exam has gone, though it is still today
+  const ringsLater = (key: string) => new Date(key + 'T19:00:00').getTime() > Date.now();
+  const canWeek = !!d.date && ringsLater(shiftKey(d.date, -7));
+  const canEve = !!d.date && ringsLater(shiftKey(d.date, -1));
   const toggleRemind = (k: ExamRemind) => {
     tick();
     const on = remindNow.includes(k);

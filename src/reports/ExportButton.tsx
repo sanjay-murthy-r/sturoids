@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T, TRACK, CHROME_FONT_MAX } from '../theme';
 import { useStore } from '../store';
@@ -33,9 +33,12 @@ const ALL_RANGE = { kind: 'all' as RangeKind, label: 'Everything' };
 /** The full report's parts ticked at first. */
 const DEFAULT_SECTIONS: SectionKey[] = ['overview', 'tasks', 'habits', 'focus', 'journal', 'scores'];
 
+/** On the PC the file is saved through a download, not handed to a share sheet: the words say so. */
+const PC = Platform.OS === 'web';
+
 /** How an export went, in a short status line. */
 function sayResult(r: Awaited<ReturnType<typeof exportSummary>>) {
-  if (r === 'unavailable') toast('Sharing is not available on this phone');
+  if (r === 'unavailable') toast(PC ? 'Saving files is not available here' : 'Sharing is not available on this phone');
   else if (r === 'error') toast("Couldn't make the file");
 }
 
@@ -110,7 +113,7 @@ export function useExportFlow(kinds: SummaryKind | readonly SummaryKind[], opts?
     const kind = kindIn ?? (listKey.split(',')[0] as SummaryKind);
     const range = o.range ?? (o.from && o.to ? 'custom' : KIND_INFO[kind].range);
     const span = rangeFor(kind, { ...o, range: range === 'custom' ? 'custom' : range });
-    setSeed({ subject: o.subject, examId: o.examId, examIds: o.examIds, scopeLabel: o.scopeLabel, title: o.title, from: o.from });
+    setSeed({ subject: o.subject, examId: o.examId, examIds: o.examIds, groupId: o.groupId, scopeLabel: o.scopeLabel, title: o.title, from: o.from });
     setChoices(kindIn ? [kindIn] : (listKey.split(',') as SummaryKind[]));
     setD((cur) => ({
       kind, range,
@@ -247,10 +250,12 @@ export function useExportFlow(kinds: SummaryKind | readonly SummaryKind[], opts?
             <LivePreview kind={d.kind} opts={effective()} />
             <View style={st.actions}>
               <PillButton label={busy ? 'Making the file' : 'Export PDF'} icon="document-text-outline" onPress={() => pickFormat('pdf')} />
-              <PillButton outline label="Share CSV" icon="grid-outline" onPress={() => pickFormat('csv')} />
+              <PillButton outline label={PC ? 'Save CSV' : 'Share CSV'} icon="grid-outline" onPress={() => pickFormat('csv')} />
             </View>
             <Text style={[T.caption, { marginTop: S.gap, textAlign: 'center' }]}>
-              Made on this phone from this profile's data, then shared where you choose.
+              {PC
+                ? "Made on this computer from this profile's data, then saved where you choose."
+                : "Made on this phone from this profile's data, then shared where you choose."}
             </Text>
           </>
         ) : null}

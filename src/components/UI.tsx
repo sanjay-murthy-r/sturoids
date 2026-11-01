@@ -14,8 +14,8 @@ import type { SharedValue } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import {
-  AnimLevel, C, CHROME_FONT_MAX, F, MIN, NO_SHADOW, S, SH, T, TRACK, ThemeMode, bgFor, darkSh, neuRaised, neuInset, neuPressedInner,
-  oneLine, setSkin, shownTheme,
+  AnimLevel, C, CHROME_FONT_MAX, F, MIN, NO_SHADOW, S, SH, T, TRACK, ThemeMode, bgFor, cheerSkinOn, darkSh, neuRaised, neuInset,
+  neuPressedInner, oneLine, setSkin, shownTheme,
 } from '../theme';
 import { useStore } from '../store';
 import {
@@ -71,10 +71,21 @@ export function ScreenBG({ children, guard = false, fling = true, maxWidth = REA
     Gesture.Fling().direction(Directions.RIGHT).onEnd(() => { 'worklet'; runOnJS(go)(-1); }),
   ), [go]);
 
+  // the page's own width (beside a rail it is less than the window's), so a header in the column knows where it stands
+  // and its Cheerful ground lines its glows up with the page's (see Ground)
+  const [pageW, setPageW] = React.useState(width);
+  const columnAt = React.useMemo(
+    () => ({ x: column ? Math.max(0, (pageW - (maxWidth as number)) / 2) : 0, y: 0 }), [column, pageW, maxWidth],
+  );
+
   const body = (
-    <View style={{ flex: 1, backgroundColor: bg }}>
+    <View style={{ flex: 1, backgroundColor: bg }} onLayout={(e) => setPageW(e.nativeEvent.layout.width)}>
       <Backdrop minimal={theme === 'minimal'} />
-      {column ? <View style={{ flex: 1, width: '100%', maxWidth: maxWidth as number, alignSelf: 'center' }}>{children}</View> : children}
+      {column ? (
+        <GroundAt.Provider value={columnAt}>
+          <View style={{ flex: 1, width: '100%', maxWidth: maxWidth as number, alignSelf: 'center' }}>{children}</View>
+        </GroundAt.Provider>
+      ) : children}
       {guard && (
         <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top }}>
           <Ground />
@@ -86,21 +97,38 @@ export function ScreenBG({ children, guard = false, fling = true, maxWidth = REA
   return <GestureDetector gesture={gesture}>{body}</GestureDetector>;
 }
 
+/** Where a bar inside the page stands from the page's top-left corner: a header in the centred column of a wide window. */
+const GroundAt = React.createContext<{ x: number; y: number }>({ x: 0, y: 0 });
+
 /**
  * The ground of a bar (a header, the band under the status bar, the tab bar): the page's own colour. In Cheerful on the
- * PC the page's colour drifts behind it, so a bar is frosted there (a real CSS blur). Android never gets a blur: its
- * blur is experimental, paints a gray slab instead of blurring and can take the app down as a screen unmounts, so a
- * bar there is the page's own colour, as in Elite.
+ * PC the page's colour drifts behind it, so a bar over the page is frosted there (a real CSS blur). Android never gets
+ * a blur: its blur is experimental, paints a gray slab instead of blurring and can take the app down as a screen
+ * unmounts, so a bar there carries its own copy of the page's backdrop, lined up with the page's, and the colour runs
+ * on through it with no band. A bar beside the page rather than over it (the tab bar, the rail) passes `beside`, where
+ * it stands from the page's top-left corner: it has nothing of the page behind it to blur, so on the PC it carries the
+ * copy too, under the same frost.
  */
-export function Ground({ style }: { style?: ViewStyle }) {
+export function Ground({ style, beside }: { style?: ViewStyle; beside?: { x: number; y: number } }) {
   const theme = useTheme();
   const cheerful = useCheerful();
+  const inPage = React.useContext(GroundAt);
   const bg = bgFor(theme);
-  if (!cheerful || Platform.OS !== 'web') return <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: bg }, style]} />;
+  if (!cheerful) return <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: bg }, style]} />;
+  const web = Platform.OS === 'web';
+  if (web && !beside) {
+    return (
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden' }, style]}>
+        <BlurView intensity={26} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: bg + 'C4' }]} />
+      </View>
+    );
+  }
+  const at = beside ?? inPage;
   return (
-    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden' }, style]}>
-      <BlurView intensity={26} tint="dark" style={StyleSheet.absoluteFill} />
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: bg + 'C4' }]} />
+    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden', backgroundColor: bg }, style]}>
+      <Backdrop minimal={theme === 'minimal'} dx={at.x} dy={at.y} />
+      {web ? <View style={[StyleSheet.absoluteFill, { backgroundColor: bg + 'C4' }]} /> : null}
     </View>
   );
 }
@@ -1259,18 +1287,19 @@ export function Toggle({ value, onChange, color, label }: {
       <View
         style={[
           st.ring,
-          theme === 'minimal' && {
+          // the shadows are picked here, not in the StyleSheet, so a switch wears the skin of the mood it is drawn in
+          theme === 'minimal' ? {
             backgroundColor: MIN.card, borderWidth: 1,
             borderColor: value ? c : MIN.border, boxShadow: NO_SHADOW,
-          },
+          } : neuRaised('low'),
         ]}
       >
-        <View style={[st.track, theme === 'minimal' && { backgroundColor: MIN.inset, boxShadow: NO_SHADOW }]}>
+        <View style={[st.track, theme === 'minimal' ? { backgroundColor: MIN.inset, boxShadow: NO_SHADOW } : neuInset('mid')]}>
           <Animated.View
             style={[
               st.thumb,
               { backgroundColor: C.knob },
-              theme === 'minimal' && { boxShadow: NO_SHADOW },
+              theme === 'minimal' ? { boxShadow: NO_SHADOW } : neuRaised('low'),
               thumbStyle,
             ]}
           >
@@ -1494,7 +1523,9 @@ export function ProgressBar({ value, color, height = 8 }: { value: number; color
 }
 
 export function Hairline() {
-  return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: C.hairline, marginVertical: 2 }} />;
+  // the minimal look's own hairline, so a rule reads as clearly as the card's outline beside it
+  const theme = useTheme();
+  return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: theme === 'minimal' ? MIN.hairline : C.hairline, marginVertical: 2 }} />;
 }
 
 /** a sheet's motion at each level: what it arrives and leaves on (see Sheet) */
@@ -1707,7 +1738,12 @@ export function Sheet({
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Animated.View
           onLayout={onPanelLayout}
-          style={[st.sheet, narrowPanel, theme === 'minimal' && { backgroundColor: MIN.card, boxShadow: SH.sheetPanelMin }, panelStyle]}
+          style={[
+            st.sheet, narrowPanel,
+            // Cheerful's panel lifts on its warm shade, with no pale rim over its colour
+            theme === 'minimal' ? { backgroundColor: MIN.card, boxShadow: SH.sheetPanelMin } : cheerSkinOn() && { boxShadow: SH.sheetPanelCheer },
+            panelStyle,
+          ]}
         >
           {/* minimal has no shadow to define the handle, so the FILL has to
               carry it — C.inset on MIN.card is all but invisible */}
@@ -1836,7 +1872,7 @@ export function ListCard({ children, style }: { children: React.ReactNode; style
           exiting={exit}
           layout={layout}
         >
-          {i > 0 ? <View style={lst.hair} /> : null}
+          {i > 0 ? <View style={[lst.hair, theme === 'minimal' && { backgroundColor: MIN.hairline }]} /> : null}
           {row}
         </Animated.View>
       ))}
@@ -1881,7 +1917,7 @@ export function ListSlice({ first, last, enter = false, children }: {
             : { backgroundColor: C.card, ...neuRaised('mid') },
         ]}
       />
-      {first ? null : <View style={lst.hair} />}
+      {first ? null : <View style={[lst.hair, theme === 'minimal' && { backgroundColor: MIN.hairline }]} />}
       <View style={{ paddingTop: first ? 4 : 0, paddingBottom: last ? 4 : 0 }}>{children}</View>
     </Animated.View>
   );
@@ -2060,17 +2096,16 @@ const st = StyleSheet.create({
   ring: {
     width: RING_W, height: RING_H, borderRadius: RING_H / 2,
     backgroundColor: C.card, alignItems: 'center', justifyContent: 'center',
-    ...neuRaised('low'),
   },
+  // the ring's, the track's and the knob's shadows are set where they are drawn (Toggle): a StyleSheet would freeze
+  // Elite's at import, and Cheerful would show its pale highlight
   track: {
     width: TRACK_W, height: TRACK_H, borderRadius: TRACK_H / 2,
     backgroundColor: C.inset, justifyContent: 'center',
     overflow: 'hidden', // ← clips the knob's shadow rims to the track bounds (required)
-    ...neuInset('mid'),
   },
   thumb: {
     width: KNOB, height: KNOB, borderRadius: KNOB / 2, marginLeft: 3,
-    ...neuRaised('low'),
   },
   knobFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: KNOB / 2 },
   fieldLabel: { color: C.textFaint, fontFamily: F.smMed, fontSize: 12, letterSpacing: TRACK.fine, marginLeft: 2, marginBottom: 2 },

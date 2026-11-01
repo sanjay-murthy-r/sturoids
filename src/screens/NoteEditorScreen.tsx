@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, TextInput, Alert, Share, Keyboard, AppState, Modal, useWindowDimensions,
+  View, Text, StyleSheet, TextInput, Alert, Keyboard, AppState, Modal, Platform, useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,6 +27,7 @@ import { NoteGate, PinSheet, ToolGate } from '../components/LockGate';
 import { expectAway, markOpen, noteScope, pinStatus } from '../lock';
 import { Bouncy, EASE_OUT, Enter, glide, rowIn, rowOut, useAnimLevel, useBuilt } from '../components/Motion';
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
+import { shareMessage } from '../share';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NOT_KEPT, keepFile, viewUri } from '../attachments';
 
@@ -44,6 +45,13 @@ const FREE_LINES = 9; // keep ~8-10 lines of breathing room while dictating
  * used to write the store, which re-rendered every screen watching the notes (the list under this page among them).
  */
 const COMMIT_PAUSE_MS = 300;
+
+/**
+ * Whether the toolbar offers dictation. The PC app has no speech service behind it (voice.ts), so the mic is not
+ * there at all rather than a button that only explains itself. A phone always has it: a copy of the app without the
+ * recogniser (Expo Go) says why when it is tapped.
+ */
+const MIC_SHOWN = Platform.OS !== 'web' || voiceAvailable();
 
 const countWords = (text: string) => {
   const t = text.trim();
@@ -330,8 +338,8 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     setLockPin(true);
   };
 
-  /** Nothing typed, nothing attached: deleting it keeps nothing in Recently deleted, as closing a blank new note does. */
-  const blankNow = () => !!note && isBlankNote({ ...draft.current, attachments: note.attachments });
+  /** Nothing typed, attached, filed under a subject or tagged: deleting it keeps nothing in Recently deleted, as closing a blank new note does. */
+  const blankNow = () => !!note && isBlankNote({ ...draft.current, attachments: note.attachments, subject: note.subject, tags: note.tags });
 
   const deleteThis = () => {
     if (!note) return;
@@ -380,8 +388,8 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       { icon: 'folder-outline', label: 'Move to folder', onPress: () => setFolderSheet(true) },
       ...(note.locked ? [] : [{
         icon: 'share-outline' as const, label: 'Share note',
-        // an untitled note shares its words alone, with no blank lines in front; coming back never locks the note
-        onPress: () => { expectAway(() => Share.share({ message: [title.trim(), body.trim()].filter(Boolean).join('\n\n') })).catch(() => {}); },
+        // an untitled note shares its words alone, with no blank lines in front; on the PC the text is copied (share.ts)
+        onPress: () => { shareMessage([title.trim(), body.trim()].filter(Boolean).join('\n\n')); },
       }]),
       {
         icon: 'trash-outline', label: 'Delete note', color: C.danger,
@@ -601,8 +609,9 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   // the note's column: the window on a phone, a capped column on a wide window
   const colW = columnWidth(width, mode === 'tab');
   // The toolbar's ten targets need 402dp. Narrower, undo and redo move into a menu (the rest need 372dp); under 376dp
-  // the photo, camera and file buttons go into it too
-  const tools: 'all' | 'media' | 'menu' = colW >= 408 ? 'all' : colW >= 376 ? 'media' : 'menu';
+  // the photo, camera and file buttons go into it too. Without the mic (the PC) there is 50dp more room for them
+  const toolW = colW + (MIC_SHOWN ? 0 : 50);
+  const tools: 'all' | 'media' | 'menu' = toolW >= 408 ? 'all' : toolW >= 376 ? 'media' : 'menu';
   const mediaW = (colW - S.pad * 2 - 10) / 2;
   const menuItems = [
     ...(tools === 'menu' ? [
@@ -704,7 +713,7 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
 
       {/* editor toolbar */}
       <View style={[st.toolbar, { paddingBottom: 9 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: NO_SHADOW }]}>
-        <MicButton listening={listening} onPress={toggleVoice} />
+        {MIC_SHOWN ? <MicButton listening={listening} onPress={toggleVoice} /> : null}
         <IconBtn name="ellipse-outline" size={20} pad={6} onPress={() => markLine('bullet')} accessibilityLabel="Bullet" />
         <IconBtn name="checkbox-outline" size={20} pad={6} onPress={() => markLine('box')} accessibilityLabel="Checkbox, then tick it" />
         <IconBtn name="checkmark-done-outline" size={20} pad={6} onPress={() => setLineSheet(true)} accessibilityLabel="Promote a line to a task" />
@@ -935,6 +944,9 @@ function PhotoViewer({ uri, onClose }: { uri: string | null; onClose: () => void
   );
 }
 
+/** the room above and to the right of an attachment that its remove badge stands out into */
+const BADGE_ROOM = 6;
+
 /**
  * The note's pictures, videos and files. Kept apart from the editor so a keystroke never re-renders a video; one added
  * later fades in where it lands, one removed fades as it goes, and the rest glide to their places.
@@ -950,25 +962,29 @@ const Attachments = React.memo(function Attachments({ items, width, onRemove, on
   const level = useAnimLevel();
   const built = useBuilt();
   const enter = built.current || live ? rowIn(level) : undefined;
+  // The remove badge sits over each one's corner. Android only answers a touch inside the parent, so each one keeps
+  // a little room above and to its right for the badge, and is that much narrower: the whole badge can be tapped,
+  // and two still fit across
+  const inner = width - BADGE_ROOM;
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
       {items.map((a) => (
-        <Animated.View key={a.id} entering={enter} exiting={rowOut(level)} layout={glide(level)}>
+        <Animated.View key={a.id} entering={enter} exiting={rowOut(level)} layout={glide(level)} style={{ paddingTop: BADGE_ROOM, paddingRight: BADGE_ROOM }}>
           {a.kind === 'image' && (
-            <AttachedImage uri={viewUri(a.uri)} width={width} onPress={() => onView(viewUri(a.uri))} />
+            <AttachedImage uri={viewUri(a.uri)} width={inner} onPress={() => onView(viewUri(a.uri))} />
           )}
-          {a.kind === 'video' && <AttachedVideo uri={viewUri(a.uri)} name={a.name} width={width} />}
+          {a.kind === 'video' && <AttachedVideo uri={viewUri(a.uri)} name={a.name} width={inner} />}
           {a.kind === 'file' && (
             <Bouncy onPress={() => openFile(a)} style={[st.fileRow, { borderColor: C.accent + '44', backgroundColor: C.accent + '18' }]}>
               <Ionicons name="document-attach-outline" size={18} color={C.accent} />
-              <Text style={{ color: C.accent, fontFamily: F.med, marginLeft: 8, fontSize: 13, letterSpacing: TRACK.small, maxWidth: width * 1.6 }} numberOfLines={1}>
+              <Text style={{ color: C.accent, fontFamily: F.med, marginLeft: 8, fontSize: 13, letterSpacing: TRACK.small, maxWidth: inner * 1.6 }} numberOfLines={1}>
                 {a.name}
               </Text>
             </Bouncy>
           )}
           <IconBtn
             name="close-circle" size={20} color={C.danger}
-            style={{ position: 'absolute', top: -6, right: -6 }}
+            style={{ position: 'absolute', top: 0, right: 0 }}
             onPress={() => onRemove(a.id)}
             accessibilityLabel="Remove attachment"
           />

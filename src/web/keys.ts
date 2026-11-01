@@ -3,7 +3,7 @@
 // new note, Ctrl+Shift+F starts Deep Work, Ctrl+, opens Settings and ? lists them all (src/web/pc.ts says which key is
 // which). Also sideways scrolling with a mouse. On a phone this does nothing.
 import { useEffect } from 'react';
-import { Platform } from 'react-native';
+import { BackHandler, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { closeSift, openSift, useSearch } from '../search/store';
 import { useStore } from '../store';
@@ -16,6 +16,43 @@ const typing = (t: EventTarget | null) => {
   const el = t as HTMLElement | null;
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 };
+
+/**
+ * Back on the PC. The web has no Back button, so React Native's BackHandler there does nothing (and says so in the
+ * console), and Escape went straight to the page before: a Settings page open over its list, the Vault's folder, an
+ * exam's unsaved form or Today's edit mode were all left at once. Here the screens' Back handlers are kept, as on a
+ * phone, and Escape (and the back arrow) asks them first, the newest first, as Android does.
+ */
+const backHandlers: (() => boolean | null | undefined)[] = [];
+let backInstalled = false;
+function installWebBack() {
+  if (backInstalled || Platform.OS !== 'web') return;
+  backInstalled = true;
+  (BackHandler as any).addEventListener = (name: string, fn: () => boolean | null | undefined) => {
+    if (name !== 'hardwareBackPress') return { remove() {} };
+    backHandlers.push(fn);
+    return {
+      remove() {
+        const at = backHandlers.lastIndexOf(fn);
+        if (at >= 0) backHandlers.splice(at, 1);
+      },
+    };
+  };
+}
+installWebBack();
+
+/** On the PC, gives Back to the screens' own handlers, the newest first: true when one of them took it. */
+export function handledBack(): boolean {
+  if (Platform.OS !== 'web') return false;
+  for (let i = backHandlers.length - 1; i >= 0; i--) {
+    try {
+      if (backHandlers[i]()) return true;
+    } catch {
+      // a handler of a screen torn down mid-way: the next one is asked
+    }
+  }
+  return false;
+}
 
 /** Whether a sheet or another window of the app's is up (each is a modal dialog on the page): it has the keys first. */
 const dialogUp = () => !!document.querySelector('[aria-modal="true"][role="dialog"]');
@@ -71,8 +108,9 @@ export function useDesktopKeys() {
           return;
         }
         // a sheet closes itself on the key's release; the page behind it stays where it is. A field handles its own
-        // Escape first; otherwise the page goes back, as Back would
+        // Escape first; otherwise the screen's own Back has it (a page open within it), then the page goes back
         if (dialogUp() || typing(e.target) || e.defaultPrevented) return;
+        if (handledBack()) return;
         if (router.canGoBack()) router.back();
         return;
       }

@@ -73,6 +73,17 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
     ? todayItems(dailies, missions, base.dateKey).filter((t) => !t.done && !tasks.includes(t.title))
     : [];
 
+  // a time of day for the end, on the day the session began or, for one that ran past midnight, the day it ended:
+  // whichever lies nearer the end it had, so 00:50 on a session that ended at 00:40 stays after midnight
+  const endOn = (h: number, mi: number) => {
+    const [y, mo, d] = base.dateKey.split('-').map(Number);
+    const first = new Date(y, mo - 1, d, h, mi).getTime();
+    const ended = new Date(base.endedAt);
+    if (todayKey(ended) === base.dateKey) return first;
+    const later = new Date(ended.getFullYear(), ended.getMonth(), ended.getDate(), h, mi).getTime();
+    return Math.abs(later - base.endedAt) < Math.abs(first - base.endedAt) ? later : first;
+  };
+
   const setMinutes = (m: number) => {
     const v = Math.max(1, Math.min(MAX_MIN, Math.round(m)));
     setMin(v);
@@ -105,10 +116,7 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
     const st = useStore.getState();
     let endedAt: number | undefined;
     const m = /^(\d{2}):(\d{2})$/.exec(end);
-    if (m && end !== hhmm(base.endedAt)) {
-      const [y, mo, d] = base.dateKey.split('-').map(Number);
-      endedAt = new Date(y, mo - 1, d, Number(m[1]), Number(m[2])).getTime();
-    }
+    if (m && end !== hhmm(base.endedAt)) endedAt = endOn(Number(m[1]), Number(m[2]));
     st.updateSession(id, {
       subject, note, rating, taskTitles: tasks, tags,
       ...(min * 60 !== base.netSeconds && min !== Math.round(base.netSeconds / 60) ? { minutes: min } : {}),
@@ -138,8 +146,7 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
 
   const started = hhmm((() => {
     const mm = /^(\d{2}):(\d{2})$/.exec(end);
-    const [y, mo, d] = base.dateKey.split('-').map(Number);
-    const endMs = mm ? new Date(y, mo - 1, d, Number(mm[1]), Number(mm[2])).getTime() : base.endedAt;
+    const endMs = mm ? endOn(Number(mm[1]), Number(mm[2])) : base.endedAt;
     return endMs - min * 60_000;
   })());
   const clock = (t: string) => {

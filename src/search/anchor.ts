@@ -24,6 +24,6 @@ export function useSiftAnchor(owner: string, active = true) {
     });
   }, [owner, active, focused]);
   const mine = useSearch((s) => s.anchorOwner === owner && s.anchor != null);
-  const style = useAnimatedStyle(() => ({ opacity: mine && siftShown.value > 0.002 ? 0 : 1 }));
+  const style = useAnimatedStyle(() => ({ opacity: mine && siftShown.value > 0 ? 0 : 1 }));
   return { ref, style };
 }

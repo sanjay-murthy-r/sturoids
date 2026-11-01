@@ -1,15 +1,15 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T } from '../src/theme';
 import { MascotLook, useStore } from '../src/store';
-import { ScreenBG, SectionTitle, useToolHeader } from '../src/components/UI';
+import { ScreenBG, SectionTitle, Toggle, useToolHeader } from '../src/components/UI';
 import { Enter } from '../src/components/Motion';
 import { READ_MAX, frame } from '../src/layout';
-import { CUTE, CUTE_BOLD, GridArt, Sprite } from '../src/components/Mascot';
-import { COLOR_SETS, FLIERS, Kind, NAMES, PROPS, Pose, REST, colorSet, gearFor } from '../src/mascot/art';
+import { CUTE, CUTE_BOLD, FloorBook, GridArt, Sprite } from '../src/components/Mascot';
+import { COLOR_SETS, COLS, FLIERS, HAND, Kind, NAMES, PROPS, Pose, REST, ROWS, colorSet, gearFor } from '../src/mascot/art';
 import { startMakeover } from '../src/components/Makeover';
 import { tick } from '../src/haptics';
 import { fmtClockTime } from '../src/utils';
@@ -39,8 +39,9 @@ export default function CompanionPage() {
   const s = useStore((st) => st.settings);
   const setSetting = useStore((st) => st.setSetting);
   const tool = useToolHeader({ title: 'Companion', mode: 'page' });
-  const kind: Kind = s.mascot === 'pip' ? 'pip' : 'sprout';
   const off = s.mascot === 'off';
+  // turned off, the page still shows (and edits) the one that comes back when it is turned on
+  const kind: Kind = off ? s.mascotLast : s.mascot === 'pip' ? 'pip' : 'sprout';
   const name = s.mascotName || NAMES[kind];
   const look = s.mascotLooks[kind];
   const set = colorSet(kind, look.colors);
@@ -49,11 +50,25 @@ export default function CompanionPage() {
   const preview = usePreview();
 
   const setLook = (patch: Partial<MascotLook>) => setSetting('mascotLooks', { ...s.mascotLooks, [kind]: { ...look, ...patch } });
-  const choose = (k: Kind | 'off') => {
+  const choose = (k: Kind) => {
     if (k === s.mascot) return;
     tick();
     setSetting('mascot', k);
-    if (k !== 'off') preview.play('wave');
+    setSetting('mascotLast', k);
+    preview.play('wave');
+  };
+  /** the companion on or off altogether: off, nothing of it shows anywhere (its door included) */
+  const setOn = (on: boolean) => {
+    tick();
+    if (on) {
+      setSetting('mascot', s.mascotLast);
+      setSetting('mascotOut', false);
+      setSetting('mascotHideUntil', 0);
+      preview.play('wave');
+    } else {
+      setSetting('mascotLast', kind);
+      setSetting('mascot', 'off');
+    }
   };
   const toggleGear = (k: string) => {
     tick();
@@ -81,6 +96,15 @@ export default function CompanionPage() {
       >
         <Enter index={enter++}>
           {tool.hero}
+          <View style={[CARD, st.onCard]}>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <Text style={st.onTitle}>Companion</Text>
+              <Text style={[T.caption, { marginTop: 2 }]}>
+                {off ? 'Off. Nothing of it shows anywhere.' : name + ' lives on your screens in Cheerful.'}
+              </Text>
+            </View>
+            <Toggle value={!off} onChange={setOn} label="Companion" />
+          </View>
           {s.mood !== 'cheerful' ? (
             <View style={[CARD, st.note]}>
               <Text style={T.body}>Your companion lives in Cheerful.</Text>
@@ -105,18 +129,27 @@ export default function CompanionPage() {
           ) : null}
           {!off ? (
             <View style={[CARD, st.stage]}>
-              <View style={{ alignItems: 'center', justifyContent: 'flex-end', height: 140 }}>
-                {kind === 'pip' && gear.includes('balloon') ? (
-                  <View style={st.balloon}>
-                    <GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={5} />
-                    <View style={{ width: 1.5, height: 30, backgroundColor: 'rgba(160,150,140,0.7)' }} />
-                  </View>
-                ) : null}
+              <View style={{ alignItems: 'center', justifyContent: 'flex-end', height: 150 }}>
                 {gear.includes('ladybug') ? <View style={st.bug}><GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={4} /></View> : null}
                 {gear.includes('firefly') ? <View style={st.fly}><View style={st.flyHalo} /><View style={st.flyDot} /></View> : null}
-                <Animated.View style={preview.style}>
-                  <Sprite kind={kind} pose={preview.pose} gear={gear} bud={preview.bud} pal={set.pal} px={6} />
+                <Animated.View style={[{ width: COLS * STAGE_PX, height: ROWS * STAGE_PX }, preview.style]}>
+                  {kind === 'pip' && gear.includes('balloon') ? (
+                    // tied to its back hand (the left, as it faces right here), wherever the hand is
+                    <View
+                      pointerEvents="none"
+                      style={[st.balloon, { left: HAND[preview.pose.l][0] * STAGE_PX - 7.5, top: HAND[preview.pose.l][1] * STAGE_PX - 30 - 18 }]}
+                    >
+                      <GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={3} />
+                      <View style={{ width: 1.5, height: 30, backgroundColor: 'rgba(160,150,140,0.7)' }} />
+                    </View>
+                  ) : null}
+                  <Sprite kind={kind} pose={preview.pose} gear={gear} bud={preview.bud} pal={set.pal} px={STAGE_PX} />
                 </Animated.View>
+                {preview.pose.book !== 'none' ? (
+                  <View pointerEvents="none" style={st.bookAt}>
+                    <FloorBook page={preview.pose.book} face={preview.face} px={STAGE_PX} />
+                  </View>
+                ) : null}
               </View>
               <Text style={st.stageName}>{name}</Text>
               <View style={st.tries}>
@@ -134,7 +167,7 @@ export default function CompanionPage() {
           <SectionTitle>Who</SectionTitle>
           <View style={{ flexDirection: 'row', gap: 12 }}>
             {(['sprout', 'pip'] as const).map((k) => {
-              const on = s.mascot === k;
+              const on = !off && s.mascot === k;
               return (
                 <Pressable
                   key={k} onPress={() => choose(k)} accessibilityRole="radio" accessibilityState={{ selected: on }}
@@ -148,9 +181,6 @@ export default function CompanionPage() {
               );
             })}
           </View>
-          <Pressable onPress={() => choose('off')} accessibilityRole="radio" accessibilityState={{ selected: off }} style={{ marginTop: 12, alignSelf: 'flex-start' }}>
-            <Text style={[T.caption, { color: off ? C.accent : C.textDim, fontFamily: F.smMed }]}>{off ? 'No companion' : 'No companion, thanks'}</Text>
-          </Pressable>
         </Enter>
 
         {!off ? (
@@ -202,7 +232,7 @@ export default function CompanionPage() {
                         <Sprite kind={kind} pose={showPose} gear={[g.key]} bud={3} pal={set.pal} px={3} />
                         {g.key === 'ladybug' ? <View style={{ position: 'absolute', right: 6, top: 4 }}><GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={3} /></View> : null}
                         {g.key === 'firefly' ? <View style={{ position: 'absolute', left: 8, top: 6 }}><View style={st.flyHalo} /><View style={st.flyDot} /></View> : null}
-                        {g.key === 'balloon' ? <View style={{ position: 'absolute', right: 2, top: -2 }}><GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={3} /></View> : null}
+                        {g.key === 'balloon' ? <View style={{ position: 'absolute', left: 6, top: -2, alignItems: 'center' }}><GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={3} /><View style={{ width: 1, height: 18, backgroundColor: 'rgba(160,150,140,0.7)' }} /></View> : null}
                         {on ? <View style={st.tick}><Ionicons name="checkmark" size={12} color="#1B1A18" /></View> : null}
                       </View>
                       <Text style={[st.tileName, on && { color: C.accent }]}>{g.name}</Text>
@@ -255,6 +285,8 @@ export default function CompanionPage() {
 }
 
 type Demo = 'wave' | 'think' | 'cheer' | 'read' | 'hop';
+/** the stage's square */
+const STAGE_PX = 6;
 
 /** The stage's own little performances, and its breathing and blinking. */
 function usePreview() {
@@ -266,6 +298,8 @@ function usePreview() {
   const lift = useSharedValue(0);
   const tilt = useSharedValue(0);
   const breath = useSharedValue(0);
+  // the stage's companion faces right, so its book lies on its right
+  const face = useSharedValue(1);
   React.useEffect(() => {
     breath.value = withRepeat(withTiming(1, { duration: 1500, easing: Easing.inOut(Easing.sin) }), -1, true);
     const iv = setInterval(() => {
@@ -296,11 +330,12 @@ function usePreview() {
         }
         setPose({ r: 'out' }); if (!(await wait(110))) return;
       } else if (d === 'think') {
-        setPose({ eyes: 'up', mouth: 'flat', l: 'up' });
+        // with its free front hand, as on the header (the back one keeps Pip's balloon)
+        setPose({ eyes: 'up', mouth: 'flat', r: 'up' });
         tilt.value = withTiming(-6, { duration: 400 });
         if (!(await wait(1400))) return;
         setPose({ eyes: 'left' }); if (!(await wait(600))) return;
-        setPose({ eyes: 'wide', mouth: 'o', l: 'rest' });
+        setPose({ eyes: 'wide', mouth: 'o', r: 'rest' });
         tilt.value = withTiming(0, { duration: 160 });
         lift.value = withSequence(withTiming(10, { duration: 150 }), withTiming(0, { duration: 170 }));
         if (!(await wait(450))) return;
@@ -318,10 +353,17 @@ function usePreview() {
         setBud(1);
       } else {
         setPose({ eyes: 'focus' }); if (!(await wait(400))) return;
-        setPose({ book: 'open', eyes: 'read', phones: true });
-        if (!(await wait(1600))) return;
+        setPose({ phones: true }); if (!(await wait(260))) return;
+        setPose({ book: 'open', eyes: 'read' });
+        tilt.value = withTiming(3, { duration: 260 });
+        for (let i = 0; i < 3; i++) {
+          if (!(await wait(700))) return;
+          setPose({ eyes: 'read2' }); if (!(await wait(500))) return;
+          setPose({ eyes: 'read' });
+        }
+        setPose({ r: 'down' }); if (!(await wait(180))) return;
         setPose({ book: 'turn' }); if (!(await wait(260))) return;
-        setPose({ book: 'open' }); if (!(await wait(1500))) return;
+        setPose({ book: 'open', r: 'rest', eyes: 'read2' }); if (!(await wait(1100))) return;
       }
       setPose(REST);
       tilt.value = withTiming(0, { duration: 200 });
@@ -331,7 +373,7 @@ function usePreview() {
   const style = useAnimatedStyle(() => ({
     transform: [{ translateY: -lift.value }, { rotate: tilt.value + 'deg' }, { scaleY: 1 + 0.025 * breath.value }] as const,
   }));
-  return { pose, bud, play, style };
+  return { pose, bud, play, style, face };
 }
 
 const st = StyleSheet.create({
@@ -345,7 +387,10 @@ const st = StyleSheet.create({
   fly: { position: 'absolute', top: 30, left: '50%', marginLeft: -70 },
   flyHalo: { position: 'absolute', left: -7, top: -7, width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFE68A', opacity: 0.35 },
   flyDot: { width: 6, height: 6, backgroundColor: '#FFF2B0' },
-  balloon: { position: 'absolute', top: 0, left: '50%', marginLeft: -84, alignItems: 'center' },
+  balloon: { position: 'absolute', alignItems: 'center', width: 15 },
+  bookAt: { position: 'absolute', bottom: 0, left: '50%', marginLeft: -COLS * STAGE_PX / 2, width: COLS * STAGE_PX, height: ROWS * STAGE_PX },
+  onCard: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, marginBottom: 14 },
+  onTitle: { fontFamily: CUTE_BOLD, fontSize: 16, color: C.text },
   who: { flex: 1, padding: 14, alignItems: 'flex-start' },
   whoName: { fontFamily: CUTE_BOLD, fontSize: 16, color: C.text, marginTop: 8 },
   name: { fontFamily: CUTE_BOLD, fontSize: 18, paddingVertical: 4 },

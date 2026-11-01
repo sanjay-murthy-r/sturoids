@@ -377,6 +377,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
               height={64}
               textStyle={st.dayText}
               accessibilityLabel="Day"
+              wheelAxis="x"
             />
             <DateLine dayIdx={dayIdx} today={today} />
             <Animated.View style={[st.todayLink, todayLinkStyle]} pointerEvents={away ? 'auto' : 'none'}>
@@ -851,6 +852,9 @@ function BlockSheet({ visible, day, editing, onClose, onClosed, onSaved }: {
   const [everyDay, setEveryDay] = useState(false);
   // a colour picked by hand is kept; until then a new block follows its subject's colour
   const colorPicked = React.useRef(false);
+  // the same block on other days, as it was when the sheet opened: what "every day it repeats" changes with it. Taken
+  // once, so the row stays put while the sheet slides away after a save has moved them all
+  const [repeats, setRepeats] = useState<ReturnType<typeof repeatsOf>>([]);
   const hour24 = useStore((s) => s.settings.hour24);
   // Set once the block is saved, or while the overlap question is up. A second tap while the sheet leaves, or Return
   // landing in the same frame as the button, finds it set: the block is never added twice, nor found clashing with itself.
@@ -867,11 +871,8 @@ function BlockSheet({ visible, day, editing, onClose, onClosed, onSaved }: {
     setRepeatDays([DAY_NAMES.indexOf(day)]);
     setLastDay(false);
     setEveryDay(false);
+    setRepeats(editing ? repeatsOf(useStore.getState().planner, day, editing) : []);
   }, [visible]);
-
-  // the same block on other days, as it was when the sheet opened: what "every day it repeats" changes with it
-  const planner = useStore((s) => s.planner);
-  const repeats = useMemo(() => (editing && visible ? repeatsOf(planner, day, editing) : []), [editing, visible, day, planner]);
 
   const pickSubject = (v: string) => {
     setSubj(v);
@@ -886,11 +887,15 @@ function BlockSheet({ visible, day, editing, onClose, onClosed, onSaved }: {
     [subjects, typed],
   );
 
-  // a start picked with no end yet gives the block an hour, kept inside the day, so most blocks need one turn of the wheel
+  // A start picked with no end yet gives the block an hour, kept inside the day, so most blocks need one turn of the
+  // wheel. A start moved up to or past the end takes the end along, keeping the block's length
   const pickStart = (v: string) => {
     setStart(v);
-    const from = toMinutes(v);
-    if (from >= 0 && toMinutes(end) < 0) setEnd(hhmmOf(Math.min(from + 60, 1440)));
+    const from = toMinutes(v), to = toMinutes(end), prev = toMinutes(start);
+    if (from >= 0 && (to < 0 || to <= from)) {
+      const len = prev >= 0 && to > prev ? to - prev : 60;
+      setEnd(hhmmOf(Math.min(from + len, 1440)));
+    }
   };
   const toggleRepeat = (i: number) => {
     tick();

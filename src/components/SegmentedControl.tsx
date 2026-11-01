@@ -87,8 +87,10 @@ export function SegmentedControl<K extends string>({
         pointerEvents="none"
         style={[
           { position: 'absolute', left: 0, top: 4, bottom: 4, borderRadius: 999, transformOrigin: 'left' },
+          // the trough's border on the minimal look: the thumb is placed from inside it, but a segment's x is measured
+          // from outside it, so the thumb steps back by the border to sit evenly over its segment
           theme === 'minimal'
-            ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: c }
+            ? { left: -1, backgroundColor: MIN.card, borderWidth: 1, borderColor: c }
             : { backgroundColor: C.card, ...neuRaised('low') },
           thumbStyle,
         ]}

@@ -8,7 +8,7 @@
 
 import type { DailyTask, DayDone, FocusSession, Habit, JournalEntry, Mission, Note, PlannerWeek } from '../store';
 import type { ScoreNode, ScoreTag } from '../scores';
-import { indexScores, isTopExam, resultOf, rootExamOf, subjectKey, topExams, whenOf, fmtPct, fmtMark } from '../scores';
+import { examsUnder, indexScores, isTopExam, resultOf, rootExamOf, subjectKey, topExams, whenOf, fmtPct, fmtMark } from '../scores';
 import { subjectStats } from '../analytics';
 import { DAY_NAMES, habitDueOn, streaks, todayKey } from '../utils';
 import { habitSince, keyToDate, moodSeries, shiftKey, MOODS } from '../journalCore';
@@ -219,6 +219,8 @@ export interface ReportOptions {
   examIds?: readonly string[];
   /** Scores: one exam and its subjects */
   examId?: string;
+  /** Scores: the exams in this group and the groups inside it, those sat in the range */
+  groupId?: string;
   /** Scores: what the exams in view are, "Board mocks" */
   scopeLabel?: string;
 }
@@ -628,10 +630,10 @@ function scoresSection({ src, o, key }: Ctx): Section {
     return { key: 'scores', title: SECTION_LABEL.scores, summary, blocks, empty: rows.length ? undefined : 'No marked results in this range.' };
   }
 
-  // the exams in view (Analytics), or every exam sat in the range
+  // the exams in view (Analytics), or every exam sat in the range, in one group when the export names it
   const exams = (o.examIds
     ? o.examIds.map((id) => ix.byId.get(id)).filter((n): n is ScoreNode => !!n && isTopExam(ix, n))
-    : topExams(ix).filter((n) => inRange(whenOf(n), o.range))
+    : (o.groupId ? examsUnder(ix, o.groupId) : topExams(ix)).filter((n) => inRange(whenOf(n), o.range))
   ).sort((a, b) => whenOf(a).localeCompare(whenOf(b)) || a.createdAt - b.createdAt);
   const marked = exams.map((n) => ({ n, r: resultOf(n, ix) })).filter((x) => x.r && Number.isFinite(x.r.pct));
   const pcts = marked.map((x) => x.r!.pct);

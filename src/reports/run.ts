@@ -36,6 +36,8 @@ export interface SummaryOpts {
   subject?: string;
   examId?: string;
   examIds?: string[];
+  /** Scores: one group's exams, over the range picked */
+  groupId?: string;
   scopeLabel?: string;
   title?: string;
 }
@@ -130,6 +132,7 @@ export function reportOptions(kind: SummaryKind, opts: SummaryOpts = {}, src: Re
     subject: opts.subject,
     examId: opts.examId,
     examIds: opts.examIds,
+    groupId: opts.groupId,
     scopeLabel: opts.scopeLabel,
   };
 }
@@ -169,6 +172,8 @@ export async function exportSummary(kind: SummaryKind, opts: SummaryOpts & { for
       return 'ok';
     }
     const printed = await Print.printToFileAsync({ html: reportHtml(report), ...A4 });
+    // in a plain browser on the PC the print dialog saved it (Save as PDF): no file comes back to move or save
+    if (!printed?.uri) return 'ok';
     // the printer names its file at random: the share sheet shows the real name
     const uri = dir + name + '.pdf';
     await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});

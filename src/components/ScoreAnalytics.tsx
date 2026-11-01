@@ -432,7 +432,7 @@ const TrendSection = React.memo(function TrendSection({ pts, stats, pickedId, on
         <TrendChart
           points={pts} moving={stats.moving} target={target}
           selected={index >= 0 ? index : null}
-          onSelect={(i) => onPick(i == null ? null : pts[i].id)}
+          onSelect={(i) => onPick(i == null ? null : pts[i]?.id ?? null)}
           accessibilityLabel={label}
           valueText={picked ? picked.title + ', ' + fmtPct(picked.pct) : 'No exam picked'}
         />

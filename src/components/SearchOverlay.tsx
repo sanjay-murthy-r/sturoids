@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  Easing, FadeIn, FadeOut, LinearTransition, runOnJS, useAnimatedReaction, useAnimatedScrollHandler, useAnimatedStyle,
+  Easing, FadeIn, LinearTransition, runOnJS, useAnimatedReaction, useAnimatedScrollHandler, useAnimatedStyle,
   useDerivedValue, useSharedValue, withDelay, withTiming,
 } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, bgFor, neuInset, neuRaised, oneLine } from '../theme';
 import { useStore } from '../store';
 import { Chip, useTheme } from './UI';
+import { Backdrop, useCheerful } from './Cheer';
 import { EASE_EMPHASISED, EASE_EXIT, EASE_OUT, Sheen, useAnimLevel } from './Motion';
 import { PinSheet } from './LockGate';
 import { toast } from './Toast';
@@ -39,21 +40,23 @@ import { router } from 'expo-router';
 /** the companion's actions wear Cheerful's pink */
 const CHEER_PINK = '#FF8FB1';
 
-// Sift: the app-wide search, laid over everything. The app behind scales back a little and dims (AppFrame, driven by
-// siftShown on the UI thread); the field drops from the top, or grows out of the header a pull came from; the keyboard
-// comes up once the motion has settled. Results are worked out a frame after typing pauses, and the last ones stay up
-// until the new ones are ready, so nothing flashes. Pull the list down at its top, Back or Cancel to close.
+// Sift: the app-wide search, laid over everything. The app behind scales back a little and goes out of focus (AppFrame,
+// driven by siftShown on the UI thread: a blur on the PC, a soft dimming on Android); Sift's field comes into focus at
+// the top (or lifts out of the page's own search bar, on More and Settings), then the filters and the results; the
+// keyboard comes up once the motion has settled. Results are worked out a frame after typing pauses, and the last ones
+// stay up until the new ones are ready, so nothing flashes. Pull the list down at its top, Back or Cancel to close; on
+// Android the keyboard goes down first, so the page behind has settled before Sift fades from over it.
 
 const OPEN_MS = 400;
 const CLOSE_MS = 300;
-/** the pill a pull draws under the bar, about this wide: Sift's field grows out of it */
-const PILL_W = 96;
 /** the scrim's strength over the app when Sift is fully open */
 const SCRIM = 0.55;
 /** the app behind, fully open */
 const BACK_SCALE = 0.955;
 /** the soft leading edge of the rising blur */
 const FEATHER = 48;
+/** Android's dimming in place of the PC's blur */
+const DIM = 'rgba(12,12,11,0.32)';
 /** how far out of focus a full pull takes the app, before Sift opens */
 const PULL_SOFTEN = 0.55;
 /** results are worked out this long after the last keystroke, then on the next frame */
@@ -109,21 +112,31 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   // the blur is there only while it shows: a full-screen blur costs, even when clear
   const [blurOn, setBlurOn] = React.useState(false);
   useAnimatedReaction(() => away.value > 0.001, (on, was) => { if (on !== was) runOnJS(setBlurOn)(on); });
+  // while Sift is up, a screen reader stays in Sift (accessibilityViewIsModal only holds it on iOS)
+  const siftOpen = useSearch((s) => s.open);
   return (
-    <Animated.View style={[{ flex: 1 }, style]}>
-      {children}
+    <View style={{ flex: 1 }} importantForAccessibility={siftOpen ? 'no-hide-descendants' : 'auto'}>
+      <Animated.View style={[{ flex: 1 }, style]}>{children}</Animated.View>
+      {/* over the whole screen, not scaled with the app, so no undimmed rim shows round the app as it steps back */}
       {blurOn && level !== 'none' ? (
         <Animated.View pointerEvents="none" style={[st.rise, blurStyle]}>
-          {/* a real blur on the PC; Android's blur is experimental (a gray slab, and a crash as it unmounts), so there the
-              app is dimmed instead, rising the same way */}
-          {Platform.OS === 'web'
-            ? <BlurView intensity={level === 'full' ? 30 : 14} tint="dark" style={[st.riseBlur, { height: winH + FEATHER }]} />
-            : <View style={[st.riseBlur, { height: winH + FEATHER, backgroundColor: 'rgba(12,12,11,0.32)' }]} />}
-          {/* the leading edge: a soft dimming that eases the line where the blur begins */}
-          <LinearGradient pointerEvents="none" colors={['rgba(12,12,11,0.14)', 'rgba(12,12,11,0)']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={st.riseEdge} />
+          {Platform.OS === 'web' ? (
+            <>
+              <BlurView intensity={level === 'full' ? 30 : 14} tint="dark" style={[st.riseBlur, { height: winH + FEATHER }]} />
+              {/* the leading edge: a soft dimming that eases the line where the blur begins */}
+              <LinearGradient pointerEvents="none" colors={['rgba(12,12,11,0.14)', 'rgba(12,12,11,0)']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={st.riseEdge} />
+            </>
+          ) : (
+            // Android's blur is experimental (a gray slab, and a crash as it unmounts), so there the app is dimmed
+            // instead, rising the same way: the dimming fades in over its leading edge, so the edge is its softest part
+            <>
+              <View style={[st.riseBlur, { top: FEATHER, backgroundColor: DIM }]} />
+              <LinearGradient pointerEvents="none" colors={['rgba(12,12,11,0)', DIM]} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={st.riseEdge} />
+            </>
+          )}
         </Animated.View>
       ) : null}
-    </Animated.View>
+    </View>
   );
 }
 
@@ -166,7 +179,8 @@ function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onLongP
       accessibilityRole="button"
       accessibilityLabel={[title, subtitle, pinned ? 'pinned' : ''].filter(Boolean).join(', ')}
       accessibilityHint={onLongPress ? (pinned ? 'Hold to unpin' : 'Hold to pin to the top of Sift') : undefined}
-      style={({ pressed }) => [st.row, pressed && { backgroundColor: theme === 'minimal' ? MIN.inset : C.pressDim }]}
+      android_ripple={{ color: theme === 'minimal' ? MIN.border : 'rgba(250,249,245,0.07)' }}
+      style={({ pressed }) => [st.row, pressed && Platform.OS !== 'android' && { backgroundColor: theme === 'minimal' ? MIN.inset : C.pressDim }]}
     >
       <View style={[st.rowWell, wellOf(theme)]}>
         <Ionicons name={icon as any} size={18} color={color || C.textDim} />
@@ -190,8 +204,14 @@ function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onLongP
 
 /** A section's head: a kicker, sticky at the top of the list while its rows scroll under it. */
 function SectionHead({ label, theme, more, onMore }: { label: string; theme: ThemeMode; more?: number; onMore?: () => void }) {
+  const cheerful = useCheerful();
+  const bg = bgFor(theme);
   return (
-    <View style={[st.head, { backgroundColor: bgFor(theme) }]} accessibilityRole="header">
+    <View style={[st.head, !cheerful && { backgroundColor: bg }]} accessibilityRole="header">
+      {cheerful ? (
+        // Cheerful's glows show through Sift: the head masks the rows passing under it with a fade, not a band
+        <LinearGradient pointerEvents="none" colors={[bg, bg + 'EB', bg + '00']} locations={[0, 0.62, 1]} style={StyleSheet.absoluteFill} />
+      ) : null}
       <Text style={T.kicker} maxFontSizeMultiplier={CHROME_FONT_MAX}>{label}</Text>
       {more && onMore ? (
         <Pressable onPress={onMore} hitSlop={10} accessibilityRole="button" accessibilityLabel={'Show more ' + label}>
@@ -428,6 +448,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       const t = setTimeout(() => inputRef.current?.focus(), level === 'none' ? 30 : 200);
       return () => clearTimeout(t);
     }
+    const kbUp = Platform.OS === 'android' && Keyboard.isVisible();
     Keyboard.dismiss();
     voice.current?.stop();
     const done = () => { siftPull.value = 0; onGone(); };
@@ -436,8 +457,17 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       done();
       return undefined;
     }
-    siftShown.value = withTiming(0, { duration: CLOSE_MS, easing: Easing.inOut(Easing.cubic) }, (fin) => { if (fin) runOnJS(done)(); });
-    return undefined;
+    const fade = () => {
+      siftShown.value = withTiming(0, { duration: CLOSE_MS, easing: Easing.inOut(Easing.cubic) }, (fin) => { if (fin) runOnJS(done)(); });
+    };
+    if (!kbUp) { fade(); return undefined; }
+    // Android: the keyboard goes down first, and the page behind takes its full height back while Sift still covers it;
+    // then Sift fades from over a page already at rest
+    let went = false;
+    const go = () => { if (went) return; went = true; sub.remove(); clearTimeout(t); fade(); };
+    const sub = Keyboard.addListener('keyboardDidHide', () => setTimeout(go, 40));
+    const t = setTimeout(go, 260);
+    return () => { if (!went) { sub.remove(); clearTimeout(t); } };
   }, [open]);
 
   // Back closes Sift first
@@ -811,10 +841,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   };
   const panelStyle = useAnimatedStyle(() => ({ opacity: level === 'full' ? span(siftShown.value, 0.12, 0.62) : siftShown.value }));
   const scrimStyle = useAnimatedStyle(() => ({ opacity: SCRIM * siftShown.value }));
-  // From a pull, the field grows out of the pill the pull drew under the bar: it starts the pill's width and a little
-  // lower, fully there almost at once, and opens out to its own width; closing, it draws back into the pill the same
-  // way. Opened any other way, it drops in from the top.
-  const pillScale = Math.min(0.9, Math.max(0.2, PILL_W / Math.max(1, Math.min(width, PANEL_MAX) - 32)));
+  // The field comes into focus where it sits; lifted out of a page's own bar, it is there all the way (see wellStyle)
   const fieldStyle = useAnimatedStyle(() => {
     if (anchored) return { opacity: 1, transform: [{ translateY: 0 }, { scaleX: 1 }, { scaleY: 1 }] as const };
     if (level !== 'full') return { opacity: siftShown.value };
@@ -835,9 +862,13 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     const a = from.value;
     const p = siftShown.value;
     const q = 1 - p;
+    // at rest, nothing of the morph is left on it: it is a field of the row again (and follows a resize)
+    if (q <= 0.0005) return { flexGrow: 1, flexShrink: 1, flexBasis: 0, height: w.h, transform: [{ translateX: 0 }, { translateY: 0 }] as const };
+    // under flex: 1 a width is ignored (the basis wins), so the basis itself is what moves
     return {
       flexGrow: 0,
-      width: w.w + (a.w - w.w) * q,
+      flexShrink: 0,
+      flexBasis: w.w + (a.w - w.w) * q,
       height: w.h + (a.h - w.h) * q,
       transform: [{ translateX: (a.x - w.x) * q }, { translateY: (a.y - w.y) * q }] as const,
     };
@@ -1021,6 +1052,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   )), [items, terms, theme, level, pinnedKeys, selKey]);
 
   const column = width > PANEL_MAX + S.pad * 2 ? { width: PANEL_MAX, alignSelf: 'center' as const } : null;
+  const cheerful = useCheerful();
   const fieldWell = theme === 'minimal'
     ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
     : { backgroundColor: C.inset, ...neuInset('mid') };
@@ -1028,7 +1060,12 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents={open ? 'auto' : 'none'} accessibilityViewIsModal>
       <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#0C0C0B' }, scrimStyle]} />
-      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: bgFor(theme) }, panelStyle]}>
+      {/* Sift's ground (Cheerful's glows on it), fading in on its own: the field above it can then be there from the
+          first frame when it lifts out of a page's bar */}
+      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: bgFor(theme) }, panelStyle]}>
+        {cheerful ? <Backdrop minimal={theme === 'minimal'} /> : null}
+      </Animated.View>
+      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
         <View style={[{ flex: 1, paddingTop: insets.top + 8 }, column]}>
           {/* the field: a carved well, with the glyph, the words, a clear key, the mic; Cancel beside it */}
           <Animated.View style={[st.fieldRow, fieldStyle]}>
@@ -1044,6 +1081,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
                 selectionColor={C.accent}
                 cursorColor={C.accent}
                 style={st.input}
+                maxFontSizeMultiplier={CHROME_FONT_MAX}
                 returnKeyType="search"
                 autoCorrect={false}
                 autoCapitalize="none"
@@ -1072,18 +1110,17 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
           {/* the first week: a quiet line under the field, saying what Enter will open. Its room is kept all week, so the
               list below never jumps as the line comes and goes */}
           {hintOn ? (
-            <View style={st.enterHint}>
+            <Animated.View style={[st.enterHint, panelStyle]}>
               {enterHint ? (
                 <Animated.View
                   key={enterHint} style={st.enterHintRow}
                   entering={level === 'none' ? undefined : FadeIn.duration(180).easing(EASE_OUT)}
-                  exiting={level === 'none' ? undefined : FadeOut.duration(120)}
                 >
                   <Ionicons name="return-down-back-outline" size={13} color={C.textFaint} style={{ transform: [{ scaleX: -1 }] }} />
                   <Text style={st.enterHintText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>{enterHint}</Text>
                 </Animated.View>
               ) : null}
-            </View>
+            </Animated.View>
           ) : null}
 
           <Animated.View style={[{ flex: 1 }, bodyStyle]}>
@@ -1113,14 +1150,14 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
                 keyboardDismissMode="on-drag"
                 overScrollMode="never"
                 stickyHeaderIndices={sticky}
-                contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }}
+                contentContainerStyle={{ paddingTop: 6, paddingBottom: Math.max(insets.bottom, 16) + 24 }}
               >
                 {rows}
               </Animated.ScrollView>
             </GestureDetector>
           </Animated.View>
         </View>
-      </Animated.View>
+      </View>
 
       <PinSheet
         visible={pinFor != null}
@@ -1144,15 +1181,15 @@ const st = StyleSheet.create({
   riseBlur: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   riseEdge: { position: 'absolute', left: 0, right: 0, top: 0, height: FEATHER },
   fieldRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: S.pad, paddingBottom: 12 },
-  field: { flex: 1, height: 48, borderRadius: 16, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 6, gap: 8, overflow: 'hidden' },
-  input: { flex: 1, color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, paddingVertical: 0 },
+  field: { flex: 1, minHeight: 48, borderRadius: 16, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 6, gap: 8, overflow: 'hidden' },
+  input: { flex: 1, color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, paddingVertical: 0, includeFontPadding: false },
   fieldBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
   cancel: { marginLeft: 14, height: 44, justifyContent: 'center' },
   cancelText: { fontFamily: F.med, fontSize: 15, letterSpacing: TRACK.body },
   chipsRow: { flexGrow: 0, flexShrink: 0 },
   chips: { paddingHorizontal: S.pad, paddingTop: 2, paddingBottom: 12, alignItems: 'center' },
   chip: { marginRight: 8, marginBottom: 0, flexShrink: 0 },
-  enterHint: { height: 16, marginTop: -4, marginBottom: 10, paddingHorizontal: S.pad + 4, opacity: 0.62 },
+  enterHint: { height: 19, marginTop: -5, marginBottom: 8, paddingHorizontal: S.pad + 4, opacity: 0.62 },
   enterHintRow: { position: 'absolute', left: S.pad + 4, right: S.pad + 4, top: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', gap: 6 },
   enterHintText: { flex: 1, color: C.textFaint, fontFamily: F.sm, ...oneLine(12), letterSpacing: TRACK.fine },
   hint: { color: C.textFaint, fontFamily: F.sm, fontSize: 12, lineHeight: 17, letterSpacing: TRACK.fine, paddingHorizontal: S.pad, paddingTop: 22, opacity: 0.8 },

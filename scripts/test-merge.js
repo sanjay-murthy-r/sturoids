@@ -10,4 +10,18 @@ const r=mergeSnapshots(base,mine,theirs);
 a.equal(r._v,2);a.deepEqual(r.settings,{theme:'b',name:'Sanjay',hour24:false});
 a.deepEqual(r.dailyTasks.map(x=>x.id+(x.done?'!':'')),['4','1!','3']); // 2 deleted on PC, 1 ticked here, 3 added here, 4 added on PC
 a.deepEqual(r.notes.map(x=>x.b),['hi there','pc']);a.deepEqual(r.planner.Tue.map(x=>x.id),['p2']);
+// settings alone, changed on both: each setting on its own, a companion's look and a page's layout one level down
+const sb={settings:{mood:'elite',hour24:false,mascotTalk:'some',mascotLooks:{sprout:{colors:'',gear:[]},pip:{colors:'',gear:[]}},pageLayout:{focus:{order:['a','b'],hidden:[]}}}};
+const sm={settings:{...sb.settings,hour24:true,mascotTalk:'often',mascotLooks:{...sb.settings.mascotLooks,sprout:{colors:'rose',gear:[]}}}};
+const st={settings:{...sb.settings,mood:'cheerful',mascotTalk:'asked',mascotLooks:{...sb.settings.mascotLooks,pip:{colors:'mint',gear:['hat']}},pageLayout:{focus:{order:['b','a'],hidden:[]},plan:{order:[],hidden:['x']}}}};
+const rs=mergeSnapshots(sb,sm,st).settings;
+a.equal(rs.mood,'cheerful');a.equal(rs.hour24,true);a.equal(rs.mascotTalk,'often');
+a.deepEqual(rs.mascotLooks,{sprout:{colors:'rose',gear:[]},pip:{colors:'mint',gear:['hat']}});
+a.deepEqual(rs.pageLayout,{focus:{order:['b','a'],hidden:[]},plan:{order:[],hidden:['x']}});
+// changed on one side only: the other side takes it whole, whichever side it was
+a.deepEqual(mergeSnapshots(sb,sb,st).settings,st.settings);a.deepEqual(mergeSnapshots(sb,sm,sb).settings,sm.settings);
+// a collection of names: each device's new folder is kept, a folder removed on one goes; settings' lists stay whole
+const nb={noteFolders:['A','B'],settings:{tabSlots:['tasks','focus','planner']}};
+const rn=mergeSnapshots(nb,{noteFolders:['A','B','Mine'],settings:{tabSlots:['notes','focus','planner']}},{noteFolders:['B','Theirs'],settings:{tabSlots:['tasks','scores','planner']}});
+a.deepEqual(rn.noteFolders,['B','Mine','Theirs']);a.deepEqual(rn.settings.tabSlots,['notes','focus','planner']);
 console.log('merge ok');

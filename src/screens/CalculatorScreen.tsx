@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TextInput, StyleSheet, ScrollView, InteractionManager, useWindowDimensions } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, InteractionManager, Platform, useWindowDimensions } from 'react-native';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
@@ -366,7 +366,18 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     setEvalError(null);
     // the field placed its own caret for what it took in: its next report is the one to follow
     awaited.current = null;
-    write(text.replace(/[\r\n]/g, '').replace(/\*/g, '×').replace(/\//g, '÷').replace(/-/g, '−'), false, live.current.fromAns, null);
+    // a pasted answer in e-notation (what Hold on = copies, 1.2e+5) is one number, written the keypad's way, ×10^5; only
+    // what came in is read so, as an e typed on the keypad is Euler's number
+    const prev = live.current.expr;
+    let a = 0;
+    while (a < prev.length && a < text.length && prev[a] === text[a]) a++;
+    let b = 0;
+    while (b < prev.length - a && b < text.length - a && prev[prev.length - 1 - b] === text[text.length - 1 - b]) b++;
+    const added = text.slice(a, text.length - b).replace(/(\d)e\+?([−-]?\d)/g, '$1×10^$2');
+    const next = (text.slice(0, a) + added + text.slice(text.length - b))
+      // 12x3 and 2**3 as a keyboard writes them: ×, and ^ for a power
+      .replace(/[\r\n]/g, '').replace(/\*\*/g, '^').replace(/[*xX]/g, '×').replace(/\//g, '÷').replace(/-/g, '−');
+    write(next, false, live.current.fromAns, null);
   };
 
   const fail = (why: string) => {
@@ -525,6 +536,12 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
             onFocus={() => { focusedRef.current = true; awaited.current = null; }}
             onBlur={() => { focusedRef.current = false; awaited.current = null; }}
             onChangeText={typed}
+            // a keyboard on the PC: Enter answers and Escape clears, as the keys do
+            onKeyPress={Platform.OS === 'web' ? (e: any) => {
+              const key = e.nativeEvent?.key;
+              if (key === 'Enter') { e.preventDefault?.(); onEquals(); }
+              else if (key === 'Escape') { e.preventDefault?.(); press('C'); }
+            } : undefined}
             showSoftInputOnFocus={false}
             multiline
             scrollEnabled={false}
@@ -638,6 +655,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       <Press
         onPress={onEquals}
         onLongPress={copyAnswer}
+        {...rightClick(copyAnswer)}
         radius={16}
         scaleTo={0.96}
         slop={rowGap / 2}
@@ -817,8 +835,10 @@ const HOLD_ACTIONS = [{ name: 'activate' }, { name: 'longpress' }];
  * carves in while held, as every press in the app does (nothing moves with no motion), and a long press, when there is
  * one, takes over after half a second. A screen reader activates it as a button.
  */
-function Press({ onPress, onLongPress, slop, radius, scaleTo, style, label, hint, children }: {
+function Press({ onPress, onLongPress, onContextMenu, slop, radius, scaleTo, style, label, hint, children }: {
   onPress: () => void; onLongPress?: () => void;
+  /** the PC's right click, which does what holding does */
+  onContextMenu?: (e: any) => void;
   /** how far above and below the key a press still counts */
   slop: number;
   radius: number; scaleTo: number; style: any; label?: string; hint?: string; children: React.ReactNode;
@@ -887,6 +907,11 @@ function Press({ onPress, onLongPress, slop, radius, scaleTo, style, label, hint
           if (e.nativeEvent.actionName === 'activate') fire();
           else if (e.nativeEvent.actionName === 'longpress') fireHold();
         }}
+        {...(Platform.OS === 'web' ? {
+          onContextMenu,
+          // a click on a key leaves the sum's caret where it was, so the key types there, as a tap does on the phone
+          onMouseDown: (e: any) => e.preventDefault(),
+        } : null)}
         style={[style, sinkStyle]}
       >
         {children}

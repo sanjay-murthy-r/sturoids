@@ -140,6 +140,8 @@ export const SH = Object.freeze({
    * on one side of a rounded box as a straight band, which leaves square corners poking past the rounding.
    */
   sheetPanel: `0 -8px 20px ${darkSh(0.45)}, inset 0px 1.5px 0px ${liteSh(0.34)}`,
+  /** Cheerful's sheet: the same lift in its warm shade, with its faint warm rim instead of the pale one (see CHEER_SKIN) */
+  sheetPanelCheer: `0 -8px 20px ${WARM(0.4)}, inset 0px 1.5px 0px ${RIM(0.07)}`,
   /** the minimal theme's sheet: no lift, a hairline rim that follows the corners the same way */
   sheetPanelMin: `inset 0px 1px 0px ${liteSh(0.35)}`,
   /** the bar lifting off the screen edge */
