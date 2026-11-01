@@ -107,7 +107,7 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [remindEdit, setRemindEdit] = useState<Habit | null>(null);
 
   const blocks = useMemo(
-    () => [...planner[day]].sort((a, b) => toMinutes(a.start) - toMinutes(b.start)),
+    () => [...(planner[day] || [])].sort((a, b) => toMinutes(a.start) - toMinutes(b.start)),
     [planner, day]
   );
   const today = useToday();

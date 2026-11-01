@@ -327,7 +327,7 @@ function AmbientBody({ onExit, ...face }: Omit<AmbientProps, 'visible'>) {
           entering={level === 'none' ? undefined : FadeIn.duration(200).easing(EASE_OUT)}
           exiting={level === 'none' ? undefined : FadeOut.duration(level === 'full' ? 400 : 160).easing(Easing.inOut(Easing.quad))}
           allowFontScaling={false}
-          style={[st.hint, { bottom: u * 0.06, fontSize: Math.max(10, u * 0.026) }]}
+          style={[st.hint, { bottom: u * 0.06, fontSize: Math.max(11, Math.round(u * 0.026)) }]}
         >
           Hold to exit
         </Animated.Text>

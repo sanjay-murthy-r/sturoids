@@ -27,7 +27,8 @@ const BLURB: Record<Kind, string> = {
 
 /** a warm card, Cheerful's own: a soft fill and rim, no carved shadows */
 const CARD = { backgroundColor: 'rgba(255,244,230,0.06)', borderWidth: 1, borderColor: 'rgba(255,244,230,0.08)', borderRadius: 20 };
-const PICKED = { borderColor: C.accent, backgroundColor: 'rgba(255,244,230,0.1)' };
+/** read when drawn, not once at load: the accent can change after this file is loaded */
+const picked = () => ({ borderColor: C.accent, backgroundColor: 'rgba(255,244,230,0.1)' });
 
 /**
  * The companion's page: who it is (Sprout or Pip, or none), its name, its colours, what it keeps, and how much it talks,
@@ -48,6 +49,14 @@ export default function CompanionPage() {
   const gear = look.gear.filter((g) => gearFor(kind).some((x) => x.key === g));
   const [nameDraft, setNameDraft] = React.useState(s.mascotName);
   const preview = usePreview();
+  // leaving the page with the name still being typed keeps it, as a blur would
+  const draftRef = React.useRef(nameDraft);
+  draftRef.current = nameDraft;
+  React.useEffect(() => () => {
+    const v = draftRef.current.replace(/\s+/g, ' ').trim().slice(0, 16);
+    const now = useStore.getState();
+    if (v !== now.settings.mascotName) now.setSetting('mascotName', v);
+  }, []);
 
   const setLook = (patch: Partial<MascotLook>) => setSetting('mascotLooks', { ...s.mascotLooks, [kind]: { ...look, ...patch } });
   const choose = (k: Kind) => {
@@ -172,7 +181,7 @@ export default function CompanionPage() {
                 <Pressable
                   key={k} onPress={() => choose(k)} accessibilityRole="radio" accessibilityState={{ selected: on }}
                   accessibilityLabel={NAMES[k] + '. ' + BLURB[k]}
-                  style={({ pressed }) => [CARD, st.who, on && PICKED, pressed && !on && { transform: [{ scale: 0.98 }] }]}
+                  style={({ pressed }) => [CARD, st.who, on && picked(), pressed && !on && { transform: [{ scale: 0.98 }] }]}
                 >
                   <Sprite kind={k} pose={REST} gear={s.mascotLooks[k].gear} bud={2} pal={colorSet(k, s.mascotLooks[k].colors).pal} px={3} />
                   <Text style={[st.whoName, on && { color: C.accent }]}>{NAMES[k]}</Text>
@@ -205,7 +214,7 @@ export default function CompanionPage() {
                     <Pressable
                       key={c.key} onPress={() => { tick(); setLook({ colors: c.key }); preview.play('hop'); }}
                       accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={c.name}
-                      style={({ pressed }) => [CARD, st.swatch, on && PICKED, pressed && { opacity: 0.8 }]}
+                      style={({ pressed }) => [CARD, st.swatch, on && picked(), pressed && { opacity: 0.8 }]}
                     >
                       <Sprite kind={kind} pose={REST} gear={[]} bud={2} pal={c.pal} px={2.5} />
                       <Text style={[st.tileName, on && { color: C.accent }]}>{c.name}</Text>
@@ -226,14 +235,14 @@ export default function CompanionPage() {
                     <Pressable
                       key={g.key} onPress={() => toggleGear(g.key)}
                       accessibilityRole="checkbox" accessibilityState={{ checked: on }} accessibilityLabel={g.name + '. ' + g.line}
-                      style={({ pressed }) => [CARD, st.gearTile, on && PICKED, pressed && { opacity: 0.85 }]}
+                      style={({ pressed }) => [CARD, st.gearTile, on && picked(), pressed && { opacity: 0.85 }]}
                     >
                       <View style={st.gearArt}>
                         <Sprite kind={kind} pose={showPose} gear={[g.key]} bud={3} pal={set.pal} px={3} />
                         {g.key === 'ladybug' ? <View style={{ position: 'absolute', right: 6, top: 4 }}><GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={3} /></View> : null}
                         {g.key === 'firefly' ? <View style={{ position: 'absolute', left: 8, top: 6 }}><View style={st.flyHalo} /><View style={st.flyDot} /></View> : null}
                         {g.key === 'balloon' ? <View style={{ position: 'absolute', left: 6, top: -2, alignItems: 'center' }}><GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={3} /><View style={{ width: 1, height: 18, backgroundColor: 'rgba(160,150,140,0.7)' }} /></View> : null}
-                        {on ? <View style={st.tick}><Ionicons name="checkmark" size={12} color="#1B1A18" /></View> : null}
+                        {on ? <View style={[st.tick, { backgroundColor: C.accent }]}><Ionicons name="checkmark" size={12} color="#1B1A18" /></View> : null}
                       </View>
                       <Text style={[st.tileName, on && { color: C.accent }]}>{g.name}</Text>
                       <Text style={st.gearLine} numberOfLines={3}>{g.line}</Text>
@@ -400,7 +409,7 @@ const st = StyleSheet.create({
   gearTile: { width: '47.5%', padding: 12, alignItems: 'center' },
   gearArt: { width: '100%', height: 64, alignItems: 'center', justifyContent: 'center' },
   gearLine: { fontFamily: CUTE, fontSize: 12, lineHeight: 16, color: C.textDim, textAlign: 'center', marginTop: 3 },
-  tick: { position: 'absolute', right: 0, top: 0, width: 20, height: 20, borderRadius: 10, backgroundColor: C.accent, alignItems: 'center', justifyContent: 'center' },
+  tick: { position: 'absolute', right: 0, top: 0, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   pill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(255,244,230,0.1)', backgroundColor: 'rgba(255,244,230,0.05)' },
   pillText: { fontFamily: CUTE_BOLD, fontSize: 13, color: C.text },
   tip: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 5 },

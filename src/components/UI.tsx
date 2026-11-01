@@ -66,10 +66,13 @@ export function ScreenBG({ children, guard = false, fling = true, maxWidth = REA
     if (stepTab(dir)) tick();
   }, []);
 
+  // On the PC a mouse fling would count too: a quick drag across a slider, a scrollbar or some selected text would change
+  // tab. The PC moves between tabs with its rail, Ctrl+1 to 5 and the arrows, so the swipe is for a finger only.
+  const swipes = Platform.OS !== 'web';
   const gesture = React.useMemo(() => Gesture.Race(
-    Gesture.Fling().direction(Directions.LEFT).onEnd(() => { 'worklet'; runOnJS(go)(1); }),
-    Gesture.Fling().direction(Directions.RIGHT).onEnd(() => { 'worklet'; runOnJS(go)(-1); }),
-  ), [go]);
+    Gesture.Fling().enabled(swipes).direction(Directions.LEFT).onEnd(() => { 'worklet'; runOnJS(go)(1); }),
+    Gesture.Fling().enabled(swipes).direction(Directions.RIGHT).onEnd(() => { 'worklet'; runOnJS(go)(-1); }),
+  ), [go, swipes]);
 
   // the page's own width (beside a rail it is less than the window's), so a header in the column knows where it stands
   // and its Cheerful ground lines its glows up with the page's (see Ground)

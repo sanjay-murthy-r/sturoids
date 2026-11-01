@@ -119,7 +119,8 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
     if (m && end !== hhmm(base.endedAt)) endedAt = endOn(Number(m[1]), Number(m[2]));
     st.updateSession(id, {
       subject, note, rating, taskTitles: tasks, tags,
-      ...(min * 60 !== base.netSeconds && min !== Math.round(base.netSeconds / 60) ? { minutes: min } : {}),
+      // the sheet opens on at least a minute, so a session kept under one (Settings keeps them) is not rounded up unless changed
+      ...(min * 60 !== base.netSeconds && min !== Math.max(1, Math.round(base.netSeconds / 60)) ? { minutes: min } : {}),
       ...(endedAt !== undefined ? { endedAt } : {}),
     });
     // today's ToDos and tasks picked as done here are ticked, only ever forward

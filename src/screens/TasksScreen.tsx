@@ -174,8 +174,15 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     });
   };
 
-  // the open tasks by deadline; the done ones fold away beneath them
-  const byDeadline = (a: Mission, b: Mission) => a.deadline.localeCompare(b.deadline);
+  // the open tasks by deadline, those due on one day by the time they are due by (none last, as Today's list has it); the
+  // done ones fold away beneath them
+  const dueAt = (m: Mission) => { const t = toMinutes(m.time || ''); return t >= 0 ? t : Infinity; };
+  const byDeadline = (a: Mission, b: Mission) => {
+    const day = a.deadline.localeCompare(b.deadline);
+    if (day) return day;
+    const x = dueAt(a), y = dueAt(b);
+    return x === y ? 0 : x < y ? -1 : 1;
+  };
   const openMissions = useMemo(() => missions.filter((m) => !m.done).sort(byDeadline), [missions]);
   const doneMissions = useMemo(() => missions.filter((m) => m.done).sort(byDeadline), [missions]);
   // a task's steps are found by tapping it: said once, under the list, until a task has some
@@ -893,7 +900,7 @@ function CheckInRows({ list, hour24, onRemove }: { list: TodoReminder[]; hour24:
       {list.map((r) => (
         <Animated.View key={r.id} entering={built.current ? rowIn(level) : undefined} exiting={rowOut(level)} layout={glide(level)}>
           <Row style={{ paddingVertical: 6 }}>
-            <Text style={[T.body, { width: hour24 ? 62 : 80, fontVariant: ['tabular-nums'], color: C.accent }]}>{clock(r.time, hour24)}</Text>
+            <Text style={[T.body, { minWidth: hour24 ? 54 : 72, marginRight: 8, flexShrink: 0, fontVariant: ['tabular-nums'], color: C.accent }]}>{clock(r.time, hour24)}</Text>
             <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{r.label || 'ToDo check-in'}</Text>
             <IconBtn name="close" size={17} onPress={() => onRemove(r)} accessibilityLabel={'Remove the reminder at ' + clock(r.time, hour24)} />
           </Row>

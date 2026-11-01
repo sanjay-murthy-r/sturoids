@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, Pressable, InteractionManager, BackHandler, Platform, StatusBar, useWindowDimensions,
+  View, Text, ScrollView, StyleSheet, Pressable, InteractionManager, BackHandler, Platform, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from 'expo-router';
@@ -203,10 +203,8 @@ export default function Today() {
     const at = scrollY.value;
     dateRef.current?.measureInWindow((dx, dy, dw, dh) => {
       if (dw <= 0) { done(null); return; }
-      // on Android a window position leaves out the status bar the page is drawn under (the bars elsewhere place their
-      // room from the insets for the same reason)
-      const top = Platform.OS === 'android' ? StatusBar.currentHeight ?? 0 : 0;
-      const finish = (right: number) => done({ left: dx + dw + 8, right: right - 6, y: dy + dh + at + top, scroll: scrollY });
+      // a window position, as measured (src/mascot/room.ts takes it against the companion's own layer)
+      const finish = (right: number) => done({ left: dx + dw + 8, right: right - 6, y: dy + dh + at, scroll: scrollY, win: true });
       if (!searchRef.current) { finish(dx + dw + 200); return; }
       searchRef.current.measureInWindow((sx, _sy, sw) => finish(sw > 0 ? sx : dx + dw + 200));
     });

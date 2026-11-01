@@ -115,13 +115,13 @@ export function ParkedCard({ parked, onPark, onUnpark }: { parked: string[]; onP
         />
         {text.trim() ? (
           <Pressable onPress={park} hitSlop={8} accessibilityRole="button" accessibilityLabel="Park it">
-            <Text style={st.parkKey}>Park</Text>
+            <Text style={[st.parkKey, { color: C.accent }]}>Park</Text>
           </Pressable>
         ) : null}
       </View>
       {parked.map((p, i) => (
         <Animated.View key={p + i} entering={rowIn(level)} exiting={rowOut(level)} layout={glide(level)} style={st.item}>
-          <View style={st.dot} />
+          <View style={[st.dot, { backgroundColor: C.accent }]} />
           <Text style={st.itemText} numberOfLines={2}>{p}</Text>
           <Pressable onPress={() => { tick(); onUnpark(i); }} hitSlop={10} accessibilityRole="button" accessibilityLabel={'Remove ' + p}>
             <Ionicons name="close" size={15} color={C.textFaint} />
@@ -149,8 +149,9 @@ const st = StyleSheet.create({
   lede: { color: C.textFaint, fontFamily: F.sm, fontSize: 13, lineHeight: 18, letterSpacing: TRACK.fine, marginTop: 6 },
   field: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 42, borderRadius: 13, paddingHorizontal: 13, marginTop: 10 },
   input: { flex: 1, color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body, paddingVertical: 0 },
-  parkKey: { color: C.accent, fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
+  // the accent is read at render (the Park key and the dot), not here: a sheet built at load keeps the first accent for good
+  parkKey: { fontFamily: F.semi, fontSize: 13, letterSpacing: TRACK.small },
   item: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10 },
-  dot: { width: 5, height: 5, borderRadius: 3, backgroundColor: C.accent, opacity: 0.7 },
+  dot: { width: 5, height: 5, borderRadius: 3, opacity: 0.7 },
   itemText: { flex: 1, color: C.textDim, fontFamily: F.reg, fontSize: 14, lineHeight: 19, letterSpacing: TRACK.body },
 });

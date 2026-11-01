@@ -1054,7 +1054,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {what === 'break' ? "You won't hear when this break ends" : "You won't hear when this block ends"}
       </Text>
       <Pressable onPress={() => { void allowAlerts(); }} hitSlop={{ top: 13, bottom: 13, left: 8, right: 8 }} accessibilityRole="button">
-        <Text style={st.silentAllow}>Allow</Text>
+        <Text style={[st.silentAllow, { color: C.accent }]}>Allow</Text>
       </Pressable>
       <IconBtn name="close" size={15} color={C.textFaint} pad={6} style={{ marginLeft: 6 }} onPress={dismissAlert} accessibilityLabel="Dismiss" />
     </Animated.View>
@@ -1594,7 +1594,8 @@ function toastWhenSeen(message: string, action: ToastAction, still: () => boolea
 const st = StyleSheet.create({
   barLayer: { zIndex: 2 },
   silent: { flexDirection: 'row', alignItems: 'center', marginTop: 14, paddingHorizontal: 4 },
-  silentAllow: { color: C.accent, fontFamily: F.smSemi, fontSize: 12, letterSpacing: TRACK.fine },
+  // the accent is read at render (the Allow text), not here: a sheet built at load keeps the first accent for good
+  silentAllow: { fontFamily: F.smSemi, fontSize: 12, letterSpacing: TRACK.fine },
 
   clockSlot:{ height: WHEEL_H, alignItems: 'center', justifyContent: 'center' },
   /** the bar under the countdown and the finish line chip under the stopwatch take the same room, so Start stays put */

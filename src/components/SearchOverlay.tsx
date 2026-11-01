@@ -6,17 +6,16 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  Easing, FadeIn, LinearTransition, runOnJS, useAnimatedReaction, useAnimatedScrollHandler, useAnimatedStyle,
-  useDerivedValue, useSharedValue, withDelay, withTiming,
+  LinearTransition, runOnJS, useAnimatedScrollHandler, useAnimatedStyle,
+  useSharedValue, withTiming,
 } from 'react-native-reanimated';
-import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, bgFor, neuInset, neuRaised, oneLine } from '../theme';
 import { useStore } from '../store';
 import { Chip, useTheme } from './UI';
 import { Backdrop, useCheerful } from './Cheer';
-import { EASE_EMPHASISED, EASE_EXIT, EASE_OUT, Sheen, useAnimLevel } from './Motion';
+import { EASE_EXIT, EASE_OUT, Sheen, useAnimLevel } from './Motion';
 import { PinSheet } from './LockGate';
 import { toast } from './Toast';
 import { tick } from '../haptics';
@@ -40,31 +39,21 @@ import { router } from 'expo-router';
 /** the companion's actions wear Cheerful's pink */
 const CHEER_PINK = '#FF8FB1';
 
-// Sift: the app-wide search, laid over everything. The app behind scales back a little and goes out of focus (AppFrame,
-// driven by siftShown on the UI thread: a blur on the PC, a soft dimming on Android); Sift's field comes into focus at
-// the top (or lifts out of the page's own search bar, on More and Settings), then the filters and the results; the
+// Sift: the app-wide search, laid over everything. It comes in as one piece: its ground fades in over the app while
+// the field, the filters and the results settle a few points down into their places, and it goes the same way back,
+// a little quicker. Nothing else moves (the app behind, a page's own search bar), so nothing can be left half-done; the
 // keyboard comes up once the motion has settled. Results are worked out a frame after typing pauses, and the last ones
 // stay up until the new ones are ready, so nothing flashes. Pull the list down at its top, Back or Cancel to close; on
 // Android the keyboard goes down first, so the page behind has settled before Sift fades from over it.
 
-const OPEN_MS = 400;
-const CLOSE_MS = 300;
-/** the scrim's strength over the app when Sift is fully open */
-const SCRIM = 0.55;
-/** the app behind, fully open */
-const BACK_SCALE = 0.955;
-/** the soft leading edge of the rising blur */
-const FEATHER = 48;
-/** Android's dimming in place of the PC's blur */
-const DIM = 'rgba(12,12,11,0.32)';
-/** how far out of focus a full pull takes the app, before Sift opens */
-const PULL_SOFTEN = 0.55;
+const OPEN_MS = 260;
+const CLOSE_MS = 200;
+/** how far Sift's parts travel to settle into their places */
+const SETTLE = 10;
 /** results are worked out this long after the last keystroke, then on the next frame */
 const TYPE_PAUSE = 40;
 /** a pull down of this much on the list, from its top, closes Sift */
 const PULL_CLOSE = 90;
-const STAGGER = 24;
-const STAGGER_ROWS = 10;
 const PANEL_MAX = 640;
 /** what leaves for a result waits this long once Sift starts to go, so the first frames of its way out are never held up */
 const HAND_OVER_MS = 70;
@@ -90,52 +79,15 @@ const hostOf = (url: string) => url.replace(/^https?:\/\//i, '').split(/[/?#]/)[
 /* ---------------------------------------------------------------- the app behind */
 
 /**
- * The app as Sift opens over it: it scales back to 0.965 as Sift comes in (full motion only; with some it only dims,
- * under the overlay's scrim). Wrap the root navigator with it, and mount <SearchOverlay/> after it.
+ * The app under Sift. It stays exactly as it is (no scaling, no blur, no dimming: Sift's own ground covers it), so
+ * nothing behind Sift can show at the edges or stick half-done; a screen reader is only held inside Sift while it is up.
+ * Wrap the root navigator with it, and mount <SearchOverlay/> after it.
  */
 export function AppFrame({ children }: { children: React.ReactNode }) {
-  const level = useAnimLevel();
-  // Focus: how far the app has gone out of focus. A pull takes it part of the way, as the finger goes; Sift opening
-  // takes it the rest
-  const away = useDerivedValue(() => Math.max(siftShown.value, Math.min(1, siftPull.value) * PULL_SOFTEN));
-  const style = useAnimatedStyle(() => (level === 'full' && away.value > 0
-    ? { transform: [{ scale: 1 - (1 - BACK_SCALE) * away.value }] }
-    : { transform: [{ scale: 1 }] }));
-  // the blur rises from the bottom of the screen, a soft edge leading it, and recedes back down the same way
-  const { height: winH } = useWindowDimensions();
-  const blurStyle = useAnimatedStyle(() => {
-    if (level !== 'full') return { height: winH + FEATHER, opacity: level === 'none' ? 0 : away.value };
-    const k = Math.min(1, away.value / 0.62);
-    const e = 1 - Math.pow(1 - k, 3);
-    return { height: (winH + FEATHER) * e, opacity: 1 };
-  });
-  // the blur is there only while it shows: a full-screen blur costs, even when clear
-  const [blurOn, setBlurOn] = React.useState(false);
-  useAnimatedReaction(() => away.value > 0.001, (on, was) => { if (on !== was) runOnJS(setBlurOn)(on); });
-  // while Sift is up, a screen reader stays in Sift (accessibilityViewIsModal only holds it on iOS)
   const siftOpen = useSearch((s) => s.open);
   return (
     <View style={{ flex: 1 }} importantForAccessibility={siftOpen ? 'no-hide-descendants' : 'auto'}>
-      <Animated.View style={[{ flex: 1 }, style]}>{children}</Animated.View>
-      {/* over the whole screen, not scaled with the app, so no undimmed rim shows round the app as it steps back */}
-      {blurOn && level !== 'none' ? (
-        <Animated.View pointerEvents="none" style={[st.rise, blurStyle]}>
-          {Platform.OS === 'web' ? (
-            <>
-              <BlurView intensity={level === 'full' ? 30 : 14} tint="dark" style={[st.riseBlur, { height: winH + FEATHER }]} />
-              {/* the leading edge: a soft dimming that eases the line where the blur begins */}
-              <LinearGradient pointerEvents="none" colors={['rgba(12,12,11,0.14)', 'rgba(12,12,11,0)']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={st.riseEdge} />
-            </>
-          ) : (
-            // Android's blur is experimental (a gray slab, and a crash as it unmounts), so there the app is dimmed
-            // instead, rising the same way: the dimming fades in over its leading edge, so the edge is its softest part
-            <>
-              <View style={[st.riseBlur, { top: FEATHER, backgroundColor: DIM }]} />
-              <LinearGradient pointerEvents="none" colors={['rgba(12,12,11,0)', DIM]} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={st.riseEdge} />
-            </>
-          )}
-        </Animated.View>
-      ) : null}
+      {children}
     </View>
   );
 }
@@ -356,14 +308,6 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   const level = useAnimLevel();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const origin = useSearch((s) => s.origin);
-  // opened over a page's own search bar (More's, Settings'): the field lifts out of that bar and goes back into it
-  const anchor = useSearch((s) => s.anchor);
-  const anchored = anchor != null && level === 'full';
-  const wellRef = React.useRef<View>(null);
-  const well = useSharedValue({ x: 0, y: 0, w: 0, h: 0 });
-  const from = useSharedValue({ x: 0, y: 0, w: 0, h: 0 });
-  const waitingForWell = React.useRef(false);
   const hour24 = useStore((s) => s.settings.hour24);
   const aiLinks = useStore((s) => s.aiLinks);
   const memory = useSiftMemory();
@@ -411,41 +355,13 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     setScopes(s.scopes);
   }, [open]);
 
-  /* ---- in and out */
-  const fromPull = origin === 'pull' && !anchored;
-  const openMotion = () => {
-    siftShown.value = level === 'none' ? 1 : withTiming(1, { duration: OPEN_MS, easing: EASE_EMPHASISED });
-  };
-  const openMotionNow = () => { waitingForWell.current = false; openMotion(); };
-  // the field's own place, once laid out: an opening from a bar waits for it (a frame), so the lift starts true
-  const measureWell = () => {
-    // once per opening: the well's own size moves while it lifts, and that must never become where it is going
-    if (!waitingForWell.current && well.value.w > 0) return;
-    wellRef.current?.measureInWindow((x, y, w, h) => {
-      if (w > 0 && h > 0) well.value = { x, y, w, h };
-      if (waitingForWell.current) { waitingForWell.current = false; openMotion(); }
-    });
-  };
+  /* ---- in and out: one fade and a short settle, the same however Sift was opened */
   React.useEffect(() => {
-    if (open && anchored && anchor) {
-      tick();
-      from.value = anchor;
-      siftShown.value = 0;
-      waitingForWell.current = true;
-      // a field already laid out (opened again while leaving) starts at once; otherwise its layout starts it
-      if (well.value.w > 0) openMotionNow();
-      const late = setTimeout(() => { if (waitingForWell.current) { waitingForWell.current = false; openMotion(); } }, 120);
-      const t = setTimeout(() => inputRef.current?.focus(), 260);
-      return () => { clearTimeout(late); clearTimeout(t); };
-    }
     if (open) {
       tick();
-      const start = fromPull ? Math.max(siftShown.value, 0.25 * siftPull.value) : siftShown.value;
-      siftShown.value = start;
-      // quick off the mark and long to settle, as every panel arrives: from a pull it carries on the finger's motion
-      siftShown.value = level === 'none' ? 1 : withTiming(1, { duration: OPEN_MS, easing: EASE_EMPHASISED });
+      siftShown.value = level === 'none' ? 1 : withTiming(1, { duration: OPEN_MS, easing: EASE_OUT });
       // the keyboard comes once the motion has settled, so it never rides the opening
-      const t = setTimeout(() => inputRef.current?.focus(), level === 'none' ? 30 : 200);
+      const t = setTimeout(() => inputRef.current?.focus(), level === 'none' ? 30 : OPEN_MS);
       return () => clearTimeout(t);
     }
     const kbUp = Platform.OS === 'android' && Keyboard.isVisible();
@@ -458,7 +374,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       return undefined;
     }
     const fade = () => {
-      siftShown.value = withTiming(0, { duration: CLOSE_MS, easing: Easing.inOut(Easing.cubic) }, (fin) => { if (fin) runOnJS(done)(); });
+      siftShown.value = withTiming(0, { duration: CLOSE_MS, easing: EASE_EXIT }, (fin) => { if (fin) runOnJS(done)(); });
     };
     if (!kbUp) { fade(); return undefined; }
     // Android: the keyboard goes down first, and the page behind takes its full height back while Sift still covers it;
@@ -831,60 +747,13 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     return 'Enter opens the top result, “' + name + '”';
   }, [hintOn, dq, enterTarget]);
 
-  /* ---- the panel's motion */
-  // The fold: the app's blur rises from the bottom (AppFrame) while Sift settles in from the top down, its ground a
-  // breath behind the blur, then the field, then the filters and the results, each coming into focus in turn. Closing
-  // plays it back: the results go first, the field last, and the blur sinks away
-  const span = (p: number, a: number, b: number) => {
-    'worklet';
-    return Math.min(1, Math.max(0, (p - a) / (b - a)));
-  };
-  const panelStyle = useAnimatedStyle(() => ({ opacity: level === 'full' ? span(siftShown.value, 0.12, 0.62) : siftShown.value }));
-  const scrimStyle = useAnimatedStyle(() => ({ opacity: SCRIM * siftShown.value }));
-  // The field comes into focus where it sits; lifted out of a page's own bar, it is there all the way (see wellStyle)
-  const fieldStyle = useAnimatedStyle(() => {
-    if (anchored) return { opacity: 1, transform: [{ translateY: 0 }, { scaleX: 1 }, { scaleY: 1 }] as const };
-    if (level !== 'full') return { opacity: siftShown.value };
-    const p = siftShown.value;
-    // the field comes into focus where it sits, first of Sift's parts: from a hair larger and soft to sharp
-    const e = 1 - Math.pow(1 - span(p, 0.16, 0.66), 3);
-    return {
-      opacity: e,
-      transform: [{ translateY: -8 * (1 - e) }, { scaleX: 1.04 - 0.04 * e }, { scaleY: 1.04 - 0.04 * e }] as const,
-      ...(Platform.OS === 'web' ? { filter: 'blur(' + (7 * (1 - e)).toFixed(2) + 'px)' } : null),
-    } as any;
-  });
-  // the well itself, from the bar's place and size to its own: moved and sized (never scaled), so its corners and words
-  // stay true the whole way
-  const wellStyle = useAnimatedStyle(() => {
-    const w = well.value;
-    if (!anchored || w.w === 0) return {};
-    const a = from.value;
-    const p = siftShown.value;
-    const q = 1 - p;
-    // at rest, nothing of the morph is left on it: it is a field of the row again (and follows a resize)
-    if (q <= 0.0005) return { flexGrow: 1, flexShrink: 1, flexBasis: 0, height: w.h, transform: [{ translateX: 0 }, { translateY: 0 }] as const };
-    // under flex: 1 a width is ignored (the basis wins), so the basis itself is what moves
-    return {
-      flexGrow: 0,
-      flexShrink: 0,
-      flexBasis: w.w + (a.w - w.w) * q,
-      height: w.h + (a.h - w.h) * q,
-      transform: [{ translateX: (a.x - w.x) * q }, { translateY: (a.y - w.y) * q }] as const,
-    };
-  });
-  const cancelStyle = useAnimatedStyle(() => ({ opacity: anchored ? Math.max(0, (siftShown.value - 0.4) / 0.6) : 1 }));
-  const bodyStyle = useAnimatedStyle(() => {
-    if (level === 'none') return { opacity: 1, transform: [{ translateY: drag.value }] };
-    if (level !== 'full') return { opacity: span(siftShown.value, 0.3, 1), transform: [{ translateY: drag.value }] };
-    // the filters and the results, after the field, coming down into focus from just above their place
-    const e = 1 - Math.pow(1 - span(siftShown.value, 0.3, 0.92), 3);
-    return {
-      opacity: e,
-      transform: [{ translateY: -14 * (1 - e) + drag.value }],
-      ...(Platform.OS === 'web' ? { filter: e < 1 ? 'blur(' + (6 * (1 - e)).toFixed(2) + 'px)' : 'none' } : null),
-    } as any;
-  });
+  /* ---- the panel's motion: the ground fades in; the field, filters and results settle down a few points with it */
+  const panelStyle = useAnimatedStyle(() => ({ opacity: siftShown.value }));
+  const settleStyle = useAnimatedStyle(() => ({
+    opacity: siftShown.value,
+    transform: [{ translateY: level === 'full' ? -SETTLE * (1 - siftShown.value) : 0 }],
+  }));
+  const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: drag.value }] }));
 
   /* ---- pull the list down at its top to close */
   const onScroll = useAnimatedScrollHandler((e) => { listY.value = e.contentOffset.y; });
@@ -905,30 +774,8 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     .onFinalize(() => { if (drag.value > 0) drag.value = withTiming(0, { duration: 200, easing: EASE_OUT }); }), []);
   const listGesture = React.useMemo(() => Gesture.Simultaneous(pull, Gesture.Native()), [pull]);
 
-  /* ---- rows' entrance: they rise and fade in, the first ten a beat apart; reordering glides, never springs */
-  const entering = (index: number) => {
-    if (level === 'none') return undefined;
-    const delay = index < STAGGER_ROWS ? index * STAGGER : 0;
-    if (level === 'some') return FadeIn.duration(160).delay(delay);
-    return () => {
-      'worklet';
-      const ease = { duration: 220, easing: Easing.out(Easing.cubic) };
-      return {
-        initialValues: { opacity: 0, transform: [{ translateY: 8 }] },
-        animations: {
-          opacity: withDelay(delay, withTiming(1, ease)),
-          transform: [{ translateY: withDelay(delay, withTiming(0, ease)) }],
-        },
-      };
-    };
-  };
-  // Rows rise in only as Sift opens. After that a new search swaps the whole list at once, under a quick fade of the
-  // list (below): rows that animated out while new ones animated in overlapped, and moved the sticky heads about
-  const staged = React.useRef(true);
-  React.useEffect(() => {
-    const t = setTimeout(() => { staged.current = false; }, 600);
-    return () => clearTimeout(t);
-  }, []);
+  // a new search swaps the whole list at once, under a quick fade of the list (rows animating in and out over each
+  // other moved the sticky heads about)
   const listFade = useSharedValue(1);
   const listRef = React.useRef<any>(null);
   const firstQuery = React.useRef(true);
@@ -1045,7 +892,6 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       key={x.key}
       ref={(n: any) => { if (n) nodes.current.set(x.key, n); else nodes.current.delete(x.key); }}
       style={x.key === selKey ? [st.picked, { backgroundColor: theme === 'minimal' ? MIN.inset : C.pressDim }] : undefined}
-      entering={x.t === 'head' || !staged.current ? undefined : entering('index' in x ? x.index : 0)}
     >
       {renderItem(x)}
     </Animated.View>
@@ -1059,17 +905,15 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents={open ? 'auto' : 'none'} accessibilityViewIsModal>
-      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#0C0C0B' }, scrimStyle]} />
-      {/* Sift's ground (Cheerful's glows on it), fading in on its own: the field above it can then be there from the
-          first frame when it lifts out of a page's bar */}
+      {/* Sift's ground (Cheerful's glows on it), opaque once in: nothing of the app behind shows through */}
       <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: bgFor(theme) }, panelStyle]}>
         {cheerful ? <Backdrop minimal={theme === 'minimal'} /> : null}
       </Animated.View>
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <Animated.View style={[StyleSheet.absoluteFill, settleStyle]} pointerEvents="box-none">
         <View style={[{ flex: 1, paddingTop: insets.top + 8 }, column]}>
           {/* the field: a carved well, with the glyph, the words, a clear key, the mic; Cancel beside it */}
-          <Animated.View style={[st.fieldRow, fieldStyle]}>
-            <Animated.View ref={wellRef} onLayout={anchored ? measureWell : undefined} collapsable={false} style={[st.field, fieldWell, wellStyle]}>
+          <View style={st.fieldRow}>
+            <View style={[st.field, fieldWell]}>
               <Ionicons name="search" size={18} color={C.textFaint} />
               <TextInput
                 ref={inputRef}
@@ -1099,28 +943,23 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
                   <Ionicons name={listening ? 'mic' : 'mic-outline'} size={19} color={listening ? C.accent : C.textFaint} />
                 </Pressable>
               ) : null}
-            </Animated.View>
-            <Animated.View style={cancelStyle}>
-              <Pressable onPress={closeSift} hitSlop={8} accessibilityRole="button" accessibilityLabel="Cancel" style={st.cancel}>
-                <Text style={[st.cancelText, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Cancel</Text>
-              </Pressable>
-            </Animated.View>
-          </Animated.View>
+            </View>
+            <Pressable onPress={closeSift} hitSlop={8} accessibilityRole="button" accessibilityLabel="Cancel" style={st.cancel}>
+              <Text style={[st.cancelText, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Cancel</Text>
+            </Pressable>
+          </View>
 
           {/* the first week: a quiet line under the field, saying what Enter will open. Its room is kept all week, so the
               list below never jumps as the line comes and goes */}
           {hintOn ? (
-            <Animated.View style={[st.enterHint, panelStyle]}>
+            <View style={st.enterHint}>
               {enterHint ? (
-                <Animated.View
-                  key={enterHint} style={st.enterHintRow}
-                  entering={level === 'none' ? undefined : FadeIn.duration(180).easing(EASE_OUT)}
-                >
+                <View style={st.enterHintRow}>
                   <Ionicons name="return-down-back-outline" size={13} color={C.textFaint} style={{ transform: [{ scaleX: -1 }] }} />
                   <Text style={st.enterHintText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX}>{enterHint}</Text>
-                </Animated.View>
+                </View>
               ) : null}
-            </Animated.View>
+            </View>
           ) : null}
 
           <Animated.View style={[{ flex: 1 }, bodyStyle]}>
@@ -1157,7 +996,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
             </GestureDetector>
           </Animated.View>
         </View>
-      </View>
+      </Animated.View>
 
       <PinSheet
         visible={pinFor != null}
@@ -1177,9 +1016,6 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
 
 
 const st = StyleSheet.create({
-  rise: { position: 'absolute', left: 0, right: 0, bottom: 0, overflow: 'hidden' },
-  riseBlur: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-  riseEdge: { position: 'absolute', left: 0, right: 0, top: 0, height: FEATHER },
   fieldRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: S.pad, paddingBottom: 12 },
   field: { flex: 1, minHeight: 48, borderRadius: 16, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 6, gap: 8, overflow: 'hidden' },
   input: { flex: 1, color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, paddingVertical: 0, includeFontPadding: false },

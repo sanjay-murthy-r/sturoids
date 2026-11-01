@@ -10,7 +10,7 @@
 // as a real one would, seen from the side. It comes and goes only by them. Held, it waves goodbye and goes out by one;
 // then a small door sits flush with the right wall, and a knock on it (a soft knock and a doorbell) brings it back.
 //
-// What it does: mostly it lives in place, breathing, blinking, looking about, thinking (eyes up, dots rising, sometimes
+// What it does: mostly it lives in place, breathing, blinking, looking about, thinking (eyes up, glancing about, sometimes
 // a bulb), stretching, ruffling its leaves or squishing, humming or watering itself; never yawning or dozing, in an
 // app for getting things done. Dragged, Sprout flies on its leaves and Pip is carried by a balloon (its own, puffed up,
 // if it keeps one; else one from nowhere that floats off once it has landed), to the nearest good place in the room.
@@ -45,7 +45,7 @@ import { WIDE_AT } from '../layout';
 import { indexScores, upcoming } from '../scores';
 import { pkey } from '../profiles';
 import { knock } from '../cheerSound';
-import { Room, useRoom } from '../mascot/room';
+import { Room, setWindowTop, useRoom } from '../mascot/room';
 import {
   BALLOON_HAND, BOOK_PAL, BOOK_PROP, COLS, Cell, FLIERS, HAND, Kind, Limb, NAMES, PROPS, Palette, Pose, REST, ROWS, colorSet,
   compose, runs,
@@ -186,8 +186,8 @@ type Step = (ms: number) => Promise<void>;
 type Side = 'left' | 'right';
 type Spot = { x: number; y: number };
 type Bubble = { text: string; aside: boolean; key: number; size?: { w: number; h: number } };
-type Fx = { dots: number; bulb: boolean; notes: boolean; cloud: boolean; heart: number; sparks: number };
-const NO_FX: Fx = { dots: 0, bulb: false, notes: false, cloud: false, heart: 0, sparks: 0 };
+type Fx = { bulb: boolean; notes: boolean; cloud: boolean; heart: number; sparks: number };
+const NO_FX: Fx = { bulb: false, notes: false, cloud: false, heart: 0, sparks: 0 };
 /** a balloon from nowhere for Pip's flight, when it keeps none of its own: held, then let go to float off */
 type Air = 'none' | 'held' | 'off';
 /** how long a bubble stays: long enough to read, never long */
@@ -227,6 +227,8 @@ function Companion({ kind }: { kind: Kind }) {
   const inSession = useStore((s) => !!s.deepWork);
   const path = usePathname();
   const { room, n: roomN } = useRoom();
+  // the layer measures itself as the headers measure their rooms, so a measured room lands where it was measured
+  const layer = React.useRef<View>(null);
   const scroll = room?.scroll;
   const rail = W >= WIDE_AT && settings.tabNav === 'side' ? 88 : 0;
 
@@ -529,13 +531,13 @@ function Companion({ kind }: { kind: Kind }) {
     setPose({ eyes: 'up', mouth: 'flat', [side]: 'up' });
     tilt.value = withTiming(leanOf(side, -6), { duration: 420, easing: Easing.inOut(Easing.quad) });
     await step(420);
-    for (let i = 1; i <= 3; i++) { setFx({ dots: i }); await step(380); }
+    await step(700);
     setPose({ eyes: 'left' });
     await step(650);
     setPose({ eyes: 'up' });
     await step(450);
     if (Math.random() < 0.45) {
-      setFx({ dots: 0, bulb: true });
+      setFx({ bulb: true });
       setPose({ eyes: 'wide', mouth: 'o', [side]: 'rest' });
       tilt.value = withTiming(0, { duration: 160 });
       lift.value = withSequence(withTiming(8, { duration: 160 }), withTiming(0, { duration: 180 }));
@@ -545,7 +547,6 @@ function Companion({ kind }: { kind: Kind }) {
       await step(1100);
       setFx({ bulb: false });
     } else {
-      setFx({ dots: 0 });
       setPose({ eyes: 'open', mouth: 'none', [side]: 'rest' });
       sq.value = withSequence(withTiming(0.95, { duration: 120 }), withTiming(1, { duration: 160 }));
       await step(400);
@@ -1090,14 +1091,23 @@ function Companion({ kind }: { kind: Kind }) {
   /* ---------------- carried: picked up and let go, it makes its own way to the nearest good place */
 
   const drag = React.useRef<{ x: number; y: number } | null>(null);
-  /** Sprout beats its leaves like wings while it is held and while it flies (stopped the moment anything else starts) */
-  const flap = React.useRef<ReturnType<typeof setInterval> | null>(null);
-  const stopFlap = () => { if (flap.current) { clearInterval(flap.current); flap.current = null; } };
+  /**
+   * Sprout beats its leaves like wings while it is held and while it flies, quick to get up, slower once it glides, and
+   * quick again to set itself down (flapEvery, in ms a beat); stopped the moment anything else starts
+   */
+  const flap = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flapEvery = React.useRef(90);
+  const stopFlap = () => { if (flap.current) { clearTimeout(flap.current); flap.current = null; } };
   const flapStart = () => {
     stopFlap();
     if (kind !== 'sprout') return;
     let i = 0;
-    flap.current = setInterval(() => { i++; setPose({ l: i % 2 ? 'up' : 'swing', r: i % 2 ? 'swing' : 'up' }); }, 90);
+    const beat = () => {
+      i++;
+      setPose({ l: i % 2 ? 'up' : 'swing', r: i % 2 ? 'swing' : 'up' });
+      flap.current = setTimeout(beat, flapEvery.current);
+    };
+    flap.current = setTimeout(beat, flapEvery.current);
   };
   const onLift = () => {
     if (away.current) return;
@@ -1116,6 +1126,7 @@ function Companion({ kind }: { kind: Kind }) {
       setPose({ ...REST, eyes: 'wide', mouth: 'o', feet: 'tuck', l: 'out', r: 'out' });
     }
     drag.current = { x: x.value, y: y.value };
+    flapEvery.current = 110;
     flapStart();
     if (Math.random() < 0.6) say('carry', { always: true });
   };
@@ -1158,27 +1169,85 @@ function Companion({ kind }: { kind: Kind }) {
       const tx = Math.max(lo, Math.min(hi, x.value));
       placed.current.set(useRoom.getState().key ?? '', hi > lo ? (tx - lo) / (hi - lo) : 1);
       const dist = Math.hypot(tx - x.value, r.y - y.value);
+      // A flight in three parts, as something small and light really flies: it gets up first (a little rise, hardly moving
+      // along), then makes its way, gathering speed and easing off again, and last sets itself down slowly. Far or near,
+      // it is never quick; each part has its own curve, so the speed changes the whole way and never all at once.
+      const x0 = x.value;
+      const y0 = y.value;
+      const dx = tx - x0;
+      const dy = r.y - y0;
+      const dir = dx >= 0 ? 1 : -1;
+      if (Math.abs(dx) > 6) turn(dir);
+      setPose({ eyes: 'happy', mouth: 'smile' });
+      const glide = Easing.bezier(0.42, 0, 0.58, 1);
       if (kind === 'sprout') {
-        // it flies: a gentle rise and glide, leaves beating, then a soft landing
-        setPose({ eyes: 'happy', mouth: 'smile' });
-        const ms = Math.max(450, Math.min(1300, dist * 1.8));
-        turn(tx > x.value ? 1 : -1);
-        x.value = withTiming(tx, { duration: ms, easing: Easing.inOut(Easing.quad) });
-        y.value = withTiming(r.y, { duration: ms, easing: Easing.inOut(Easing.quad) });
-        lift.value = withSequence(withTiming(10, { duration: ms * 0.4, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: ms * 0.6, easing: Easing.in(Easing.quad) }));
-        tilt.value = withTiming(tx > x.value ? 8 : -8, { duration: 200 });
-        await step(ms);
-      } else {
-        // Pip drifts along under its balloon, swaying, and is set down softly on its feet
-        setPose({ eyes: 'happy', mouth: 'smile' });
-        const ms = Math.max(800, Math.min(1900, dist * 2.6));
-        if (Math.abs(tx - x.value) > 6) turn(tx > x.value ? 1 : -1);
-        x.value = withTiming(tx, { duration: ms, easing: Easing.inOut(Easing.sin) });
-        y.value = withTiming(r.y, { duration: ms, easing: Easing.inOut(Easing.quad) });
-        tilt.value = withRepeat(withSequence(withTiming(6, { duration: 340, easing: Easing.inOut(Easing.sin) }), withTiming(-6, { duration: 340, easing: Easing.inOut(Easing.sin) })), Math.max(1, Math.round(ms / 680)), false);
-        await step(ms - 120);
+        const up = 520;
+        const way = Math.max(1100, Math.min(2800, dist * 4.6));
+        const down = 640;
+        flapEvery.current = 80;
+        x.value = withSequence(
+          withTiming(x0 + dx * 0.06, { duration: up, easing: Easing.out(Easing.quad) }),
+          withTiming(x0 + dx * 0.92, { duration: way, easing: glide }),
+          withTiming(tx, { duration: down, easing: Easing.out(Easing.cubic) }),
+        );
+        y.value = withSequence(
+          withTiming(y0 + Math.min(0, dy) * 0.05, { duration: up, easing: Easing.out(Easing.quad) }),
+          withTiming(y0 + dy * 0.9, { duration: way, easing: glide }),
+          withTiming(r.y, { duration: down, easing: Easing.out(Easing.cubic) }),
+        );
+        // up off the ground, a soft rise and dip as it goes, then down onto its feet
+        lift.value = withSequence(
+          withTiming(18, { duration: up, easing: Easing.out(Easing.cubic) }),
+          withTiming(12, { duration: way * 0.5, easing: Easing.inOut(Easing.sin) }),
+          withTiming(15, { duration: way * 0.5, easing: Easing.inOut(Easing.sin) }),
+          withTiming(0, { duration: down, easing: Easing.inOut(Easing.quad) }),
+        );
+        // leaning into the way it goes, most while it is quickest
+        tilt.value = withSequence(
+          withTiming(dir * 3, { duration: up }),
+          withTiming(dir * 9, { duration: way * 0.45, easing: Easing.inOut(Easing.sin) }),
+          withTiming(dir * 4, { duration: way * 0.55, easing: Easing.inOut(Easing.sin) }),
+          withTiming(0, { duration: down, easing: Easing.out(Easing.quad) }),
+        );
+        await step(up);
+        flapEvery.current = 150;
+        await step(way);
+        flapEvery.current = 95;
+        await step(down - 160);
         setPose({ feet: 'stand' });
-        await step(120);
+        await step(160);
+      } else {
+        // Pip hangs under its balloon: the balloon takes it up, carries it along slowly, swaying, and lets it down gently
+        const up = 700;
+        const way = Math.max(1400, Math.min(3400, dist * 5.6));
+        const down = 900;
+        x.value = withSequence(
+          withTiming(x0 + dx * 0.05, { duration: up, easing: Easing.inOut(Easing.sin) }),
+          withTiming(x0 + dx * 0.94, { duration: way, easing: glide }),
+          withTiming(tx, { duration: down, easing: Easing.out(Easing.sin) }),
+        );
+        y.value = withSequence(
+          withTiming(y0 + Math.min(0, dy) * 0.08, { duration: up, easing: Easing.inOut(Easing.sin) }),
+          withTiming(y0 + dy * 0.85, { duration: way, easing: glide }),
+          withTiming(r.y, { duration: down, easing: Easing.out(Easing.cubic) }),
+        );
+        lift.value = withSequence(
+          withTiming(12, { duration: up, easing: Easing.out(Easing.sin) }),
+          withTiming(9, { duration: way * 0.5, easing: Easing.inOut(Easing.sin) }),
+          withTiming(11, { duration: way * 0.5, easing: Easing.inOut(Easing.sin) }),
+          withTiming(0, { duration: down, easing: Easing.out(Easing.quad) }),
+        );
+        const sway = 760;
+        tilt.value = withSequence(
+          withRepeat(withSequence(
+            withTiming(5, { duration: sway / 2, easing: Easing.inOut(Easing.sin) }),
+            withTiming(-5, { duration: sway / 2, easing: Easing.inOut(Easing.sin) }),
+          ), Math.max(1, Math.round((up + way) / sway)), false),
+          withTiming(0, { duration: down, easing: Easing.out(Easing.sin) }),
+        );
+        await step(up + way + down - 180);
+        setPose({ feet: 'stand' });
+        await step(180);
       }
       stopFlap();
       tilt.value = withTiming(0, { duration: 160 });
@@ -1258,7 +1327,10 @@ function Companion({ kind }: { kind: Kind }) {
   const showBalloon = kind === 'pip' && (ownBalloon || air !== 'none');
 
   return (
-    <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+    <View
+      ref={layer} collapsable={false} pointerEvents="box-none" style={StyleSheet.absoluteFill}
+      onLayout={() => layer.current?.measureInWindow((_x, top) => setWindowTop(top))}
+    >
       {door ? <WallDoor side={door.side} wall={wallX(door.side)} y={door.y - (scroll ? scroll.value : 0)} open={doorOpen} /> : null}
       <Animated.View pointerEvents="box-none" style={[st.anchor, anchor]}>
         <Effects fx={fx} />
@@ -1390,14 +1462,10 @@ function KnockDoor({ name, bottom }: { name: string; bottom: number }) {
 
 /* ---------------------------------------------------------------- the little things around it */
 
-/** thought dots and a bulb, z's, music notes, a raincloud, a heart, sparks: drawn over its head */
+/** a bulb for an idea, music notes, a raincloud, a heart: drawn over its head */
 function Effects({ fx }: { fx: Fx }) {
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      {[0, 1, 2].map((i) => (fx.dots > i ? (
-        <Animated.View key={i} entering={FadeIn.duration(160)}
-          style={[st.dot, { width: 3 + i * 1.5, height: 3 + i * 1.5, left: -6 - i * 6, top: 4 - i * 7 }]} />
-      ) : null))}
       {fx.bulb ? (
         <Animated.View entering={FadeIn.duration(140)} style={{ position: 'absolute', left: -16, top: -14 }}>
           <GridArt grid={PROPS.bulb.grid} pal={PROPS.bulb.pal} px={2.5} />
@@ -1443,22 +1511,24 @@ function Cloud() {
 }
 
 /**
- * Dot the ladybug: flits about Sprout in little curves and, every so often, lands on top of its head with its wings
- * folded, then takes off again. During Deep Work it stays landed.
+ * Dot the ladybug: flits about Sprout in little curves and, every so often, lands on one of its leaves with its wings
+ * folded (the other leaf the next time), then takes off again. During Deep Work it stays landed.
  */
-/** where Dot lands: on the crown of Sprout's head, beside the stem (and clear of a bud on it), feet on the top row */
+/** where Dot lands: on the top edge of a resting leaf, the left one or the right (art.ts LEAF rest: row 4, columns 4 to 6) */
 const BUG_SQ = 1.75;
-const BUG_X = 10 * PX;
-const BUG_Y = 8 * PX - PROPS.ladybug.grid.length * BUG_SQ + 0.5;
+const BUG_Y = 4 * PX - PROPS.ladybug.grid.length * BUG_SQ + 0.5;
+const BUG_AT = [4.2 * PX, (COLS - 4.2) * PX - PROPS.ladybug.grid[0].length * BUG_SQ];
 function Ladybug({ resting, full }: { resting: boolean; full: boolean }) {
-  const bx = useSharedValue(BUG_X);
+  // the leaf it lands on next, turn and turn about
+  const leaf = React.useRef(0);
+  const bx = useSharedValue(BUG_AT[0]);
   const by = useSharedValue(BUG_Y);
   const flap = useSharedValue(0);
   const [landed, setLanded] = React.useState(true);
   React.useEffect(() => {
     if (!full || resting) {
       setLanded(true);
-      bx.value = withTiming(BUG_X, { duration: 700 });
+      bx.value = withTiming(BUG_AT[leaf.current], { duration: 700 });
       by.value = withTiming(BUG_Y, { duration: 700 });
       return undefined;
     }
@@ -1467,7 +1537,8 @@ function Ladybug({ resting, full }: { resting: boolean; full: boolean }) {
     const fly = (n: number) => {
       if (!live) return;
       if (n <= 0) {
-        bx.value = withTiming(BUG_X, { duration: 900, easing: Easing.inOut(Easing.quad) });
+        leaf.current = 1 - leaf.current;
+        bx.value = withTiming(BUG_AT[leaf.current], { duration: 900, easing: Easing.inOut(Easing.quad) });
         by.value = withTiming(BUG_Y, { duration: 900, easing: Easing.inOut(Easing.quad) });
         t = setTimeout(() => { if (!live) return; setLanded(true); t = setTimeout(() => { if (live) { setLanded(false); fly(Math.round(rnd(4, 9))); } }, rnd(6000, 16000)); }, 950);
         return;
@@ -1628,7 +1699,6 @@ const st = StyleSheet.create({
   string: { position: 'absolute', left: -0.5, top: 0, width: 1, backgroundColor: 'rgba(120,110,100,0.75)' },
   ball: { position: 'absolute', left: -BW / 2, top: 0, width: BW, height: BH },
   book: { position: 'absolute', left: 0, top: 0 },
-  dot: { position: 'absolute', borderRadius: 1, backgroundColor: 'rgba(255,248,238,0.9)' },
   flier: { position: 'absolute', left: 0, top: 0 },
   wings: { position: 'absolute', left: 1, top: -3, width: 6, height: 3, borderRadius: 3, backgroundColor: '#FFFFFF' },
   halo: { position: 'absolute', left: -5, top: -5, width: 13, height: 13, borderRadius: 7, backgroundColor: '#FFE68A' },

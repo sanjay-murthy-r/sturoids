@@ -640,7 +640,8 @@ export function ScoresScreen({ mode }: { mode: 'tab' | 'stack' }) {
             ) : inExam && here ? (
               <ExamView
                 hero={header.hero}
-                exam={here} ix={ix} today={today} delta={table.delta.get(here.id) ?? null} onOpen={openNode} onMenu={openMenu}
+                // only an exam standing on its own moves on the one before: a subject's neighbour is another subject
+                exam={here} ix={ix} today={today} delta={isTopExam(ix, here) ? table.delta.get(here.id) ?? null : null} onOpen={openNode} onMenu={openMenu}
                 onEdit={() => editNode(here)}
                 onAddPart={() => editNode(here, true)}
                 learnings={examLearnings}

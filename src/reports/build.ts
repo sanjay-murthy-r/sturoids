@@ -1024,7 +1024,7 @@ export function reportHtml(r: Report): string {
   <h1>${esc(r.title)}</h1>
   <div class="who">${r.profile ? `<span>${esc(r.profile)}</span>` : ''}<span>${esc(r.range.label)}</span></div>
   ${sections}
-  <footer>Made with Sturoids on ${esc(made)}. Everything here comes from the app on this phone.</footer>
+  <footer>Made with Sturoids on ${esc(made)}. Everything here comes from the data kept in the app.</footer>
 </body></html>`;
 }
 

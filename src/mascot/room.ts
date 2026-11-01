@@ -16,24 +16,42 @@ export interface Room {
   y: number;
   /** for a row that scrolls with its page (Today's header): how far the page has scrolled */
   scroll?: SharedValue<number>;
+  /**
+   * y is a window position straight from measureInWindow (left and right always are). Android leaves the status bar
+   * out of those, though the page is drawn under it, so such a y is taken against where the companion's own layer
+   * measures itself, the same way (see setWindowTop)
+   */
+  win?: boolean;
 }
 
 const rooms = new Map<string, Room>();
 export const useRoom = create<{ key: string | null; room: Room | null; n: number }>(() => ({ key: null, room: null, n: 0 }));
 
+/** where the companion's layer (the screen's top) measures itself by measureInWindow: 0, or minus the status bar */
+let windowTop = 0;
+/** a room as the companion's layer sees it */
+const local = (r: Room | null | undefined): Room | null => (r ? (r.win ? { ...r, y: r.y - windowTop, win: false } : r) : null);
+/** The companion's layer says where measureInWindow puts the top of the screen; a room measured that way follows. */
+export function setWindowTop(top: number) {
+  if (Math.abs(top - windowTop) < 0.5) return;
+  windowTop = top;
+  const s = useRoom.getState();
+  if (s.key != null) useRoom.setState({ room: local(rooms.get(s.key)), n: s.n + 1 });
+}
+
 const same = (a: Room | null | undefined, b: Room | null | undefined) =>
-  !!a && !!b && Math.abs(a.left - b.left) < 1 && Math.abs(a.right - b.right) < 1 && Math.abs(a.y - b.y) < 1 && a.scroll === b.scroll;
+  !!a && !!b && Math.abs(a.left - b.left) < 1 && Math.abs(a.right - b.right) < 1 && Math.abs(a.y - b.y) < 1 && a.scroll === b.scroll && !!a.win === !!b.win;
 
 function setRoom(key: string, room: Room | null) {
   const had = rooms.get(key);
   if (room) rooms.set(key, room); else rooms.delete(key);
   const s = useRoom.getState();
-  if (s.key === key && !same(had, room)) useRoom.setState({ room, n: s.n + 1 });
+  if (s.key === key && !same(had, room)) useRoom.setState({ room: local(room), n: s.n + 1 });
 }
 function focusRoom(key: string) {
   const s = useRoom.getState();
   if (s.key === key) return;
-  useRoom.setState({ key, room: rooms.get(key) ?? null, n: s.n + 1 });
+  useRoom.setState({ key, room: local(rooms.get(key)), n: s.n + 1 });
 }
 function blurRoom(key: string) {
   const s = useRoom.getState();
