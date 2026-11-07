@@ -39,13 +39,28 @@ export function setSiftAnchor(a: Anchor) {
   return () => { if (anchor === a) anchor = null; };
 }
 
+/** Measures the bar Sift was opened from again (its page may have moved while the keyboard was up), if it is still there. */
+export function measureSiftAnchor(owner: string, cb: (r: SiftRect | null) => void) {
+  const a = anchor;
+  if (!a || a.owner !== owner) { cb(null); return; }
+  a.measure(cb);
+}
+
+/**
+ * On the UI thread, for the bar Sift's field lifts out of: whose bar it is, and whether the field is out of it now. The
+ * bar hides in the very frame the field takes its place, and shows again in the frame the field lands back in it, so
+ * there is only ever one of it on the screen.
+ */
+export const siftAnchorOwner = makeMutable('');
+export const siftAnchorOut = makeMutable(0);
+
 export const useSearch = create<SiftState>(() => ({
   open: false, scopes: [], query: '', origin: 'other', anchor: null, anchorOwner: null,
 }));
 
 /**
- * How far Sift is open, 0 to 1, on the UI thread: the overlay drives it, and the app behind (AppFrame) scales and dims
- * with it. A module-level shared value, so the root layout's frame and the overlay read one value without a context.
+ * How far Sift is open, 0 to 1, on the UI thread: the overlay drives it (its ground, its field's lift out of a page's
+ * bar). A module-level shared value, so everything that follows Sift reads one value without a context.
  */
 export const siftShown = makeMutable(0);
 
@@ -146,11 +161,15 @@ function cleanPin(p: any): PinnedRef | null {
 }
 
 let loading: Promise<void> | null = null;
+/** counts resets, so a read that was under way when the memory was reset never puts the old memory back */
+let generation = 0;
 
 /** Reads the memory once (on the first open); a damaged row starts empty. */
 export function loadSiftMemory(): Promise<void> {
   if (loading) return loading;
+  const gen = generation;
   loading = AsyncStorage.getItem(MEMORY_KEY).then((raw) => {
+    if (gen !== generation) return;
     const j = raw ? JSON.parse(raw) : null;
     const recent = Array.isArray(j?.recent) ? j.recent.filter((q: unknown) => typeof q === 'string' && q.trim()).slice(0, RECENT_MAX) : [];
     const opened = Array.isArray(j?.opened)
@@ -165,9 +184,22 @@ export function loadSiftMemory(): Promise<void> {
     useSiftMemory.setState({ loaded: true, recent, opened, uses, pinned, firstUsedAt });
     if (!j?.firstUsedAt) saveSoon();
   }).catch(() => {
+    if (gen !== generation) return;
     useSiftMemory.setState({ loaded: true, firstUsedAt: Date.now() });
   });
   return loading;
+}
+
+/**
+ * Forgets everything Sift remembered, as on a fresh install: called by an erase of this phone, once the saved row is
+ * gone. A save still waiting is dropped, and the memory counts as read (Sift stays mounted and reads only once), with
+ * its first week starting now.
+ */
+export function resetSiftMemory() {
+  generation++;
+  loading = Promise.resolve();
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  useSiftMemory.setState({ loaded: true, pinned: [], firstUsedAt: Date.now(), recent: [], opened: [], uses: {} });
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;

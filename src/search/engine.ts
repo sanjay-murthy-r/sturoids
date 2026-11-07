@@ -591,16 +591,40 @@ export function highlight(text: string, terms: string[]): Range[] {
   return mergeRanges(out);
 }
 
+/** a run of word characters, the same words `highlight` walks (everything SPLIT does not split on) */
+const WORD_SRC = '[^' + SPLIT.source.slice(1, SPLIT.source.lastIndexOf(']')) + ']+';
+
+/**
+ * Where the first match in a text starts (as written), or -1: the words are folded one at a time and the walk stops at
+ * the first that matches, so a long body is never folded whole for a match near its start.
+ */
+function firstMatch(text: string, terms: string[]): number {
+  const re = new RegExp(WORD_SRC, 'g');
+  const sub = new RegExp(WORD_SRC, 'g');
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const f = fold(m[0]);
+    // folding can turn a character into one that splits words, so the folded word is walked as highlight would
+    sub.lastIndex = 0;
+    for (let w = sub.exec(f); w; w = sub.exec(f)) {
+      for (const t of terms) {
+        const r = matchInWord(w[0], t);
+        if (r) return m.index + (foldWithMap(m[0]).map[w.index + r[0]] ?? 0);
+      }
+    }
+  }
+  return -1;
+}
+
 /**
  * A short window of a body around its first match (about `width` characters), with ellipses where it was cut, and the
- * matches in it. Null when nothing in the body matches.
+ * matches in it. Null when nothing in the body matches. Only the window is highlighted, so its cost hardly grows with
+ * the body.
  */
 export function snippet(body: string | undefined, terms: string[], width = 70): { text: string; ranges: Range[] } | null {
   if (!body || !terms.length) return null;
   const flat = body.replace(/\s+/g, ' ').trim();
-  const ranges = highlight(flat, terms);
-  if (!ranges.length) return null;
-  const first = ranges[0][0];
+  const first = firstMatch(flat, terms);
+  if (first < 0) return null;
   let start = Math.max(0, first - Math.round(width * 0.35));
   // start at a word
   if (start > 0) {
@@ -616,6 +640,14 @@ export function snippet(body: string | undefined, terms: string[], width = 70): 
   const tail = end < flat.length ? '…' : '';
   const text = lead + flat.slice(start, end) + tail;
   const shift = lead.length - start;
+  // the window widened to whole words (a little way at most), so a word cut at either edge is matched as it is written
+  let from = start;
+  const fromMin = Math.max(0, start - 40);
+  while (from > fromMin && flat[from - 1] !== ' ') from--;
+  let to = end;
+  const toMax = Math.min(flat.length, end + 40);
+  while (to < toMax && flat[to] !== ' ') to++;
+  const ranges = highlight(flat.slice(from, to), terms).map(([a, b]) => [a + from, b + from] as Range);
   const inside = ranges
     .filter(([a, b]) => a >= start && b <= end)
     .map(([a, b]) => [a + shift, b + shift] as Range);

@@ -3,6 +3,7 @@
 // quietly (desktop/main.js); in a plain browser the release's page opens. Looking by itself: src/autoUpdate.ts.
 
 import { Linking, Platform } from 'react-native';
+import { create } from 'zustand';
 import { compareVersions } from './utils';
 
 export interface ReleaseFile { name: string; url: string; size: number }
@@ -71,29 +72,70 @@ export function installKind(release: Release): 'apk' | 'exe' | 'page' {
   return 'page';
 }
 
-const APK_PATH = 'sturoids-update.apk';
+export const APK_PATH = 'sturoids-update.apk';
 
 /**
- * Downloads the release's APK into the app's cache, telling `onProgress` how far it has got (0 to 1), and hands it to
- * Android's installer, which asks the user to confirm (and, the first time, to allow Sturoids to install apps). The
- * new version installs over this one, keeping everything: it is signed with the same key.
+ * The APK download under way, if any: its release and how far it has got (0 to 1, in whole percents, so a fast
+ * download never re-renders on every packet). Kept outside Settings, so leaving the page and coming back still shows it.
  */
-export async function downloadAndInstall(release: Release, onProgress: (p: number) => void): Promise<void> {
-  if (!release.apk) throw new UpdateError('This release has no Android app attached.');
+export const useApkDownload = create<{ rel: Release | null; p: number }>(() => ({ rel: null, p: 0 }));
+
+/** The one download under way: the install from Settings and the quiet fetch (autoUpdate.ts) write the same file. */
+let inFlight: { version: string; job: Promise<string> } | null = null;
+
+/** The download under way, or null: whoever wants the file waits for it rather than writing over it. */
+export const apkDownloadInFlight = (): Promise<string> | null => inFlight?.job ?? null;
+
+/**
+ * Downloads the release's APK into the app's cache and gives its file's address. A download of the same version already
+ * under way is joined, not started again; one of another version is waited for first, as both write the same file.
+ */
+export function downloadApk(release: Release): Promise<string> {
+  const apk = release.apk;
+  if (!apk) return Promise.reject(new UpdateError('This release has no Android app attached.'));
+  if (inFlight) {
+    if (inFlight.version === release.version) return inFlight.job;
+    return inFlight.job.catch(() => '').then(() => downloadApk(release));
+  }
+  const job = (async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const FileSystem = require('expo-file-system') as typeof import('expo-file-system');
+    const target = (FileSystem.cacheDirectory || '') + APK_PATH;
+    await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
+    const dl = FileSystem.createDownloadResumable(apk.url, target, {}, (p) => {
+      const total = p.totalBytesExpectedToWrite > 0 ? p.totalBytesExpectedToWrite : apk.size;
+      if (!(total > 0)) return;
+      const share = Math.min(1, p.totalBytesWritten / total);
+      if (Math.floor(share * 100) !== Math.floor(useApkDownload.getState().p * 100)) useApkDownload.setState({ p: share });
+    });
+    const done = await dl.downloadAsync();
+    if (!done || (done.status && done.status >= 400)) throw new UpdateError('The download did not finish. Try again.');
+    return done.uri;
+  })();
+  const mine = { version: release.version, job };
+  inFlight = mine;
+  useApkDownload.setState({ rel: release, p: 0 });
+  const settle = () => {
+    if (inFlight !== mine) return;
+    inFlight = null;
+    useApkDownload.setState({ rel: null, p: 0 });
+  };
+  job.then(settle, settle);
+  return job;
+}
+
+/**
+ * Downloads the release's APK (joining a download already under way) and hands it to Android's installer, which asks
+ * the user to confirm (and, the first time, to allow Sturoids to install apps). The new version installs over this
+ * one, keeping everything: it is signed with the same key.
+ */
+export async function downloadAndInstall(release: Release): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const FileSystem = require('expo-file-system') as typeof import('expo-file-system');
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const IntentLauncher = require('expo-intent-launcher') as typeof import('expo-intent-launcher');
-  const target = (FileSystem.cacheDirectory || '') + APK_PATH;
-  await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
-  const job = FileSystem.createDownloadResumable(release.apk.url, target, {}, (p) => {
-    const total = p.totalBytesExpectedToWrite > 0 ? p.totalBytesExpectedToWrite : release.apk!.size;
-    if (total > 0) onProgress(Math.min(1, p.totalBytesWritten / total));
-  });
-  const done = await job.downloadAsync();
-  if (!done || (done.status && done.status >= 400)) throw new UpdateError('The download did not finish. Try again.');
-  onProgress(1);
-  const uri = await FileSystem.getContentUriAsync(done.uri);
+  const file = await downloadApk(release);
+  const uri = await FileSystem.getContentUriAsync(file);
   await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
     data: uri,
     type: 'application/vnd.android.package-archive',

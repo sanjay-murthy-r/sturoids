@@ -118,12 +118,13 @@ export function useDesktopKeys() {
       const id = shortcutOf({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey, typing: typing(e.target) });
       if (!id) return;
       if (id === 'sift') {
-        // Ctrl+K also closes Sift; a bare / never opens it over a sheet
+        // Ctrl+K also closes Sift. Neither key opens it over a sheet: Sift would lie under the sheet's window, with the
+        // keyboard's focus left in the sheet
         if (sift) {
           if (e.key !== '/') { e.preventDefault(); closeSift(); }
           return;
         }
-        if (dialogUp() && e.key === '/') return;
+        if (dialogUp()) return;
         e.preventDefault();
         openSift('shortcut');
         return;

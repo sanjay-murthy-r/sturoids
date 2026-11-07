@@ -7,7 +7,7 @@ import { useFocusEffect, useNavigation } from 'expo-router';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
-  AnimatedRef, Easing, FadeIn, FadeOut, SharedValue, ZoomIn, ZoomOut, runOnJS, scrollTo, useAnimatedRef,
+  AnimatedRef, Easing, FadeIn, FadeOut, LayoutAnimationConfig, SharedValue, ZoomIn, ZoomOut, runOnJS, scrollTo, useAnimatedRef,
   useAnimatedScrollHandler, useAnimatedStyle, useFrameCallback, useSharedValue, withSequence, withTiming,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -26,7 +26,7 @@ import { tap, tick } from '../../src/haptics';
 import { normaliseSlots, toolByKey } from '../../src/tools';
 import { openPage } from '../../src/toolNav';
 import { useGreeting } from '../../src/greeting';
-import { useIntro } from '../../src/intro';
+import { afterEntrance, useIntro } from '../../src/intro';
 import { useNow } from '../../src/hooks/useNow';
 import { useScrollMemory } from '../../src/hooks/useScrollMemory';
 import { BOARD_MAX, columnWidth } from '../../src/layout';
@@ -47,6 +47,9 @@ import type { WidgetDef } from '../../src/widgets/types';
 import { rightClick } from '../../src/web/rightClick';
 import { markGesture } from '../../src/dragGuard';
 import { Twinkle, useCheerful } from '../../src/components/Cheer';
+
+/** how much lower Today starts while Cheerful's companion stands on its date row */
+const COMPANION_ROOM = 10;
 
 // what the greeting is told about a tool that is archived: nothing, so it never speaks of what the user put away
 const NO_SESSIONS: FocusSession[] = [];
@@ -142,8 +145,10 @@ export default function Today() {
   const hidePlanner = archived.has('planner');
   const hideFocus = archived.has('focus');
 
-  const items = useTodayItems();
-  const nextBlock = useNextBlock();
+  // given the page's own minute: these are read above the board's clock (BoardNow), which would otherwise hand them a
+  // fresh time every render
+  const items = useTodayItems(now);
+  const nextBlock = useNextBlock(now);
   const greeting = useGreeting({
     now, name,
     sessions: hideFocus ? NO_SESSIONS : sessions,
@@ -154,35 +159,48 @@ export default function Today() {
     nextBlock: hidePlanner ? null : nextBlock,
   });
 
-  // once the intro has gone and the screen is still, the other tabs are built one at a time, so a first visit
-  // never waits for a screen to be made and nothing is built out of sight while the intro plays
+  // The other tabs are built ahead, out of sight, so a first visit never waits for a screen to be made: while the
+  // intro's composed scene holds still before its hand-over (building there never shows as a stutter), and whatever
+  // is left once Today's entrance has played, one at a time, a beat apart. Never while the intro is moving.
   const navigation = useNavigation();
-  const introDone = useIntro((s) => s.phase === 'done');
-  useEffect(() => {
-    if (!introDone) return undefined;
+  const resting = useIntro((s) => s.resting);
+  const built = React.useRef(new Set<string>());
+  const buildNext = useCallback(() => {
     // a slot holding Desmos waits for its first visit: its page loads desmos.com in a heavy web view
     const slots = normaliseSlots(useStore.getState().settings.tabSlots);
     const names = [...(['slot1', 'slot2', 'slot3'] as const).filter((_, i) => slots[i] !== 'desmos'), 'more'];
+    const name = names.find((n) => !built.current.has(n));
+    if (!name) return false;
+    built.current.add(name);
+    // as a transition, so React builds it in slices and the intro's own timers keep their time
+    React.startTransition(() => {
+      try {
+        (navigation as any).preload?.(name);
+      } catch {
+        // a navigator that cannot preload builds the tab on its first visit instead
+      }
+    });
+    return true;
+  }, [navigation]);
+  useEffect(() => {
+    if (!resting) return undefined;
+    buildNext();
+    const iv = setInterval(() => { if (!buildNext()) clearInterval(iv); }, 140);
+    return () => clearInterval(iv);
+  }, [resting, buildNext]);
+  useEffect(() => {
     let live = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const next = (i: number) => {
-      if (!live || i >= names.length) return;
+    const next = () => {
+      if (!live) return;
       InteractionManager.runAfterInteractions(() => {
-        if (!live) return;
-        try {
-          (navigation as any).preload?.(names[i]);
-        } catch {
-          // a navigator that cannot preload builds the tab on its first visit instead
-        }
-        timer = setTimeout(() => next(i + 1), 700);
+        if (!live || !buildNext()) return;
+        timer = setTimeout(next, 700);
       });
     };
-    timer = setTimeout(() => next(0), 1000);
-    return () => {
-      live = false;
-      if (timer) clearTimeout(timer);
-    };
-  }, [introDone]);
+    const cancel = afterEntrance(next);
+    return () => { live = false; cancel(); if (timer) clearTimeout(timer); };
+  }, [buildNext]);
 
   // a drag down from inside the greeting opens Sift; off while the board is edited, and when Settings turns the pull off
   const pullMode = useStore((s) => s.settings.siftPull);
@@ -195,6 +213,9 @@ export default function Today() {
   // changes in place, so the line never blinks each minute
   const greetingKey = greeting.kind + '|' + (greeting.sub || '');
   const cheerful = useCheerful();
+  // Cheerful's companion stands on the date row: the page starts a little lower while it is there, so its head keeps
+  // clear of the status bar
+  const companionRoom = useStore((s) => s.settings.mood === 'cheerful' && s.settings.mascot !== 'off' && s.settings.animLevel !== 'none');
   // the room on the date row, between the date and the search glyph, where the companion stands (src/mascot/room.ts);
   // it scrolls away with the header
   const dateRef = React.useRef<View>(null);
@@ -209,8 +230,16 @@ export default function Today() {
       searchRef.current.measureInWindow((sx, _sy, sw) => finish(sw > 0 ? sx : dx + dw + 200));
     });
   });
-  // the page rises into place as the intro ends (a move, not a layout), so the row is measured again once it has
-  React.useEffect(() => { if (introDone) { remeasureRoom(); const t = setTimeout(remeasureRoom, 700); return () => clearTimeout(t); } return undefined; }, [introDone]);
+  // the page rises into place as the intro ends (a move, not a layout), so the row is measured again once it has;
+  // heard from the intro's store, not read in render, so its end never re-renders all of Today just to start a timer
+  React.useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const measure = () => { remeasureRoom(); t = setTimeout(remeasureRoom, 700); };
+    let off: (() => void) | null = null;
+    if (useIntro.getState().phase === 'done') measure();
+    else off = useIntro.subscribe((s) => { if (s.phase === 'done' && off) { off(); off = null; measure(); } });
+    return () => { off?.(); if (t) clearTimeout(t); };
+  }, []);
 
   const header = (
     <Enter index={0}>
@@ -239,8 +268,9 @@ export default function Today() {
             </View>
             {/* Sift, a tap away: a small flat glyph, no well; while the board is edited, Done takes its place */}
             {editing ? (
+              // Done is narrower than the search glyph it replaces, so the companion's room is measured again
               <Pressable
-                onPress={() => setEditing(false)} hitSlop={LINK_SLOP} style={st.headAction}
+                onPress={() => setEditing(false)} onLayout={remeasureRoom} hitSlop={LINK_SLOP} style={st.headAction}
                 accessibilityRole="button" accessibilityLabel="Done editing Today"
               >
                 <Text style={[st.link, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Done</Text>
@@ -267,9 +297,11 @@ export default function Today() {
     // while the board is edited a sideways drag moves a widget between columns, never to the next tab
     <ScreenBG guard maxWidth={BOARD_MAX} fling={!editing}>
       <BoardNow.Provider value={now}>
+        {/* the banners, widgets and edit chips fade when they go on their own; when the page itself is rebuilt or torn
+            down they go with it at once, so no exit keeps a part of the old page alive */}
+        <LayoutAnimationConfig key={fk} skipExiting>
         <PullArea gesture={todayPull}>
         <Animated.ScrollView
-          key={fk}
           ref={memory.ref}
           scrollEnabled={!dragging}
           onScroll={onScroll}
@@ -280,7 +312,7 @@ export default function Today() {
             measureScroll();
           }}
           onContentSizeChange={(w, h) => { contentH.current = h; measureScroll(); memory.onContentSizeChange(w, h); }}
-          contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20, paddingBottom: 44 }}
+          contentContainerStyle={{ padding: S.pad, paddingTop: insets.top + 20 + (companionRoom ? COMPANION_ROOM : 0), paddingBottom: 44 }}
           showsVerticalScrollIndicator={false}
         >
           {header}
@@ -294,6 +326,7 @@ export default function Today() {
           </Animated.View>
         </Animated.ScrollView>
         </PullArea>
+        </LayoutAnimationConfig>
       </BoardNow.Provider>
       <ProfileSwitcher visible={switcher} onClose={() => setSwitcher(false)} onManage={openAccount} />
     </ScreenBG>
@@ -434,6 +467,11 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
   const colW = Math.max(0, Math.floor(((width - GRID_GAP * (count - 1)) / count) * 100) / 100);
   const ids = useMemo(() => visible.map((w) => w.id), [visible]);
   const allMeasured = visible.every((w) => !widgetDef(w.type)!.flow || measured[w.id] != null);
+  // Until every flow section has been measured once, the places come from estimates (FLOW_EST): the widgets take each
+  // place as it is, so the first real heights never glide them in. Set after the render that first has them all, so
+  // that render's places are taken too.
+  const [settled, setSettled] = useState(false);
+  useEffect(() => { if (allMeasured && !settled) setSettled(true); }, [allMeasured, settled]);
   const columns = useMemo(
     () => arrangeColumns(ids, count, count > 1 ? savedCols : null, (id) => {
       const it = items.get(id);
@@ -674,7 +712,7 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
           return (
             <BoardItem
               key={w.id} w={w} def={def} x={r.x} y={r.y} width={r.w} editing={editing} enter={Math.min(6, enterAt++)}
-              fresh={fresh.has(w.id)}
+              fresh={fresh.has(w.id)} settled={settled}
               topOfColumn={count > 1 && r.y === 0}
               dragging={drag?.id === w.id} scroll={scroll}
               onMeasure={onMeasure} onRemove={remove} onResize={resize} onHold={enterEdit}
@@ -712,12 +750,14 @@ function Board({ count, width, editing, archived, onEdit, onDragging, scroll }: 
  * board, as it scrolls under it) until it is let go, when it glides into the place the board kept for it.
  */
 const BoardItem = React.memo(function BoardItem({
-  w, def, x, y, width, editing, enter, fresh, dragging, topOfColumn, scroll, onMeasure, onRemove, onResize, onHold,
+  w, def, x, y, width, editing, enter, fresh, settled, dragging, topOfColumn, scroll, onMeasure, onRemove, onResize, onHold,
   onDragStart, onAim, onEdge, onDragEnd, setConfig,
 }: {
   w: TodayWidget; def: WidgetDef; x: number; y: number; width: number; editing: boolean; enter: number; dragging: boolean;
   /** just added from the gallery: it gives one soft wash of the accent */
   fresh: boolean;
+  /** the board's flow sections have all been measured once: until then a new place is taken, not glided to */
+  settled: boolean;
   /** first in its column on a wide board: a heading at its top drops the space above it */
   topOfColumn: boolean;
   scroll: BoardScroll;
@@ -745,10 +785,11 @@ const BoardItem = React.memo(function BoardItem({
     settle.value = level === 'none' ? (editing ? 1 : 0) : withTiming(editing ? 1 : 0, { duration: 260, easing: EASE_OUT });
   }, [editing, level]);
 
-  // a new place: glide there (its very first place, and any while the animation level is off, is simply taken)
+  // a new place: glide there (its very first place, any before the board's first measure, and any while the animation
+  // level is off, is simply taken)
   useEffect(() => {
     if (dragging) return;
-    if (!placed.current || level === 'none') {
+    if (!placed.current || !settled || level === 'none') {
       px.value = x;
       py.value = y;
       placed.current = true;
@@ -961,7 +1002,8 @@ function Gallery({ visible, onClose, onClosed, archived, onTypes, onAdd, onRemov
   return (
     <Sheet
       visible={visible} onClose={onClose} onClosed={() => { setReady(false); onClosed(); }} onRisen={() => setReady(true)} title="Add widgets"
-      action={picked.size ? <ConfirmKey count={picked.size} onPress={confirm} /> : null}
+      // the key fades out when the last pick is undone, but goes at once with the sheet, which holds it outside its body
+      action={<LayoutAnimationConfig skipExiting>{picked.size ? <ConfirmKey count={picked.size} onPress={confirm} /> : null}</LayoutAnimationConfig>}
     >
       <StoreOverride.Provider value={sample}>
       {groups.map((g) => (

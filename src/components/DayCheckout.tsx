@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { Easing, FadeOut, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { C, F, MIN, S, TRACK, neuRaised } from '../theme';
 import { JournalEntry } from '../store';
 import { MOODS, journalDateParts, shiftKey } from '../journal';
@@ -34,16 +34,28 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
   const surface = theme === 'minimal'
     ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
     : { backgroundColor: C.card, ...neuRaised('mid') };
+  // Skip and Done fade the card out before the journal takes it away. A layout exit would also run when the whole
+  // journal page goes, keeping a card alive in a page being torn down; the other ways it closes simply cut.
+  const out = useSharedValue(1);
+  const leaving = React.useRef(false);
+  const leave = (then: () => void) => {
+    if (leaving.current) return;
+    leaving.current = true;
+    if (level === 'none') { then(); return; }
+    out.value = withTiming(0, { duration: 160, easing: Easing.in(Easing.quad) }, (done) => { if (done) runOnJS(then)(); });
+  };
+  const outStyle = useAnimatedStyle(() => ({ opacity: out.value }));
 
   return (
+    // the fade sits on a wrapper, so it never shares the card's opacity with its entrance
+    <Animated.View style={outStyle}>
     <Animated.View
       entering={swapIn(level)}
-      exiting={level === 'none' ? undefined : FadeOut.duration(160).easing(Easing.in(Easing.quad))}
       style={[st.card, surface]}
     >
       <View style={st.head}>
         <Text style={[st.title, { flex: 1, marginRight: 12 }]} numberOfLines={1}>{title}</Text>
-        <Pressable onPress={skip ? onSkip : onDone} hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }} accessibilityRole="button">
+        <Pressable onPress={() => leave(skip ? onSkip : onDone)} hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }} accessibilityRole="button">
           {/* Skip turns into Done as the first answer lands: the word dips over instead of swapping */}
           <FadeSwap swapKey={skip ? 'skip' : 'done'}>
             <Text style={[st.action, { color: skip ? C.textDim : C.gold }]}>{skip ? 'Skip' : 'Done'}</Text>
@@ -79,6 +91,7 @@ export function DayCheckout({ dateKey, mood, rating, offered, onMood, onRating, 
           ))}
         </View>
       </View>
+    </Animated.View>
     </Animated.View>
   );
 }

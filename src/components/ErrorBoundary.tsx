@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { C, F, MIN, NEU, TRACK, bgFor } from '../theme';
+import { C, F, MIN, TRACK, bgFor, neuInset } from '../theme';
 import { PillButton, useTheme } from './UI';
 
 function Fallback({ onRestart }: { onRestart: () => void }) {
@@ -13,7 +13,7 @@ function Fallback({ onRestart }: { onRestart: () => void }) {
           st.well,
           theme === 'minimal'
             ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
-            : { backgroundColor: C.inset, ...NEU.insetLow },
+            : { backgroundColor: C.inset, ...neuInset('low') },
         ]}
       >
         <Ionicons name="alert-circle-outline" size={28} color={C.textDim} />

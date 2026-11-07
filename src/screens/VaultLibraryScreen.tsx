@@ -24,10 +24,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as CachedImage } from 'expo-image';
 import { WIDE_AT, columnWidth } from '../layout';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
-import { DraftSheet, fetchTitle, removeVaultItem } from './VaultPlayerScreen';
+import { DraftSheet, fetchTitle, folderChoices, removeVaultItem } from './VaultPlayerScreen';
 import { toastTrashed } from '../trashToast';
 
 const thumb = (videoId: string) => 'https://img.youtube.com/vi/' + videoId + '/mqdefault.jpg';
+/** the thumbnails loaded this launch: a row scrolled back into view, or a page visited again, shows its own at once */
+const thumbsShown = new Set<string>();
 
 /** A second tap on a video while the first one's player is on its way is the same tap: never two players, two WebViews. */
 const PUSH_GAP_MS = 600;
@@ -53,8 +55,12 @@ const hitText = (x: NoteHit) => (x.isBookmark ? (x.item as Bookmark).label : (x.
  */
 function Thumb({ videoId, style, radius = 10 }: { videoId: string; style?: any; radius?: number }) {
   const theme = useTheme();
+  const level = useAnimLevel();
   const [failed, setFailed] = React.useState(false);
-  const [loaded, setLoaded] = React.useState(false);
+  // one already shown this launch comes from the memory cache at once: no sheen over it for a frame, no fade in again
+  const [loaded, setLoaded] = React.useState(() => thumbsShown.has(videoId));
+  // settled as it mounts, so the fade is never cut short when the load lands
+  const [seen] = React.useState(loaded);
   const box = [st.thumb, style, { borderRadius: radius }];
   if (failed) {
     return (
@@ -67,8 +73,8 @@ function Thumb({ videoId, style, radius = 10 }: { videoId: string; style?: any; 
     <View style={[box, { overflow: 'hidden' }]}>
       <CachedImage
         source={{ uri: thumb(videoId) }} style={[StyleSheet.absoluteFill, { borderRadius: radius }]} contentFit="cover"
-        cachePolicy="memory-disk" transition={220}
-        onLoad={() => setLoaded(true)}
+        cachePolicy="memory-disk" transition={level === 'none' || seen ? 0 : 220}
+        onLoad={() => { thumbsShown.add(videoId); setLoaded(true); }}
         onError={() => setFailed(true)}
       />
       {loaded ? null : <Sheen radius={radius} />}
@@ -262,7 +268,7 @@ const AddCard = React.memo(function AddCard({ cwd, folderName, onAdded, onMany }
           onSubmitEditing={() => { if (!adding && url.trim()) submit(url); }}
         />
         <IconBtn name="clipboard-outline" color={C.pink} size={22} style={{ marginLeft: 4 }} onPress={paste} accessibilityLabel="Paste a link" />
-        <NeuIconBtn name="add" color={adding ? C.textFaint : C.pink} dim={40} onPress={() => { if (!adding && url.trim()) submit(url); }} accessibilityLabel="Add video" />
+        <NeuIconBtn name="add" color={adding ? C.textFaint : C.pink} dim={44} onPress={() => { if (!adding && url.trim()) submit(url); }} accessibilityLabel="Add video" />
       </Row>
       {adding && <Appear><Text style={[T.caption, { marginTop: 6 }]}>Fetching title…</Text></Appear>}
     </Card>
@@ -273,7 +279,11 @@ const AddCard = React.memo(function AddCard({ cwd, folderName, onAdded, onMany }
  * The search field. The words being typed stay here, so a keystroke re-renders the field at once; the three pages
  * filter in a transition behind it, which a faster keystroke interrupts.
  */
-const SearchField = React.memo(function SearchField({ onQuery }: { onQuery: (q: string) => void }) {
+const SearchField = React.memo(function SearchField({ onQuery, onFocusChange }: {
+  onQuery: (q: string) => void;
+  /** whether the field has the keyboard, which is what moves the hero aside */
+  onFocusChange: (focused: boolean) => void;
+}) {
   const [text, setText] = useState('');
   return (
     <Field
@@ -282,6 +292,8 @@ const SearchField = React.memo(function SearchField({ onQuery }: { onQuery: (q: 
         setText(v);
         React.startTransition(() => onQuery(v));
       }}
+      onFocus={() => onFocusChange(true)}
+      onBlur={() => onFocusChange(false)}
       placeholder="Search titles, #tags, notes…"
     />
   );
@@ -406,6 +418,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return m;
   }, [videos, folders]);
   const folderNames = useMemo(() => new Map(folders.map((f) => [f.id, f.name])), [folders]);
+  const folderList = useMemo(() => folderChoices(folders), [folders]);
   // the folders at and under the level in view; null at the top, where that is the whole library
   const subtree = useMemo(() => {
     if (!cwd) return null;
@@ -468,7 +481,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return () => sub.remove();
   }, [goUp]));
 
-  const ql = q.trim().toLowerCase();
+  // a lone # is a tag search not yet typed: it searches for nothing, so every page stays as it was
+  const typed = q.trim().toLowerCase();
+  const ql = typed === '#' ? '' : typed;
   const match = (v: VaultVideo) => {
     if (!ql) return true;
     if (ql.startsWith('#')) return v.tags.some((t) => t.includes(ql.slice(1)));
@@ -605,8 +620,10 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // context line is the count of videos, none when there are none. The hero sits above the controls: they are fixed
   // above three lists, so the big title never scrolls away and the bar's own title stays out of the way. On a phone the
   // hero steps aside while the keyboard is up: the fixed controls take most of a short screen, and a search would be left
-  // a sliver of results to show. They then start below the bar (barH: a tab's bar lies over the top, a page's has its own space)
-  const typing = useKeyboardOpen() && width < WIDE_AT;
+  // a sliver of results to show. They then start below the bar (barH: a tab's bar lies over the top, a page's has its own space).
+  // Only for the search: a link being pasted into the add field, or a sheet's field, leaves the hero where it is
+  const [searchFocused, setSearchFocused] = useState(false);
+  const typing = useKeyboardOpen() && searchFocused && width < WIDE_AT;
   const header = useToolHeader({
     // a pull down on any of the three pages, at the top of the Vault, opens Sift on its Vault filter
     contentPull: cwdFolder ? undefined : 'vault',
@@ -630,7 +647,7 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
             {typing ? null : header.hero}
             <AddCard cwd={cwd} folderName={cwdFolder?.name} onAdded={openVideo} onMany={setMany} />
 
-            <SearchField onQuery={setQ} />
+            <SearchField onQuery={setQ} onFocusChange={setSearchFocused} />
 
             <SegmentedControl
               color={C.pink}
@@ -807,9 +824,9 @@ export function VaultLibraryScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <Row style={{ flexWrap: 'wrap' }}>
           <Chip icon="home-outline" label="No folder" color={C.pink} active={heldMove?.folderId === null}
             onPress={() => { if (moveSheet) updateVideo(moveSheet.id, { folderId: null }); setMoveSheet(null); }} />
-          {folders.map((f) => (
-            <Chip key={f.id} icon="folder-outline" color={C.pink} active={heldMove?.folderId === f.id}
-              label={f.parentId ? (folderNames.get(f.parentId) || '') + ' / ' + f.name : f.name}
+          {/* each folder by its whole path, in order by it, as the player's own move sheet */}
+          {folderList.map(({ folder: f, label }) => (
+            <Chip key={f.id} icon="folder-outline" color={C.pink} active={heldMove?.folderId === f.id} label={label}
               onPress={() => { if (moveSheet) updateVideo(moveSheet.id, { folderId: f.id }); setMoveSheet(null); }} />
           ))}
         </Row>

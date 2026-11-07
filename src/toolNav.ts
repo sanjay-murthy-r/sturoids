@@ -102,6 +102,38 @@ export function openTool(key: ToolKey, params?: ToolParams) {
   });
 }
 
+/**
+ * Opens a video's player wherever the Vault lives right now, as openTool does for the tool: in the Vault's bar slot,
+ * over the Vault with the bar still there, or as a full page when the Vault has no slot. `t` asks for a moment in
+ * seconds, and carries a new nonce each time, so a player already open on that video sees it as a new ask and goes
+ * there again.
+ */
+export function openVideoPage(id: string, t?: number | string) {
+  const at = t == null || t === '' ? NaN : Math.floor(Number(t));
+  const params: Record<string, string> = Number.isFinite(at) && at >= 0
+    ? { id, t: String(at), n: Date.now().toString(36) }
+    : { id };
+  const slot = normaliseSlots(useStore.getState().settings.tabSlots).indexOf('vault');
+  const stack = slot < 0 ? undefined : rootStack();
+  if (!containerRef || !stack) {
+    // no slot, or the first frames of a cold start: the full page, as before
+    router.push({ pathname: '/vault/[id]', params }, { dangerouslySingular: true });
+    return;
+  }
+  // One action, like openTool's: a full page open over the tabs closes, and the slot's own stack is asked for the
+  // player, so a player already open on this video comes to the top instead of a second copy. `initial: false` keeps
+  // the Vault beneath it in a slot not visited yet this launch, so Back lands on the library
+  containerRef.dispatch({
+    type: 'NAVIGATE',
+    target: stack.key,
+    payload: {
+      name: TABS_GROUP,
+      pop: true,
+      params: { screen: slotRouteName(slot), params: { screen: 'video/[id]', params, initial: false } },
+    },
+  });
+}
+
 /** Tab fling: move to the next (1) or previous (-1) bar route, in bar order. Returns whether it moved. */
 export function stepTab(dir: 1 | -1): boolean {
   const stack = rootStack();

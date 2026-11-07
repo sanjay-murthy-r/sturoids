@@ -1,15 +1,19 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, {
+  Easing, FadeIn, FadeOut, SharedValue, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T } from '../src/theme';
 import { MascotLook, useStore } from '../src/store';
 import { ScreenBG, SectionTitle, Toggle, useToolHeader } from '../src/components/UI';
-import { Enter } from '../src/components/Motion';
+import { Enter, useAnimLevel } from '../src/components/Motion';
 import { READ_MAX, frame } from '../src/layout';
 import { CUTE, CUTE_BOLD, FloorBook, GridArt, Sprite } from '../src/components/Mascot';
-import { COLOR_SETS, COLS, FLIERS, HAND, Kind, NAMES, PROPS, Pose, REST, ROWS, colorSet, gearFor } from '../src/mascot/art';
+import {
+  BOOK_TUCK, COLOR_SETS, COLS, ColorSet, FLIERS, HAND, Kind, NAMES, PROPS, Palette, Pose, REST, ROWS, colorSet, gearFor,
+} from '../src/mascot/art';
 import { startMakeover } from '../src/components/Makeover';
 import { tick } from '../src/haptics';
 import { fmtClockTime } from '../src/utils';
@@ -46,9 +50,13 @@ export default function CompanionPage() {
   const name = s.mascotName || NAMES[kind];
   const look = s.mascotLooks[kind];
   const set = colorSet(kind, look.colors);
-  const gear = look.gear.filter((g) => gearFor(kind).some((x) => x.key === g));
+  // kept the same array while the gear is, so the stage and its sprite are not drawn again for nothing
+  const gear = React.useMemo(() => look.gear.filter((g) => gearFor(kind).some((x) => x.key === g)), [look.gear, kind]);
   const [nameDraft, setNameDraft] = React.useState(s.mascotName);
-  const preview = usePreview();
+  const [swatchW, setSwatchW] = React.useState(0);
+  // the stage plays its own performances (Stage below), so a pose step redraws the stage alone, not the whole page
+  const stage = React.useRef<((d: Demo) => void) | null>(null);
+  const play = (d: Demo) => stage.current?.(d);
   // leaving the page with the name still being typed keeps it, as a blur would
   const draftRef = React.useRef(nameDraft);
   draftRef.current = nameDraft;
@@ -64,7 +72,12 @@ export default function CompanionPage() {
     tick();
     setSetting('mascot', k);
     setSetting('mascotLast', k);
-    preview.play('wave');
+    // choosing one while it is off turns it on, as the switch does: out on a walk or hiding, it would not show at all
+    if (off) {
+      setSetting('mascotOut', false);
+      setSetting('mascotHideUntil', 0);
+    }
+    play('wave');
   };
   /** the companion on or off altogether: off, nothing of it shows anywhere (its door included) */
   const setOn = (on: boolean) => {
@@ -73,7 +86,7 @@ export default function CompanionPage() {
       setSetting('mascot', s.mascotLast);
       setSetting('mascotOut', false);
       setSetting('mascotHideUntil', 0);
-      preview.play('wave');
+      play('wave');
     } else {
       setSetting('mascotLast', kind);
       setSetting('mascot', 'off');
@@ -86,12 +99,12 @@ export default function CompanionPage() {
     // one friend flying about at a time
     if (!on && FLIERS.includes(k)) next = next.filter((g) => g === k || !FLIERS.includes(g));
     setLook({ gear: next });
-    if (!on) preview.play(k === 'glasses' || k === 'phones' ? 'read' : 'cheer');
+    if (!on) play(k === 'glasses' || k === 'phones' ? 'read' : 'cheer');
   };
   const saveName = () => {
     const v = nameDraft.replace(/\s+/g, ' ').trim().slice(0, 16);
     setNameDraft(v);
-    if (v !== s.mascotName) { setSetting('mascotName', v); preview.play('wave'); }
+    if (v !== s.mascotName) { setSetting('mascotName', v); play('wave'); }
   };
 
   let enter = 0;
@@ -117,7 +130,7 @@ export default function CompanionPage() {
           {s.mood !== 'cheerful' ? (
             <View style={[CARD, st.note]}>
               <Text style={T.body}>Your companion lives in Cheerful.</Text>
-              <Pressable onPress={() => startMakeover('cheerful')} accessibilityRole="button" style={{ marginTop: 8 }}>
+              <Pressable onPress={() => startMakeover('cheerful')} accessibilityRole="button" hitSlop={12} style={{ marginTop: 8 }}>
                 <Text style={[T.body, { color: C.accent, fontFamily: F.semi }]}>Switch to Cheerful</Text>
               </Pressable>
             </View>
@@ -131,45 +144,12 @@ export default function CompanionPage() {
                     return name + ' is hiding until ' + fmtClockTime(d.getHours() * 60 + d.getMinutes(), s.hour24) + '. Or:';
                   })()}
               </Text>
-              <Pressable onPress={() => { setSetting('mascotOut', false); setSetting('mascotHideUntil', 0); }} accessibilityRole="button" style={{ marginTop: 8 }}>
+              <Pressable onPress={() => { setSetting('mascotOut', false); setSetting('mascotHideUntil', 0); }} accessibilityRole="button" hitSlop={12} style={{ marginTop: 8 }}>
                 <Text style={[T.body, { color: C.accent, fontFamily: F.semi }]}>Call {name} back</Text>
               </Pressable>
             </View>
           ) : null}
-          {!off ? (
-            <View style={[CARD, st.stage]}>
-              <View style={{ alignItems: 'center', justifyContent: 'flex-end', height: 150 }}>
-                {gear.includes('ladybug') ? <View style={st.bug}><GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={4} /></View> : null}
-                {gear.includes('firefly') ? <View style={st.fly}><View style={st.flyHalo} /><View style={st.flyDot} /></View> : null}
-                <Animated.View style={[{ width: COLS * STAGE_PX, height: ROWS * STAGE_PX }, preview.style]}>
-                  {kind === 'pip' && gear.includes('balloon') ? (
-                    // tied to its back hand (the left, as it faces right here), wherever the hand is
-                    <View
-                      pointerEvents="none"
-                      style={[st.balloon, { left: HAND[preview.pose.l][0] * STAGE_PX - 7.5, top: HAND[preview.pose.l][1] * STAGE_PX - 30 - 18 }]}
-                    >
-                      <GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={3} />
-                      <View style={{ width: 1.5, height: 30, backgroundColor: 'rgba(160,150,140,0.7)' }} />
-                    </View>
-                  ) : null}
-                  <Sprite kind={kind} pose={preview.pose} gear={gear} bud={preview.bud} pal={set.pal} px={STAGE_PX} />
-                </Animated.View>
-                {preview.pose.book !== 'none' ? (
-                  <View pointerEvents="none" style={st.bookAt}>
-                    <FloorBook page={preview.pose.book} face={preview.face} px={STAGE_PX} />
-                  </View>
-                ) : null}
-              </View>
-              <Text style={st.stageName}>{name}</Text>
-              <View style={st.tries}>
-                {(['wave', 'think', 'cheer', 'read'] as const).map((k) => (
-                  <Pressable key={k} onPress={() => preview.play(k)} accessibilityRole="button" style={({ pressed }) => [st.try, pressed && { opacity: 0.6 }]}>
-                    <Text style={st.tryText}>{k === 'read' ? 'Study' : k[0].toUpperCase() + k.slice(1)}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-          ) : null}
+          {!off ? <Stage kind={kind} gear={gear} pal={set.pal} name={name} playRef={stage} /> : null}
         </Enter>
 
         <Enter index={enter++}>
@@ -207,20 +187,25 @@ export default function CompanionPage() {
 
             <Enter index={enter++}>
               <SectionTitle>Colours</SectionTitle>
-              <View style={st.grid}>
-                {COLOR_SETS[kind].map((c) => {
-                  const on = c.key === set.key;
-                  return (
-                    <Pressable
-                      key={c.key} onPress={() => { tick(); setLook({ colors: c.key }); preview.play('hop'); }}
-                      accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={c.name}
-                      style={({ pressed }) => [CARD, st.swatch, on && picked(), pressed && { opacity: 0.8 }]}
-                    >
-                      <Sprite kind={kind} pose={REST} gear={[]} bud={2} pal={c.pal} px={2.5} />
-                      <Text style={[st.tileName, on && { color: C.accent }]}>{c.name}</Text>
-                    </Pressable>
-                  );
-                })}
+              {/* centred lines, balanced so that none is left holding a lone swatch */}
+              <View onLayout={(e) => setSwatchW(Math.round(e.nativeEvent.layout.width))}>
+                {swatchRows(COLOR_SETS[kind], swatchW).map((row, i) => (
+                  <View key={i} style={[st.swatchRow, i > 0 && { marginTop: GRID_GAP }]}>
+                    {row.map((c) => {
+                      const on = c.key === set.key;
+                      return (
+                        <Pressable
+                          key={c.key} onPress={() => { tick(); setLook({ colors: c.key }); play('hop'); }}
+                          accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={c.name}
+                          style={({ pressed }) => [CARD, st.swatch, on && picked(), pressed && { opacity: 0.8 }]}
+                        >
+                          <Sprite kind={kind} pose={REST} gear={NO_GEAR} bud={2} pal={c.pal} px={2.5} />
+                          <Text style={[st.tileName, on && { color: C.accent }]}>{c.name}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ))}
               </View>
             </Enter>
 
@@ -230,7 +215,7 @@ export default function CompanionPage() {
                 {gearFor(kind).map((g) => {
                   const on = gear.includes(g.key);
                   // the tile shows it wearing just this, in the pose that shows it best
-                  const showPose: Pose = g.key === 'phones' ? { ...REST, phones: true, eyes: 'happy' } : g.key === 'glasses' ? { ...REST, eyes: 'open' } : REST;
+                  const showPose: Pose = g.key === 'phones' ? PHONES_POSE : g.key === 'glasses' ? GLASSES_POSE : REST;
                   return (
                     <Pressable
                       key={g.key} onPress={() => toggleGear(g.key)}
@@ -238,7 +223,7 @@ export default function CompanionPage() {
                       style={({ pressed }) => [CARD, st.gearTile, on && picked(), pressed && { opacity: 0.85 }]}
                     >
                       <View style={st.gearArt}>
-                        <Sprite kind={kind} pose={showPose} gear={[g.key]} bud={3} pal={set.pal} px={3} />
+                        <Sprite kind={kind} pose={showPose} gear={oneGear(g.key)} bud={3} pal={set.pal} px={3} />
                         {g.key === 'ladybug' ? <View style={{ position: 'absolute', right: 6, top: 4 }}><GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={3} /></View> : null}
                         {g.key === 'firefly' ? <View style={{ position: 'absolute', left: 8, top: 6 }}><View style={st.flyHalo} /><View style={st.flyDot} /></View> : null}
                         {g.key === 'balloon' ? <View style={{ position: 'absolute', left: 6, top: -2, alignItems: 'center' }}><GridArt grid={PROPS.balloon.grid} pal={{ a: set.pal.a, A: set.pal.A, h: '#FFFFFF' }} px={3} /><View style={{ width: 1, height: 18, backgroundColor: 'rgba(160,150,140,0.7)' }} /></View> : null}
@@ -259,7 +244,7 @@ export default function CompanionPage() {
                   const on = s.mascotTalk === t.key;
                   return (
                     <Pressable
-                      key={t.key} onPress={() => { tick(); setSetting('mascotTalk', t.key); }}
+                      key={t.key} onPress={() => { tick(); setSetting('mascotTalk', t.key); }} hitSlop={8}
                       accessibilityRole="radio" accessibilityState={{ selected: on }}
                       style={[st.pill, on && { backgroundColor: C.accent + '2E', borderColor: C.accent }]}
                     >
@@ -297,6 +282,82 @@ type Demo = 'wave' | 'think' | 'cheer' | 'read' | 'hop';
 /** the stage's square */
 const STAGE_PX = 6;
 
+// the tiles' sprites are memoised: kept arrays and poses let them skip a redraw when nothing of theirs has changed
+const NO_GEAR: string[] = [];
+const PHONES_POSE: Pose = { ...REST, phones: true, eyes: 'happy' };
+const GLASSES_POSE: Pose = { ...REST, eyes: 'open' };
+const ONE_GEAR: Record<string, string[]> = {};
+const oneGear = (key: string) => ONE_GEAR[key] || (ONE_GEAR[key] = [key]);
+
+/** a colour swatch's width (st.swatch) and the room between swatches */
+const SWATCH_W = 78;
+const GRID_GAP = 10;
+/**
+ * The colour swatches in lines for a width: as many lines as the swatches need at that width, shared out evenly (the
+ * longer lines first), so a line is never left with one swatch alone. Unmeasured, one line that wraps.
+ */
+function swatchRows(sets: ColorSet[], w: number): ColorSet[][] {
+  if (!w) return [sets];
+  const fit = Math.max(1, Math.floor((w + GRID_GAP) / (SWATCH_W + GRID_GAP)));
+  const lines = Math.ceil(sets.length / fit);
+  const rows: ColorSet[][] = [];
+  let at = 0;
+  for (let i = 0; i < lines; i++) {
+    const n = Math.floor(sets.length / lines) + (i < sets.length % lines ? 1 : 0);
+    rows.push(sets.slice(at, at + n));
+    at += n;
+  }
+  return rows;
+}
+
+/**
+ * The live stage at the top of the page: the companion as chosen, with its own performances, breathing and blinking.
+ * It holds the pose itself, so each step of a performance redraws the stage alone; the page asks it to play through
+ * `playRef`.
+ */
+const Stage = React.memo(function Stage({ kind, gear, pal, name, playRef }: {
+  kind: Kind; gear: string[]; pal: Palette; name: string;
+  playRef: React.MutableRefObject<((d: Demo) => void) | null>;
+}) {
+  const preview = usePreview();
+  React.useEffect(() => { playRef.current = preview.play; });
+  React.useEffect(() => () => { playRef.current = null; }, [playRef]);
+  return (
+    <View style={[CARD, st.stage]}>
+      <View style={{ alignItems: 'center', justifyContent: 'flex-end', height: 150 }}>
+        {gear.includes('ladybug') ? <View style={st.bug}><GridArt grid={PROPS.ladybug.grid} pal={PROPS.ladybug.pal} px={4} /></View> : null}
+        {gear.includes('firefly') ? <View style={st.fly}><View style={st.flyHalo} /><View style={st.flyDot} /></View> : null}
+        <Animated.View style={[{ width: COLS * STAGE_PX, height: ROWS * STAGE_PX }, preview.style]}>
+          {kind === 'pip' && gear.includes('balloon') ? (
+            // tied to its back hand (the left, as it faces right here), wherever the hand is
+            <View
+              pointerEvents="none"
+              style={[st.balloon, { left: HAND[preview.pose.l][0] * STAGE_PX - 7.5, top: HAND[preview.pose.l][1] * STAGE_PX - 30 - 18 }]}
+            >
+              <GridArt grid={PROPS.balloon.grid} pal={{ a: pal.a, A: pal.A, h: '#FFFFFF' }} px={3} />
+              <View style={{ width: 1.5, height: 30, backgroundColor: 'rgba(160,150,140,0.7)' }} />
+            </View>
+          ) : null}
+          <Sprite kind={kind} pose={preview.pose} gear={gear} bud={preview.bud} pal={pal} px={STAGE_PX} />
+        </Animated.View>
+        {preview.pose.book !== 'none' ? (
+          <View pointerEvents="none" style={st.bookAt}>
+            <FloorBook page={preview.pose.book} face={preview.face} px={STAGE_PX} tuck={BOOK_TUCK[kind]} />
+          </View>
+        ) : null}
+      </View>
+      <Text style={st.stageName}>{name}</Text>
+      <View style={st.tries}>
+        {(['wave', 'think', 'cheer', 'read'] as const).map((k) => (
+          <Pressable key={k} onPress={() => preview.play(k)} accessibilityRole="button" hitSlop={8} style={({ pressed }) => [st.try, pressed && { opacity: 0.6 }]}>
+            <Text style={st.tryText}>{k === 'read' ? 'Study' : k[0].toUpperCase() + k.slice(1)}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+});
+
 /** The stage's own little performances, and its breathing and blinking. */
 function usePreview() {
   const [pose, setPoseState] = React.useState<Pose>(REST);
@@ -309,29 +370,49 @@ function usePreview() {
   const breath = useSharedValue(0);
   // the stage's companion faces right, so its book lies on its right
   const face = useSharedValue(1);
+  // with motion off the stage keeps still: no breathing, blinking or wave of its own, and a performance asked for
+  // steps through its poses with its tilts landing at once and its hops kept on the floor
+  const still = useAnimLevel() === 'none';
+  const stillRef = React.useRef(still);
+  stillRef.current = still;
+  const waved = React.useRef(false);
   React.useEffect(() => {
+    if (still) {
+      breath.value = 0;
+      return () => { token.current++; };
+    }
     breath.value = withRepeat(withTiming(1, { duration: 1500, easing: Easing.inOut(Easing.sin) }), -1, true);
     const iv = setInterval(() => {
       if (ref.current.eyes !== 'open') return;
       setPose({ eyes: 'blink' });
       setTimeout(() => { if (ref.current.eyes === 'blink') setPose({ eyes: 'open' }); }, 130);
     }, 3400);
-    const t = setTimeout(() => play('wave'), 500);
-    return () => { clearInterval(iv); clearTimeout(t); token.current++; };
-  }, []);
+    // the hello once, as the page opens
+    const t = waved.current ? undefined : setTimeout(() => play('wave'), 500);
+    waved.current = true;
+    return () => { clearInterval(iv); if (t) clearTimeout(t); token.current++; };
+  }, [still]);
+  const tiltTo = (deg: number, duration: number) => { tilt.value = stillRef.current ? deg : withTiming(deg, { duration }); };
+  const hop = (v: SharedValue<number>, h: number, up: number, down: number, eased = true) => {
+    if (stillRef.current) return;
+    v.value = withSequence(
+      withTiming(h, eased ? { duration: up, easing: Easing.out(Easing.quad) } : { duration: up }),
+      withTiming(0, eased ? { duration: down, easing: Easing.in(Easing.quad) } : { duration: down }),
+    );
+  };
   const play = (d: Demo) => {
     const my = ++token.current;
     const wait = (ms: number) => new Promise<boolean>((r) => setTimeout(() => r(token.current === my), ms));
     const run = async () => {
       setPose(REST);
-      tilt.value = withTiming(0, { duration: 120 });
+      tiltTo(0, 120);
       if (d === 'hop') {
         setPose({ eyes: 'happy', feet: 'tuck' });
-        lift.value = withSequence(withTiming(22, { duration: 200, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: 200, easing: Easing.in(Easing.quad) }));
+        hop(lift, 22, 200, 200);
         if (!(await wait(420))) return;
       } else if (d === 'wave') {
         setPose({ eyes: 'happy', mouth: 'smile', r: 'out' });
-        tilt.value = withTiming(5, { duration: 160 });
+        tiltTo(5, 160);
         if (!(await wait(110))) return;
         for (let i = 0; i < 4; i++) {
           setPose({ r: 'up' }); if (!(await wait(150))) return;
@@ -341,19 +422,19 @@ function usePreview() {
       } else if (d === 'think') {
         // with its free front hand, as on the header (the back one keeps Pip's balloon)
         setPose({ eyes: 'up', mouth: 'flat', r: 'up' });
-        tilt.value = withTiming(-6, { duration: 400 });
+        tiltTo(-6, 400);
         if (!(await wait(1400))) return;
         setPose({ eyes: 'left' }); if (!(await wait(600))) return;
         setPose({ eyes: 'wide', mouth: 'o', r: 'rest' });
-        tilt.value = withTiming(0, { duration: 160 });
-        lift.value = withSequence(withTiming(10, { duration: 150 }), withTiming(0, { duration: 170 }));
+        tiltTo(0, 160);
+        hop(lift, 10, 150, 170, false);
         if (!(await wait(450))) return;
         setPose({ eyes: 'happy', mouth: 'smile' }); if (!(await wait(800))) return;
       } else if (d === 'cheer') {
         setPose({ eyes: 'happy', mouth: 'grin', l: 'up', r: 'up' });
         for (let i = 0; i < 3; i++) {
           setPose({ feet: 'tuck', l: i % 2 ? 'swing' : 'up', r: i % 2 ? 'up' : 'swing' });
-          lift.value = withSequence(withTiming(20, { duration: 200, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: 200, easing: Easing.in(Easing.quad) }));
+          hop(lift, 20, 200, 200);
           if (!(await wait(420))) return;
           setPose({ feet: 'stand' });
         }
@@ -364,7 +445,7 @@ function usePreview() {
         setPose({ eyes: 'focus' }); if (!(await wait(400))) return;
         setPose({ phones: true }); if (!(await wait(260))) return;
         setPose({ book: 'open', eyes: 'read' });
-        tilt.value = withTiming(3, { duration: 260 });
+        tiltTo(3, 260);
         for (let i = 0; i < 3; i++) {
           if (!(await wait(700))) return;
           setPose({ eyes: 'read2' }); if (!(await wait(500))) return;
@@ -375,7 +456,7 @@ function usePreview() {
         setPose({ book: 'open', r: 'rest', eyes: 'read2' }); if (!(await wait(1100))) return;
       }
       setPose(REST);
-      tilt.value = withTiming(0, { duration: 200 });
+      tiltTo(0, 200);
     };
     void run();
   };
@@ -404,7 +485,8 @@ const st = StyleSheet.create({
   whoName: { fontFamily: CUTE_BOLD, fontSize: 16, color: C.text, marginTop: 8 },
   name: { fontFamily: CUTE_BOLD, fontSize: 18, paddingVertical: 4 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  swatch: { width: 78, alignItems: 'center', paddingVertical: 10 },
+  swatchRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: GRID_GAP },
+  swatch: { width: SWATCH_W, alignItems: 'center', paddingVertical: 10 },
   tileName: { fontFamily: CUTE_BOLD, fontSize: 13, color: C.text, marginTop: 6 },
   gearTile: { width: '47.5%', padding: 12, alignItems: 'center' },
   gearArt: { width: '100%', height: 64, alignItems: 'center', justifyContent: 'center' },

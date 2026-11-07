@@ -132,6 +132,8 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
   const [dropNote, setDropNote] = React.useState('');
   const [draft, setDraft] = React.useState('');
   const [catDraft, setCatDraft] = React.useState('');
+  // a new tag's name that a category already has, said under the tag line
+  const [tagClash, setTagClash] = React.useState('');
   // the last delete and its Undo. A sheet is its own window and would cover a toast, so the Undo is offered here, in
   // the list the tag left, until the manager is next opened
   const [gone, setGone] = React.useState<null | { label: string; category: boolean; undo: () => void }>(null);
@@ -191,21 +193,36 @@ export function TagManagerSheet({ visible, onClose }: { visible: boolean; onClos
       </Pressable>
     </View>
   );
+  // A tag named like a category already there makes nothing (a name is one tag or one category), so the name stays in
+  // its field and a line says why, as the exam form's tag line does, instead of the field simply emptying
+  const add = (value: string, set: (v: string) => void, category: boolean) => {
+    const name = value.trim();
+    const id = addScoreTag(value, { category });
+    if (!category && id && useStore.getState().scoreTags.find((t) => t.id === id)?.category) {
+      setTagClash(name + ' is a category. Give the tag another name.');
+      return;
+    }
+    set('');
+  };
   const addLine = (value: string, set: (v: string) => void, category: boolean) => (
-    <Row style={{ alignItems: 'flex-start', marginTop: 12 }}>
-      <Field
-        value={value} onChangeText={set} placeholder={category ? 'New category' : 'New tag'} maxLength={40}
-        style={{ flex: 1, marginBottom: 0 }}
-        onSubmitEditing={() => { addScoreTag(value, { category }); set(''); }}
-        returnKeyType="done"
-      />
-      <IconBtn
-        name="add-circle" color={value.trim() ? C.accent : C.textFaint} size={26}
-        style={{ marginLeft: 8, marginTop: 6 }}
-        onPress={() => { tick(); addScoreTag(value, { category }); set(''); }}
-        accessibilityLabel={category ? 'Add this category' : 'Add this tag'}
-      />
-    </Row>
+    <>
+      <Row style={{ alignItems: 'flex-start', marginTop: 12 }}>
+        <Field
+          value={value} onChangeText={(v) => { set(v); if (!category && tagClash) setTagClash(''); }}
+          placeholder={category ? 'New category' : 'New tag'} maxLength={40}
+          style={{ flex: 1, marginBottom: 0 }}
+          onSubmitEditing={() => add(value, set, category)}
+          returnKeyType="done"
+        />
+        <IconBtn
+          name="add-circle" color={value.trim() ? C.accent : C.textFaint} size={26}
+          style={{ marginLeft: 8, marginTop: 6 }}
+          onPress={() => { tick(); add(value, set, category); }}
+          accessibilityLabel={category ? 'Add this category' : 'Add this tag'}
+        />
+      </Row>
+      {!category && tagClash ? <Appear><Text style={[st.problem, { marginTop: 6, marginBottom: 0 }]}>{tagClash}</Text></Appear> : null}
+    </>
   );
 
   return (

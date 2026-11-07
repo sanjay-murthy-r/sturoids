@@ -3,7 +3,6 @@ import * as Notifications from 'expo-notifications';
 import { useStore } from './store';
 import { dayName, fmtClockTime, habitDueOn, todoDueOn, toMinutes, todayKey } from './utils';
 import { COUNTDOWN_NOTIF_ID, FINISH_NOTIF_ID } from './deepWork';
-import { openTool } from './toolNav';
 import { ToolKey, toolByKey } from './tools';
 import { ExamRemind, categoryOf, examRemindsOf, indexScores, resultOf, topExams } from './scores';
 import { toast } from './components/Toast';
@@ -252,7 +251,11 @@ function openFrom(r: Notifications.NotificationResponse) {
   const tool = r.notification.request.content.data?.tool;
   if (typeof tool !== 'string' || !toolByKey(tool)) return;
   if (pausedTools(useStore.getState()).has(tool)) return;
-  openTool(tool as ToolKey);
+  // through the app links' queue: a tap that started the app waits until the intro has gone and the navigator is up
+  // a block's alert opens the Planner on today, not on whichever day was last picked there
+  // loaded here: the app links' module reaches the screens, which the store's tests (in Node) never load
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  (require('./actions') as typeof import('./actions')).queueAppLink({ kind: 'open', tool, params: tool === 'planner' ? { day: dayName() } : {} });
 }
 
 /**

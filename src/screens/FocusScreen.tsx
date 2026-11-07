@@ -5,7 +5,7 @@ import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from '
 import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
-import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
 import { todayKey, yesterdayKey, uid, toMinutes, fmtClockTime, dayName, todoDueOn } from '../utils';
@@ -23,8 +23,8 @@ import { swapIn, useSwapIn } from '../components/Swap';
 import { Wheel } from '../components/Wheel';
 import { tick as haptic } from '../haptics';
 import {
-  NOTIF_CHANNEL_ID, cancelBreakEnd, cancelCountdownEnd, ensurePermission, notificationPermission, scheduleBreakEnd,
-  scheduleCountdownEnd,
+  NOTIF_CHANNEL_ID, SESSION_END_CHIME_CHANNEL, SESSION_END_QUIET_CHANNEL, cancelBreakEnd, cancelCountdownEnd, ensureChannel,
+  ensurePermission, notificationPermission, scheduleBreakEnd, scheduleCountdownEnd,
 } from '../notifications';
 import { playSessionEnd } from '../chime';
 import { FINISH_NOTIF_ID, TimerState, displayOf, elapsedOf, fmtMins } from '../deepWork';
@@ -409,6 +409,16 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const start = () => {
     // the block has run out and is wrapping up: there is nothing left to resume
     if (wrapTimer.current) return;
+    // a block until a clock time that has passed since it was set (only then is it more than ten hours off again) is
+    // not started on the length that time gave long ago: it says so, and the wheel's length starts it next time
+    if (startedAtRef.current == null && timerMode === 'countdown') {
+      const u0 = untilRef.current;
+      if (u0 && u0.min === targetMin && minutesUntil(u0.at) > LONGEST_MIN) {
+        untilRef.current = null;
+        toast(fmtClockTime(u0.at, hour24) + ' has passed, so the block did not start. Pick a time again, or Start for ' + fmtMins(targetMin));
+        return;
+      }
+    }
     endedRef.current = false;
     if (startedAtRef.current == null) {
       startedAtRef.current = Date.now();
@@ -457,8 +467,10 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     if (!mountedRef.current) return;
     if (ok) {
       setSilent(false);
-      // the block's end is told again, now that it can be
+      // the block's end, or the finish line, is told again, now that it can be
       renewEndNotice();
+      const at = finishAtRef.current;
+      if (startedRef.current && at != null && at > Date.now()) void noticeFinish(at);
       return;
     }
     // refused, or blocked in the phone's settings, where Android stops asking: the settings are the way to allow them.
@@ -474,6 +486,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const pause = () => {
     // the block has run out and is wrapping up: pausing now would only stall the wrap-up
     if (wrapTimer.current) return;
+    // a stopwatch paused once its finish line has passed ends there and then: paused, the 10-minute wait would never
+    // end it, and resuming would bank nothing past the line
+    if (timerMode === 'stopwatch' && finishAt != null && Date.now() >= finishAt) { endSession(true); return; }
     // a phone clock set back never takes time away; a stopwatch paused after its finish line has passed counts the
     // running stretch only up to the line, as ending it while running does
     if (startTs) {
@@ -515,20 +530,30 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
   const finishAtRef = useRef(finishAt);
   finishAtRef.current = finishAt;
-  /** The finish line's heads-up for when the app is away; the in-app flow below is primary. */
+  /**
+   * The finish line's heads-up for when the app is away; the in-app flow below is primary. Set as the countdown's end
+   * is: only when notifications are already allowed (Start never stops to ask; the quiet "You won't hear" line offers
+   * that), on the end-of-block channel with the chime when it is on.
+   */
   const noticeFinish = async (at: number) => {
     try {
-      // a line cleared or moved while permission was asked is not announced
-      if (!(await ensurePermission()) || finishAtRef.current !== at) return;
+      // a line cleared or moved while permission was looked up is not announced
+      if (!(await Notifications.getPermissionsAsync()).granted || finishAtRef.current !== at) return;
+      await ensureChannel();
+      if (finishAtRef.current !== at) return;
+      const channelId = useStore.getState().settings.focusChime ? SESSION_END_CHIME_CHANNEL : SESSION_END_QUIET_CHANNEL;
       finishNotifId.current = await Notifications.scheduleNotificationAsync({
         identifier: FINISH_NOTIF_ID,
         content: {
           title: 'Finish line reached', body: 'Your Deep Work finish line has passed. Open Sturoids to wrap up.',
           // a tap opens Deep Work, wherever it lives
           data: { tool: 'focus' },
+          sound: channelId === SESSION_END_CHIME_CHANNEL ? 'chime.wav' : false,
         },
-        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(at), channelId: NOTIF_CHANNEL_ID } as any,
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(at), channelId } as any,
       });
+      // cleared or moved while it was being set: take it back
+      if (finishAtRef.current !== at) Notifications.cancelScheduledNotificationAsync(FINISH_NOTIF_ID).catch(() => {});
     } catch {}
   };
 
@@ -581,8 +606,9 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           setHeld(true);
           toastWhenSeen('Finish line reached', { label: 'Open', onPress: () => openTool('focus') }, () => !navigation.isFocused());
         }
+        // the session ends after the wait whether it is still running or was paused meanwhile
         autoConcludeTimer.current = setTimeout(() => {
-          if (runningRef.current) {
+          if (startedLiveRef.current) {
             setFinishPrompt(false);
             endSessionRef.current();
           }
@@ -702,6 +728,8 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         taskTitles: attached.map((a) => a.title),
         subject: subject.trim() || undefined,
         ...(tags.length ? { tags } : {}),
+        // when it really began, pauses and all, for the part of the day the history puts it in
+        ...(startedAtRef.current != null ? { startedAt: startedAtRef.current } : {}),
       });
     }
     // after a review, said once its sheet has gone, where the toast can be seen
@@ -911,7 +939,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const recent = React.useMemo(() => [...sessions].reverse().slice(0, 6), [sessions]);
   // what the screen was built with is simply there; a mode switch or a task added later eases in
   const built = useBuilt();
-  const modeIn = built.current && level !== 'none' ? FadeIn.duration(level === 'full' ? 260 : 180).easing(EASE_OUT) : undefined;
+  const modeEase = built.current && level !== 'none' ? FadeIn.duration(level === 'full' ? 260 : 180).easing(EASE_OUT) : undefined;
 
   const idle = !started;
   // the time between blocks (a break offered, running or over) takes the setup's place while it lasts; read against the
@@ -922,13 +950,18 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const stageNow = idle ? (gap ? 'between' : 'idle') : 'running';
   const lastStage = useRef(stageNow);
   const switched = useRef(false);
-  if (lastStage.current !== stageNow) {
+  // the stage changed in this very render: every section comes in anew under its outer rise, so the views inside it
+  // that ease in by themselves (a mode's clock, the tasks list, the quiet line) come in with it rather than play twice
+  const switchedNow = lastStage.current !== stageNow;
+  if (switchedNow) {
     lastStage.current = stageNow;
     switched.current = true;
   }
   const switchIn = switched.current ? swapIn(level) : undefined;
+  const modeIn = switchedNow ? undefined : modeEase;
   // the first task attached takes the place of the empty note, and the last one taken off gives it back
-  const tasksIn = useSwapIn(attached.length === 0 ? 'none' : 'list');
+  const tasksSwap = useSwapIn(attached.length === 0 ? 'none' : 'list');
+  const tasksIn = switchedNow ? undefined : tasksSwap;
   const shownSubject = subject.trim();
   const current = attached.length === 0
     ? undefined
@@ -987,11 +1020,17 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const subjectBox = useRef<View>(null);
   const revealSubject = () => {
     const box = subjectBox.current;
-    if (mode !== 'tab' || !box) return;
+    const scroll = scrollRef.current as unknown as View | null;
+    if (mode !== 'tab' || !box || !scroll) return;
     const y0 = header.scrollY.value;
-    box.measureInWindow((_x, y) => {
-      const clear = header.barH + 12;
-      if (y < clear) scrollRef.current?.scrollTo({ y: Math.max(0, y0 - (clear - y)), animated: level !== 'none' });
+    // both are measured the same way and only their difference is used: Android's window y leaves out the status bar,
+    // which barH counts, so the field's raw y would read a status bar too high
+    scroll.measureInWindow((_sx, top) => {
+      box.measureInWindow((_x, by) => {
+        const y = by - top;
+        const clear = header.barH + 12;
+        if (y < clear) scrollRef.current?.scrollTo({ y: Math.max(0, y0 - (clear - y)), animated: level !== 'none' });
+      });
     });
   };
 
@@ -1220,7 +1259,7 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
     ),
     today: (
       <View style={{ marginTop: flush('today') ? 0 : S.section / 2 }}>
-        <TodayCard sessions={sessions} today={today} liveMin={liveMin} goalMin={focusGoal} next={idle ? nextLine : undefined} />
+        <TodayCard sessions={sessions} today={today} liveMin={liveMin} running={started && running} paused={started && !running && !review} goalMin={focusGoal} next={idle ? nextLine : undefined} />
       </View>
     ),
     tasks: (
@@ -1237,24 +1276,27 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
         >
           Session tasks
         </SectionTitle>
-        <Animated.View key={attached.length === 0 ? 'none' : 'list'} entering={tasksIn}>
-          {attached.length === 0 ? (
-            <GlassCard pad={12}>
-              <EmptyState compact icon="link-outline" title="No tasks attached" body="Attach tasks before or during the session, then check them off as you go." />
-            </GlassCard>
-          ) : (
-            // one card for the list: a task attached or taken off folds in or out, and the card follows its rows
-            <ListCard>
-              {live.map((a) => (
-                <ListRow key={a.key} style={st.taskRow}>
-                  <CheckCircle done={a.done} color={a.kind === 'mission' ? C.amber : C.green} onPress={() => markAttached(a.key)} label={a.title} />
-                  <StrikeText done={a.done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{a.title}</StrikeText>
-                  <IconBtn name="close" size={16} onPress={() => setAttached((l) => l.filter((x) => x.key !== a.key))} accessibilityLabel={'Take ' + a.title + ' off this session'} />
-                </ListRow>
-              ))}
-            </ListCard>
-          )}
-        </Animated.View>
+        {/* the last task taken off swaps the card for the empty note whole: its row goes with it, not fading over the note */}
+        <LayoutAnimationConfig key={attached.length === 0 ? 'none' : 'list'} skipExiting>
+          <Animated.View entering={tasksIn}>
+            {attached.length === 0 ? (
+              <GlassCard pad={12}>
+                <EmptyState compact icon="link-outline" title="No tasks attached" body="Attach tasks before or during the session, then check them off as you go." />
+              </GlassCard>
+            ) : (
+              // one card for the list: a task attached or taken off folds in or out, and the card follows its rows
+              <ListCard>
+                {live.map((a) => (
+                  <ListRow key={a.key} style={st.taskRow}>
+                    <CheckCircle done={a.done} color={a.kind === 'mission' ? C.amber : C.green} onPress={() => markAttached(a.key)} label={a.title} />
+                    <StrikeText done={a.done} style={st.taskText} wrapStyle={st.taskWrap} numberOfLines={1}>{a.title}</StrikeText>
+                    <IconBtn name="close" size={16} onPress={() => setAttached((l) => l.filter((x) => x.key !== a.key))} accessibilityLabel={'Take ' + a.title + ' off this session'} />
+                  </ListRow>
+                ))}
+              </ListCard>
+            )}
+          </Animated.View>
+        </LayoutAnimationConfig>
       </>
     ),
     recent: idle ? (
@@ -1301,12 +1343,18 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const block = (k: string, i: number) => (
     <Enter key={k} index={Math.min(i, 4)}>
       <SectionTopTrim.Provider value={twoCol && i === 0}>
-        <Animated.View key={stateKey + ':' + k} entering={switchIn}>{sections[k]}</Animated.View>
+        {/* a stage change replaces every section whole: the rows inside (a list card's) go with it at once, or Fabric
+            would keep the old section on screen while they fade */}
+        <LayoutAnimationConfig key={stateKey + ':' + k} skipExiting>
+          <Animated.View entering={switchIn}>{sections[k]}</Animated.View>
+        </LayoutAnimationConfig>
       </SectionTopTrim.Provider>
     </Enter>
   );
   const mainKeys = order.filter((k) => MAIN.has(k) && sections[k] != null);
   const sideKeys = order.filter((k) => !MAIN.has(k) && sections[k] != null);
+  // the first column: the clock's side on a wide screen, every section on a phone
+  const firstKeys = twoCol ? mainKeys : order.filter((k) => sections[k] != null);
 
   const reviewMin = Math.round(accumSec / 60);
 
@@ -1334,15 +1382,17 @@ export function FocusScreen({ mode }: { mode: 'tab' | 'stack' }) {
           <Enter index={0}>{header.hero}</Enter>
 
           {/* a sideways tablet: the session on the left, its tasks and the history beside it. One tree either way, so
-              turning the tablet only changes styles and never builds the stage again; a phone has no styles here */}
-          {twoCol ? (
-            <View style={st.cols}>
-              <View style={st.col}><InOrder shown={mainKeys}>{mainKeys.map(block)}</InOrder></View>
-              <View style={st.col}><InOrder shown={sideKeys}>{sideKeys.map(block)}</InOrder></View>
+              turning the tablet only changes styles and never builds the stage again: one column holds every section
+              in the page's order, and on a wide screen it keeps the clock's side while the rest moves beside it; a
+              phone has no styles here */}
+          <View style={twoCol ? st.cols : undefined}>
+            <View style={twoCol ? st.col : undefined}>
+              <InOrder shown={firstKeys}>{firstKeys.map(block)}</InOrder>
             </View>
-          ) : (
-            <InOrder shown={order.filter((k) => sections[k] != null)}>{order.filter((k) => sections[k] != null).map(block)}</InOrder>
-          )}
+            <View style={twoCol ? st.col : undefined}>
+              {twoCol ? <InOrder shown={sideKeys}>{sideKeys.map(block)}</InOrder> : null}
+            </View>
+          </View>
         </View>
       </Animated.ScrollView>)}
 
@@ -1566,7 +1616,9 @@ function savedToast(id: string, netSeconds: number, undo?: () => void, extra = '
   cheer('done');
   const m = Math.max(1, Math.round(netSeconds / 60));
   const len = m >= 60 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '') : m + ' min';
-  const message = 'Saved · ' + len + (extra ? ' · ' + extra : '');
+  // only a stopwatch reaches the cap (a block runs up to ten hours): one left running past it says it was cut there
+  const capped = netSeconds >= STOPWATCH_CAP_SEC ? ', the most a stopwatch keeps' : '';
+  const message = 'Saved · ' + len + capped + (extra ? ' · ' + extra : '');
   const edit = { label: 'Edit details', onPress: () => openSessionEditor(id) };
   if (undo) toast(message, { label: 'Undo', onPress: undo }, { second: edit });
   else toast(message, edit);

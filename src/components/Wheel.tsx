@@ -115,9 +115,10 @@ export const Wheel = React.memo(function Wheel({
         runOnJS(commit)(t);
         return;
       }
-      pos.value = withSpring(t, { ...SPRING, velocity }, (finished) => {
-        if (finished) runOnJS(commit)(t);
-      });
+      // the value is known the moment the finger lifts, so it is handed on now and the spring only draws: a Done or
+      // Save tapped while the wheel still glides keeps the value turned to
+      runOnJS(commit)(t);
+      pos.value = withSpring(t, { ...SPRING, velocity });
     };
     const pan = Gesture.Pan()
       .activeOffsetX([-8, 8])
@@ -136,7 +137,8 @@ export const Wheel = React.memo(function Wheel({
         pos.value = p;
       })
       .onEnd((e) => {
-        const base = Math.round(start.value);
+        // the cap limits only the fling's carry past where the finger let go, not the drag itself
+        const base = Math.round(pos.value);
         const t = Math.min(base + 3, Math.max(base - 3, Math.round(pos.value - (e.velocityX / spacing) * 0.16)));
         settle(t, -e.velocityX / spacing);
       });
@@ -162,10 +164,9 @@ export const Wheel = React.memo(function Wheel({
       commit(target);
       return;
     }
-    pos.value = withSpring(target, SPRING, (finished) => {
-      'worklet';
-      if (finished) runOnJS(commit)(target);
-    });
+    // as with a release: the value is handed on at once and the spring only draws
+    commit(target);
+    pos.value = withSpring(target, SPRING);
   };
 
   // A mouse on the PC: the wheel over it turns it, a value a notch (a trackpad's swipe, either way, a value per stretch

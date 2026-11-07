@@ -5,11 +5,11 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
-import { C, F, MIN, NEU, S, T, TRACK, bgFor } from '../theme';
+import { C, F, MIN, S, T, TRACK, bgFor, neuInset } from '../theme';
 import { useStore, JournalEntry, FocusSession } from '../store';
 import { todayKey } from '../utils';
 import {
-  Card, Chip, DotMenu, EmptyState, Field, GateHeader, Hairline, ListRow, ListSlice, PillButton, Row, ScreenBG, Sheet, useTheme,
+  Card, Chip, DotMenu, EmptyState, Field, GateHeader, Ground, Hairline, ListRow, ListSlice, PillButton, Row, ScreenBG, Sheet, useTheme,
   useToolHeader, contextLine,
 } from '../components/UI';
 import { monthRange, useExport } from '../reports';
@@ -26,6 +26,7 @@ import { shareMessage } from '../share';
 import { tick } from '../haptics';
 import { Appear, Bouncy, CountUp, EASE_OUT, useAnimLevel } from '../components/Motion';
 import { swapIn } from '../components/Swap';
+import { useCheerful } from '../components/Cheer';
 import { toastTrashed } from '../trashToast';
 
 type Sort = 'newest' | 'oldest' | 'longest' | 'best';
@@ -135,10 +136,18 @@ const EntryRow = React.memo(function EntryRow({ e, first, last, enter, tokens, s
   );
 });
 
+/** The last value that was not null, so a sheet or a menu keeps what it shows while it closes. */
+function useHeld<T>(value: T | null): T | null {
+  const held = React.useRef(value);
+  if (value != null) held.current = value;
+  return held.current;
+}
+
 function Archive({ tabMode }: { tabMode: boolean }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const theme = useTheme();
+  const cheerful = useCheerful();
   const level = useAnimLevel();
   const journal = useStore((s) => s.journal);
   const journalTags = useStore((s) => s.journalTags);
@@ -180,6 +189,9 @@ function Archive({ tabMode }: { tabMode: boolean }) {
   const [filters, setFilters] = React.useState(false);
   const [menu, setMenu] = React.useState<JournalEntry | null>(null);
   const [moveEntry, setMoveEntry] = React.useState<JournalEntry | null>(null);
+  // the menu and the move sheet keep their entry while they close, rather than emptying on the way down
+  const heldMenu = useHeld(menu);
+  const heldMove = useHeld(moveEntry);
 
   // Arrivals: Sift opens the archive on one tag (`tag`), as the only filter. The param is cleared once followed, so the
   // same link works again
@@ -336,9 +348,10 @@ function Archive({ tabMode }: { tabMode: boolean }) {
       }));
   }, [journal, today]);
 
+  // the mood too: Cheerful's wells are its own shade
   const well = React.useMemo(
-    () => (theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...NEU.insetLow }),
-    [theme],
+    () => (theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset, ...neuInset('low') }),
+    [theme, cheerful],
   );
   const marked = React.useMemo(() => new Set(journal.map((e) => e.dateKey)), [journal]);
   // a stat of zero says nothing, so it is left out rather than shown as a nought
@@ -507,7 +520,14 @@ function Archive({ tabMode }: { tabMode: boolean }) {
         ListHeaderComponent={listHead}
         ListEmptyComponent={empty}
         contentContainerStyle={{ padding: S.pad, paddingTop: tool.padTop, paddingBottom: 40 + (tabMode ? 0 : insets.bottom) }}
-        renderSectionHeader={({ section }) => <Text style={[st.section, { backgroundColor: bgFor(theme) }]}>{section.title}</Text>}
+        renderSectionHeader={({ section }) => (cheerful ? (
+          // Cheerful's colour drifts behind the page, so a flat band would cut across it: the heading stands on the
+          // page's own ground, as the header does
+          <View style={st.sectionBox}>
+            <Ground />
+            <Text style={st.sectionText}>{section.title}</Text>
+          </View>
+        ) : <Text style={[st.section, { backgroundColor: bgFor(theme) }]}>{section.title}</Text>)}
         renderItem={({ item: e, index, section }) => (
           <EntryRow
             e={e} first={index === 0} last={index === section.data.length - 1} enter={firstPaint.current}
@@ -571,22 +591,22 @@ function Archive({ tabMode }: { tabMode: boolean }) {
       <DotMenu
         visible={!!menu}
         onClose={() => setMenu(null)}
-        items={menu ? [
-          { label: 'Open', icon: 'journal-outline', onPress: () => open(menu.dateKey, menu.id) },
-          { label: menu.pinned ? 'Unpin' : 'Pin', icon: menu.pinned ? 'pin' : 'pin-outline', onPress: () => patchJournalEntry(menu.id, { pinned: !menu.pinned }) },
-          { label: 'Change day', icon: 'calendar-outline', onPress: () => setMoveEntry(menu) },
-          { label: 'Share as text', icon: 'share-outline', onPress: () => shareEntry(menu) },
-          { label: 'Delete entry', icon: 'trash-outline', color: C.danger, onPress: () => confirmDelete(menu) },
+        items={heldMenu ? [
+          { label: 'Open', icon: 'journal-outline', onPress: () => open(heldMenu.dateKey, heldMenu.id) },
+          { label: heldMenu.pinned ? 'Unpin' : 'Pin', icon: heldMenu.pinned ? 'pin' : 'pin-outline', onPress: () => patchJournalEntry(heldMenu.id, { pinned: !heldMenu.pinned }) },
+          { label: 'Change day', icon: 'calendar-outline', onPress: () => setMoveEntry(heldMenu) },
+          { label: 'Share as text', icon: 'share-outline', onPress: () => shareEntry(heldMenu) },
+          { label: 'Delete entry', icon: 'trash-outline', color: C.danger, onPress: () => confirmDelete(heldMenu) },
         ] : []}
       />
 
       <Sheet visible={!!moveEntry} onClose={() => setMoveEntry(null)} title="Move to which day?">
-        {moveEntry ? (
+        {heldMove ? (
           <JournalCalendar
-            value={moveEntry.dateKey}
+            value={heldMove.dateKey}
             maxKey={today}
             marked={marked}
-            onPick={(key) => { patchJournalEntry(moveEntry.id, { dateKey: key }); setMoveEntry(null); }}
+            onPick={(key) => { patchJournalEntry(heldMove.id, { dateKey: key }); setMoveEntry(null); }}
           />
         ) : null}
       </Sheet>
@@ -616,6 +636,9 @@ const st = StyleSheet.create({
   section: {
     ...T.kicker, marginHorizontal: -S.pad, paddingHorizontal: S.pad, paddingTop: 14, paddingBottom: 8,
   },
+  // the same heading on Cheerful's ground: the box spans and pads, the words keep the kicker's face
+  sectionBox: { marginHorizontal: -S.pad, paddingHorizontal: S.pad, paddingTop: 14, paddingBottom: 8 },
+  sectionText: { ...T.kicker },
   entry: { alignItems: 'flex-start', paddingVertical: 14 },
   dayWell: { width: 46, paddingVertical: 7, borderRadius: 14, alignItems: 'center' },
   dayName: { color: C.textFaint, fontFamily: F.smSemi, fontSize: 11, letterSpacing: TRACK.fine },

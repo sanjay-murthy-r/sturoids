@@ -1,5 +1,6 @@
 import React from 'react';
 import { Text, StyleSheet, Pressable, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, T, TRACK } from '../theme';
 import { useStore, DailyTask, Mission, MissionEarly, TaskRemind } from '../store';
@@ -7,12 +8,12 @@ import { todayKey, toMinutes, fmtClockTime, cleanDays, daysLabel, daysUntil } fr
 import { shiftKey } from '../journal';
 import { fmtExamDate } from '../scores';
 import { turnOnReminders } from '../notifications';
-import { Sheet, Field, PillButton, Chip, Row, TimeField } from './UI';
+import { Sheet, SheetRise, Field, PillButton, Chip, Row, TimeField } from './UI';
 import { DayToggles, toggledDay } from './DayToggles';
 import { tick } from '../haptics';
 import { SegmentedControl } from './SegmentedControl';
 import { JournalCalendar } from './JournalCalendar';
-import { Appear, FadeSwap } from './Motion';
+import { Appear, FadeSwap, glide, useAnimLevel } from './Motion';
 import { toast } from './Toast';
 import { cheer } from '../cheerSound';
 
@@ -61,6 +62,18 @@ export function shortClock(hhmm: string, hour24: boolean): string {
   const h = Math.floor(m / 60);
   const min = m % 60;
   return (h % 12 || 12) + (min ? ':' + String(min).padStart(2, '0') : '') + (h >= 12 ? ' pm' : ' am');
+}
+
+/**
+ * A part of a sheet's body below something that opens or closes. The panel's top glides to the new height (Sheet's
+ * fitBody: 260 ms, ease out) while the content reflows at once, so what lies below would jump and slide back; this
+ * glides it over the same 260 ms on the same curve, which cancels the panel's glide and keeps it still on screen. It
+ * glides only once the panel has risen: while it rises the body takes its height at once too.
+ */
+export function SheetGlide({ children }: { children: React.ReactNode }) {
+  const level = useAnimLevel();
+  const { risen } = React.useContext(SheetRise);
+  return <Animated.View layout={risen ? glide(level) : undefined}>{children}</Animated.View>;
 }
 
 const isMission = (t: DailyTask | Mission): t is Mission => 'deadline' in t;
@@ -114,13 +127,15 @@ export function missionRingsLine(early: readonly MissionEarly[], remind: TaskRem
  * toast confirms it with Undo. With `editing` it opens on that ToDo or long-term task instead, its kind fixed, and
  * saving a change says so once the sheet has gone.
  */
-export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'daily', initialTitle = '', editing = null }: {
+export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'daily', initialTitle = '', editing = null, openCalendar = false }: {
   visible: boolean; onClose: () => void;
   /** runs after the sheet has gone, and after its toast */
   onClosed?: () => void;
   initialKind?: TaskKind; initialTitle?: string;
   /** the ToDo or long-term task being edited; none for a new task */
   editing?: DailyTask | Mission | null;
+  /** a long-term task opens on its calendar, with no keyboard over it: moving its deadline to another day */
+  openCalendar?: boolean;
 }) {
   const addDaily = useStore((s) => s.addDaily);
   const addMission = useStore((s) => s.addMission);
@@ -163,7 +178,7 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
     setKind(editing ? (m ? 'mission' : 'daily') : initialKind);
     setTitle(editing ? editing.title : initialTitle);
     setDue(m ? m.deadline : shiftKey(todayKey(), 7));
-    setCalendar(false);
+    setCalendar(!!openCalendar && !!m);
     setRepeat(t?.repeat === 'daily' ? (t.days?.length ? 'days' : 'daily') : 'off');
     setDays(t?.days?.length ? [...t.days] : WEEKDAYS);
     setLastDay(false);
@@ -259,7 +274,8 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
     if (newReminder && !useStore.getState().settings.remindersEnabled) void turnOnReminders();
   };
 
-  const showRings = isLong ? !!(shownEarly.length || remNow) : !!(time && remind);
+  const named = !!title.trim();
+  const showRings = isLong ?!!(shownEarly.length || remNow) : !!(time && remind);
   const rings = !showRings ? ''
     : isLong ? missionRingsLine(shownEarly, remNow, time, hour24)
       : ringsLine(kind, repeat, time, remind as TaskRemind, hour24);
@@ -307,7 +323,7 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
         value={title}
         onChangeText={setTitle}
         placeholder={kind === 'daily' ? 'e.g. 50 PYQs' : 'e.g. Full mock test + analysis'}
-        autoFocus
+        autoFocus={!(openCalendar && editing && isMission(editing))}
         returnKeyType="done"
         onSubmitEditing={add}
         maxLength={140}
@@ -332,6 +348,8 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
       ) : (
         <DuePicker due={due} calendar={calendar} onDue={setDue} onCalendar={setCalendar} />
       )}
+      {/* what follows a part that opens or closes glides with the panel's top, so it holds still on screen */}
+      <SheetGlide>
       {timeOpen ? (
         <Appear>
           <TimeField label="Due by" value={time} onChange={pickTime} clearable />
@@ -355,8 +373,10 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
           <Text style={[st.linkText, { color: C.accent }]}>Add a time</Text>
         </Pressable>
       )}
+      </SheetGlide>
       {/* a long-term task's reminders need no time: days before it, and the morning of its day; with all of them gone by,
           there is nothing to offer */}
+      <SheetGlide>
       {isLong && (earlyShown.length > 0 || !morningGone || (!!time && !hourGone)) ? (
         <Appear>
           <Text style={st.label}>Reminders</Text>
@@ -382,18 +402,26 @@ export function QuickTaskSheet({ visible, onClose, onClosed, initialKind = 'dail
           </Row>
         </Appear>
       ) : null}
+      </SheetGlide>
       {/* the help line crosses over as the choice changes, and is gone with none */}
+      <SheetGlide>
       {isLong || time ? (
         <FadeSwap swapKey={showRings ? rings : 'off'}>
           {showRings && rings ? <Text style={[T.caption, st.rings]}>{rings}</Text> : <View style={st.ringsGap} />}
         </FadeSwap>
       ) : null}
-      {editing ? <PillButton label="Save" onPress={add} /> : <PillButton label="Add" icon="add-outline" onPress={add} />}
-      {showRings && !remindersEnabled ? (
-        <Text style={[T.caption, { marginTop: 10 }]}>
-          Reminders are off in Settings. A reminder set here asks for notification permission and switches them on.
-        </Text>
-      ) : null}
+      </SheetGlide>
+      {/* the button stands greyed until there is a name to add, as a tap on it would do nothing */}
+      <SheetGlide>
+        {editing
+          ? <PillButton label="Save" color={named ? undefined : C.textFaint} onPress={add} />
+          : <PillButton label="Add" icon="add-outline" color={named ? undefined : C.textFaint} onPress={add} />}
+        {showRings && !remindersEnabled ? (
+          <Text style={[T.caption, { marginTop: 10 }]}>
+            Reminders are off in Settings. A reminder set here asks for notification permission and switches them on.
+          </Text>
+        ) : null}
+      </SheetGlide>
     </Sheet>
   );
 }

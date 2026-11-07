@@ -75,6 +75,9 @@ function MakeoverScreen({ to, onDone }: { to: Mood; onDone: () => void }) {
   const cover = useSharedValue(0);
   const [done, setDone] = React.useState<string[]>([]);
   const [list] = React.useState(jobs);
+  // the stage starts moving only once the new mood has been drawn: the whole app re-renders for it, and a stage set off
+  // while that render runs would stutter through its first beats
+  const [staged, setStaged] = React.useState(false);
 
   React.useEffect(() => {
     tick();
@@ -83,8 +86,11 @@ function MakeoverScreen({ to, onDone }: { to: Mood; onDone: () => void }) {
     const motion = level === 'none' ? 0 : 1;
     cover.value = motion ? withTiming(1, { duration: 320, easing: Easing.out(Easing.cubic) }) : 1;
     // the mood changes under the cover, once it is whole
+    let frame = 0;
     const swap = setTimeout(() => {
       useStore.getState().setSetting('mood', to);
+      // two frames on, the swap's render has been committed and drawn: the stage sets off then
+      frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => { frame = 0; if (live) setStaged(true); }); });
       // its little run plays as the letters lift in
       if (cheer) setTimeout(() => playCheer('makeover'), 420);
     }, motion ? 360 : 0);
@@ -112,7 +118,7 @@ function MakeoverScreen({ to, onDone }: { to: Mood; onDone: () => void }) {
       const left = Math.max(0, min - (Date.now() - t0));
       setTimeout(finish, left + 250);
     });
-    return () => { live = false; clearTimeout(swap); };
+    return () => { live = false; clearTimeout(swap); if (frame) cancelAnimationFrame(frame); };
   }, []);
 
   const coverStyle = useAnimatedStyle(() => ({ opacity: cover.value }));
@@ -120,7 +126,9 @@ function MakeoverScreen({ to, onDone }: { to: Mood; onDone: () => void }) {
 
   return (
     <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: bg, zIndex: 9999 }, coverStyle]} accessibilityViewIsModal accessibilityLabel={cheer ? 'Switching to Cheerful' : 'Switching to Elite'}>
-      {cheer ? <CheerStage width={width} height={height} still={level !== 'full'} bg={bg} /> : <EliteStage width={width} still={level !== 'full'} />}
+      {cheer
+        ? <CheerStage width={width} height={height} still={level !== 'full'} go={staged} bg={bg} />
+        : <EliteStage width={width} still={level !== 'full'} go={staged} />}
       <View style={st.jobs}>
         {list.map((j) => {
           const ok = done.includes(j.label);
@@ -153,14 +161,15 @@ function EliteLetter({ ch, i, word }: { ch: string; i: number; word: SharedValue
   return <Animated.Text style={[st.eliteWord, style]}>{ch}</Animated.Text>;
 }
 
-function EliteStage({ width, still }: { width: number; still: boolean }) {
+/** `go`: the new mood has been drawn, so the stage sets off (see MakeoverScreen) */
+function EliteStage({ width, still, go }: { width: number; still: boolean; go: boolean }) {
   const line = useSharedValue(still ? 1 : 0);
   const word = useSharedValue(still ? 1 : 0);
   React.useEffect(() => {
-    if (still) return;
+    if (still || !go) return;
     line.value = withDelay(260, withTiming(1, { duration: 900, easing: Easing.bezier(0.2, 0, 0, 1) }));
     word.value = withDelay(520, withTiming(1, { duration: 1100, easing: Easing.bezier(0.2, 0, 0, 1) }));
-  }, []);
+  }, [go]);
   const lineStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: line.value }], opacity: 0.25 + 0.75 * line.value }));
   const wordStyle = useAnimatedStyle(() => ({
     opacity: word.value,
@@ -187,7 +196,7 @@ function EliteStage({ width, still }: { width: number; still: boolean }) {
 
 const MOTES = 12;
 
-function Mote({ i, width, height, still }: { i: number; width: number; height: number; still: boolean }) {
+function Mote({ i, width, height, still, go }: { i: number; width: number; height: number; still: boolean; go: boolean }) {
   const p = useSharedValue(still ? 0.5 : 0);
   // a seeded spread: each mote its own place, size, pace and colour
   const r = (k: number) => ((Math.sin(i * 12.9898 + k * 78.233) * 43758.5453) % 1 + 1) % 1;
@@ -196,9 +205,9 @@ function Mote({ i, width, height, still }: { i: number; width: number; height: n
   const rise = height * (0.22 + 0.2 * r(3));
   const color = [C.accent, CHEER.sun, '#FFFFFF', CHEER.pink][i % 4];
   React.useEffect(() => {
-    if (still) return;
+    if (still || !go) return;
     p.value = withDelay(200 + r(4) * 700, withTiming(1, { duration: 2200 + r(5) * 800, easing: Easing.out(Easing.quad) }));
-  }, []);
+  }, [go]);
   const style = useAnimatedStyle(() => ({
     opacity: p.value < 0.2 ? p.value / 0.2 * 0.7 : 0.7 * (1 - (p.value - 0.2) / 0.8),
     transform: [{ translateX: x + Math.sin(p.value * 5 + i) * 8 }, { translateY: height * 0.78 - rise * p.value }] as const,
@@ -206,13 +215,13 @@ function Mote({ i, width, height, still }: { i: number; width: number; height: n
   return <Animated.View style={[{ position: 'absolute', left: 0, top: 0, width: size, height: size, borderRadius: size / 2, backgroundColor: color }, style]} />;
 }
 
-function Letter({ ch, i, still }: { ch: string; i: number; still: boolean }) {
+function Letter({ ch, i, still, go }: { ch: string; i: number; still: boolean; go: boolean }) {
   const p = useSharedValue(still ? 1 : 0);
   React.useEffect(() => {
-    if (still) return;
+    if (still || !go) return;
     // a soft spring: a little lift past its place and back, never a wobble
     p.value = withDelay(380 + i * 55, withSpring(1, { damping: 13, stiffness: 160, mass: 0.8 }));
-  }, []);
+  }, [go]);
   const style = useAnimatedStyle(() => ({
     opacity: Math.min(1, p.value * 1.4),
     transform: [{ translateY: 18 * (1 - p.value) }, { scale: 0.92 + 0.08 * p.value }] as const,
@@ -220,16 +229,16 @@ function Letter({ ch, i, still }: { ch: string; i: number; still: boolean }) {
   return <Animated.Text style={[st.cheerLetter, style]}>{ch}</Animated.Text>;
 }
 
-function CheerStage({ width, height, still, bg }: { width: number; height: number; still: boolean; bg: string }) {
+function CheerStage({ width, height, still, go, bg }: { width: number; height: number; still: boolean; go: boolean; bg: string }) {
   const warm = useSharedValue(still ? 1 : 0);
   const line = useSharedValue(still ? 1 : 0);
   const sub = useSharedValue(still ? 1 : 0);
   React.useEffect(() => {
-    if (still) return;
+    if (still || !go) return;
     warm.value = withTiming(1, { duration: 1600, easing: Easing.out(Easing.cubic) });
     line.value = withDelay(820, withTiming(1, { duration: 800, easing: Easing.bezier(0.2, 0, 0, 1) }));
     sub.value = withDelay(1150, withTiming(1, { duration: 500 }));
-  }, []);
+  }, [go]);
   const warmStyle = useAnimatedStyle(() => ({ opacity: warm.value, transform: [{ translateY: 60 * (1 - warm.value) }] }));
   const lineStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: line.value }], opacity: line.value }));
   const subStyle = useAnimatedStyle(() => ({ opacity: sub.value, transform: [{ translateY: 6 * (1 - sub.value) }] }));
@@ -260,9 +269,9 @@ function CheerStage({ width, height, still, bg }: { width: number; height: numbe
           {Platform.OS === 'android' ? <Rect x="0" y="0" width={width} height={height} fill="url(#mkfloor)" /> : null}
         </Svg>
       </Animated.View>
-      {Array.from({ length: still ? 0 : MOTES }, (_, i) => <Mote key={i} i={i} width={width} height={height} still={still} />)}
+      {Array.from({ length: still ? 0 : MOTES }, (_, i) => <Mote key={i} i={i} width={width} height={height} still={still} go={go} />)}
       <View style={{ flexDirection: 'row' }}>
-        {'Cheerful'.split('').map((ch, i) => <Letter key={i} ch={ch} i={i} still={still} />)}
+        {'Cheerful'.split('').map((ch, i) => <Letter key={i} ch={ch} i={i} still={still} go={go} />)}
       </View>
       <Animated.View style={[st.rule, { width: Math.min(220, s * 0.4), backgroundColor: C.accent }, lineStyle]} />
       <Animated.Text style={[st.sub, subStyle]}>Same app, a little more joy</Animated.Text>

@@ -316,13 +316,18 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
   const today = useToday();
   const hour24 = useStore((s) => s.settings.hour24);
   const showFolder = !folder;
+  // the only row left never fades: its going swaps the list for the empty page, which would come up under a fading row
+  // (the page going as a whole is seen to by its gate, LockGate's LockPage). Made once per level: a new one each render
+  // would be a new prop on every row and undo the rows' memo
+  const leaveAnim = React.useMemo(() => rowOut(level), [level]);
+  const glideAnim = React.useMemo(() => glide(level), [level]);
   const renderItem = React.useCallback(({ item, index }: { item: Note; index: number }) => (
     <NoteRow
       note={item} first={index === 0} last={index === count - 1}
-      dip={dip} leave={sameList ? rowOut(level) : undefined} showFolder={showFolder} today={today} hour24={hour24}
+      dip={dip} leave={sameList && count > 1 ? leaveAnim : undefined} showFolder={showFolder} today={today} hour24={hour24}
       onOpen={openNote} onMenu={openMenu} hit={hits?.get(item.id)}
     />
-  ), [count, showFolder, today, hour24, openNote, openMenu, hits, sameList, level]);
+  ), [count, showFolder, today, hour24, openNote, openMenu, hits, sameList, leaveAnim]);
 
   return (
     <ScreenBG guard={tabMode}>
@@ -335,7 +340,7 @@ function NotesList({ mode }: { mode: 'tab' | 'stack' }) {
           data={filtered}
           keyExtractor={(n) => n.id}
           renderItem={renderItem}
-          itemLayoutAnimation={sameList ? glide(level) : undefined}
+          itemLayoutAnimation={sameList ? glideAnim : undefined}
           // the header follows the list's offset, on the UI thread
           {...header.scrollProps}
           contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 110 + (tabMode ? 0 : insets.bottom) }}

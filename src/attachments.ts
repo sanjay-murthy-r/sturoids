@@ -49,15 +49,48 @@ export async function keepFile(uri: string, name: string): Promise<{ uri: string
 /** What a note says when a file was attached but no copy of it could be kept. */
 export const NOT_KEPT = 'Attached, but the phone is too full to keep a copy. Free some space and attach it again.';
 
-/**
- * An attachment's address as the screen can show it. On a phone that is its file; on the PC version files live in the
- * page's database (src/web/shims/fileSystem.ts), so it is a short-lived address made for it there.
- */
-export function viewUri(uri: string): string {
+/** The PC version's stand-in for the file system (src/web/shims/fileSystem.ts); null on a phone. */
+function webFiles(): { displayUrl?: (u: string) => string | null; fsReady?: Promise<unknown> } | null {
   // read here, not at the top: the backup tests load this file in Node, without React Native
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  if ((require('react-native') as typeof import('react-native')).Platform.OS !== 'web') return uri;
+  if ((require('react-native') as typeof import('react-native')).Platform.OS !== 'web') return null;
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const FS = require('expo-file-system') as { displayUrl?: (u: string) => string | null };
-  return FS.displayUrl?.(uri) ?? uri;
+  return require('expo-file-system');
+}
+
+/**
+ * An attachment's address as the screen can show it. On a phone that is its file; on the PC version files live in the
+ * page's database (src/web/shims/fileSystem.ts), so it is a short-lived address made for it there. Null on the PC
+ * while the files are still loading (see filesPending) or when the file is not there: the raw path would only fail.
+ */
+export function viewUri(uri: string): string | null {
+  const FS = webFiles();
+  if (!FS?.displayUrl) return uri;
+  return FS.displayUrl(uri);
+}
+
+let filesIn = false;
+/**
+ * On the PC, a promise that settles once the page's files have loaded, while they are still loading; null once they
+ * are (and always on a phone). Until then viewUri has no address for a kept file, which is not yet a missing one.
+ */
+export function filesPending(): Promise<void> | null {
+  if (filesIn) return null;
+  const ready = webFiles()?.fsReady;
+  if (!ready) { filesIn = true; return null; }
+  return ready.then(() => { filesIn = true; }, () => { filesIn = true; });
+}
+
+/** The kind of file an attachment is, from its name, for the app that opens it and the PC's download. */
+export function mimeOf(a: Attachment): string {
+  const ext = (a.name || a.uri).split('.').pop()?.toLowerCase() || '';
+  const known: Record<string, string> = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic',
+    mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', '3gp': 'video/3gpp',
+    pdf: 'application/pdf', mp3: 'audio/mpeg', m4a: 'audio/mp4', txt: 'text/plain', csv: 'text/csv',
+    doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  };
+  return known[ext] || (a.kind === 'image' ? 'image/jpeg' : a.kind === 'video' ? 'video/mp4' : 'application/octet-stream');
 }

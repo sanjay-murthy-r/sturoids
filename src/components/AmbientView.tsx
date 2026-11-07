@@ -172,11 +172,13 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
   const unit = !withSeconds && !big.includes(':');
 
   // the subject at the top and the task at the foot keep their places; the time is centred between them, as large as
-  // the width and the height left over allow
-  const kickerSize = u * 0.035;
-  const todSize = u * 0.032;
-  const metaSize = u * 0.032;
-  const taskSize = u * 0.034;
+  // the width and the height left over allow. Type in whole sizes and never under 11, as everywhere in the app: a
+  // fractional size renders soft, and a small phone would take the words below what can be read
+  const typeSize = (n: number) => Math.max(11, Math.round(n));
+  const kickerSize = typeSize(u * 0.035);
+  const todSize = typeSize(u * 0.032);
+  const metaSize = typeSize(u * 0.032);
+  const taskSize = typeSize(u * 0.034);
   const top = Math.max(u * 0.15, topInset + 12);
   const foot = u * 0.17;
   const topH = top + (subject ? kickerSize * 1.5 : 0) + (showClock ? u * 0.024 + todSize * 1.35 : 0);
@@ -224,7 +226,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
           {withSeconds ? (
             <ClockDigits
               text={sec}
-              size={size * SEC}
+              size={typeSize(size * SEC)}
               color={INK.soft}
               style={{ marginTop: Math.round(size * SEC_TOP), marginLeft: size * SEC_GAP }}
             />
@@ -232,7 +234,7 @@ function MonolithFace({ timer, subject, task, startedAt, finishAt, hour24, width
             <Text
               allowFontScaling={false}
               style={[st.unit, {
-                fontSize: size * UNIT, lineHeight: Math.round(size * UNIT * 1.25),
+                fontSize: typeSize(size * UNIT), lineHeight: Math.round(typeSize(size * UNIT) * 1.25),
                 marginTop: Math.round(size * 0.175), marginLeft: size * UNIT_GAP,
               }]}
             >
@@ -327,7 +329,8 @@ function AmbientBody({ onExit, ...face }: Omit<AmbientProps, 'visible'>) {
           entering={level === 'none' ? undefined : FadeIn.duration(200).easing(EASE_OUT)}
           exiting={level === 'none' ? undefined : FadeOut.duration(level === 'full' ? 400 : 160).easing(Easing.inOut(Easing.quad))}
           allowFontScaling={false}
-          style={[st.hint, { bottom: u * 0.06, fontSize: Math.max(11, Math.round(u * 0.026)) }]}
+          // above a navigation bar that is still showing: the Modal draws under it
+          style={[st.hint, { bottom: Math.max(u * 0.06, insets.bottom + 8), fontSize: Math.max(11, Math.round(u * 0.026)) }]}
         >
           Hold to exit
         </Animated.Text>
@@ -351,8 +354,14 @@ interface AmbientProps {
 export function AmbientView({ visible, onExit, ...rest }: AmbientProps) {
   const level = useAnimLevel();
   return (
-    // with motion off the dark screen is simply there, and simply gone
-    <Modal visible={visible} animationType={level === 'none' ? 'none' : 'fade'} statusBarTranslucent onRequestClose={onExit}>
+    // with motion off the dark screen is simply there, and simply gone. On Android the Modal is a window of its own: it
+    // draws under both system bars, so where a bar stays (a skin that refuses to hide it from inside) it lies over the
+    // near-black face rather than over a band of the page behind; the body hides both from inside it (useAmbientSystem
+    // and its StatusBar)
+    <Modal
+      visible={visible} animationType={level === 'none' ? 'none' : 'fade'} statusBarTranslucent navigationBarTranslucent
+      onRequestClose={onExit}
+    >
       {visible ? (
         // the face leaves with the screen, not digit by digit
         <LayoutAnimationConfig skipExiting>

@@ -1,8 +1,9 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable, Alert, BackHandler } from 'react-native';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { View, Text, StyleSheet, Pressable, Alert, BackHandler, TextInput } from 'react-native';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import type { EventArg, NavigationAction } from '@react-navigation/native';
+import Animated, { FadeIn, FadeOut, LayoutAnimationConfig } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, S, T, TRACK } from '../theme';
 import { useStore } from '../store';
@@ -15,7 +16,7 @@ import { SubjectSuggest } from '../components/SubjectSuggest';
 import { todayKey } from '../utils';
 import { shiftKey } from '../journal';
 import { ScreenBG, Card, Chip, Field, Hairline, IconBtn, PillButton, Row, SectionTitle, Toggle, useToolHeader, contextLine } from '../components/UI';
-import { EASE_OUT, Enter, useAnimLevel, useBuilt } from '../components/Motion';
+import { EASE_OUT, Enter, glide, useAnimLevel, useBuilt } from '../components/Motion';
 import { TagPicker } from '../components/ScoreTags';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { JournalCalendar } from '../components/JournalCalendar';
@@ -148,10 +149,15 @@ function initialDraft(params: { id?: string; parent?: string; subject?: string }
   return { draft, editId: null as string | null, parentId, template: t.template, suggestion: t.suggestion, originalIds: [] as string[], focusKey: null };
 }
 
+/** the form being taken away by a navigation action, which can be held back and sent on later */
+type LeaveEvent = EventArg<'beforeRemove', true, { action: NavigationAction }>;
+
 type Problems = { title?: string; marks?: string; rows: Record<string, string>; details?: string };
 
 /** A text link's reach: 13 px words stretched to about 44 dp to tap, without moving anything around them. */
 const LINK_SLOP = { top: 13, bottom: 13, left: 10, right: 10 };
+/** about as long as the page's entrance takes */
+const FOCUS_AFTER_MS = 350;
 
 /**
  * The exam form, on its own screen: name, category, date, every subject with its marks and the total adding up as
@@ -193,6 +199,14 @@ export function ExamFormScreen() {
   const firstRows = React.useRef(new Set(init.draft.subjects.map((r) => r.key))).current;
 
   const editing = !!init.editId;
+  // The field the form opens on (a new exam's name, or the subject row asked for) takes the keyboard once the page's
+  // entrance has passed: a keyboard rising mid-entrance resizes the window under the moving page, and the page jumps
+  const openFocus = React.useRef<TextInput>(null);
+  const focusTitle = !editing && !init.suggestion;
+  React.useEffect(() => {
+    const t = setTimeout(() => openFocus.current?.focus(), level === 'none' ? 0 : FOCUS_AFTER_MS);
+    return () => clearTimeout(t);
+  }, []);
   const categories = categoriesOf(tags);
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }));
   const setRow = (key: string, patch: Partial<SubjectRow>) => {
@@ -271,20 +285,37 @@ export function ExamFormScreen() {
   // a second tap would add the exam twice, go back a page too far and ask for its page to open on the next visit.
   // Never cleared, since the form closes with it
   const saving = React.useRef(false);
+  // set once Discard was chosen, so the leave it asked for is let through without asking again
+  const discarded = React.useRef(false);
+  const askDiscard = (go: () => void) => Alert.alert(
+    editing ? 'Discard your changes?' : 'Discard this exam?',
+    editing ? 'What you changed here is not saved.' : 'What you typed here is not saved.',
+    [
+      { text: 'Keep editing', style: 'cancel' },
+      { text: 'Discard', style: 'destructive', onPress: () => { discarded.current = true; go(); } },
+    ],
+  );
   const leaveRef = React.useRef(() => {});
   leaveRef.current = () => {
     if (saving.current) return;
     if (!dirty) { router.back(); return; }
-    Alert.alert(
-      editing ? 'Discard your changes?' : 'Discard this exam?',
-      editing ? 'What you changed here is not saved.' : 'What you typed here is not saved.',
-      [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => router.back() }],
-    );
+    askDiscard(() => router.back());
   };
   useFocusEffect(React.useCallback(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { leaveRef.current(); return true; });
     return () => sub.remove();
   }, []));
+  // Anything else that takes the form away (a tab tapped, a tool opened from Sift, both of which pop the stack) asks the
+  // same question first, and goes on with that same leave once the form is discarded
+  const navigation = useNavigation();
+  const guardRef = React.useRef((_e: LeaveEvent) => {});
+  guardRef.current = (e) => {
+    if (saving.current || discarded.current || !dirty) return;
+    e.preventDefault();
+    askDiscard(() => navigation.dispatch(e.data.action));
+  };
+  // the router's navigation type loses beforeRemove's preventDefault, though the event always carries it
+  React.useEffect(() => navigation.addListener('beforeRemove', (e) => guardRef.current(e as unknown as LeaveEvent)), [navigation]);
 
   const save = () => {
     if (saving.current) return;
@@ -423,7 +454,7 @@ export function ExamFormScreen() {
           {header.hero}
           <Field
             label="Exam" value={d.title} onChangeText={(v) => { set({ title: v }); if (problems.title) setProblems((p) => ({ ...p, title: '' })); }}
-            placeholder={suggestion || 'e.g. Mock test 7'} autoFocus={!editing && !suggestion} maxLength={80}
+            placeholder={suggestion || 'e.g. Mock test 7'} ref={focusTitle ? openFocus : undefined} maxLength={80}
             style={{ fontSize: 20, letterSpacing: TRACK.large, fontFamily: F.semi, marginBottom: 0 }}
           />
           {problems.title ? <Text style={st.problem}>{problems.title}</Text> : null}
@@ -518,7 +549,10 @@ export function ExamFormScreen() {
               </Pressable>
             </View>
           ) : null}
-          <Animated.View key={hasSubjects ? 'rows' : 'none'} entering={popIn}>
+          {/* keyed so the card and its empty note trade places whole; the rows' fades are skipped when the card goes
+              with them (the last row taken out, Start blank, the form closed), as their parent is gone too */}
+          <LayoutAnimationConfig key={hasSubjects ? 'rows' : 'none'} skipExiting>
+          <Animated.View entering={popIn}>
             {hasSubjects ? (
               <Card>
                 <View style={st.headRow}>
@@ -532,16 +566,19 @@ export function ExamFormScreen() {
                   const lockedNode = r.locked && r.id ? ix.byId.get(r.id) : undefined;
                   const lockedRes = lockedNode ? resultOf(lockedNode, ix) : null;
                   return (
+                    // a row taken out fades where it stood while the rows and the blocks below it glide up into its place
                     <Animated.View
                       key={r.key}
                       entering={firstRows.has(r.key) || level === 'none' ? undefined : FadeIn.duration(level === 'full' ? 220 : 180)}
                       exiting={level === 'none' ? undefined : FadeOut.duration(140)}
+                      layout={glide(level)}
                     >
                       {i > 0 ? <View style={{ height: 6 }} /> : null}
                       <View style={st.subjectRow}>
                         <Field
                           value={r.title} onChangeText={(v) => setRow(r.key, { title: v })} placeholder={i === 0 ? 'Physics' : 'Subject'}
-                          maxLength={60} autoFocus={r.key === init.focusKey || (!firstRows.has(r.key) && !r.title)}
+                          maxLength={60} autoFocus={!firstRows.has(r.key) && !r.title}
+                          ref={r.key === init.focusKey ? openFocus : undefined}
                           style={{ flex: 1, marginBottom: 0 }}
                           onFocus={() => setTypingRow(r.key)}
                           onBlur={() => setTypingRow((k) => (k === r.key ? null : k))}
@@ -592,11 +629,11 @@ export function ExamFormScreen() {
                     </Animated.View>
                   );
                 })}
-                <View style={{ flexDirection: 'row', marginTop: 16 }}>
+                <Animated.View layout={glide(level)} style={{ flexDirection: 'row', marginTop: 16 }}>
                   <Chip small icon="add" label="Add a subject" onPress={addRow} />
-                </View>
+                </Animated.View>
                 {live ? (
-                  <Animated.View entering={popIn}>
+                  <Animated.View entering={popIn} layout={glide(level)}>
                     <Hairline />
                     <View style={st.totalRow}>
                       <Text style={T.kicker}>{d.ownMarks ? 'Subjects add up to' : 'Total'}</Text>
@@ -632,8 +669,9 @@ export function ExamFormScreen() {
               </Card>
             )}
           </Animated.View>
+          </LayoutAnimationConfig>
           {rowsShown.length >= 2 ? (
-            <View style={{ marginTop: 18 }}>
+            <Animated.View layout={glide(level)} style={{ marginTop: 18 }}>
               <Text style={st.label}>How subjects add up</Text>
               <SegmentedControl
                 size="sm" stretch
@@ -644,10 +682,12 @@ export function ExamFormScreen() {
               <Text style={st.hint}>
                 {weighted ? 'Each subject counts by its weight, as a percentage. 1 when a weight is empty.' : 'Marks are added up, so a subject out of more counts for more.'}
               </Text>
-            </View>
+            </Animated.View>
           ) : null}
         </Enter>
 
+        {/* the blocks under the subjects glide as a row is taken out, instead of jumping up into its place */}
+        <Animated.View layout={glide(level)}>
         <Enter index={4}>
           <SectionTitle>Marks</SectionTitle>
           {hasSubjects ? (
@@ -706,6 +746,7 @@ export function ExamFormScreen() {
           ) : null}
           {problems.details ? <Text style={st.problem}>{problems.details}</Text> : null}
         </Enter>
+        </Animated.View>
       </Animated.ScrollView>
 
       <View style={[frame(READ_MAX), st.bar, { paddingBottom: insets.bottom + 14 }]}>

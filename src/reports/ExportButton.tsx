@@ -341,7 +341,8 @@ export function ExportButton({ kind, opts, inline = false, label = 'Export' }: {
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const st = StyleSheet.create({
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  // no gap: each Chip keeps its own right and bottom margins, as in every row of chips
+  chips: { flexDirection: 'row', flexWrap: 'wrap' },
   label: { ...T.label, marginBottom: 10 },
   row: { paddingVertical: 14, minHeight: 52 },
   value: { color: C.textDim, fontFamily: F.med, fontSize: 15, letterSpacing: TRACK.body, marginRight: 8 },

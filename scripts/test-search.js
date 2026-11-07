@@ -332,6 +332,21 @@ test('every settings label still appears in Settings (no drift)', () => {
   }
 });
 
+test('every row Settings marks with sid(...) is in the index (no row Sift cannot find)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'app/settings.tsx'), 'utf8');
+  const ids = new Set(SI.SETTINGS_INDEX.map((r) => r.id));
+  const marked = [];
+  // sid('page', 'Label')
+  for (const m of src.matchAll(/\bsid\(\s*'([a-z]+)'\s*,\s*'([^']+)'\s*\)/g)) marked.push(SI.settingId(m[1], m[2]));
+  // ['Label', 'Label'].map((l) => sid('page', l))
+  for (const m of src.matchAll(/\[([^\[\]]*)\]\.map\(\(\s*(\w+)\s*\)\s*=>\s*sid\(\s*'([a-z]+)'\s*,\s*\2\s*\)\)/g)) {
+    for (const l of m[1].matchAll(/'([^']+)'/g)) marked.push(SI.settingId(m[3], l[1]));
+  }
+  assert.ok(marked.length > 20, 'found the sid(...) marks in Settings');
+  const missing = [...new Set(marked)].filter((id) => !ids.has(id));
+  assert.deepEqual(missing, [], 'rows in Settings with no index entry: ' + missing.join(', '));
+});
+
 test('Settings search groups matches by page', () => {
   const r = SI.searchSettings('lock');
   assert.ok(r.length >= 1);

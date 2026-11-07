@@ -4,7 +4,11 @@ import { displayUrl } from './fileSystem';
 
 export const isAvailableAsync = async () => true;
 
-export async function shareAsync(uri: string, opts: { dialogTitle?: string; mimeType?: string } = {}) {
+/**
+ * `fileName` is this stand-in's own: the name the download is saved under (an attachment's own name, not the internal
+ * one its copy was kept under). Without it, the file's own name.
+ */
+export async function shareAsync(uri: string, opts: { dialogTitle?: string; mimeType?: string; fileName?: string } = {}) {
   let href = displayUrl(uri) || uri;
   if (href.startsWith('file:')) {
     // not loaded into the page yet: fetch it through the shim's own reader
@@ -15,7 +19,7 @@ export async function shareAsync(uri: string, opts: { dialogTitle?: string; mime
   }
   const a = document.createElement('a');
   a.href = href;
-  a.download = decodeURIComponent(uri.split('/').pop() || 'sturoids-file');
+  a.download = opts.fileName || decodeURIComponent(uri.split('/').pop() || 'sturoids-file');
   document.body.appendChild(a);
   a.click();
   a.remove();

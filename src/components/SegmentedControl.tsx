@@ -1,8 +1,8 @@
 import React from 'react';
-import { Pressable, View, ViewStyle } from 'react-native';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { LayoutChangeEvent, Platform, Pressable, View, ViewStyle } from 'react-native';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { C, CHROME_FONT_MAX, F, MIN, TRACK, neuInset, neuRaised, oneLine } from '../theme';
+import { C, CHROME_FONT_MAX, F, MIN, TRACK, neuInset, neuKey, neuRaised, oneLine } from '../theme';
 import { useTheme } from './UI';
 import { CHANGE, useAnimLevel } from './Motion';
 
@@ -40,6 +40,9 @@ export function SegmentedControl<K extends string>({
   const x = useSharedValue(0);
   const w = useSharedValue(0);
   const sx = useSharedValue(1);
+  // the thumb is picked up for its move and set down again: it lifts off the trough's floor (its key shadow grows and it
+  // rises a point) as it starts, travels, and settles back as it lands
+  const lift = useSharedValue(0);
   const layouts = React.useRef<Record<string, { x: number; width: number }>>({}).current;
   const place = React.useCallback((animate: boolean) => {
     const l = layouts[value];
@@ -51,6 +54,12 @@ export function SegmentedControl<K extends string>({
       w.value = l.width;
       sx.value = withTiming(1, SLIDE);
       x.value = withTiming(l.x, SLIDE);
+      if (level === 'full') {
+        lift.value = withSequence(
+          withTiming(1, { duration: 110, easing: Easing.out(Easing.quad) }),
+          withTiming(0, { duration: 240, easing: Easing.inOut(Easing.quad) }),
+        );
+      }
     } else {
       x.value = l.x;
       w.value = l.width;
@@ -60,8 +69,9 @@ export function SegmentedControl<K extends string>({
   React.useEffect(() => { place(true); }, [value]);
   const thumbStyle = useAnimatedStyle(() => ({
     width: w.value,
-    transform: [{ translateX: x.value }, { scaleX: sx.value }] as const,
+    transform: [{ translateX: x.value }, { translateY: -lift.value }, { scaleX: sx.value }] as const,
   }));
+  const liftStyle = useAnimatedStyle(() => ({ opacity: lift.value }));
 
   const padV = size === 'sm' ? 7 : 9;
   const padH = size === 'sm' ? 12 : 16;
@@ -94,15 +104,19 @@ export function SegmentedControl<K extends string>({
             : { backgroundColor: C.card, ...neuRaised('low') },
           thumbStyle,
         ]}
-      />
+      >
+        {theme === 'minimal' ? null : (
+          <Animated.View style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999 }, neuKey('mid'), liftStyle]} />
+        )}
+      </Animated.View>
       {options.map((o) => {
         const active = o.key === value;
         return (
-          <Pressable
+          <Segment
             key={o.key}
-            hitSlop={SEG_SLOP}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
+            active={active}
+            // the chosen segment lights under the pointer only when a tap on it does something
+            hovers={!active || !!onPressActive}
             onPress={() => {
               if (!active) { tick(); onChange(o.key); } else onPressActive?.(o.key);
             }}
@@ -118,10 +132,48 @@ export function SegmentedControl<K extends string>({
             }}
           >
             <SegLabel active={active} label={o.label} icon={o.icon} color={c} size={fontSize} />
-          </Pressable>
+          </Segment>
         );
       })}
     </View>
+  );
+}
+
+/** the PC's pointer: a segment it rests on lights a little, as every Bouncy does (Motion.tsx) */
+const HOVERS = Platform.OS === 'web';
+const HOVER_IN = { duration: 120, easing: Easing.out(Easing.quad) };
+const HOVER_OUT = { duration: 200, easing: Easing.out(Easing.quad) };
+
+/** One segment: a button that says whether it is the chosen one, lit softly on the PC while the pointer rests on it. */
+function Segment({ active, hovers, onPress, onLayout, style, children }: {
+  active: boolean; hovers: boolean; onPress: () => void; onLayout: (e: LayoutChangeEvent) => void;
+  style: ViewStyle; children: React.ReactNode;
+}) {
+  const level = useAnimLevel();
+  const lights = HOVERS && hovers;
+  const hv = useSharedValue(0);
+  // a segment that stops answering a tap under the pointer (it has just been chosen) lets its light go
+  React.useEffect(() => { if (!lights) hv.value = level === 'none' ? 0 : withTiming(0, HOVER_OUT); }, [lights]);
+  const hoverStyle = useAnimatedStyle(() => ({ opacity: hv.value }));
+  return (
+    <Pressable
+      hitSlop={SEG_SLOP}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      onLayout={onLayout}
+      onHoverIn={lights ? () => { hv.value = level === 'none' ? 1 : withTiming(1, HOVER_IN); } : undefined}
+      onHoverOut={lights ? () => { hv.value = level === 'none' ? 0 : withTiming(0, HOVER_OUT); } : undefined}
+      style={style}
+    >
+      {HOVERS ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999, backgroundColor: C.hover }, hoverStyle]}
+        />
+      ) : null}
+      {children}
+    </Pressable>
   );
 }
 

@@ -6,6 +6,7 @@
 import React from 'react';
 import { create } from 'zustand';
 import { NavigationContext } from '@react-navigation/native';
+import { View } from 'react-native';
 import type { SharedValue } from 'react-native-reanimated';
 
 export interface Room {
@@ -24,6 +25,21 @@ export interface Room {
   win?: boolean;
 }
 
+/**
+ * Perches on the tab bar: points where the companion may stand on the bar's top edge, between two tabs, in window
+ * points (y the bar's top, as seen by a screen-filling layer). The bar publishes them while it shows and takes them
+ * back while it steps aside (the keyboard) or is not drawn; the companion uses them only while a tab is in front.
+ */
+export interface Perch { x: number; y: number; kind: 'bar' | 'rail' }
+export const useBarPerches = create<{ perches: Perch[] | null }>(() => ({ perches: null }));
+export function setBarPerches(perches: Perch[] | null) {
+  const was = useBarPerches.getState().perches;
+  const same = was && perches && was.length === perches.length
+    && was.every((p, i) => Math.abs(p.x - perches[i].x) < 1 && Math.abs(p.y - perches[i].y) < 1 && p.kind === perches[i].kind);
+  if (same || (!was && !perches)) return;
+  useBarPerches.setState({ perches });
+}
+
 const rooms = new Map<string, Room>();
 export const useRoom = create<{ key: string | null; room: Room | null; n: number }>(() => ({ key: null, room: null, n: 0 }));
 
@@ -31,6 +47,27 @@ export const useRoom = create<{ key: string | null; room: Room | null; n: number
 let windowTop = 0;
 /** a room as the companion's layer sees it */
 const local = (r: Room | null | undefined): Room | null => (r ? (r.win ? { ...r, y: r.y - windowTop, win: false } : r) : null);
+/**
+ * Where measureInWindow puts the top of the screen (0, or minus the status bar on Android): take it off a y that
+ * measureInWindow gave to place something in a layer that fills the screen (a modal, an overlay, the companion's).
+ */
+export const getWindowTop = () => windowTop;
+/** A y from measureInWindow, as a layer filling the whole screen sees it. */
+export const screenY = (y: number) => y - windowTop;
+
+/**
+ * Measures where measureInWindow puts the screen's top, once and whenever the window changes: mount it once, filling
+ * the root (the root layout does), so every screen-filling layer can place what was measured (see screenY).
+ */
+export function WindowTopProbe() {
+  const ref = React.useRef<any>(null);
+  return React.createElement(View, {
+    ref, pointerEvents: 'none', collapsable: false, style: PROBE,
+    onLayout: () => ref.current?.measureInWindow((_x: number, top: number) => setWindowTop(top)),
+  });
+}
+const PROBE = { position: 'absolute' as const, top: 0, left: 0, width: 1, height: 1, opacity: 0 };
+
 /** The companion's layer says where measureInWindow puts the top of the screen; a room measured that way follows. */
 export function setWindowTop(top: number) {
   if (Math.abs(top - windowTop) < 0.5) return;

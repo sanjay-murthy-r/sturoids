@@ -7,6 +7,8 @@ import { useTheme } from './UI';
 import { EASE_EXIT, EASE_OUT, useAnimLevel } from './Motion';
 import { tick } from '../haptics';
 import { useRail } from '../hooks/useRail';
+import { useIntro } from '../intro';
+import { create } from 'zustand';
 
 export interface ToastAction { label: string; onPress: () => void }
 /** More a toast can do: its words themselves can be a way somewhere (Recently deleted), said to a screen reader as `hint`. */
@@ -16,8 +18,13 @@ export interface ToastOptions {
   second?: ToastAction;
 }
 type Shown = { message: string; action?: ToastAction; opts?: ToastOptions; key: number };
+type Raised = [message: string, action?: ToastAction, opts?: ToastOptions];
 
 let show: ((message: string, action?: ToastAction, opts?: ToastOptions) => void) | null = null;
+
+/** How much higher a screen in view asks the card to stand: Tasks lifts it clear of its add button. 0 by default. */
+const useToastLift = create<{ by: number }>(() => ({ by: 0 }));
+export const setToastLift = (by: number) => { if (useToastLift.getState().by !== by) useToastLift.setState({ by }); };
 
 /**
  * A short note that needs no answer, on a raised card above the tab bar for a little over two seconds. With an
@@ -44,6 +51,7 @@ export function ToastHost() {
   const level = useAnimLevel();
   const insets = useSafeAreaInsets();
   const rail = useRail();
+  const lift = useToastLift((s) => s.by);
   const [shownToast, setShownToast] = React.useState<Shown | null>(null);
   const shown = useSharedValue(0);
   // a toast that takes the place of one still showing: its words come up in the same card
@@ -63,9 +71,16 @@ export function ToastHost() {
     return () => { live = false; sub.remove(); };
   }, []);
 
+  // Toasts raised while the intro still covers the app (it sits above this card) would run out unseen behind it, an
+  // Undo with them: they wait here and come up one after another, oldest first, once the intro has gone.
+  const held = React.useRef<Raised[]>([]);
+  /** shows the next held toast, if there is one; set up with `show` */
+  const showHeld = React.useRef<() => boolean>(() => false);
+
   const clear = React.useCallback(() => {
     current.current = null;
     setShownToast(null);
+    showHeld.current();
   }, []);
 
   const hide = React.useCallback((duration: number) => {
@@ -81,7 +96,7 @@ export function ToastHost() {
   }, [clear]);
 
   React.useEffect(() => {
-    show = (message, action, opts) => {
+    const present = (message: string, action?: ToastAction, opts?: ToastOptions) => {
       counter.current += 1;
       const next = { message, action, opts: opts?.onMessage || opts?.second ? opts : undefined, key: counter.current };
       const replacing = current.current != null;
@@ -100,10 +115,28 @@ export function ToastHost() {
       }
       if (timer.current) clearTimeout(timer.current);
       const stay = !action && !next.opts ? STAY_MS : reader.current ? STAY_ACTION_READER_MS : STAY_ACTION_MS;
-      timer.current = setTimeout(() => hide(200), stay);
+      // a held toast still to come takes this one's place in the same card once its time is up
+      timer.current = setTimeout(() => { if (!showHeld.current()) hide(200); }, stay);
     };
+    showHeld.current = () => {
+      if (useIntro.getState().phase !== 'done') return false;
+      const next = held.current.shift();
+      if (!next) return false;
+      present(...next);
+      return true;
+    };
+    show = (message, action, opts) => {
+      if (useIntro.getState().phase !== 'done') {
+        held.current.push([message, action, opts]);
+        return;
+      }
+      present(message, action, opts);
+    };
+    const unsub = useIntro.subscribe((s) => { if (s.phase === 'done' && !current.current) showHeld.current(); });
     return () => {
       show = null;
+      showHeld.current = () => false;
+      unsub();
       if (timer.current) clearTimeout(timer.current);
     };
   }, [hide]);
@@ -124,7 +157,7 @@ export function ToastHost() {
 
   return (
     // above the tab bar; a wide window with its tabs in the rail at the side has no bar below, so the card sits low
-    <Animated.View pointerEvents="box-none" style={[st.wrap, { bottom: insets.bottom + (rail ? 24 : 96) }, style]}>
+    <Animated.View pointerEvents="box-none" style={[st.wrap, { bottom: insets.bottom + (rail ? 24 : 96) + lift }, style]}>
       <View
         pointerEvents={action || onMessage || opts?.second ? 'auto' : 'none'}
         style={[

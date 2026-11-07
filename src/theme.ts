@@ -1,20 +1,18 @@
 import { Platform, TextStyle } from 'react-native';
 
 // ============================================================================
-// Sturoids v5 — dark soft-UI (dual-shadow neumorphism)
+// Sturoids 3.6 — lit material
 //
 // Palette: Claude's dark theme greys, "Claude Surface" in the Palette Lab (picked 2026-09-15):
 //   surface #30302E (the material)  canvas #262624  sidebar #1F1E1D  text #FAF9F5 / #C2C0B6 / #9C9A92
-// Shadow system extracted from "Neumorphism UI Kit (Community).svg":
-//   dual drop-shadows per surface — dark side rgb(174,174,192) @ 0.2/0.4/0.6,
-//   light side rgb(255,255,255) @ 0.7/1.0, blur ≈ 1.4 × offset distance,
-//   inner (pressed) variants use the same pair inverted.
-// Overrides requested: distance = 6px for BOTH sides, light angle = 60°,
-// dark side derived automatically as the exact opposite (240°).
+// Surfaces are lit material, in both looks: a tight contact shadow where a surface meets the ground, a softer key
+// shadow thrown away from the light, and a one-pixel rim on the edge that faces it; a carved well shades the walls
+// nearest the light and catches a faint lip on the far edge. It reads over any ground (Cheerful's drifting colour, a
+// wallpaper), where the old dual-shadow recipe's pale highlight turned into a grey smudge. Each look has its own light:
+// Elite the brand's studio light at 60° from the upper right (the icon's and the start screen's), Cheerful a warm
+// daylight from straight above.
 //
-// Every colour the shadow system uses flows from `darkSh` / `liteSh`, and every
-// shadow string is computed ONCE at load (see NEU) — so a palette swap is a
-// token-only change and no render allocates a fresh shadow string.
+// Every shadow string is computed ONCE at load (see SKINS), so no render allocates a fresh one.
 // ============================================================================
 
 export type ThemeMode = 'default' | 'minimal';
@@ -46,37 +44,101 @@ export const darkSh = (a: number) => `rgba(${DARK_RGB}, ${a})`;
 export const liteSh = (a: number) => `rgba(${LITE_RGB}, ${a})`;
 
 /**
- * How strongly the light falls on the material: every highlight at 90% of the kit's (Option A, "Softer", picked
- * 2026-10-30), so surfaces sit a touch calmer; the shadows are the kit's own.
+ * The start screen's plate keeps the brand's own dual-shadow look exactly as it was designed (the kit's pair at 90% of
+ * its light), so the intro never changes with the app's surfaces. Only StartScreen reads these.
  */
 const LIGHT = 0.9;
 const raisedPair = (dA: number, lA0: number, dBlur: number, lBlur: number, k = 1, lA = lA0 * LIGHT) =>
   `${+(LX * k).toFixed(2)}px ${+(LY * k).toFixed(2)}px ${lBlur}px ${liteSh(lA)}, ` +
   `${+(-LX * k).toFixed(2)}px ${+(-LY * k).toFixed(2)}px ${dBlur}px ${darkSh(dA)}`;
-const insetPair = (dA: number, lA0: number, dBlur: number, lBlur: number, k = 1, lA = lA0 * LIGHT) =>
-  `inset ${+(LX * k).toFixed(2)}px ${+(LY * k).toFixed(2)}px ${lBlur}px ${liteSh(lA)}, ` +
-  `inset ${+(-LX * k).toFixed(2)}px ${+(-LY * k).toFixed(2)}px ${dBlur}px ${darkSh(dA)}`;
+export const BRAND_PLATE = Object.freeze({ boxShadow: raisedPair(0.48, 0.25, 15, 6) });
+
+/* ---------------------------------------------------------------- lit material */
+
+type Shadow = Readonly<{ boxShadow: string }>;
+interface Skin {
+  /** a raised surface as it rests: contact shadow, key shadow and lit rim */
+  raisedLow: Shadow; raisedMid: Shadow; raisedHigh: Shadow;
+  /** only the contact shadow: what a raised control keeps while it is pressed into the material */
+  base: Shadow;
+  /** only the key shadow and the rim: the layer a press fades out (see Bouncy) */
+  keyLow: Shadow; keyMid: Shadow; keyHigh: Shadow;
+  /** a carved well; hairline for anything under ~20 px on its short axis, where a full inner shade collapses */
+  insetHairline: Shadow; insetLow: Shadow; insetMid: Shadow;
+  /** the inner shade a pressed raised control shows, on an overlay inside it */
+  pressedInner: Shadow;
+  /** a well while its field has the focus: a step deeper */
+  focusInner: Shadow;
+}
+const s = (boxShadow: string): Shadow => Object.freeze({ boxShadow });
+function litSkin(contact: string, key: [string, string, string], rim: [string, string, string], wells: {
+  hairline: string; low: string; mid: string; pressed: string; focus: string;
+}): Readonly<Skin> {
+  return Object.freeze({
+    raisedLow: s(`${contact}, ${key[0]}, ${rim[0]}`),
+    raisedMid: s(`${contact}, ${key[1]}, ${rim[1]}`),
+    raisedHigh: s(`${contact}, ${key[2]}, ${rim[2]}`),
+    base: s(contact),
+    keyLow: s(`${key[0]}, ${rim[0]}`),
+    keyMid: s(`${key[1]}, ${rim[1]}`),
+    keyHigh: s(`${key[2]}, ${rim[2]}`),
+    insetHairline: s(wells.hairline),
+    insetLow: s(wells.low),
+    insetMid: s(wells.mid),
+    pressedInner: s(wells.pressed),
+    focusInner: s(wells.focus),
+  });
+}
 
 /**
- * Every neumorphic surface value in the app, computed once.
- * Raised: tight, restrained highlight (~55% of the dark blur, low alpha), softer
- * wider dark side — user-tuned; do not re-balance them.
- * Inset physics: inside a pit, the wall NEAREST the light throws its shadow
- * across the floor (dark hugs the light-side edges — top and right at 60°), while
- * the FAR lip catches the light. CSS inset offsets paint the edge OPPOSITE the
- * offset, so dark = (-LX,-LY), light = (LX,LY) — the mirror of the raised pair.
+ * Elite: the brand's studio light, 60° from the upper right. A shadow falls `d` px away from it, down and to the left
+ * (`away`); the rim lights the top and right edges. Inset offsets paint the edge OPPOSITE the offset, so a well's
+ * shade thrown `away` lands on its top and right walls (the walls nearest the light throw their shadow across the
+ * floor), and the far lip (bottom, left) catches the light.
  */
-export const NEU = Object.freeze({
-  raisedLow: Object.freeze({ boxShadow: raisedPair(0.32, 0.18, 9, 4) }),
-  raisedMid: Object.freeze({ boxShadow: raisedPair(0.4, 0.22, 12, 5) }),
-  raisedHigh: Object.freeze({ boxShadow: raisedPair(0.48, 0.25, 15, 6) }),
-  /** for anything under ~20px on its short axis — a full inset rim collapses there */
-  insetHairline: Object.freeze({ boxShadow: insetPair(0.34, 0.12, 3, 2, 0.5) }),
-  insetLow: Object.freeze({ boxShadow: insetPair(0.38, 0.16, 8, 4) }),
-  insetMid: Object.freeze({ boxShadow: insetPair(0.5, 0.2, 10, 5) }),
-  /** the kit's carved inner panel — goes on an overlay INSIDE a raised control */
-  pressedInner: Object.freeze({ boxShadow: insetPair(0.5, 0.14, 8, 5) }),
-});
+const away = (d: number) => `${+(-LX / NEU_DIST * d).toFixed(2)}px ${+(-LY / NEU_DIST * d).toFixed(2)}px`;
+const SHEEN = (a: number) => `rgba(250, 249, 245, ${a})`;
+const ELITE = litSkin(
+  `${away(1.15)} 2px ${darkSh(0.5)}`,
+  [
+    `${away(3)} 7px ${darkSh(0.34)}`,
+    `${away(6)} 13px ${darkSh(0.4)}`,
+    `${away(9)} 19px ${darkSh(0.44)}, ${away(14)} 30px ${darkSh(0.18)}`,
+  ],
+  [`inset -1px 1px 0px ${SHEEN(0.07)}`, `inset -1px 1px 0px ${SHEEN(0.08)}`, `inset -1px 1px 0px ${SHEEN(0.09)}`],
+  {
+    hairline: `inset ${away(2)} 2px ${darkSh(0.4)}`,
+    low: `inset ${away(3)} 5px ${darkSh(0.44)}, inset 1px -1px 0px ${SHEEN(0.04)}`,
+    mid: `inset ${away(4)} 6px ${darkSh(0.48)}, inset 1px -1px 0px ${SHEEN(0.05)}`,
+    pressed: `inset ${away(3)} 6px ${darkSh(0.5)}`,
+    focus: `inset ${away(5)} 8px ${darkSh(0.56)}, inset 1px -1px 0px ${SHEEN(0.06)}`,
+  },
+);
+
+/**
+ * Cheerful: a warm daylight from straight above. Shadows fall straight down in a warm dark, the rim lights the top edge
+ * in a warm cream, wells shade from the top and catch a faint warm lip at the bottom. No pale grey light anywhere, so
+ * nothing smudges over the drifting colour behind the pages.
+ */
+const WARM = (a: number) => `rgba(8, 6, 4, ${a})`;
+const RIM = (a: number) => `rgba(255, 236, 214, ${a})`;
+const CHEERFUL = litSkin(
+  `0px 1px 2px ${WARM(0.3)}`,
+  [`0px 3px 8px ${WARM(0.22)}`, `0px 6px 14px ${WARM(0.26)}`, `0px 10px 22px ${WARM(0.28)}, 0px 18px 36px ${WARM(0.12)}`],
+  [`inset 0px 1px 0px ${RIM(0.06)}`, `inset 0px 1px 0px ${RIM(0.07)}`, `inset 0px 1px 0px ${RIM(0.08)}`],
+  {
+    hairline: `inset 0px 1px 2px ${WARM(0.3)}`,
+    low: `inset 0px 1px 4px ${WARM(0.32)}, inset 0px -1px 0px ${RIM(0.04)}`,
+    mid: `inset 0px 2px 6px ${WARM(0.36)}, inset 0px -1px 0px ${RIM(0.05)}`,
+    pressed: `inset 0px 2px 6px ${WARM(0.36)}`,
+    focus: `inset 0px 3px 8px ${WARM(0.42)}, inset 0px -1px 0px ${RIM(0.06)}`,
+  },
+);
+
+/** Both looks' surfaces. Prefer neuRaised and the rest, which pick the look being drawn. */
+export const SKINS = Object.freeze({ elite: ELITE, cheerful: CHEERFUL });
+/** Elite's surfaces, for the few places drawn outside any look (prefer neuRaised and the rest). */
+export const NEU = ELITE;
 
 /**
  * No shadow at all, for a style that must take away one an earlier style gave (the minimal theme's flat controls). An
@@ -90,46 +152,41 @@ export const wellFor = (theme: ThemeMode, strength: 'hairline' | 'low' | 'mid' =
     ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, boxShadow: NO_SHADOW }
     : { backgroundColor: C.inset, ...neuInset(strength) }) as any;
 
-/** Raised surface (frozen object — safe to spread in render). */
+let cheerSkin = false;
+/** Which look the surfaces wear: set from the mood by useTheme (src/components/UI.tsx), before anything is drawn. */
+export function setSkin(cheerful: boolean) { cheerSkin = cheerful; }
+export const cheerSkinOn = () => cheerSkin;
+const skinNow = () => (cheerSkin ? CHEERFUL : ELITE);
+
+/** Raised surface as it rests (frozen object — safe to spread in render). */
 export const neuRaised = (strength: 'low' | 'mid' | 'high' = 'mid') => {
-  const k = cheerSkin ? CHEER_SKIN : NEU;
+  const k = skinNow();
   return (strength === 'high' ? k.raisedHigh : strength === 'mid' ? k.raisedMid : k.raisedLow) as any;
+};
+
+/** Only a raised surface's contact shadow: what it keeps while pressed in. Pair it with neuKey on a layer inside. */
+export const neuBase = () => skinNow().base as any;
+
+/** Only a raised surface's key shadow and rim: the layer a press fades (neuBase stays on the surface itself). */
+export const neuKey = (strength: 'low' | 'mid' | 'high' = 'mid') => {
+  const k = skinNow();
+  return (strength === 'high' ? k.keyHigh : strength === 'mid' ? k.keyMid : k.keyLow) as any;
 };
 
 /** Carved-in valley (frozen object — safe to spread in render). */
 export const neuInset = (strength: 'hairline' | 'low' | 'mid' = 'mid') => {
-  const k = cheerSkin ? CHEER_SKIN : NEU;
+  const k = skinNow();
   return (strength === 'mid' ? k.insetMid : strength === 'low' ? k.insetLow : k.insetHairline) as any;
 };
 
 /**
- * Cheerful's own surfaces. Elite's neumorphic light falls from the top left as a pale highlight; over Cheerful's
- * drifting colour that highlight reads as a gray smudge around every card. Cheerful keeps Elite's shapes and spacing
- * but lifts its cards with a soft, warm-dark drop shadow and a faint warm rim along the top, and sinks its wells with a
- * gentle inner shade only: no pale light anywhere.
+ * The inner shade a pressed raised control shows. Goes on an overlay inside the control, never on the control's own
+ * surface, which keeps its silhouette.
  */
-const WARM = (a: number) => `rgba(8, 6, 4, ${a})`;
-const RIM = (a: number) => `rgba(255, 236, 214, ${a})`;
-const CHEER_SKIN = Object.freeze({
-  raisedLow: Object.freeze({ boxShadow: `0px 3px 10px ${WARM(0.3)}, inset 0px 1px 0px ${RIM(0.06)}` }),
-  raisedMid: Object.freeze({ boxShadow: `0px 6px 16px ${WARM(0.34)}, inset 0px 1px 0px ${RIM(0.07)}` }),
-  raisedHigh: Object.freeze({ boxShadow: `0px 10px 24px ${WARM(0.38)}, inset 0px 1px 0px ${RIM(0.08)}` }),
-  insetHairline: Object.freeze({ boxShadow: `inset 0px 1px 2px ${WARM(0.3)}` }),
-  insetLow: Object.freeze({ boxShadow: `inset 0px 1px 4px ${WARM(0.32)}` }),
-  insetMid: Object.freeze({ boxShadow: `inset 0px 2px 6px ${WARM(0.36)}` }),
-  pressedInner: Object.freeze({ boxShadow: `inset 0px 2px 6px ${WARM(0.36)}` }),
-});
-let cheerSkin = false;
-/** Which skin the surfaces wear: set from the mood by useTheme (src/components/UI.tsx), before anything is drawn. */
-export function setSkin(cheerful: boolean) { cheerSkin = cheerful; }
-export const cheerSkinOn = () => cheerSkin;
+export const neuPressedInner = () => skinNow().pressedInner as any;
 
-/**
- * Kit "pressed" state, dark adaptation — the inner panel that carves into a
- * control which keeps its own raised silhouette from its call site. Goes on an
- * overlay/panel inside the control, never on the control surface itself.
- */
-export const neuPressedInner = () => (cheerSkin ? CHEER_SKIN.pressedInner : NEU.pressedInner) as any;
+/** A well a step deeper, for a field while it has the focus: on an overlay inside the well. */
+export const neuFocusInner = () => skinNow().focusInner as any;
 
 /** Non-neumorphic lifts that still ride the same shadow source. */
 export const SH = Object.freeze({
@@ -165,7 +222,8 @@ export const DEFAULT_ACCENT = '#9588F9';
 // ---- tokens ----
 export const C = {
   bg: GREY.g800,          // #30302E, the material
-  card: GREY.g800,        // classic soft-UI: same colour, depth from shadows
+  /** a hair lighter than the ground, as a surface that faces the light reads */
+  card: '#333331',
   inset: '#2B2B29',       // a step below the surface: the carved floor
   lite: liteSh(0.34),
   border: liteSh(0.16),

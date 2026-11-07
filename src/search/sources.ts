@@ -3,7 +3,7 @@ import { InteractionManager, Linking } from 'react-native';
 import { router } from 'expo-router';
 import { useStore, DailyTask, Mission, PlannerBlock, Habit, Note, JournalEntry, VaultVideo, FocusSession, AiLink, CalcEntry, TrashItem } from '../store';
 import { TOOLS, ToolKey, colorOf, normaliseArchived, normaliseSlots, toolByKey } from '../tools';
-import { openPage, openTool } from '../toolNav';
+import { openPage, openTool, openVideoPage } from '../toolNav';
 import { runAction } from '../actions';
 import { markFreshNote } from '../freshNotes';
 import { openReport } from '../reports';
@@ -149,12 +149,9 @@ export function addTodo(title: string) {
 }
 
 const openNote = (id: string) => router.push({ pathname: '/notes/[id]', params: { id } }, { dangerouslySingular: true });
-// a moment asked for carries a new nonce, so a player already open sees it as a new ask and goes there again
-const openVideo = (id: string, t?: number) =>
-  router.push({
-    pathname: '/vault/[id]',
-    params: t != null ? { id, t: String(Math.floor(t)), n: Date.now().toString(36) } : { id },
-  }, { dangerouslySingular: true });
+// in the Vault's slot when it has one, as the Vault itself would open it; a moment asked for carries a new nonce, so a
+// player already open sees it as a new ask and goes there again
+const openVideo = (id: string, t?: number) => openVideoPage(id, t);
 const openScores = (id: string) => { openScoreNode(id); openTool('scores'); };
 
 /* ---------------------------------------------------------------- the store's documents */
@@ -196,7 +193,8 @@ function missionDocs(m: Mission): SiftDoc[] {
   for (const s of m.subtasks) {
     out.push({
       key: 'step:' + m.id + ':' + s.id, kind: 'step', section: 'Tasks', title: s.title, subtitle: 'Step of ' + m.title,
-      payload: { icon: s.done ? 'checkmark-outline' : 'remove-outline', color: colorOf('slate'), open },
+      // a step opens its task with the steps unfolded, so the step found is in view
+      payload: { icon: s.done ? 'checkmark-outline' : 'remove-outline', color: colorOf('slate'), open: () => openTool('tasks', { list: 'missions', item: m.id, step: s.id }) },
     });
   }
   return out;
@@ -368,6 +366,16 @@ let staticDone = false;
 const ONE = [0];
 /** the inputs of the subjects, one object replaced only when one of them changes, so the collection holds them once */
 let subjectSrc: { sessions: unknown; notes: unknown; planner: unknown; scores: unknown } | null = null;
+/**
+ * A one-item list around a source object, the same list for as long as the object is the same: a collection compares
+ * its list by identity, so a fresh `[x]` on every pass would build it again each time.
+ */
+const ONE_OF = new WeakMap<object, readonly object[]>();
+function oneOf<T extends object>(x: T): readonly T[] {
+  let list = ONE_OF.get(x) as readonly T[] | undefined;
+  if (!list) { list = [x]; ONE_OF.set(x, list); }
+  return list;
+}
 
 /** The keys of the collections a tool's content lives in, which leave the index while it is archived or locked. */
 const TOOL_COLLECTIONS: Partial<Record<ToolKey, string[]>> = {
@@ -475,42 +483,45 @@ export function useSiftSources(active: boolean): SiftSources {
       scoreById: new Map(scores.map((n) => [n.id, n])),
       tagLabel: new Map(scoreTags.map((t) => [t.id, t])),
     };
-    const flatBlocks = DAY_NAMES.flatMap((d) => (planner[d] || []).map((b) => ({ b, d })));
-    // the planner's blocks are re-read with the week (each block keeps its own day)
-    index.setCollection('todos', dailyTasks, todoDoc);
-    index.setCollection('missions', missions, missionDocs);
-    index.setCollection('blocks', [planner], () => flatBlocks.map(({ b, d }) => blockDoc(b, d, ctx)), hour24);
-    index.setCollection('habits', habits, habitDoc);
-    index.setCollection('notes', notes, noteDoc);
-    index.setCollection('folders', noteFolders, (f: string): SiftDoc => ({
-      key: 'folder:' + f, kind: 'folder', section: 'Notes', title: f, subtitle: 'Folder',
-      payload: { icon: 'folder-outline', color: colorOf('green'), open: () => openTool('notes', { folder: f }) },
-    }));
-    index.setCollection('journal', journal, journalDoc, bodiesRev, (e) => journalBodies.get(e.id)?.u === e.updatedAt);
-    index.setCollection('journalTags', journalTags, (t: string): SiftDoc => ({
-      key: 'jtag:' + t, kind: 'tag', section: 'Journal', title: t, subtitle: 'Journal tag',
-      payload: { icon: 'pricetag-outline', color: colorOf('gold'), open: () => openPage('/journal/archive', { tag: t }) },
-    }));
-    index.setCollection('videos', videos, (v) => videoDocs(v, ctx), vaultFolders);
-    index.setCollection('scores', scores, (n) => scoreDoc(n, ctx), scoreTags);
-    index.setCollection('learnings', learnings, (l) => learningDoc(l, ctx), scores);
-    index.setCollection('scoreTags', scoreTags, scoreTagDoc);
-    if (!subjectSrc || subjectSrc.sessions !== sessions || subjectSrc.notes !== notes || subjectSrc.planner !== planner || subjectSrc.scores !== scores) {
-      subjectSrc = { sessions, notes, planner, scores };
-    }
-    // one source object, so the subjects are listed once (a source of four inputs would list them four times)
-    index.setCollection('subjects', [subjectSrc], (x) => subjectsOf(x as any).map(subjectDoc));
-    index.setCollection('sessions', sessions, (x) => sessionDoc(x, ctx), hour24);
-    index.setCollection('ai', aiLinks, aiDoc);
-    index.setCollection('calc', calc, calcDoc);
-    index.setCollection('trash', trash, (t) => trashDoc(t, notesLocked, journalLocked), notesLocked + '|' + journalLocked);
-    index.setCollection('profiles', profiles.filter((p) => p.id !== activeProfile), profileDoc);
-    // a locked tool, or an archived one, keeps its content out
+    // a locked tool, or an archived one, keeps its content out: worked out first, so what is about to be dropped is
+    // never built at all
     const out = new Set<string>();
     if (notesLocked) TOOL_COLLECTIONS.notes!.forEach((k) => out.add(k));
     if (journalLocked) TOOL_COLLECTIONS.journal!.forEach((k) => out.add(k));
     for (const t of archived) (TOOL_COLLECTIONS[t] ?? []).forEach((k) => out.add(k));
     if (out.has('notes')) out.add('subjects');
+    const set = <T>(
+      key: string, items: readonly T[], toDocs: (item: T) => SiftDoc[] | SiftDoc | null, version?: unknown, itemVersion?: (item: T) => unknown,
+    ) => { if (!out.has(key)) index.setCollection(key, items, toDocs, version, itemVersion); };
+    // the planner's blocks are re-read with the week (each block keeps its own day)
+    set('todos', dailyTasks, todoDoc);
+    set('missions', missions, missionDocs);
+    set('blocks', oneOf(planner), () => DAY_NAMES.flatMap((d) => (planner[d] || []).map((b) => blockDoc(b, d, ctx))), hour24);
+    set('habits', habits, habitDoc);
+    set('notes', notes, noteDoc);
+    set('folders', noteFolders, (f: string): SiftDoc => ({
+      key: 'folder:' + f, kind: 'folder', section: 'Notes', title: f, subtitle: 'Folder',
+      payload: { icon: 'folder-outline', color: colorOf('green'), open: () => openTool('notes', { folder: f }) },
+    }));
+    set('journal', journal, journalDoc, bodiesRev, (e) => journalBodies.get(e.id)?.u === e.updatedAt);
+    set('journalTags', journalTags, (t: string): SiftDoc => ({
+      key: 'jtag:' + t, kind: 'tag', section: 'Journal', title: t, subtitle: 'Journal tag',
+      payload: { icon: 'pricetag-outline', color: colorOf('gold'), open: () => openPage('/journal/archive', { tag: t }) },
+    }));
+    set('videos', videos, (v) => videoDocs(v, ctx), vaultFolders);
+    set('scores', scores, (n) => scoreDoc(n, ctx), scoreTags);
+    set('learnings', learnings, (l) => learningDoc(l, ctx), scores);
+    set('scoreTags', scoreTags, scoreTagDoc);
+    if (!subjectSrc || subjectSrc.sessions !== sessions || subjectSrc.notes !== notes || subjectSrc.planner !== planner || subjectSrc.scores !== scores) {
+      subjectSrc = { sessions, notes, planner, scores };
+    }
+    // one source object, so the subjects are listed once (a source of four inputs would list them four times)
+    set('subjects', oneOf(subjectSrc), (x) => subjectsOf(x as any).map(subjectDoc));
+    set('sessions', sessions, (x) => sessionDoc(x, ctx), hour24);
+    set('ai', aiLinks, aiDoc);
+    set('calc', calc, calcDoc);
+    set('trash', trash, (t) => trashDoc(t, notesLocked, journalLocked), notesLocked + '|' + journalLocked);
+    set('profiles', profiles.filter((p) => p.id !== activeProfile), profileDoc);
     for (const k of out) index.dropCollection(k);
     // a key dropped once must be set again from scratch next time: dropping removed it, so a later set rebuilds it
     return Math.random();

@@ -2,9 +2,9 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Alert, AppState, BackHandler, Dimensions, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import YoutubePlayer, { YoutubeIframeRef } from 'react-native-youtube-iframe';
-import Animated, { useAnimatedScrollHandler, useDerivedValue, useSharedValue } from 'react-native-reanimated';
+import Animated, { LayoutAnimationConfig, useAnimatedScrollHandler, useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { C, F, S, T, TRACK } from '../theme';
-import { useStore, TimedNote, Bookmark, flushSaves } from '../store';
+import { useStore, TimedNote, Bookmark, VaultFolder, flushSaves } from '../store';
 import { fmtMediaTime } from '../utils';
 import {
   ScreenBG, Card, SectionTitle, Sheet, Field, PillButton, EmptyState, Row, Chip, IconBtn, DotMenu, ScrollEdge, edgeStrength,
@@ -24,12 +24,17 @@ const PLAYER_MAX_H = 0.55;
 const COL_GAP = 28;
 /** how long a title may take before the video is saved without it, so a stalled connection never holds the add key */
 const TITLE_WAIT_MS = 6000;
-/** while it plays, where the video is gets saved this often (and on a pause, a leave, the app put away) */
-const PROGRESS_EVERY_MS = 10_000;
+/**
+ * while it plays, where the video is gets saved this often (and on a pause, a leave, the app put away): each save
+ * writes the whole Vault row again, so not more often than a lost half-minute is worth
+ */
+const PROGRESS_EVERY_MS = 30_000;
 /** a video opens this far before where it was left, so the sentence it stopped in starts again */
 const RESUME_BACK_S = 2;
 /** left this close to the end, it counts as watched through, and opens from the start next time */
 const END_MARGIN_S = 10;
+/** how long "@ now" waits on the player: one not yet made (offline, a slow load) never answers, and the sheet must open */
+const NOW_WAIT_MS = 500;
 
 /** The moment a link asks for, in seconds (0 included), or null when it asks for none. */
 function momentOf(t: string | undefined): number | null {
@@ -65,6 +70,27 @@ export async function fetchTitle(videoId: string): Promise<{ title: string; foun
 export function removeVaultItem(videoId: string, item: TimedNote | Bookmark, isBookmark: boolean) {
   const s = useStore.getState();
   toastTrashed(isBookmark ? s.trashBookmark(videoId, item.id) : s.trashTimedNote(videoId, item.id));
+}
+
+/**
+ * Every folder as a move sheet offers it: named by its whole path (Physics / Mechanics / Rotation), so two folders of
+ * the same name are told apart, and in order by that path, so a subfolder stands right after its parent.
+ */
+export function folderChoices(folders: VaultFolder[]): { folder: VaultFolder; label: string }[] {
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const pathOf = (f: VaultFolder) => {
+    const names = [f.name];
+    // a parent seen twice is a loop in damaged data: the path stops there instead of running for ever
+    const seen = new Set([f.id]);
+    for (let p = f.parentId ? byId.get(f.parentId) : undefined; p && !seen.has(p.id); p = p.parentId ? byId.get(p.parentId) : undefined) {
+      seen.add(p.id);
+      names.unshift(p.name);
+    }
+    return names.join(' / ');
+  };
+  return folders
+    .map((folder) => ({ folder, label: pathOf(folder) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /** The last value that was not null, so a sheet keeps its title and its rows while it closes. */
@@ -166,6 +192,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [areaW, setAreaW] = useState(() => columnWidth(width, mode === 'tab', WIDE_MAX));
   const video = useStore((s) => s.vaultVideos.find((v) => v.id === id));
   const folders = useStore((s) => s.vaultFolders);
+  const folderList = useMemo(() => folderChoices(folders), [folders]);
   const updateVideo = useStore((s) => s.updateVideo);
   const addTimedNote = useStore((s) => s.addTimedNote);
   const updateTimedNote = useStore((s) => s.updateTimedNote);
@@ -283,7 +310,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     keepPlace(p.playing ? p.sec + (Date.now() - p.at) / 1000 : p.sec);
     savePlace(false).catch(() => {});
   }, [keepPlace, savePlace]);
-  // every 10 s while it plays, never more often
+  // every 30 s while it plays, never more often
   React.useEffect(() => {
     if (!playing) return undefined;
     const timer = setInterval(() => { savePlace(true).catch(() => {}); }, PROGRESS_EVERY_MS);
@@ -335,7 +362,7 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     if (s === 'playing') {
       setPlaying(true);
       readLength();
-      // only noted: the place is saved 10 s on, or at a pause or a leave
+      // only noted: the place is saved 30 s on, or at a pause or a leave
       savePlace(true, false).catch(() => {});
     }
     if (s === 'paused') {
@@ -419,9 +446,24 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     );
   }
 
+  // The player's moment, or the last one read from it (carried on while it was playing), or 0. A player that is not
+  // ready never settles getCurrentTime, so it is not asked, and one that is gets a short wait before the fallback
   const now = async () => {
-    try { return Math.floor((await playerRef.current?.getCurrentTime()) || 0); }
-    catch { return 0; }
+    const p = lastPos.current;
+    const fallback = Math.floor(p ? (p.playing ? p.sec + (Date.now() - p.at) / 1000 : p.sec) : 0);
+    if (!readyRef.current || !playerRef.current) return fallback;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const sec = await Promise.race([
+        playerRef.current.getCurrentTime(),
+        new Promise<null>((done) => { timer = setTimeout(() => done(null), NOW_WAIT_MS); }),
+      ]);
+      return typeof sec === 'number' && Number.isFinite(sec) ? Math.floor(sec) : fallback;
+    } catch {
+      return fallback;
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   // The revision sheet is plain text in the note editor's own style (a bullet, the moment, the words), with no heading
@@ -549,48 +591,58 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
     <ScreenBG maxWidth={WIDE_MAX}>
       {/* above the scroll, so the bar's shade falls over the video and the notes rather than behind them */}
       <View style={[frame(twoCol ? WIDE_MAX : READ_MAX), st.barLayer]}>{header.bar}</View>
+      {/* each layout is wrapped so that, when it gives way to the other or the page goes (or the video does), the rows
+          and chips inside go with it at once instead of fading out over a parent that is already gone */}
       {pinned ? (
         // a phone: the video stays under the bar, and its title, its actions and the notes scroll beneath it
-        <View style={[frame(READ_MAX), { flex: 1 }]}>
-          {player}
-          <View style={{ flex: 1 }}>
-            <Animated.ScrollView
-              onScroll={onNotesScroll}
-              scrollEventThrottle={16}
-              keyboardShouldPersistTaps="handled"
-              onLayout={(e) => { const w = e.nativeEvent.layout.width; if (Math.abs(w - areaW) > 0.5) setAreaW(w); }}
-              contentContainerStyle={{ padding: S.pad, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
-            >
-              {info}
-              {lists}
-            </Animated.ScrollView>
-            <ScrollEdge at={notesEdge} />
-          </View>
-        </View>
-      ) : (
-        <Animated.ScrollView
-          {...header.scrollProps}
-          onLayout={(e) => { const w = e.nativeEvent.layout.width; if (Math.abs(w - areaW) > 0.5) setAreaW(w); }}
-          contentContainerStyle={{ paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
-        >
-          {twoCol ? (
-            <View style={st.cols}>
-              <View style={st.main}>
-                <View style={{ alignItems: 'center' }}>{player}</View>
-                <View style={{ paddingTop: S.pad }}>{info}</View>
-              </View>
-              <View style={st.side}>{lists}</View>
-            </View>
-          ) : (
-            <View style={frame(READ_MAX)}>
-              {wide ? <View style={{ alignItems: 'center' }}>{player}</View> : player}
-              <View style={{ padding: S.pad }}>
+        <LayoutAnimationConfig key="pinned" skipExiting>
+          <View style={[frame(READ_MAX), { flex: 1 }]}>
+            {player}
+            <View style={{ flex: 1 }}>
+              <Animated.ScrollView
+                onScroll={onNotesScroll}
+                scrollEventThrottle={16}
+                keyboardShouldPersistTaps="handled"
+                onLayout={(e) => { const w = e.nativeEvent.layout.width; if (Math.abs(w - areaW) > 0.5) setAreaW(w); }}
+                contentContainerStyle={{ padding: S.pad, paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
+              >
                 {info}
                 {lists}
-              </View>
+              </Animated.ScrollView>
+              <ScrollEdge at={notesEdge} />
             </View>
-          )}
-        </Animated.ScrollView>
+          </View>
+        </LayoutAnimationConfig>
+      ) : (
+        <LayoutAnimationConfig key="scroll" skipExiting>
+          <Animated.ScrollView
+            {...header.scrollProps}
+            onLayout={(e) => { const w = e.nativeEvent.layout.width; if (Math.abs(w - areaW) > 0.5) setAreaW(w); }}
+            contentContainerStyle={{ paddingBottom: 40 + (mode === 'tab' ? 0 : insets.bottom) }}
+          >
+            {twoCol ? (
+              <LayoutAnimationConfig key="cols" skipExiting>
+                <View style={st.cols}>
+                  <View style={st.main}>
+                    <View style={{ alignItems: 'center' }}>{player}</View>
+                    <View style={{ paddingTop: S.pad }}>{info}</View>
+                  </View>
+                  <View style={st.side}>{lists}</View>
+                </View>
+              </LayoutAnimationConfig>
+            ) : (
+              <LayoutAnimationConfig key="col" skipExiting>
+                <View style={frame(READ_MAX)}>
+                  {wide ? <View style={{ alignItems: 'center' }}>{player}</View> : player}
+                  <View style={{ padding: S.pad }}>
+                    {info}
+                    {lists}
+                  </View>
+                </View>
+              </LayoutAnimationConfig>
+            )}
+          </Animated.ScrollView>
+        </LayoutAnimationConfig>
       )}
 
       <DraftSheet
@@ -612,14 +664,13 @@ export function VaultPlayerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         onSave={(text) => { if (text.trim()) { addVideoTag(video.id, text); setTagSheet(false); } }}
       />
 
-      {/* the same chips as the library's own move sheet: an icon, not a text glyph, and a subfolder named with its parent */}
+      {/* the same chips as the library's own move sheet: an icon, not a text glyph, and a subfolder named by its path */}
       <Sheet visible={folderSheet} onClose={() => setFolderSheet(false)} title="Move to folder">
         <Row style={{ flexWrap: 'wrap' }}>
           <Chip icon="home-outline" label="No folder" color={C.pink} active={video.folderId === null}
             onPress={() => { updateVideo(video.id, { folderId: null }); setFolderSheet(false); }} />
-          {folders.map((f) => (
-            <Chip key={f.id} icon="folder-outline" color={C.pink} active={video.folderId === f.id}
-              label={f.parentId ? (folders.find((p) => p.id === f.parentId)?.name || '') + ' / ' + f.name : f.name}
+          {folderList.map(({ folder: f, label }) => (
+            <Chip key={f.id} icon="folder-outline" color={C.pink} active={video.folderId === f.id} label={label}
               onPress={() => { updateVideo(video.id, { folderId: f.id }); setFolderSheet(false); }} />
           ))}
         </Row>

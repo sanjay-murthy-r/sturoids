@@ -60,6 +60,17 @@ async function pickRecognizer(M: any): Promise<{ lang: string; onDevice: boolean
 let picked: Promise<{ lang: string; onDevice: boolean }> | null = null;
 
 /**
+ * The recogniser's listeners belong to the module, not to a session, so a session stopped and another started at
+ * once would overlap: the old one's listeners would write its last phrase a second time, and its late 'end' would
+ * take the new one's listeners away and show the mic off while it listened. A stopped session keeps here the promise
+ * of its 'end', and its listeners; the next one waits for that (only so long) and drops any listeners still left.
+ */
+const END_WAIT_MS = 1500;
+let ending: Promise<void> | null = null;
+let lastSubs: any[] | null = null;
+const dropSubs = (subs: any[]) => subs.forEach((s) => { try { s?.remove?.(); } catch {} });
+
+/**
  * Speech recognition with live interim transcripts, on the device when the phone can do it there.
  * onInterim fires continuously with the phrase being spoken;
  * onFinal fires when a phrase is committed.
@@ -80,7 +91,19 @@ export async function startVoice(
     if (!picked) picked = pickRecognizer(M);
     const { lang, onDevice } = await picked;
 
+    // the session before, if it is still on its way out
+    if (ending) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([ending, new Promise<void>((r) => { timer = setTimeout(r, END_WAIT_MS); })]);
+      clearTimeout(timer);
+      ending = null;
+    }
+    if (lastSubs) { dropSubs(lastSubs); lastSubs = null; }
+
     const subs: any[] = [];
+    let ended!: () => void;
+    const endSeen = new Promise<void>((r) => { ended = r; });
+    lastSubs = subs;
     subs.push(M.addListener('result', (e: any) => {
       try {
         const transcript = e?.results?.[0]?.transcript;
@@ -90,23 +113,36 @@ export async function startVoice(
       } catch {}
     }));
     subs.push(M.addListener('end', () => {
-      subs.forEach((s) => s?.remove?.());
+      dropSubs(subs);
+      if (lastSubs === subs) lastSubs = null;
+      ended();
       onEnd();
     }));
     subs.push(M.addListener('error', (e: any) => {
       onError(e?.message || e?.error || 'Speech recognition error');
     }));
 
-    M.start({
-      lang,
-      interimResults: true,
-      continuous: true,
-      requiresOnDeviceRecognition: onDevice,
-      addsPunctuation: true,
-    });
+    try {
+      M.start({
+        lang,
+        interimResults: true,
+        continuous: true,
+        requiresOnDeviceRecognition: onDevice,
+        addsPunctuation: true,
+      });
+    } catch (e) {
+      // it never started, so no 'end' will come to take its listeners away
+      dropSubs(subs);
+      if (lastSubs === subs) lastSubs = null;
+      ended();
+      throw e;
+    }
 
     return {
-      stop: () => { try { M.stop(); } catch {} },
+      stop: () => {
+        ending = endSeen;
+        try { M.stop(); } catch {}
+      },
     };
   } catch (e: any) {
     onError(String(e?.message || e));

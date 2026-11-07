@@ -5,7 +5,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } fro
 import Svg, { Circle, Line, Path, Text as SvgText } from 'react-native-svg';
 import { useIsFocused } from '@react-navigation/native';
 import { TAG_COLORS } from '../scores';
-import { C, F, MIN, NEU, TRACK, DEFAULT_ACCENT } from '../theme';
+import { C, F, MIN, TRACK, DEFAULT_ACCENT, neuInset } from '../theme';
 import { useTheme } from './UI';
 import { EASE_OUT, useAnimLevel, useTabReturns } from './Motion';
 import { useIntro } from '../intro';
@@ -131,7 +131,7 @@ export function GrowBar({ value, color, height = 6, play = true, round = 0, dela
       onLayout={(e) => { trackW.value = e.nativeEvent.layout.width; }}
       style={[
         { height, borderRadius: height / 2, overflow: 'hidden' },
-        theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...NEU.insetHairline },
+        theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...neuInset('hairline') },
       ]}
     >
       <Animated.View style={[StyleSheet.absoluteFill, { borderRadius: height / 2, backgroundColor: color || C.accent }, fill]} />
@@ -174,7 +174,7 @@ export function ShareBar({ parts, height = 12, play = true, round = 0, delay = 0
       onLayout={(e) => { trackW.value = e.nativeEvent.layout.width; }}
       style={[
         { height, borderRadius: height / 2, overflow: 'hidden' },
-        theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...NEU.insetHairline },
+        theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...neuInset('hairline') },
       ]}
     >
       <Animated.View style={[StyleSheet.absoluteFill, { flexDirection: 'row' }, slide]}>

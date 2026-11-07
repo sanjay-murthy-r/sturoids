@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system';
 import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   useStore, initialData, flushSaves, deleteRecoveryCopy, readRecoveryCopy, loadFailedThisLaunch, savingPaused,
   clearSavedData, trashedAttachments, trashedEntryIds,
@@ -9,6 +10,8 @@ import { ATT_DIR } from './attachments';
 import { removePin, closeLock, noteScope, ALL_NOTES } from './lock';
 import { cancelBreakEnd, cancelCountdownEnd, rescheduleAllReminders } from './notifications';
 import { FINISH_NOTIF_ID } from './deepWork';
+import { pkey } from './profiles';
+import { LAST_EXPORT_KEY } from './backupNudge';
 
 /** Deletes the files inside a folder, keeping the folder: the modules that write there made it once and expect it. */
 async function emptyFolder(dir: string) {
@@ -57,6 +60,16 @@ function closeAllLocks() {
  * (profiles.ts), so another profile on the phone is never touched; the cache is the phone's, and holds only passing
  * copies (exports on their way to a share, picker copies), which any profile may clear.
  */
+/** This profile's kept wallpaper photos, gone. */
+async function removeWallpapers() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    await (require('./wallpaper') as typeof import('./wallpaper')).removeAllWallpapers();
+  } catch {
+    // none kept
+  }
+}
+
 export async function eraseThisPhone() {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -71,7 +84,16 @@ export async function eraseThisPhone() {
   Notifications.cancelScheduledNotificationAsync(FINISH_NOTIF_ID).catch(() => {});
   await removePin();
   closeAllLocks();
-  await Promise.all([emptyFolder(JOURNAL_DIR), emptyFolder(ATT_DIR), deleteRecoveryCopy().catch(() => {}), clearCache()]);
+  await Promise.all([emptyFolder(JOURNAL_DIR), emptyFolder(ATT_DIR), deleteRecoveryCopy().catch(() => {}), clearCache(), removeWallpapers()]);
+  // what is kept beside the data on this phone goes too: when the last backup file was made, Sift's recent searches
+  // and pins (which can name notes and journal words), what has been learnt, and the companion's memory
+  await AsyncStorage.multiRemove([LAST_EXPORT_KEY, pkey('sturoids-search'), pkey('sturoids-learn'), pkey('sturoids-companion')]).catch(() => {});
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require('./search/store') as typeof import('./search/store')).resetSiftMemory();
+  } catch {
+    // Sift not loaded: nothing remembered in memory
+  }
   // with other profiles on the phone this one stays itself: its name, colour and photo survive, so it is never
   // "Unnamed" and the switcher still shows who it is
   const { name, accent, avatar } = useStore.getState().settings;
@@ -87,6 +109,8 @@ export async function eraseThisPhone() {
   const fresh = initialData();
   if (keepWho) fresh.settings = { ...fresh.settings, name, accent, avatar };
   useStore.getState().replaceAll(fresh);
+  // the wallpapers are this device's own (kept through a replace): erasing takes them too
+  useStore.getState().setSetting('wallpapers', { elite: null, cheerful: null });
   flushSaves();
   rescheduleAllReminders().catch(() => {});
 }

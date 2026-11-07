@@ -3,7 +3,7 @@ import { View, ActivityIndicator, AppState, BackHandler, Linking, Platform, Styl
 import { WebView } from 'react-native-webview';
 import type { WebViewMessageEvent } from 'react-native-webview';
 import { useFocusEffect, useRouter } from 'expo-router';
-import Animated, { Easing, FadeOut } from 'react-native-reanimated';
+import Animated, { Easing, FadeOut, LayoutAnimationConfig } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, MIN, bgFor, neuRaised } from '../theme';
 import { NeuHeader, ScreenBG, useTheme, EmptyState } from '../components/UI';
@@ -298,38 +298,43 @@ export function DesmosScreen({ mode }: { mode: 'tab' | 'stack' }) {
               javaScriptEnabled
               domStorageEnabled // lets Desmos remember the session's graph state
             />
-            {loading ? (
-              // the plate takes the touches meant for the page it hides: a tap on it never lands on an unseen graph
-              <Animated.View
-                pointerEvents="auto"
-                exiting={level === 'none' ? undefined : FadeOut.duration(level === 'full' ? 280 : 180).easing(Easing.out(Easing.quad))}
-                style={[StyleSheet.absoluteFill, st.cover, { backgroundColor: bg }]}
-              >
-                {slow ? (
-                  <View style={st.slow}>
-                    <EmptyState
-                      icon="hourglass-outline" title="Desmos is taking a while" body="The connection may be slow. Try again, or keep waiting."
-                      actionLabel="Retry" onAction={retry}
-                    />
-                  </View>
-                ) : (
-                  <View
-                    accessible
-                    accessibilityLabel="Loading Desmos"
-                    style={[
-                      st.plate,
-                      theme === 'minimal'
-                        ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
-                        : { backgroundColor: C.card, ...neuRaised('mid') },
-                    ]}
-                  >
-                    {/* a soft band of light sweeps the plate while Desmos loads (plain with less motion) */}
-                    <Sheen radius={24} />
-                    <ActivityIndicator size="large" color={C.accent} />
-                  </View>
-                )}
-              </Animated.View>
-            ) : null}
+            {/* the plate fades as the page shows; when the page itself goes (a second load fails and the offline note
+                takes its place, or the tool closes) the plate goes with it at once, or Fabric would hold the whole page
+                on screen while it faded */}
+            <LayoutAnimationConfig skipExiting>
+              {loading ? (
+                // the plate takes the touches meant for the page it hides: a tap on it never lands on an unseen graph
+                <Animated.View
+                  pointerEvents="auto"
+                  exiting={level === 'none' ? undefined : FadeOut.duration(level === 'full' ? 280 : 180).easing(Easing.out(Easing.quad))}
+                  style={[StyleSheet.absoluteFill, st.cover, { backgroundColor: bg }]}
+                >
+                  {slow ? (
+                    <View style={st.slow}>
+                      <EmptyState
+                        icon="hourglass-outline" title="Desmos is taking a while" body="The connection may be slow. Try again, or keep waiting."
+                        actionLabel="Retry" onAction={retry}
+                      />
+                    </View>
+                  ) : (
+                    <View
+                      accessible
+                      accessibilityLabel="Loading Desmos"
+                      style={[
+                        st.plate,
+                        theme === 'minimal'
+                          ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
+                          : { backgroundColor: C.card, ...neuRaised('mid') },
+                      ]}
+                    >
+                      {/* a soft band of light sweeps the plate while Desmos loads (plain with less motion) */}
+                      <Sheen radius={24} />
+                      <ActivityIndicator size="large" color={C.accent} />
+                    </View>
+                  )}
+                </Animated.View>
+              ) : null}
+            </LayoutAnimationConfig>
           </View>
         )}
       </View>

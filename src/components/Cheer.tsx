@@ -15,6 +15,7 @@ import { create } from 'zustand';
 import { C } from '../theme';
 import { DailyTask, useStore } from '../store';
 import { useAnimLevel } from './Motion';
+import { useIntro } from '../intro';
 import { toast } from './Toast';
 import { todayKey, todoDueOn } from '../utils';
 import { NavigationContext } from '@react-navigation/native';
@@ -115,10 +116,11 @@ export function Backdrop({ minimal, dx = 0, dy = 0 }: { minimal: boolean; dx?: n
   const cheerful = useCheerful();
   const level = useAnimLevel();
   const { width, height } = useWindowDimensions();
-  // only the page in front drifts: the tabs behind it hold still
+  // only the page in front drifts (the tabs behind it hold still), and nothing drifts unseen under the intro
   const focused = useMaybeFocused();
+  const introDone = useIntro((s) => s.phase !== 'playing');
   if (!cheerful) return null;
-  const still = level !== 'full' || !focused;
+  const still = level !== 'full' || !focused || !introDone;
   const s = Math.max(width, height) * 0.75;
   const k = minimal ? 0.1 : 0.16;
   return (
@@ -280,7 +282,9 @@ export function Bob({ children, by = 4, ms = 2400 }: { children: React.ReactNode
   const cheerful = useCheerful();
   const level = useAnimLevel();
   const t = useSharedValue(0);
-  const on = cheerful && level === 'full';
+  // only on the screen in front: a tab behind it never floats unseen
+  const focused = useMaybeFocused();
+  const on = cheerful && level === 'full' && focused;
   React.useEffect(() => {
     if (!on) { cancelAnimation(t); t.value = 0; return undefined; }
     t.value = withRepeat(withSequence(

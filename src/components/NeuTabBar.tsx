@@ -7,7 +7,7 @@ import { StackActions } from '@react-navigation/native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { C, CHROME_FONT_MAX, F, MIN, TRACK, bgFor } from '../theme';
 import { Ground, useTheme } from './UI';
-import { EASE_EMPHASISED, EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, RISE_OUT, SINK_IN, TAB_FADE, TAB_SHIFT, useAnimLevel } from './Motion';
+import { CHANGE, EASE_EMPHASISED, EASE_EXIT, EASE_OUT, FADE_IN, FADE_OUT, RISE_OUT, SINK_IN, TAB_FADE, TAB_SHIFT, useAnimLevel } from './Motion';
 import { useStore } from '../store';
 import { normaliseSlots, toolByKey } from '../tools';
 import { TAB_ROUTES } from '../toolNav';
@@ -18,6 +18,10 @@ import { RAIL_W } from '../layout';
 import { openSift, useSearch } from '../search/store';
 import { useBackupAttention } from '../cloud';
 import { Lift, useCheerful } from './Cheer';
+import { screenY, setBarPerches } from '../mascot/room';
+import { useWallpaper } from './Wallpaper';
+
+const WALL_RAIL = { x: 0, y: 0 };
 
 /** a second tap on the tab you are on within this many ms opens Sift (the first still does what it always did) */
 const DOUBLE_TAP_MS = 280;
@@ -60,11 +64,14 @@ const railDotInItem = (labelH: number) => (RAIL_ITEM_H - (ICON + GAP + labelH + 
  * beneath it. The two icon colours crossfade, so nothing snaps. The dot under the name belongs to the bar, which
  * glides it from tab to tab; each tab keeps the dot's room so nothing moves.
  */
-function TabItem({ meta, focused, onPress, vertical, labelH, badge = false }: {
+function TabItem({ meta, focused, onPress, vertical, labelH, badge }: {
   meta: ItemMeta; focused: boolean; onPress: () => void; vertical: boolean;
   /** the name's room at the phone's font size (see LABEL_H) */
   labelH: number;
-  /** a small amber dot on the icon: something behind this tab needs a look (the backup, on More) */
+  /**
+   * a small amber dot on the icon: something behind this tab needs a look (the backup, on More). Left out on a tab that
+   * never carries one
+   */
   badge?: boolean;
 }) {
   const level = useAnimLevel();
@@ -74,6 +81,12 @@ function TabItem({ meta, focused, onPress, vertical, labelH, badge = false }: {
   React.useEffect(() => {
     on.value = level === 'none' ? (focused ? 1 : 0) : withTiming(focused ? 1 : 0, level === 'full' ? TAB_SHIFT : TAB_FADE);
   }, [focused, level]);
+  // the dot fades in and out rather than popping
+  const dot = useSharedValue(badge ? 1 : 0);
+  React.useEffect(() => {
+    dot.value = level === 'none' ? (badge ? 1 : 0) : withTiming(badge ? 1 : 0, CHANGE);
+  }, [badge, level]);
+  const dotStyle = useAnimatedStyle(() => ({ opacity: dot.value }));
   const rises = level === 'full';
   const sink = useAnimatedStyle(() => ({ transform: [{ scale: 1 - 0.08 * press.value }] }));
   const lit = useAnimatedStyle(() => ({ opacity: on.value }));
@@ -102,7 +115,7 @@ function TabItem({ meta, focused, onPress, vertical, labelH, badge = false }: {
             <Ionicons name={meta.icon as any} size={ICON} color={C.accent} />
           </Lift>
         </Animated.View>
-        {badge ? <View style={[st.badge, { backgroundColor: C.amber }]} /> : null}
+        {badge !== undefined ? <Animated.View pointerEvents="none" style={[st.badge, { backgroundColor: C.amber }, dotStyle]} /> : null}
       </Animated.View>
       <Animated.Text
         numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_MAX} style={[st.label, { height: labelH, color: C.accent }, nameStyle]}
@@ -132,8 +145,9 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
   const slots = React.useMemo(() => normaliseSlots(rawSlots), [rawSlots]);
   const vertical = descriptors[state.routes[state.index]?.key]?.options.tabBarPosition === 'left';
   // the bar steps aside while the keyboard is up, so a text field never sits under a row of tabs; the rail, beside
-  // the screen rather than under it, stays
-  const keyboardOpen = useKeyboardOpen();
+  // the screen rather than under it, stays. It starts as the keyboard sets out (a field's focus, on Android), not once
+  // the window has been resized for it, or the bar would ride up with the resize and only then drop
+  const keyboardOpen = useKeyboardOpen(true);
   // ...but not for Sift's own keyboard: the bar is behind Sift then, and stepping aside there would only have it come
   // back up into view as Sift goes. The keyboard belongs to whatever was open when it came up.
   const siftOpen = useSearch((s) => s.open);
@@ -231,20 +245,52 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
     return tool ? { label: tool.label, shortLabel: tool.shortLabel, icon: tool.icon } : MORE;
   };
 
+  // Cheerful's companion may stand on the bar: on its top edge between two tabs (never over a tab, and never at the
+  // last gap, where a page's add button sits just above the bar), or at the free foot of the side rail. The bar says
+  // where while it shows, and takes them back while it steps aside for the keyboard.
+  const barRef = React.useRef<View>(null);
+  const companionOn = useStore((s) => s.settings.mood === 'cheerful' && s.settings.mascot !== 'off');
+  const publishPerches = React.useCallback(() => {
+    if (!companionOn || stepAside) { setBarPerches(null); return; }
+    barRef.current?.measureInWindow((x, y, w, h) => {
+      if (w <= 0 || h <= 0) return;
+      if (vertical) {
+        setBarPerches([{ x: x + w / 2, y: screenY(y) + h - Math.max(insets.bottom, 12) - 14, kind: 'rail' }]);
+        return;
+      }
+      const slot = (w - BAR_PAD_X * 2) / routeNames.length;
+      setBarPerches([1, 2, 3].map((k) => ({ x: x + BAR_PAD_X + slot * k, y: screenY(y), kind: 'bar' as const })));
+    });
+  }, [companionOn, stepAside, vertical, insets.bottom]);
+  React.useEffect(() => {
+    // stepping aside takes them back at once; otherwise once the bar has arrived and settled into its place
+    if (stepAside || !companionOn) { setBarPerches(null); return undefined; }
+    const t = setTimeout(publishPerches, 900);
+    return () => clearTimeout(t);
+  }, [publishPerches, introOver]);
+  React.useEffect(() => () => setBarPerches(null), []);
+
   const hairline = theme === 'minimal' ? MIN.hairline : C.hairline;
   // Cheerful: the bar and the rail carry the page's drifting colour on through them (see Ground), lined up from where
   // they stand beside the page: the rail to its left, the bar under it
   const cheerful = useCheerful();
+  // with a photo behind the pages the bar carries its frosted copy too, lined up with the window
+  const photo = useWallpaper();
   const [barY, setBarY] = React.useState(0);
   const beside = React.useMemo(() => (vertical ? { x: -RAIL_W, y: 0 } : { x: 0, y: barY }), [vertical, barY]);
   return (
     <Animated.View
+      ref={barRef as any}
+      collapsable={false}
       pointerEvents={stepAside ? 'none' : 'auto'}
       accessibilityRole="tablist"
-      onLayout={vertical ? undefined : (e) => {
-        barH.value = e.nativeEvent.layout.height;
-        setBarY(e.nativeEvent.layout.y);
-        setSlotW((e.nativeEvent.layout.width - BAR_PAD_X * 2) / routeNames.length);
+      onLayout={(e) => {
+        if (!vertical) {
+          barH.value = e.nativeEvent.layout.height;
+          setBarY(e.nativeEvent.layout.y);
+          setSlotW((e.nativeEvent.layout.width - BAR_PAD_X * 2) / routeNames.length);
+        }
+        publishPerches();
       }}
       style={vertical ? [
         st.rail,
@@ -261,7 +307,7 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
         slideStyle,
       ]}
     >
-      {cheerful ? <Ground beside={beside} /> : null}
+      {cheerful || photo ? <Ground beside={beside} wallAt={vertical ? WALL_RAIL : { x: 0, y: barY }} /> : null}
       {TAB_ROUTES.map((name) => {
         const route = state.routes.find((r) => r.name === name);
         if (!route) return null;
@@ -295,7 +341,7 @@ export function NeuTabBar({ state, navigation, descriptors }: BottomTabBarProps)
         return (
           <TabItem
             key={name} meta={metaFor(name)} focused={focused} onPress={onPress} vertical={vertical} labelH={labelH}
-            badge={name === 'more' && backupDot}
+            badge={name === 'more' ? backupDot : undefined}
           />
         );
       })}

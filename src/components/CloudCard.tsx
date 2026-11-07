@@ -674,9 +674,14 @@ function PasswordSheet({ visible, onClose }: { visible: boolean; onClose: () => 
     if (visible) { setNext(''); setAgain(''); setError(''); done.current = false; }
   }, [visible]);
 
+  // held from the first submit until it is answered: the keyboard's Done and the button (whose busy state is a render
+  // behind) can each send it again in the meantime
+  const busyRef = React.useRef(false);
   const save = async () => {
+    if (busyRef.current) return;
     if (next.length < 6) { setError('Use a password of at least 6 characters.'); return; }
     if (next !== again) { setError('The two passwords do not match.'); return; }
+    busyRef.current = true;
     setBusy(true);
     try {
       await changePassword(next);
@@ -685,6 +690,7 @@ function PasswordSheet({ visible, onClose }: { visible: boolean; onClose: () => 
     } catch (e) {
       setError(describe(e));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };

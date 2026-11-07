@@ -6,14 +6,14 @@
 
 import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut, LayoutAnimationConfig } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, TRACK } from '../theme';
 import { useStore } from '../store';
 import { todayKey } from '../utils';
 import { indexScores, upcoming } from '../scores';
 import { Chip, useTheme } from './UI';
-import { EASE_OUT, glide, rowIn, rowOut, useAnimLevel } from './Motion';
+import { EASE_OUT, glide, rowIn, rowOut, useAnimLevel, useBuilt } from './Motion';
 import { tick } from '../haptics';
 import { noteUse, useLearnt } from '../learn';
 
@@ -97,12 +97,19 @@ export function TagPicker({ value, onChange, style, subject }: {
   const drop = (t: string) => { tick(); onChange(value.filter((x) => x !== t)); };
   const iconOf = (t: string) => (examTags.has(t) ? 'school-outline' : 'pricetag-outline');
   const anim = level !== 'none';
+  // the tags the picker is built with are simply there as its sheet rises; a tag added later fades in
+  const built = useBuilt();
+  const enter = built.current ? rowIn(level) : undefined;
 
+  // A chip or the tray taken away on its own fades; the picker going as a whole (its sheet or its screen part going)
+  // skips those exits, so nothing around it is held back while they run. One host view, kept off view flattening,
+  // holds it all so the config reaches every part.
   return (
-    <View style={style}>
+    <LayoutAnimationConfig skipExiting>
+    <View style={style} collapsable={false}>
       <Animated.View layout={anim ? glide(level) : undefined} style={st.chips}>
         {value.map((t) => (
-          <Animated.View key={'on:' + t} entering={rowIn(level)} exiting={rowOut(level)} layout={glide(level)}>
+          <Animated.View key={'on:' + t} entering={enter} exiting={rowOut(level)} layout={glide(level)}>
             <Chip small active icon={iconOf(t)} label={t} onPress={() => drop(t)} accessibilityHint="Takes the tag off" />
           </Animated.View>
         ))}
@@ -119,7 +126,7 @@ export function TagPicker({ value, onChange, style, subject }: {
           </Animated.View>
         ) : null}
         {!open && hint && !full ? (
-          <Animated.View key={'hint:' + hint.tag} entering={rowIn(level)} exiting={rowOut(level)} layout={glide(level)}>
+          <Animated.View key={'hint:' + hint.tag} entering={enter} exiting={rowOut(level)} layout={glide(level)}>
             <Pressable
               onPress={() => add(hint.tag)} hitSlop={6} accessibilityRole="button" accessibilityLabel={'Tag ' + hint.tag + ', ' + hint.when}
               style={({ pressed }) => [st.key, pressed && { opacity: 0.6 }]}
@@ -174,6 +181,7 @@ export function TagPicker({ value, onChange, style, subject }: {
         </Animated.View>
       ) : null}
     </View>
+    </LayoutAnimationConfig>
   );
 }
 

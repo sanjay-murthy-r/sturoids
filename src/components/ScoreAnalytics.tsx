@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, Pressable, InteractionManager, useWindowDimensions } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
@@ -29,6 +29,8 @@ const fmtRank = (n: number) => n.toLocaleString('en-IN');
 
 /** bars start filling once their section has begun to rise */
 const BAR_DELAY = 220;
+/** when the subject sections are built: about when the page's own rise has finished */
+const LATER_MS = 800;
 
 /** A text link's reach: 13 px words stretched to about 44 dp to tap, without moving anything around them. */
 const LINK_SLOP = { top: 13, bottom: 13, left: 10, right: 10 };
@@ -171,12 +173,20 @@ export function ScoreAnalytics({
   // the page's round: 0 until it is in view, then one more each time it comes into view, so its figures and bars play the same every visit
   const round = useSeen();
   const { width } = useWindowDimensions();
-  // The subject sections (a bar per subject, the heatmap's cells, a line per subject) are built a frame after the rest,
-  // so the headline's count and the page's rise start on a light frame. Their entrances come later than that anyway.
+  // The subject sections (a bar per subject, the heatmap's cells, a line per subject) are built once the page's rise has
+  // all but finished, and once nothing else is busy, so the headline's count and the rise never share a frame with
+  // them; they sit below the first screen, and rise in on their own. With motion off there is no rise to keep clear of,
+  // so they come a frame after the rest
+  const level = useAnimLevel();
   const [later, setLater] = useState(false);
   React.useEffect(() => {
-    const f = requestAnimationFrame(() => setLater(true));
-    return () => cancelAnimationFrame(f);
+    let task: { cancel: () => void } | undefined;
+    if (level === 'none') {
+      const f = requestAnimationFrame(() => setLater(true));
+      return () => cancelAnimationFrame(f);
+    }
+    const t = setTimeout(() => { task = InteractionManager.runAfterInteractions(() => setLater(true)); }, LATER_MS);
+    return () => { clearTimeout(t); task?.cancel(); };
   }, []);
 
   const { cats, overview, chips, scope, label: scopeLabel, all, range, pts } = resolved;
@@ -643,6 +653,12 @@ const RankCard = React.memo(function RankCard({ stats }: { stats: SeriesStats })
 
 /* ---------------------------------------------------------------- subjects */
 
+/**
+ * A key chip's reach: about 30 dp tall, stretched to 44 to tap, and a little to the sides, into the 8 dp between the
+ * keys, so a tap between two keys still finds one of them
+ */
+const KEY_SLOP = { top: 7, bottom: 7, left: 4, right: 4 };
+
 /** A flat key that picks a subject's line out: its colour as a dot, an outline at rest, a tint of its colour when on. */
 function KeyChip({ label, color, active, onPress }: { label: string; color: string; active: boolean; onPress: () => void }) {
   const theme = useTheme();
@@ -651,6 +667,7 @@ function KeyChip({ label, color, active, onPress }: { label: string; color: stri
       onPress={onPress}
       scaleTo={0.94}
       radius={999}
+      hitSlop={KEY_SLOP}
       accessibilityRole="checkbox"
       accessibilityState={{ checked: active }}
       accessibilityLabel={'Pick out ' + label}

@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, StyleSheet, ScrollView, InteractionManager, Platform, useWindowDimensions } from 'react-native';
-import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, LayoutAnimationConfig, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
-import { C, F, MIN, NEU, S, T, TRACK, neuPressedInner, neuRaised, oneLine } from '../theme';
+import { C, F, MIN, S, T, TRACK, neuPressedInner, neuRaised, oneLine } from '../theme';
 import { useStore } from '../store';
 import { ScreenBG, Sheet, Row, PillButton, Inset, Chip, IconBtn, NeuHeader, useTheme } from '../components/UI';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -38,6 +38,7 @@ const FAIL = {
   real: 'No real answer',
   bracket: 'Missing a bracket',
   large: 'Too large',
+  undefined: 'No value there',
   other: "Can't evaluate",
 };
 
@@ -240,14 +241,34 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
     router.setParams({ expr: undefined });
   }, [params.expr, write]));
 
-  const evalExpr = (raw: string) => {
+  /** A sum as the engine reads it, with the scope it is read in. */
+  const engineOf = (raw: string) => {
     const s = live.current;
     // a sum that carries on from an answer works from the answer itself, all 40 digits of it, rather than the 14 the
     // display shows: 1÷3 = then ×3 = is 1, not 0.99999999999999
     let src = s.fromAns && raw.startsWith(s.ansText) ? 'Ans' + raw.slice(s.ansText.length) : raw;
     // keypad: ln( = natural log, log( = base-10. mathjs: log( = natural, log10( = base-10.
     src = src.replace(/ln\(/g, '__LN__(').replace(/log\(/g, 'log10(').replace(/__LN__\(/g, 'log(');
-    return math.evaluate(toEngine(src), makeScope(deg, s.ans));
+    return { src: toEngine(src), scope: makeScope(deg, s.ans) };
+  };
+  const evalExpr = (raw: string) => {
+    const { src, scope } = engineOf(raw);
+    return math.evaluate(src, scope);
+  };
+  /** Whether some ÷ in the sum really divides by zero (1÷(2−2)), rather than the sum running off another way (ln 0). */
+  const dividesByZero = (raw: string) => {
+    try {
+      const { src, scope } = engineOf(raw);
+      let found = false;
+      math.parse(src).traverse((node: any) => {
+        if (found || !node.isOperatorNode || node.fn !== 'divide' || node.args?.length !== 2) return;
+        const d = node.args[1].evaluate(scope);
+        if (M.isBigNumber(d) ? d.isZero() : d === 0) found = true;
+      });
+      return found;
+    } catch {
+      return false;
+    }
   };
 
   /** A sum's answer, or what keeps it from having one. */
@@ -260,13 +281,15 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
       if (M.isComplex(v)) return { fail: FAIL.real };
       if (!M.isBigNumber(v)) return { fail: FAIL.other };
       if (!v.isFinite()) {
-        if (sum.includes('÷')) return { fail: FAIL.zero };
+        if (sum.includes('÷') && dividesByZero(sum)) return { fail: FAIL.zero };
         return { fail: v.isNaN() && /a(sin|cos)\(/.test(sum) ? FAIL.real : FAIL.other };
       }
       const ascii = fmt(v, sciNotation);
       return { value: v, ascii, text: shown(ascii) };
     } catch (err: any) {
       if (err?.unfit === 'large') return { fail: FAIL.large };
+      // tan 90 in degrees: there is no value there at all, not merely a large one
+      if (err?.unfit === 'undefined') return { fail: FAIL.undefined };
       // open brackets are closed before this, so a bracket still wrong is a closing one with no opening
       return { fail: sum.split(')').length > sum.split('(').length ? FAIL.bracket : FAIL.other };
     }
@@ -667,7 +690,7 @@ export function CalculatorScreen({ mode }: { mode: 'tab' | 'stack' }) {
           (wide || fitted) && { height: eqH, paddingVertical: 0, justifyContent: 'center' },
           theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: C.accent }
-            : { backgroundColor: C.accent, ...NEU.raisedMid },
+            : { backgroundColor: C.accent, ...neuRaised('mid') },
         ]}
       >
         <Text maxFontSizeMultiplier={KEY_SCALE_MAX} style={[st.equalsText, { color: theme === 'minimal' ? C.accent : C.onAccent }]}>
@@ -792,7 +815,7 @@ const FIRST_ROWS = 30;
 
 /**
  * Past sums, newest first. One that arrives while the list is in view (a split screen's history) fades in above the
- * rest as they glide down; clearing lets them fade together. A list that opens (the sheet) is simply there.
+ * rest as they glide down; clearing takes them at once. A list that opens (the sheet) is simply there.
  */
 const HistoryRows = React.memo(function HistoryRows({ history, onPick }: {
   history: { id: string; expr: string; result: string }[]; onPick: (result: string) => void;
@@ -807,22 +830,26 @@ const HistoryRows = React.memo(function HistoryRows({ history, onPick }: {
   }, [all]);
   const enter = built.current ? rowIn(level) : undefined;
   return (
-    <>
-      {(all ? history : history.slice(0, FIRST_ROWS)).map((h, i) => (
-        // the rows added after the rise are out of sight below the first ones: they need no fade
-        <Animated.View key={h.id} entering={i < FIRST_ROWS ? enter : undefined} exiting={rowOut(level)} layout={glide(level)}>
-          <Bouncy
-            style={st.histRow} radius={14} scaleTo={0.98}
-            onPress={() => { if (h.result !== 'Error') onPick(h.result); }}
-            accessibilityRole="button"
-            accessibilityLabel={spoken(h.expr) + ' equals ' + spoken(h.result) + ', reuse result'}
-          >
-            <Text style={st.histSum} numberOfLines={1} ellipsizeMode="middle">{h.expr}</Text>
-            <Text style={[st.histResult, h.result === 'Error' && { color: C.danger }]}>= {h.result}</Text>
-          </Bouncy>
-        </Animated.View>
-      ))}
-    </>
+    // a row dropped on its own fades; the list going as a whole (cleared for the empty line, the sheet closing, a
+    // tablet turned) takes its rows at once, or Fabric would leave them over what replaces them while they fade
+    <LayoutAnimationConfig skipExiting>
+      <View>
+        {(all ? history : history.slice(0, FIRST_ROWS)).map((h, i) => (
+          // the rows added after the rise are out of sight below the first ones: they need no fade
+          <Animated.View key={h.id} entering={i < FIRST_ROWS ? enter : undefined} exiting={rowOut(level)} layout={glide(level)}>
+            <Bouncy
+              style={st.histRow} radius={14} scaleTo={0.98}
+              onPress={() => { if (h.result !== 'Error') onPick(h.result); }}
+              accessibilityRole="button"
+              accessibilityLabel={spoken(h.expr) + ' equals ' + spoken(h.result) + ', reuse result'}
+            >
+              <Text style={st.histSum} numberOfLines={1} ellipsizeMode="middle">{h.expr}</Text>
+              <Text style={[st.histResult, h.result === 'Error' && { color: C.danger }]}>= {h.result}</Text>
+            </Bouncy>
+          </Animated.View>
+        ))}
+      </View>
+    </LayoutAnimationConfig>
   );
 });
 

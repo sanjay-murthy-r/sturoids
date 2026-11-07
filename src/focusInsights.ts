@@ -8,6 +8,8 @@ import { todayKey } from './utils';
 /** The parts of a session these read. */
 export interface SessionLike {
   dateKey: string; endedAt: number; netSeconds: number; subject?: string; manual?: boolean; rating?: 1 | 2 | 3;
+  /** when it really began, kept by sessions timed since it was added */
+  startedAt?: number;
 }
 
 /** `key` moved by `days` (negative is back), as a day key. */
@@ -173,7 +175,9 @@ export function focusHours(sessions: readonly SessionLike[], today: string = tod
     const n = secsOf(s);
     const end = Number(s.endedAt);
     if (!n || !(end > 0)) continue;
-    const part = partOfHour(new Date(end - n * 1000).getHours());
+    // the start it kept, when it has one (a session paused along the way began earlier than its end less its length)
+    const began = Number(s.startedAt);
+    const part = partOfHour(new Date(began > 0 && began <= end ? began : end - n * 1000).getHours());
     secs.set(part, (secs.get(part) || 0) + n);
     if (s.rating) rated++;
     if (s.rating === 3) deep.set(part, (deep.get(part) || 0) + n);

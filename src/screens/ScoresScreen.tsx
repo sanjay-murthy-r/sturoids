@@ -4,7 +4,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated from 'react-native-reanimated';
-import { C, F, MIN, NEU, S, T, TRACK, neuRaised } from '../theme';
+import { C, F, MIN, S, T, TRACK, neuInset, neuRaised } from '../theme';
 import { useStore } from '../store';
 import {
   ScoreNode, ScoreIndex, ScoreResult, ScoreTag, Learning, TagMatch, indexScores, resultOf, partsMismatch, groupSummary,
@@ -154,7 +154,7 @@ function Delta({ value, style }: { value: number; style?: any }) {
 function Bar({ pct }: { pct: number }) {
   const theme = useTheme();
   return (
-    <View style={[st.barTrack, theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...NEU.insetHairline }]}>
+    <View style={[st.barTrack, theme === 'minimal' ? { backgroundColor: MIN.inset } : { backgroundColor: C.inset, ...neuInset('hairline') }]}>
       <View style={[st.barFill, { width: `${Math.max(0, Math.min(100, pct))}%`, backgroundColor: C.accent }]} />
     </View>
   );

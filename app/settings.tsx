@@ -15,8 +15,8 @@ import Constants from 'expo-constants';
 import { router, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import {
-  C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, WritingFont, bgFor, neuInset, neuRaised, shadowsSupported,
-  wellFor, writingFace,
+  C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, AnimLevel, ACCENT_CHOICES, WritingFont, bgFor, neuInset, neuRaised, oneLine,
+  shadowsSupported, wellFor, writingFace,
 } from '../src/theme';
 import {
   useStore, DEFAULT_UPDATE_REPO, exportSnapshot, importSnapshot, readSnapshot, applySnapshot, readRecoveryCopy, deleteRecoveryCopy, flushSaves,
@@ -31,7 +31,7 @@ import {
   EdgeScroll, EmptyState, RowIcon, useTheme, ScrollEdge, edgeStrength, ArrivalPulse, IconBtn, PullArea, useContentPull,
 } from '../src/components/UI';
 import { toast } from '../src/components/Toast';
-import { Release, downloadAndInstall, installKind, isNewer, isRepo, latestRelease, openRelease } from '../src/updates';
+import { Release, downloadAndInstall, installKind, isNewer, isRepo, latestRelease, openRelease, useApkDownload } from '../src/updates';
 import { Bouncy, CHANGE, EASE_OUT, FadeSwap, rowIn, useAnimLevel, useBuilt, useEntrance, useLoop } from '../src/components/Motion';
 import { tap, tick } from '../src/haptics';
 import { SegmentedControl } from '../src/components/SegmentedControl';
@@ -51,6 +51,7 @@ import { LAST_EXPORT_KEY } from '../src/backupNudge';
 import { useBackupAttention } from '../src/cloud';
 import { SettingsPage, settingId } from '../src/search/settingsIndex';
 import { openSift } from '../src/search/store';
+import { WallpaperCard } from '../src/components/WallpaperCard';
 import { useSiftAnchor } from '../src/search/anchor';
 import { useBringIntoView } from '../src/hooks/useBringIntoView';
 import { TWO_COL_AT, WIDE_MAX } from '../src/layout';
@@ -519,6 +520,7 @@ function MakeoverCard() {
       </View>
       {mood === 'cheerful' ? (
         <Card style={{ marginTop: 12 }}>
+          <Anchor ids={[sid('appearance', 'Cheerful sounds')]}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <View style={{ flex: 1, marginRight: 12 }}>
               <Text style={[T.body, { fontFamily: F.med }]}>Cheerful sounds</Text>
@@ -526,7 +528,9 @@ function MakeoverCard() {
             </View>
             <Toggle value={sounds} onChange={(v) => setSetting('cheerSounds', v)} label="Cheerful sounds" />
           </View>
+          </Anchor>
           <Hairline />
+          <Anchor ids={[sid('appearance', 'Companion')]}>
           <Pressable
             onPress={() => router.push('/companion')} accessibilityRole="button"
             accessibilityLabel={'Companion: ' + (mascot === 'off' ? 'none' : companionName)} accessibilityHint="Opens the companion's page"
@@ -551,6 +555,7 @@ function MakeoverCard() {
               }}
             />
           </Pressable>
+          </Anchor>
         </Card>
       ) : null}
     </>
@@ -621,7 +626,9 @@ function SettingsSiftField({ active }: { active: boolean }) {
   return (
     <Animated.View ref={anchor.ref} style={anchor.style} collapsable={false}>
     <Pressable
-      onPress={() => { tap(); openSift('other', { scope: 'settings' }); }}
+      // no buzz of its own: Sift gives one as it opens
+      onPress={() => openSift('other', { scope: 'settings' })}
+      hitSlop={{ top: 4, bottom: 4 }}
       accessibilityRole="search" accessibilityLabel="Search settings" accessibilityHint="Opens Sift on its Settings filter"
       style={({ pressed }) => [st.searchWell, well, cheerful && theme !== 'minimal' && { backgroundColor: C.inset + 'CC' }, pressed && { opacity: 0.8 }]}
     >
@@ -637,7 +644,8 @@ const GOALS: { key: string; label: string }[] = [
   { key: '0', label: 'Off' }, { key: '60', label: '1 h' }, { key: '120', label: '2 h' }, { key: '180', label: '3 h' },
   { key: '240', label: '4 h' },
 ];
-const goalLabel = (min: number) => (min % 60 ? Math.floor(min / 60) + ' h ' + (min % 60) : min / 60 + ' h');
+// one wording for a goal, on its own choice and in the list's summary: under an hour it is minutes, never "0 h 30"
+const goalLabel = (min: number) => (min < 60 ? min + ' min' : min % 60 ? Math.floor(min / 60) + ' h ' + (min % 60) : min / 60 + ' h');
 
 const FocusGoalCard = React.memo(function FocusGoalCard() {
   useTheme();
@@ -645,7 +653,7 @@ const FocusGoalCard = React.memo(function FocusGoalCard() {
   const setSetting = useStore((s) => s.setSetting);
   const options = useMemo(() => {
     if (GOALS.some((g) => Number(g.key) === goal)) return GOALS;
-    const own = { key: String(goal), label: goal < 60 ? goal + ' min' : goalLabel(goal) };
+    const own = { key: String(goal), label: goalLabel(goal) };
     return [...GOALS, own].sort((a, b) => Number(a.key) - Number(b.key));
   }, [goal]);
   return (
@@ -706,6 +714,8 @@ const PAGE_IN_SOME = { duration: 180, easing: EASE_OUT };
 /** Going back, it leaves to the right, quicker than it came, gathering speed as it goes; at some motion it fades. */
 const PAGE_OUT = { duration: 220, easing: Easing.in(Easing.quad) };
 const PAGE_OUT_SOME = { duration: 160, easing: Easing.in(Easing.quad) };
+/** Side by side, a new category's page: a short dip of the old one out and the new one in, each way this long. */
+const SPLIT_DIP = { duration: 100, easing: EASE_OUT };
 
 type Page = 'account' | 'appearance' | 'tools' | 'motion' | 'time' | 'deepwork' | 'privacy' | 'backup' | 'trash' | 'updates'
   | 'delete';
@@ -883,7 +893,12 @@ const UpdatesCard = React.memo(function UpdatesCard() {
   const setSetting = useStore((s) => s.setSetting);
   const level = useAnimLevel();
   const repoDraft = useSettingDraft('githubRepo');
-  const [state, setState] = useState<UpdateState>({ k: 'idle' });
+  const [own, setState] = useState<UpdateState>({ k: 'idle' });
+  // the download lives outside the page (src/updates.ts), so one under way shows here even after the page was left and
+  // opened again, or when Update by itself is fetching; once it is done the bar stays full until the installer opens
+  const dl = useApkDownload();
+  const state: UpdateState = dl.rel && own.k !== 'handed' ? { k: 'downloading', rel: dl.rel, p: dl.p }
+    : own.k === 'downloading' ? { ...own, p: 1 } : own;
   const [editRepo, setEditRepo] = useState(false);
   // set at the tap, so a second tap while GitHub answers (or while it downloads) starts nothing
   const busy = useRef(false);
@@ -930,13 +945,8 @@ const UpdatesCard = React.memo(function UpdatesCard() {
     tap();
     setState({ k: 'downloading', rel, p: 0 });
     try {
-      let last = 0;
-      await downloadAndInstall(rel, (p) => {
-        // the bar moves in whole percents, so a fast download never re-renders the card on every packet
-        if (Math.floor(p * 100) === Math.floor(last * 100)) return;
-        last = p;
-        setState({ k: 'downloading', rel, p });
-      });
+      // joins a download already under way rather than writing the same file at once
+      await downloadAndInstall(rel);
       setState({ k: 'handed', rel });
     } catch (e: any) {
       setState({ k: 'available', rel });
@@ -994,6 +1004,7 @@ const UpdatesCard = React.memo(function UpdatesCard() {
 
       {/* looking by itself, on a phone: a little after launch and on coming back, at most every six hours */}
       {Platform.OS === 'android' ? (
+        <Anchor ids={[sid('updates', 'Update by itself')]}>
         <View style={[st.updSource, { marginTop: 14 }]}>
           <View style={{ flex: 1, marginRight: 12 }}>
             <Text style={[T.body, { fontFamily: F.med }]}>Update by itself</Text>
@@ -1001,6 +1012,7 @@ const UpdatesCard = React.memo(function UpdatesCard() {
           </View>
           <Toggle value={autoUpdate} onChange={(v) => setSetting('autoUpdate', v)} label="Update by itself" />
         </View>
+        </Anchor>
       ) : null}
 
       {/* where it looks: Sturoids' own releases, unless another repo is typed in */}
@@ -1226,7 +1238,6 @@ export default function Settings() {
     if (isPage(params.page)) setPage(params.page);
     if (params.row) setTarget({ id: String(params.row), n: String(params.n ?? Date.now()) });
   }, [params.page, params.row, params.n]);
-  const open = useCallback((p: Page) => setPage(p), []);
   // A pull down on the bar, or anywhere on the list or a page once it is at its top (Settings' choice), opens Sift on its
   // Settings filter. One progress for both, so the bar's pill follows either.
   const pullMode = useStore((s) => s.settings.siftPull);
@@ -1272,10 +1283,28 @@ export default function Settings() {
   // of jumping to full strength first. A page linked to is simply there, under the stack's own transition
   const pageFade = useSharedValue(page ? 1 : 0);
   const pageShift = useSharedValue(page || level !== 'full' ? 0 : PAGE_DRIFT);
+  const levelRef = useRef(level);
+  levelRef.current = level;
+  const open = useCallback((p: Page) => {
+    // a row asked for on one page means nothing on another (side by side, back never runs to clear it)
+    setTarget(null);
+    // side by side, a new category dips the page out and back rather than swapping it in one frame. A second tap
+    // during the dip cuts the first one short, so only the last category asked for opens
+    if (splitRef.current && pageRef.current && pageRef.current !== p && levelRef.current !== 'none') {
+      pageFade.value = withTiming(0, SPLIT_DIP, (finished) => { if (finished) runOnJS(setPage)(p); });
+      return;
+    }
+    setPage(p);
+  }, []);
+  // a new page's scroll starts at the top, so the last page's offset must not hold back the pull or a linked row
+  useEffect(() => { pageY.value = 0; }, [layerPage]);
+  const lastPage = useRef(page);
   useEffect(() => {
     const shown = page === null;
     const turned = shown !== listShown.current;
     listShown.current = shown;
+    const swapped = !!page && !!lastPage.current && page !== lastPage.current;
+    lastPage.current = page;
     const x = shown || level !== 'full' ? 0 : -LIST_DRIFT;
     const o = shown ? 1 : 0;
     if (!turned || level === 'none') {
@@ -1288,7 +1317,10 @@ export default function Settings() {
       listShift.value = withTiming(x, ease);
       listFade.value = withTiming(o, ease);
     }
-    if (!turned || level === 'none') {
+    if (swapped && split && level !== 'none') {
+      // side by side, the new category comes back up from the dip `open` took it down into
+      pageFade.value = withTiming(1, SPLIT_DIP);
+    } else if (!turned || level === 'none') {
       pageFade.value = shown ? 0 : 1;
       pageShift.value = shown && level === 'full' ? PAGE_DRIFT : 0;
       // a page settled away (motion off, or the level changed while it left) lets go of its layer at once
@@ -1599,6 +1631,14 @@ export default function Settings() {
     ]);
   };
 
+  // both were read once when Settings opened: after an erase the kept copy and the backup time are gone from the phone,
+  // so they must go from the page too, or the erased copy could still be restored or shared from here
+  const onErased = useCallback(() => {
+    setRecovery(null);
+    setLastExport(null);
+    back();
+  }, [back]);
+
   // ---- privacy: what is locked, what may open it, the app PIN, and how soon an open lock closes again ----
   const lockedNotes = useStore((s) => s.notes.filter((n) => n.locked).length);
   const trashCount = useStore((s) => s.trash.length);
@@ -1741,7 +1781,10 @@ export default function Settings() {
       case 'appearance':
         return (
           <>
-            <Anchor ids={[sid('appearance', 'Makeover')]}>
+            {/* in Elite the Cheerful rows are not there: a link to one lands on the Makeover cards, where Cheerful is */}
+            <Anchor
+              ids={[sid('appearance', 'Makeover'), ...(settings.mood === 'cheerful' ? [] : ['Cheerful sounds', 'Companion'].map((l) => sid('appearance', l)))]}
+            >
               <SectionTitle right={<InfoDot text="Elite keeps the app calm and formal. Cheerful adds soft colour drifting behind the pages, sparks when you tick something, confetti when a session or a day is done, and gentle looping motion. Both work with the Default and Minimalistic themes, and with motion turned down they stay still." />}>
                 Makeover
               </SectionTitle>
@@ -1752,6 +1795,12 @@ export default function Settings() {
               <Card pad={12}>
                 <OptionPicker options={SHOWN_THEMES} value={settings.theme} onPick={pickTheme} />
               </Card>
+            </Anchor>
+            <Anchor ids={[sid('appearance', 'Wallpaper')]}>
+              <SectionTitle right={<InfoDot text="A photo of your own behind the pages, for Elite and for Cheerful each. It stays on this device: it never syncs to your account and is not part of a backup." />}>
+                Wallpaper
+              </SectionTitle>
+              <WallpaperCard />
             </Anchor>
             <Anchor ids={[sid('appearance', 'Accent colour')]}>
               <SectionTitle>Accent colour</SectionTitle>
@@ -2107,7 +2156,7 @@ export default function Settings() {
         // after an erase the page would hold one button over nothing: back to the list, which is fresh too
         return (
           <Anchor ids={['Delete my account', 'Delete my cloud data', 'Delete everything on this phone'].map((l) => sid('delete', l))}>
-            <DeleteSection title={null} onErased={back} />
+            <DeleteSection title={null} onErased={onErased} />
           </Anchor>
         );
     }
@@ -2220,7 +2269,7 @@ const st = StyleSheet.create({
     height: 36, borderRadius: 18, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 14,
     marginTop: 2, marginBottom: S.gap, overflow: 'hidden',
   },
-  searchText: { flex: 1, marginLeft: 9, color: C.textFaint, fontFamily: F.reg, fontSize: 14, letterSpacing: TRACK.small },
+  searchText: { flex: 1, marginLeft: 9, color: C.textFaint, fontFamily: F.reg, ...oneLine(14), letterSpacing: TRACK.small },
   statusDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 7 },
   catRow: { paddingVertical: 13 },
   // level with the toggle's words above it; the press carves a little past them

@@ -8,9 +8,9 @@ import Animated, {
 import type { SharedValue } from 'react-native-reanimated';
 import Svg, { Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { C, F, LX, LY, NEU, bgFor, darkSh, liteSh } from '../theme';
+import { BRAND_PLATE, C, F, GREY, LX, LY, bgFor, darkSh, liteSh } from '../theme';
 import { useStore } from '../store';
-import { SKIP_WAIT_MS, SKIP_WAIT_NO_FONTS_MS, setIntroPhase, useIntro } from '../intro';
+import { SKIP_WAIT_MS, SKIP_WAIT_NO_FONTS_MS, setIntroPhase, setResting, useIntro } from '../intro';
 import { SIG_SIZE, SIG_SPEED } from '../signature';
 import { dateDigits } from '../sigModel';
 import { EASE_OUT, useAnimLevel } from './Motion';
@@ -64,7 +64,7 @@ const SHEEN_SLANT = Math.tan((-SHINE_SKEW * Math.PI) / 180) * PLATE;
 
 /* ------------------------------------------------------------------ plate extrusion tiers */
 
-// NEU.raisedHigh is the kit pair: lite alpha .25 (at the kit's 0.9 light, .225) / blur 6, dark alpha .48 / blur 15, offsets LX/LY.
+// BRAND_PLATE (theme.ts) is the brand's own kit pair, kept for the plate whatever the app's surfaces wear: lite alpha .25 (at the kit's 0.9 light, .225) / blur 6, dark alpha .48 / blur 15, offsets LX/LY.
 // The plate rises through three static tiers of that pair scaled by extrusion h and crossfades
 // between them, so no shadow string is ever animated.
 const HIGH = { liteA: 0.225, liteBlur: 6, darkA: 0.48, darkBlur: 15 };
@@ -74,8 +74,8 @@ function plateShadow(h: number): string {
   return `${n2(LX * h)}px ${n2(LY * h)}px ${n2(HIGH.liteBlur * h)}px ${liteSh(n3(HIGH.liteA * h))}, `
     + `${n2(-LX * h)}px ${n2(-LY * h)}px ${n2(HIGH.darkBlur * h)}px ${darkSh(n3(HIGH.darkA * h))}`;
 }
-if (__DEV__ && plateShadow(1) !== NEU.raisedHigh.boxShadow) {
-  console.warn('StartScreen: the plate tiers no longer match NEU.raisedHigh; update HIGH');
+if (__DEV__ && plateShadow(1) !== BRAND_PLATE.boxShadow) {
+  console.warn('StartScreen: the plate tiers no longer match BRAND_PLATE; update HIGH');
 }
 
 /* ------------------------------------------------------------------ timeline */
@@ -109,7 +109,7 @@ function beats(sigTotal: number, dateMs: number, late: boolean, dated: boolean) 
   /** the pen's last mark in beat 1: the signature's, or the date's after it */
   const penDone = late || !dated ? signed : signed + DATE_LIFT + dateMs;
   /** beat 2: the signature travels into its slot and sinks into a carve while the plate rises */
-  const SHIFT = { at: penDone + HOLD, dur: 1060 };
+  const SHIFT = { at: penDone + HOLD, dur: SHIFT_DUR };
   const RISE = { at: SHIFT.at + 240, dur: 1020, settle: 250 };
   const SINK = { at: SHIFT.at + 560, dur: 700 };
   const GROOVES = { at: RISE.at + 860, dur: 460 };
@@ -180,10 +180,17 @@ function logoBeats(sigTotal: number, dateMs: number, late: boolean, dated: boole
  * recede in turn; the material clears for the app and the app makes its entrance (CLEAR); the overlay goes (DONE).
  */
 const RECEDE = { words: 0, plate: 70, sig: 140, dur: 460 };
-const HAND = { clear: 300, clearDur: 260, done: 860 };
+/**
+ * The overlay is clear 560 ms into the hand-over, but it is taken down only once Today's entrance has played (about
+ * 900 ms from `leaving`): unmounting it, and the root and Today re-rendering for the intro's end, then never land on
+ * the entrance
+ */
+const HAND = { clear: 300, clearDur: 260, done: 1300 };
+/** the composed scene holds still this long before it settles back: the app builds the other tabs out of sight then */
+const REST_MS = 320;
 
 // 'some': the composed end state fades in, the app is built beneath it, the scene settles back and hands over
-const SOME = { fade: 320, reveal: 360, leave: 900, handoff: 1080, done: 1440 };
+const SOME = { fade: 320, reveal: 360, leave: 900, handoff: 1080, done: 1900 };
 
 /**
  * Tap to skip: every value still on its way is retargeted to where the composed scene has it, in one short ease out (the
@@ -339,13 +346,19 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
 
     /** Beat 4 from `start` ms on: the scene settles back, one layer after another, and the material clears for the app. */
     const handOver = (start: number) => {
-      at(start, () => { leaving = true; armed.value = 0; });
+      // the scene's last still moment before it settles back
+      at(Math.max(0, start - REST_MS), () => setResting(true));
+      at(start, () => { leaving = true; armed.value = 0; setResting(false); });
       const settle = { duration: RECEDE.dur, easing: cubicOut };
       leaveWords.value = withDelay(start + RECEDE.words, withTiming(1, settle));
       leavePlate.value = withDelay(start + RECEDE.plate, withTiming(1, settle));
       leaveSig.value = withDelay(start + RECEDE.sig, withTiming(1, settle));
-      overlay.value = withDelay(start + HAND.clear, withTiming(0, { duration: HAND.clearDur, easing: Easing.inOut(Easing.quad) }));
-      at(start + HAND.clear, () => setIntroPhase('leaving'));
+      // the material clears on the same JS beat that lets Today rise: a fade timed on the UI thread ran ahead of a busy
+      // JS thread and showed the bare material before the app's entrance began
+      at(start + HAND.clear, () => {
+        setIntroPhase('leaving');
+        overlay.value = withTiming(0, { duration: HAND.clearDur, easing: Easing.inOut(Easing.quad) });
+      });
       at(start + HAND.done, finish);
     };
     /** The same at some motion: quicker, and closer together. */
@@ -356,9 +369,34 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
       leavePlate.value = withDelay(start + 40, withTiming(1, quick));
       leaveSig.value = withDelay(start + 80, withTiming(1, quick));
       const handoff = start + SOME.handoff - SOME.leave;
-      overlay.value = withDelay(handoff, withTiming(0, { duration: 220, easing: Easing.inOut(Easing.quad) }));
-      at(handoff, () => setIntroPhase('leaving'));
+      at(handoff, () => {
+        setIntroPhase('leaving');
+        overlay.value = withTiming(0, { duration: 220, easing: Easing.inOut(Easing.quad) });
+      });
       at(start + SOME.done - SOME.leave, finish);
+    };
+
+    /**
+     * Runs `go` with the lead it should start from once the app beneath has drawn: `lead` ms from now if it already has,
+     * SHIFT_AFTER_DRAWN ms after it does, or at once when SHIFT_WAIT_MAX has passed without it. Mounting the app lands on
+     * the UI thread, so a beat moving meanwhile would stutter, and an overlay clearing early would show a page half built.
+     */
+    const whenDrawn = (lead: number, go: (lead: number) => void) => {
+      if (leaving) return;
+      if (useIntro.getState().appDrawn) {
+        go(lead);
+        return;
+      }
+      let started = false;
+      const begin = (l: number) => {
+        if (started) return;
+        started = true;
+        waitUnsub?.();
+        waitUnsub = null;
+        if (!leaving) go(l);
+      };
+      waitUnsub = useIntro.subscribe((now) => { if (now.appDrawn) begin(SHIFT_AFTER_DRAWN); });
+      at(lead + SHIFT_WAIT_MAX, () => begin(0));
     };
 
     /** The date's pen, `delay` ms from now, at the date's speed (`pace` times quicker again when the logo comes first). */
@@ -384,8 +422,9 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
 
     if (level === 'some') {
       content.value = withTiming(1, { duration: SOME.fade, easing: cubicOut });
-      handOverSome(SOME.leave);
       at(SOME.reveal, reveal);
+      // the hand-over waits for the app beneath to have drawn, so the overlay never clears onto a page still being built
+      at(SOME.leave - SHIFT_CHECK, () => whenDrawn(SHIFT_CHECK, handOverSome));
     } else if (logoFirst) {
       const cubicInOut = Easing.inOut(Easing.cubic);
       // beat 1: the plate rises out of the material and its grooves settle, unhurried; the signature is already in
@@ -403,15 +442,31 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
       }));
       // beat 3: the pen writes below them, in the place the signature keeps, and today's date after it
       tau.value = withDelay(L.penAt, withTiming(model.total, { duration: real(model.total) / LOGO_PEN, easing: Easing.linear }));
-      writeDate(L.dateStart, dateRef.current, LOGO_PEN);
-      rereadDate(L.dateStart, LOGO_PEN);
-      // the ink settles into the carve, then one shine crosses the plate and the signature together
-      ink.value = withDelay(L.SINK.at, withTiming(0, { duration: L.SINK.dur, easing: cubicInOut }));
-      carve.value = withDelay(L.SINK.at, withTiming(1, { duration: L.SINK.dur, easing: cubicInOut }));
-      glint.value = withDelay(L.SHINE.at, withTiming(1, { duration: L.SHINE.dur, easing: Easing.inOut(Easing.sin) }));
-      // beat 4: the hand-over, as it always is
-      handOver(L.LEAVE);
+      if (!late) {
+        writeDate(L.dateStart, dateRef.current, LOGO_PEN);
+        rereadDate(L.dateStart, LOGO_PEN);
+      }
       at(L.REVEAL, reveal);
+      /**
+       * The sink, the shine and the hand-over, from `lead` ms from now, when the sink begins. The app is built just
+       * before them, so they wait until it has drawn, keeping their places relative to the sink, as the signed-first
+       * shift does.
+       */
+      const settle = (lead: number) => {
+        if (leaving) return;
+        const d = (abs: number) => Math.max(0, lead + abs - L.SINK.at);
+        // the ink settles into the carve, then one shine crosses the plate and the signature together
+        ink.value = withDelay(d(L.SINK.at), withTiming(0, { duration: L.SINK.dur, easing: cubicInOut }));
+        carve.value = withDelay(d(L.SINK.at), withTiming(1, { duration: L.SINK.dur, easing: cubicInOut }));
+        glint.value = withDelay(d(L.SHINE.at), withTiming(1, { duration: L.SHINE.dur, easing: Easing.inOut(Easing.sin) }));
+        if (late) {
+          writeDate(d(L.dateStart), dateRef.current, LOGO_PEN);
+          rereadDate(d(L.dateStart), LOGO_PEN);
+        }
+        // beat 4: the hand-over, as it always is
+        handOver(d(L.LEAVE));
+      };
+      at(L.SINK.at - SHIFT_CHECK, () => whenDrawn(SHIFT_CHECK, settle));
     } else {
       const cubicInOut = Easing.inOut(Easing.cubic);
       // beat 1: the pen, then today's date a little quicker
@@ -456,23 +511,7 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
       // The shift waits for a still moment: the app is built under the overlay after the pen, and on a slower phone
       // that can run past the held beat. Mounting it lands on the UI thread, so a shift moving meanwhile would stutter.
       // Once the app has drawn (at once, almost always), the shift begins as composed; at most it waits a little more.
-      at(B.SHIFT.at - SHIFT_CHECK, () => {
-        if (leaving) return;
-        if (useIntro.getState().appDrawn) {
-          rest(SHIFT_CHECK);
-          return;
-        }
-        let started = false;
-        const go = (lead: number) => {
-          if (started) return;
-          started = true;
-          waitUnsub?.();
-          waitUnsub = null;
-          rest(lead);
-        };
-        waitUnsub = useIntro.subscribe((now) => { if (now.appDrawn) go(SHIFT_AFTER_DRAWN); });
-        at(SHIFT_CHECK + SHIFT_WAIT_MAX, () => go(0));
-      });
+      at(B.SHIFT.at - SHIFT_CHECK, () => whenDrawn(SHIFT_CHECK, rest));
     }
 
     // Tap to skip. The tap itself retargets the scene on the UI thread (see `skipGesture` below), with no freeze: every
@@ -521,6 +560,7 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
     }
 
     return () => {
+      setResting(false);
       armed.value = 0;
       skipJs.current = { start: () => {}, settled: () => {} };
       waitUnsub?.();
@@ -654,7 +694,7 @@ export const StartScreen = React.memo(function StartScreen({ onReveal, onDone }:
           <Animated.View style={[st.plate, plateStyle]}>
             <Animated.View style={[st.plateFace, st.tierLow, tierLowStyle]} />
             <Animated.View style={[st.plateFace, st.tierMid, tierMidStyle]} />
-            <Animated.View style={[st.plateFace, NEU.raisedHigh, tierHighStyle]} />
+            <Animated.View style={[st.plateFace, BRAND_PLATE, tierHighStyle]} />
             <Animated.View style={[st.plateFace, st.plateBody, bodyStyle]} />
             <Animated.View style={[st.plateFace, st.clip, grooveStyle]}>
               <Svg width={PLATE} height={PLATE} viewBox={`0 0 ${PLATE} ${PLATE}`}>
@@ -739,7 +779,8 @@ const st = StyleSheet.create({
   // shadow-only tiers: an outset box shadow never paints under its own box, so these stay clear
   tierLow: { boxShadow: plateShadow(0.35) },
   tierMid: { boxShadow: plateShadow(0.7) },
-  plateBody: { backgroundColor: C.card },
+  // the brand's material, exactly the ground's colour (the app's cards are a hair lighter, the plate never)
+  plateBody: { backgroundColor: GREY.g800 },
   clip: { overflow: 'hidden' },
   // letter spacing trails each glyph, so the left padding keeps the word optically centred
   wordRow: { flexDirection: 'row', justifyContent: 'center', height: WORD_H, paddingLeft: 3 },

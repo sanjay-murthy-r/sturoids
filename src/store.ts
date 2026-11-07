@@ -1,3 +1,4 @@
+import { Wallpapers, cleanWallpapers } from './wallpaperModel';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState as AppLifecycle } from 'react-native';
 import React from 'react';
@@ -58,6 +59,9 @@ export interface FocusSession {
   timedSeconds?: number;
   /** what the time was for beyond its subject: an exam coming up, or a tag of the student's own */
   tags?: string[];
+  /** when a timed session really began, pauses and all; older sessions, and one whose end or length is changed, have
+   *  none, and their start is the end less the length */
+  startedAt?: number;
 }
 
 /** What can be changed about a session afterwards (the session editor). */
@@ -365,6 +369,11 @@ export interface Settings {
   mascotLooks: { sprout: MascotLook; pip: MascotLook };
   /** how much it says by itself: 'often', 'some' (now and then), or 'asked' (only when spoken to) */
   mascotTalk: 'often' | 'some' | 'asked';
+  /**
+   * Each look's own photo behind the pages, or none (src/wallpaper.ts). A device setting: the photos live on this
+   * device only, so this never syncs, never goes into a backup, and a restore keeps this device's.
+   */
+  wallpapers: Wallpapers;
 }
 
 export type Mood = 'elite' | 'cheerful';
@@ -501,6 +510,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mascotName: '',
   mascotLooks: { sprout: { colors: '', gear: [] }, pip: { colors: '', gear: [] } },
   mascotTalk: 'some',
+  wallpapers: { elite: null, cheerful: null },
 };
 
 /** Every persisted data key with its fresh-install value (actions excluded). */
@@ -547,10 +557,14 @@ const DATA_KEYS = Object.keys(initialData()) as DataKey[];
 
 /**
  * Settings that belong to this phone, not to the data: when the app was opened here, and the one-time notes about this
- * phone (its backups, its notification permission) answered here. They never travel in a backup's
- * fingerprint, a replace keeps this phone's own, and a change to them alone is not a change worth backing up.
+ * phone (its backups, its notification permission) answered here. The screen locks go with this phone's PIN, which
+ * never leaves the phone, and the companion out for a walk or hiding is about this screen alone. They never travel in
+ * a backup's fingerprint, a replace keeps this phone's own, and a change to them alone is not a change worth backing up.
  */
-export const DEVICE_SETTINGS = ['firstOpenedAt', 'lastOpenedAt', 'backupNudgeAt', 'focusAlertAsked'] as const;
+export const DEVICE_SETTINGS = [
+  'firstOpenedAt', 'lastOpenedAt', 'backupNudgeAt', 'focusAlertAsked', 'journalScreenLock', 'notesScreenLock', 'mascotOut', 'mascotHideUntil',
+  'wallpapers',
+] as const;
 const isDeviceSetting = (k: string) => (DEVICE_SETTINGS as readonly string[]).includes(k);
 
 /** The settings without this phone's own ones. */
@@ -1332,6 +1346,7 @@ function cleanTrash(raw: any, settings?: Partial<Settings>): TrashItem[] {
 
 const BOOLEAN_SETTINGS_V6 = [
   'introTapSkip', 'focusChime', 'examReminders', 'blockAlerts', 'attachmentsWifiOnly', 'calcFunctions', 'calcSci', 'focusAlertAsked',
+  'journalScreenLock', 'notesScreenLock',
 ] as const;
 
 function cleanSettingsV6(s: any): Settings {
@@ -1364,6 +1379,7 @@ function cleanSettingsV6(s: any): Settings {
   st.autoUpdate = st.autoUpdate !== false;
   // the first four friends became two: Pip stays, the others (and anything unknown) are Sprout
   st.mascot = st.mascot === 'pip' || st.mascot === 'off' ? st.mascot : 'sprout';
+  st.wallpapers = cleanWallpapers(st.wallpapers);
   st.mascotLast = st.mascot === 'pip' || (st.mascot === 'off' && st.mascotLast === 'pip') ? 'pip' : 'sprout';
   st.mascotName = typeof st.mascotName === 'string' ? st.mascotName.replace(/\s+/g, ' ').trim().slice(0, 16) : '';
   // one look per companion; the single look of 3.0.x becomes the look of the companion chosen then
@@ -1529,6 +1545,11 @@ let latestSave: StorageValue<any> | null = null;
 
 /** each row's text as it is on disk (read or written this launch), so a save writes only the rows that changed */
 const rowText = new Map<string, string>();
+/**
+ * the collection object each row's text was last made from: the store never changes a collection in place, so the
+ * same object is the same text, and a save that leaves it alone does not turn it into text again
+ */
+const rowObj = new Map<string, unknown>();
 /** each collection's size in characters, as last saved or loaded */
 const rowChars = new Map<string, number>();
 /** the collections with a row on disk, which the meta row names */
@@ -1614,16 +1635,22 @@ export function flushSaves(): Promise<void> {
   if (!next) return writesSettled();
   const state: any = next.state || {};
   const pairs: [string, string][] = [];
-  const wrote: { key: string; text: string; before: string | undefined }[] = [];
+  const wrote: { key: string; text: string; before: string | undefined; obj: unknown }[] = [];
   try {
     for (const k of DATA_KEYS) {
       if (blockedRows.has(k) || !(k in state)) continue;
+      // the very object saved last time is the same text: a video's place, saved while it plays, changes one collection
+      // and would otherwise turn every other one into text again each time
+      if (rowText.has(k) && rowObj.get(k) === state[k]) continue;
       // stringified once, here, so the row's size is known
       const text = JSON.stringify(state[k]);
       if (typeof text !== 'string') continue;
       rowChars.set(k, text.length);
-      if (rowText.get(k) === text) continue;
-      wrote.push({ key: k, text, before: rowText.get(k) });
+      if (rowText.get(k) === text) {
+        rowObj.set(k, state[k]);
+        continue;
+      }
+      wrote.push({ key: k, text, before: rowText.get(k), obj: state[k] });
       pairs.push([rowKey(k), text]);
     }
   } catch {
@@ -1634,6 +1661,7 @@ export function flushSaves(): Promise<void> {
   latestSave = next;
   for (const w of wrote) {
     rowText.set(w.key, w.text);
+    rowObj.set(w.key, w.obj);
     rowsOnDisk.add(w.key);
   }
   const meta: RowsMeta = {
@@ -1654,6 +1682,8 @@ export function flushSaves(): Promise<void> {
       // waiting or saving has paused since to protect data that could not be read
       for (const w of wrote) {
         if (rowText.get(w.key) !== w.text) continue;
+        // not on disk after all, so the next save writes it whatever object it is by then
+        rowObj.delete(w.key);
         if (w.before === undefined) rowText.delete(w.key);
         else rowText.set(w.key, w.before);
       }
@@ -1771,6 +1801,7 @@ async function readSaved(): Promise<StorageValue<any> | null> {
       continue;
     }
     rowText.set(k, text);
+    rowObj.delete(k);
     rowChars.set(k, text.length);
   }
   // the exam tree, its tags and its learnings are checked against one another on every load: with one of them out, the
@@ -1800,6 +1831,7 @@ async function removeRows(): Promise<void> {
   dropPendingSave();
   await AsyncStorage.multiRemove(allRowKeys());
   rowText.clear();
+  rowObj.clear();
   rowChars.clear();
   rowsOnDisk.clear();
 }
@@ -1828,6 +1860,7 @@ export async function clearSavedData(): Promise<void> {
     // whatever stays is written over by the next save, now that nothing blocks it
   }
   rowText.clear();
+  rowObj.clear();
   rowChars.clear();
   rowsOnDisk.clear();
   legacyChars = null;
@@ -2184,9 +2217,15 @@ const appStore = create<AppState>()(
           }
         }
         if (patch.endedAt !== undefined && Number.isFinite(patch.endedAt)) {
-          // a new end on the session's own day, never in the future
+          // a new end on the session's own day or, for one that ran past midnight, the next, never in the future; a
+          // next-day end only while the session still began on its own day (the end less its length), as dateKey says
           const at = Math.min(Date.now(), Math.round(patch.endedAt));
-          if (todayKey(new Date(at)) === was.dateKey) next.endedAt = at;
+          const [y, m, d] = was.dateKey.split('-').map(Number);
+          const day = todayKey(new Date(at));
+          if (day === was.dateKey) next.endedAt = at;
+          else if (day === todayKey(new Date(y, m - 1, d + 1)) && todayKey(new Date(at - next.netSeconds * 1000)) <= was.dateKey) {
+            next.endedAt = at;
+          }
         }
         if (Array.isArray(patch.taskTitles)) {
           next.taskTitles = patch.taskTitles
@@ -2216,6 +2255,8 @@ const appStore = create<AppState>()(
           && (next.tags ?? []).join('\n') === (was.tags ?? []).join('\n')
           && next.taskTitles.length === was.taskTitles.length && next.taskTitles.every((t, i) => t === was.taskTitles[i]);
         if (same) return true;
+        // a new end or length says when it began better than the start it was timed from (the end less the length)
+        if (next.endedAt !== was.endedAt || next.netSeconds !== was.netSeconds) delete next.startedAt;
         let list = s.sessions.map((x) => (x.id === id ? next : x));
         // a new end keeps the history in order by time
         if (next.endedAt !== was.endedAt) list = [...list].sort((a, b) => a.endedAt - b.endedAt);
@@ -2226,17 +2267,19 @@ const appStore = create<AppState>()(
       patchDeepWork: (patch) =>
         set((s) => (s.deepWork ? { deepWork: { ...s.deepWork, ...patch } } : {})),
 
+      // a saved week missing a day (an old or hand-edited one) reads that day as empty, as the Planner shows it,
+      // instead of throwing on the first block added to it
       addBlock: (day, b) =>
-        set((s) => ({ planner: { ...s.planner, [day]: [...s.planner[day], { ...b, id: uid() }] } })),
+        set((s) => ({ planner: { ...s.planner, [day]: [...(s.planner[day] || []), { ...b, id: uid() }] } })),
       updateBlock: (day, b) =>
         set((s) => ({
-          planner: { ...s.planner, [day]: s.planner[day].map((x) => (x.id === b.id ? b : x)) },
+          planner: { ...s.planner, [day]: (s.planner[day] || []).map((x) => (x.id === b.id ? b : x)) },
         })),
       removeBlock: (day, id) =>
-        set((s) => ({ planner: { ...s.planner, [day]: s.planner[day].filter((x) => x.id !== id) } })),
+        set((s) => ({ planner: { ...s.planner, [day]: (s.planner[day] || []).filter((x) => x.id !== id) } })),
       copyDay: (from, to) =>
         set((s) => ({
-          planner: { ...s.planner, [to]: s.planner[from].map((b) => ({ ...b, id: uid() })) },
+          planner: { ...s.planner, [to]: (s.planner[from] || []).map((b) => ({ ...b, id: uid() })) },
         })),
       restorePlanner: (week) => set({ planner: week }),
       restoreHabit: (h, index) =>

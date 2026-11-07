@@ -73,15 +73,18 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
     ? todayItems(dailies, missions, base.dateKey).filter((t) => !t.done && !tasks.includes(t.title))
     : [];
 
-  // a time of day for the end, on the day the session began or, for one that ran past midnight, the day it ended:
-  // whichever lies nearer the end it had, so 00:50 on a session that ended at 00:40 stays after midnight
+  // a time of day for the end, on the day the session began or the day after: for one that ran past midnight,
+  // whichever lies nearer the end it had, so 00:50 on a session that ended at 00:40 stays after midnight; for one
+  // that ended on its own day, the day after only when the time would fall before the session began and lies nearer
+  // (00:30 on a session from 23:00 to 23:50 means it ran on past midnight), and never in the future
   const endOn = (h: number, mi: number) => {
     const [y, mo, d] = base.dateKey.split('-').map(Number);
     const first = new Date(y, mo - 1, d, h, mi).getTime();
-    const ended = new Date(base.endedAt);
-    if (todayKey(ended) === base.dateKey) return first;
-    const later = new Date(ended.getFullYear(), ended.getMonth(), ended.getDate(), h, mi).getTime();
-    return Math.abs(later - base.endedAt) < Math.abs(first - base.endedAt) ? later : first;
+    const later = new Date(y, mo - 1, d + 1, h, mi).getTime();
+    const nearer = Math.abs(later - base.endedAt) < Math.abs(first - base.endedAt);
+    if (later > Date.now() || !nearer) return first;
+    if (todayKey(new Date(base.endedAt)) !== base.dateKey) return later;
+    return first < base.endedAt - base.netSeconds * 1000 ? later : first;
   };
 
   const setMinutes = (m: number) => {
@@ -134,7 +137,9 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
       }
     }
     tick();
-    said.current = () => toast('Session updated');
+    // an end the store would not take (it would make the session begin on another day) is said, not passed over
+    const kept = endedAt === undefined || useStore.getState().sessions.find((s) => s.id === id)?.endedAt !== base.endedAt;
+    said.current = () => toast(kept ? 'Session updated' : 'Session updated; that end time would start it on another day');
     onClose();
   };
 
@@ -210,7 +215,7 @@ function SessionEditor({ id, visible, onClose }: { id: string; visible: boolean;
           <Animated.View key={t} entering={rowIn(level)} exiting={rowOut(level)} layout={glide(level)} style={st.taskRow}>
             <Ionicons name="checkmark-circle" size={18} color={C.green} />
             <Text style={st.taskText} numberOfLines={2}>{t}</Text>
-            <Pressable onPress={() => dropTask(t)} hitSlop={10} accessibilityRole="button" accessibilityLabel={'Take off ' + t}>
+            <Pressable onPress={() => dropTask(t)} hitSlop={14} accessibilityRole="button" accessibilityLabel={'Take off ' + t}>
               <Ionicons name="close" size={16} color={C.textFaint} />
             </Pressable>
           </Animated.View>

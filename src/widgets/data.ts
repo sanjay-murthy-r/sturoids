@@ -7,9 +7,13 @@ import { habitDueOn, todayKey } from '../utils';
 import { useBoardNow } from './kit';
 import { TodayItem, nextBlockOf, todayItems } from './logic';
 
-/** Today's list: the ToDos due today and the long-term tasks due today or late. */
-export function useTodayItems(): TodayItem[] {
-  const now = useBoardNow();
+/**
+ * Today's list: the ToDos due today and the long-term tasks due today or late. `at` is the time to read it at, for a
+ * caller above the board's clock (Today's page itself), where useBoardNow would give a fresh time every render.
+ */
+export function useTodayItems(at?: Date): TodayItem[] {
+  const boardNow = useBoardNow();
+  const now = at ?? boardNow;
   const today = todayKey(now);
   const dailies = useStore((s) => s.dailyTasks);
   const missions = useStore((s) => s.missions);
@@ -55,10 +59,11 @@ export function useLiveMin(now: Date, today: string): number {
 
 /**
  * The block the plan shows (on now, next, or tomorrow's first). Worked out each minute, but it keeps its identity while
- * it is the same block with the same tag, so a new minute never re-renders what reads it.
+ * it is the same block with the same tag, so a new minute never re-renders what reads it. `at` as for useTodayItems.
  */
-export function useNextBlock() {
-  const now = useBoardNow();
+export function useNextBlock(at?: Date) {
+  const boardNow = useBoardNow();
+  const now = at ?? boardNow;
   const planner = useStore((s) => s.planner);
   const fresh = React.useMemo(() => nextBlockOf(planner, now), [planner, now]);
   const key = fresh ? fresh.block.id + ':' + fresh.tag : '';

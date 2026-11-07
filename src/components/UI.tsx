@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useRoomPublisher } from '../mascot/room';
+import { screenY, useRoomPublisher } from '../mascot/room';
 import { Directions, Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   Easing, Extrapolation, interpolate, runOnJS, useAnimatedReaction, useAnimatedScrollHandler, useAnimatedStyle,
@@ -14,7 +14,7 @@ import type { SharedValue } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import {
-  AnimLevel, C, CHROME_FONT_MAX, F, MIN, NO_SHADOW, S, SH, T, TRACK, ThemeMode, bgFor, cheerSkinOn, darkSh, neuRaised, neuInset,
+  AnimLevel, C, CHROME_FONT_MAX, F, MIN, NO_SHADOW, S, SH, T, TRACK, ThemeMode, bgFor, cheerSkinOn, darkSh, neuBase, neuRaised, neuInset,
   neuPressedInner, oneLine, setSkin, shownTheme,
 } from '../theme';
 import { useStore } from '../store';
@@ -30,6 +30,7 @@ import { SiftScope, openSift, siftPull } from '../search/store';
 import { TimeWheel, defaultTime, isTime, timeLabel } from './TimeWheel';
 import { ScrollMemoryMode, useScrollMemory } from '../hooks/useScrollMemory';
 import { Backdrop, Bob, Sparks, useCheerful } from './Cheer';
+import { WallpaperLayer, useWallpaper } from './Wallpaper';
 import { BlurView } from 'expo-blur';
 import { cheer } from '../cheerSound';
 
@@ -77,23 +78,41 @@ export function ScreenBG({ children, guard = false, fling = true, maxWidth = REA
   // the page's own width (beside a rail it is less than the window's), so a header in the column knows where it stands
   // and its Cheerful ground lines its glows up with the page's (see Ground)
   const [pageW, setPageW] = React.useState(width);
+  // where the page stands in the window (beside the side rail on a wide window), so its wallpaper lines up with the
+  // window and with every bar's copy of it
+  const pageRef = React.useRef<View>(null);
+  const [pageAt, setPageAt] = React.useState({ x: 0, y: 0 });
+  const photo = useWallpaper();
   const columnAt = React.useMemo(
     () => ({ x: column ? Math.max(0, (pageW - (maxWidth as number)) / 2) : 0, y: 0 }), [column, pageW, maxWidth],
   );
 
   const body = (
-    <View style={{ flex: 1, backgroundColor: bg }} onLayout={(e) => setPageW(e.nativeEvent.layout.width)}>
-      <Backdrop minimal={theme === 'minimal'} />
-      {column ? (
-        <GroundAt.Provider value={columnAt}>
-          <View style={{ flex: 1, width: '100%', maxWidth: maxWidth as number, alignSelf: 'center' }}>{children}</View>
-        </GroundAt.Provider>
-      ) : children}
-      {guard && (
-        <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top }}>
-          <Ground />
-        </View>
-      )}
+    <View
+      ref={pageRef} collapsable={false} style={{ flex: 1, backgroundColor: bg }}
+      onLayout={(e) => {
+        setPageW(e.nativeEvent.layout.width);
+        pageRef.current?.measureInWindow((x, y) => {
+          const at = { x: Math.round(x), y: Math.max(0, Math.round(screenY(y))) };
+          setPageAt((p) => (p.x === at.x && p.y === at.y ? p : at));
+        });
+      }}
+    >
+      {photo ? <WallpaperLayer at={pageAt} /> : null}
+      {/* with a photo behind the page, Cheerful's glows drift over it only when the look keeps them */}
+      {!photo || photo.glows ? <Backdrop minimal={theme === 'minimal'} /> : null}
+      <PageAt.Provider value={pageAt}>
+        {column ? (
+          <GroundAt.Provider value={columnAt}>
+            <View style={{ flex: 1, width: '100%', maxWidth: maxWidth as number, alignSelf: 'center' }}>{children}</View>
+          </GroundAt.Provider>
+        ) : children}
+        {guard && (
+          <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top }}>
+            <Ground />
+          </View>
+        )}
+      </PageAt.Provider>
     </View>
   );
   if (!guard || !fling) return body;
@@ -102,6 +121,8 @@ export function ScreenBG({ children, guard = false, fling = true, maxWidth = REA
 
 /** Where a bar inside the page stands from the page's top-left corner: a header in the centred column of a wide window. */
 const GroundAt = React.createContext<{ x: number; y: number }>({ x: 0, y: 0 });
+/** Where the page itself stands in the window, for the copies of its wallpaper its bars carry. */
+const PageAt = React.createContext<{ x: number; y: number }>({ x: 0, y: 0 });
 
 /**
  * The ground of a bar (a header, the band under the status bar, the tab bar): the page's own colour. In Cheerful on the
@@ -112,11 +133,28 @@ const GroundAt = React.createContext<{ x: number; y: number }>({ x: 0, y: 0 });
  * it stands from the page's top-left corner: it has nothing of the page behind it to blur, so on the PC it carries the
  * copy too, under the same frost.
  */
-export function Ground({ style, beside }: { style?: ViewStyle; beside?: { x: number; y: number } }) {
+export function Ground({ style, beside, wallAt }: {
+  style?: ViewStyle; beside?: { x: number; y: number };
+  /** a bar outside any page (the tab bar, the rail): where it stands in the window, for its copy of the wallpaper */
+  wallAt?: { x: number; y: number };
+}) {
   const theme = useTheme();
   const cheerful = useCheerful();
   const inPage = React.useContext(GroundAt);
+  const page = React.useContext(PageAt);
+  const photo = useWallpaper();
   const bg = bgFor(theme);
+  // a photo behind the pages: every bar carries the frosted copy of it, lined up with the window (no blur view, so the
+  // same on Android, the PC and the web), with Cheerful's glows over it only when the look keeps them
+  if (photo) {
+    const at = wallAt ?? { x: page.x + inPage.x, y: page.y + inPage.y };
+    return (
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden', backgroundColor: bg }, style]}>
+        <WallpaperLayer bar at={at} />
+        {cheerful && photo.glows ? <Backdrop minimal={theme === 'minimal'} dx={(beside ?? inPage).x} dy={(beside ?? inPage).y} /> : null}
+      </View>
+    );
+  }
   if (!cheerful) return <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: bg }, style]} />;
   const web = Platform.OS === 'web';
   if (web && !beside) {
@@ -313,6 +351,11 @@ export function useToolHeader({
     [contentPull],
   );
   const content = useContentPull(!!contentPull && pullMode === 'anywhere' && pull, scrollY, pullProgress, pullOpen);
+  // in tab mode the bar's band lets touches through at rest (so the big title under it scrolls and taps), so the big
+  // title takes the pull itself, sharing the bar's progress; once the bar's ground is in, the band takes it again
+  const tab = mode === 'tab';
+  const bandPull = tab && pull && pullMode !== 'off';
+  const heroPull = useHeaderPull(bandPull, pullProgress, pullOpen);
   const onScroll = useAnimatedScrollHandler((e) => { scrollY.value = e.contentOffset.y; });
   const memory = useScrollMemory(scrollY, { mode: scrollMemory, ref: scrollRef });
   const scrollProps = React.useMemo(
@@ -320,7 +363,6 @@ export function useToolHeader({
     [onScroll, memory.ref, memory.onContentSizeChange],
   );
   const parts = partsOf(context);
-  const tab = mode === 'tab';
   // where the big title ends, for the room the bar leaves the companion (src/mascot/room.ts)
   const geo = React.useRef<HeaderGeo>({ hero: 0, bump: null });
   // the big title shares the tray's row, so it leaves the tray's width free on its right (the overflow button takes the
@@ -331,11 +373,16 @@ export function useToolHeader({
     bar: (
       <ToolBar
         title={title} back={!tab} onBack={onBack} actions={actions} right={right} scrollY={scrollY} overlay={tab}
-        contentStyle={contentStyle} pull={tab && pull} pullProgress={contentPull ? pullProgress : undefined} pullOpen={pullOpen}
+        contentStyle={contentStyle} pull={tab && pull} pullProgress={contentPull || bandPull ? pullProgress : undefined} pullOpen={pullOpen}
         geo={geo}
       />
     ),
-    hero: <ToolHero title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} reserve={tab ? reserve : 0} geo={geo} />,
+    hero: (
+      <ToolHero
+        title={title} tab={tab} parts={parts} live={live && parts != null} covered={covered} reserve={tab ? reserve : 0} geo={geo}
+        pull={heroPull.gesture}
+      />
+    ),
     scrollProps,
     scrollY,
     /** for a page with several scrolls (the Vault's pages): the pull's progress and what it opens, for useContentPull */
@@ -500,10 +547,15 @@ function ToolBar({ title, back, onBack, actions, right, scrollY, overlay = false
         </Animated.View>
       ) : <Ground />}
       {/* the header band takes a one-finger drag down (Sift): from under the status bar, which is the phone's shade, to
-          the bar's lower rim; the tray's buttons sit above it and keep their taps */}
+          the bar's lower rim; the tray's buttons sit above it and keep their taps. Over a tab at rest the bar is clear
+          and the big title under it takes the pull itself (ToolHero), so the band lets touches through to the scroll
+          until the ground is in */}
       {bandPull ? (
         <GestureDetector gesture={headerPull.gesture}>
-          <Animated.View collapsable={false} style={[StyleSheet.absoluteFill, { top: insets.top }]} />
+          <Animated.View
+            collapsable={false} pointerEvents={overlay && !solid ? 'none' : 'auto'}
+            style={[StyleSheet.absoluteFill, { top: insets.top }]}
+          />
         </GestureDetector>
       ) : null}
       <Animated.View ref={rowRef as any} collapsable={false} pointerEvents={through} style={[hdr.row, contentStyle, (bandPull || pullProgress) && !contentStyle ? pullRow : null]}>
@@ -604,11 +656,13 @@ export function GateHeader({ title, tab }: { title: string; tab: boolean }) {
 }
 
 /** The first thing in the scroll: the big title in tab mode, and the context line, if there is one. */
-function ToolHero({ title, tab, parts, live, covered, reserve, geo }: {
+function ToolHero({ title, tab, parts, live, covered, reserve, geo, pull }: {
   title: string; tab: boolean; parts: ContextPart[] | null; live: boolean; covered: boolean;
   /** the width the big title leaves free on its right, for the tray beside it */
   reserve: number;
   geo?: React.MutableRefObject<HeaderGeo>;
+  /** tab mode: the header pull on the big title, which the clear bar over it lets through at rest */
+  pull?: ReturnType<typeof useHeaderPull>['gesture'];
 }) {
   const ref = React.useRef<View>(null);
   const cheerful = useCheerful();
@@ -621,8 +675,8 @@ function ToolHero({ title, tab, parts, live, covered, reserve, geo }: {
     });
   };
   if (tab) {
-    return (
-      <View style={hdr.heroTab}>
+    const body = (
+      <View collapsable={false} style={hdr.heroTab}>
         {/* the big title sits level with the bar's tray, so it is chrome too: it grows at most by 1.3 */}
         <FadeSwap swapKey={title} style={reserve ? { paddingRight: reserve } : undefined}>
           <View ref={ref} collapsable={false} onLayout={told} style={hdr.titleFit}>
@@ -632,6 +686,7 @@ function ToolHero({ title, tab, parts, live, covered, reserve, geo }: {
         {parts ? <ContextLine parts={parts} live={live} covered={covered} style={{ marginTop: 2 }} /> : null}
       </View>
     );
+    return pull ? <GestureDetector gesture={pull}>{body}</GestureDetector> : body;
   }
   if (!parts) return null;
   return (
@@ -718,7 +773,7 @@ export const PULL_OPEN = 64;
  * An RNGH Pan that wakes only on a downward drag (10 dp) and gives way to a sideways one (16 dp) or an upward one, so a
  * fling between tabs and the scroll below are never taken. `progress` runs 0 to 1 up to the threshold (a little past
  * it with resistance) on the UI thread, for a pill under the header; a tick marks the threshold, and letting go past
- * it opens Sift with its field morphing out of the header. `enabled` false (an edit mode, a running session) turns
+ * it opens Sift. `enabled` false (an edit mode, a running session) turns
  * it off. Put the gesture on the header band's own view (a GestureDetector around it), never on scrolling content.
  */
 export function useHeaderPull(enabled: boolean, outside?: SharedValue<number>, open: () => void = openFromPull) {
@@ -819,14 +874,33 @@ export function PullArea({ gesture, children }: { gesture: ReturnType<typeof use
 }
 
 /**
- * The pill a header pull draws out from under the bar: a carved well with the search glyph and Sift's name, growing with
- * the pull; at the threshold its glyph and name take the accent ("let go to open"). Fades only with some motion; a
- * step with none.
+ * What a header pull draws out from under the bar: a small search glyph that comes in and grows with the pull, and at
+ * the threshold takes the accent ("let go to open"). With some motion it only fades in; with none it shows, already in
+ * the accent, once the pull is far enough. All on the UI thread, transforms and opacity only.
  */
-export function PullPill(_: { progress: SharedValue<number> }) {
-  // Focus (picked in the Sift study): a pull shows nothing of its own under the bar. The app behind goes softly out of
-  // focus with the pull instead (AppFrame), and Sift's field comes into focus where it sits
-  return null;
+export function PullPill({ progress }: { progress: SharedValue<number> }) {
+  useTheme(); // the glyph takes the accent at the threshold, so it follows a new one
+  const level = useAnimLevel();
+  const glyph = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, progress.value));
+    if (level === 'none') return { opacity: p >= 1 ? 1 : 0, transform: [{ scale: 1 }] };
+    // it waits out the first few points of a drag, so a scroll that only brushes the bar shows nothing
+    const opacity = interpolate(p, [0.15, 0.6], [0, 1], Extrapolation.CLAMP);
+    return { opacity, transform: [{ scale: level === 'full' ? 0.6 + 0.4 * p : 1 }] };
+  });
+  const lit = useAnimatedStyle(() => ({ opacity: progress.value >= 1 ? 1 : 0 }));
+  return (
+    <View pointerEvents="none" style={hdr.pillRoom} importantForAccessibility="no-hide-descendants">
+      <Animated.View style={glyph}>
+        <Ionicons name="search" size={18} color={level === 'none' ? C.accent : C.textFaint} />
+        {level === 'none' ? null : (
+          <Animated.View style={[StyleSheet.absoluteFill, lit]}>
+            <Ionicons name="search" size={18} color={C.accent} />
+          </Animated.View>
+        )}
+      </Animated.View>
+    </View>
+  );
 }
 
 /**
@@ -878,7 +952,9 @@ export function InfoDot({ text, size = 15, label = 'About this' }: {
   const [bubbleH, setBubbleH] = React.useState(0);
   const ref = React.useRef<View>(null);
   const show = () => {
-    ref.current?.measureInWindow((x, y, w, h) => {
+    ref.current?.measureInWindow((x, wy, w, h) => {
+      // measureInWindow leaves the status bar out on Android, but the modal below fills the screen from its very top
+      const y = screenY(wy);
       setPos({ x, y: y + h, top: y });
       setBubbleH(0);
       setOpen(true);
@@ -894,10 +970,8 @@ export function InfoDot({ text, size = 15, label = 'About this' }: {
       >
         <Ionicons name="information-circle-outline" size={size} color={C.textFaint} />
       </Pressable>
-      {/* statusBarTranslucent keeps this modal's window in the SAME coordinate
-          space measureInWindow reported from — without it the content view
-          starts below the translucent status bar and the bubble lands a
-          status-bar height too low */}
+      {/* statusBarTranslucent makes this modal fill the screen from its top on Android, so the dot's place is moved
+          into that space with screenY (above); otherwise the bubble would land a status bar too high */}
       <Modal
         visible={open} transparent statusBarTranslucent animationType={level === 'none' ? 'none' : 'fade'}
         onRequestClose={() => setOpen(false)}
@@ -934,8 +1008,8 @@ export interface A11yProps {
 }
 
 /**
- * Raised soft-UI surface: the kit's dual drop-shadow (light side toward the
- * 60° light, dark side at the exact opposite end), 6px distance both ways.
+ * A raised surface of lit material (theme.ts). One that can be pressed sinks into the material under the finger: its
+ * key shadow and rim fade (Bouncy's `raised`) and only its contact shadow stays.
  */
 export function Card({
   children, style, pad = S.cardPad, onPress, onLongPress, hero = false,
@@ -953,9 +1027,11 @@ export function Card({
   const inner = <View style={{ padding: pad }}>{children}</View>;
 
   if (onPress || onLongPress) {
+    const minimal = theme === 'minimal';
     return (
       <Bouncy
-        onPress={onPress} onLongPress={onLongPress} radius={S.radius} style={[st.cardBase, surface, style as any]}
+        onPress={onPress} onLongPress={onLongPress} radius={S.radius} raised={minimal ? undefined : hero ? 'high' : 'mid'}
+        style={[st.cardBase, minimal ? surface : { backgroundColor: C.card, ...neuBase() }, style as any]}
         accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint} accessibilityRole={accessibilityRole}
       >
         {inner}
@@ -1110,6 +1186,8 @@ export function PillButton({
     <Bouncy
       onPress={onPress}
       scaleTo={0.96}
+      raised={!outline && theme !== 'minimal' ? 'low' : undefined}
+      radius={999}
       style={[
         st.pill,
         small && { paddingVertical: 8, paddingHorizontal: 14 },
@@ -1117,7 +1195,7 @@ export function PillButton({
           ? { borderColor: c + '88', borderWidth: 1.5, backgroundColor: 'transparent' }
           : theme === 'minimal'
             ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: c + '77' }
-            : { backgroundColor: C.card, ...neuRaised('low') },
+            : { backgroundColor: C.card, ...neuBase() },
         style,
       ]}
     >
@@ -1162,13 +1240,14 @@ export function NeuIconBtn({ name, onPress, color, size = 20, dim = 44, active, 
       onPress={onPress}
       scaleTo={0.9}
       radius={dim / 2}
+      raised={theme === 'minimal' ? undefined : 'low'}
       accessibilityLabel={accessibilityLabel}
       accessibilityRole={accessibilityLabel ? 'button' : undefined}
       style={[
         { width: dim, height: dim, borderRadius: dim / 2, alignItems: 'center', justifyContent: 'center' },
         theme === 'minimal'
           ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: active ? c : MIN.border }
-          : { backgroundColor: C.card, ...neuRaised('low') },
+          : { backgroundColor: C.card, ...neuBase() },
         style,
       ]}
     >
@@ -1260,6 +1339,12 @@ const TRACK_W = 50;
 const TRACK_H = 26;
 const KNOB = 20;
 const KNOB_TRAVEL = TRACK_W - KNOB - 6; // 24
+/** Elite's switch: quick off the mark, landing exactly */
+const TOGGLE_GLIDE = { duration: 240, easing: Easing.bezier(0.2, 0.9, 0.3, 1) };
+/** the PC's pointer resting on a switch: the light Bouncy gives (Motion.tsx), with its timings */
+const HOVERS = Platform.OS === 'web';
+const HOVER_IN = { duration: 120, easing: Easing.out(Easing.quad) };
+const HOVER_OUT = { duration: 200, easing: Easing.out(Easing.quad) };
 
 export function Toggle({ value, onChange, color, label }: {
   value: boolean; onChange: (v: boolean) => void; color?: string;
@@ -1272,19 +1357,30 @@ export function Toggle({ value, onChange, color, label }: {
   const cheerful = useCheerful();
   const x = useSharedValue(value ? 1 : 0);
   React.useEffect(() => {
-    x.value = level === 'none' ? (value ? 1 : 0) : withSpring(value ? 1 : 0, RISE_OUT);
+    // Cheerful glides with a soft spring; Elite with an exact ease that never runs past its end
+    x.value = level === 'none' ? (value ? 1 : 0) : cheerful ? withSpring(value ? 1 : 0, RISE_OUT) : withTiming(value ? 1 : 0, TOGGLE_GLIDE);
   }, [value, level]);
+  // under the finger the knob presses in a little, as a real switch's does, before it goes across
+  const press = useSharedValue(0);
   // Cheerful: the knob stretches a little in the middle of its travel, like something soft on its way across
   const stretch = cheerful && level === 'full' ? 0.22 : 0;
   const thumbStyle = useAnimatedStyle(() => {
     const mid = Math.sin(Math.PI * Math.min(1, Math.max(0, x.value)));
-    return { transform: [{ translateX: x.value * KNOB_TRAVEL }, { scaleX: 1 + stretch * mid }, { scaleY: 1 - stretch * 0.35 * mid }] as const };
+    const k = 1 - 0.08 * press.value;
+    return { transform: [{ translateX: x.value * KNOB_TRAVEL }, { scaleX: k * (1 + stretch * mid) }, { scaleY: k * (1 - stretch * 0.35 * mid) }] as const };
   });
   // the accent fills the knob as it travels, instead of flipping colour the moment it is tapped
   const knobFill = useAnimatedStyle(() => ({ opacity: Math.min(1, Math.max(0, x.value)) }));
+  // on the PC the switch lights softly while the pointer rests on it, as every Bouncy does, and the light goes as it is pressed
+  const hv = useSharedValue(0);
+  const hoverStyle = useAnimatedStyle(() => ({ opacity: hv.value * (1 - press.value) }));
   return (
     <Pressable
       onPress={() => { tick(); onChange(!value); }} hitSlop={8}
+      onPressIn={level === 'none' ? undefined : () => { press.value = withTiming(1, { duration: 90 }); }}
+      onPressOut={level === 'none' ? undefined : () => { press.value = withTiming(0, { duration: 160 }); }}
+      onHoverIn={HOVERS ? () => { hv.value = level === 'none' ? 1 : withTiming(1, HOVER_IN); } : undefined}
+      onHoverOut={HOVERS ? () => { hv.value = level === 'none' ? 0 : withTiming(0, HOVER_OUT); } : undefined}
       accessibilityRole="switch" accessibilityState={{ checked: value }} accessibilityLabel={label}
     >
       <View
@@ -1309,6 +1405,7 @@ export function Toggle({ value, onChange, color, label }: {
             <Animated.View pointerEvents="none" style={[st.knobFill, { backgroundColor: c }, knobFill]} />
           </Animated.View>
         </View>
+        {HOVERS ? <Animated.View pointerEvents="none" style={[st.ringHover, { backgroundColor: C.hover }, hoverStyle]} /> : null}
       </View>
     </Pressable>
   );
@@ -1534,6 +1631,8 @@ export function Hairline() {
 /** a sheet's motion at each level: what it arrives and leaves on (see Sheet) */
 const SLIDE = { arrive: ARRIVE, leave: LEAVE };
 const FADE = { arrive: FADE_IN, leave: FADE_OUT };
+/** the panel's glide as its body grows or shrinks inside an open sheet */
+const BODY_GLIDE = { duration: 260, easing: EASE_OUT };
 
 /**
  * Bottom sheet: the backdrop fades while the panel rises from below the screen's edge, its whole height. It rises on the
@@ -1559,21 +1658,26 @@ export function Sheet({
   // on a wide window a sheet keeps a phone's proportions: at most 560 wide, centred, still rising from the bottom
   const narrowPanel = winW >= WIDE_AT ? st.sheetWide : null;
   const [render, setRender] = React.useState(visible);
-  // the keyboard's height while the sheet is up: the window shrinks above it, and the panel must still fit there
+  // The room the panel has above the keyboard. On Android (and the PC) the modal's window itself shrinks above the
+  // keyboard, so it is the height of the area the panel stands in, read from that area's own layout: it lands in the
+  // frame the window resizes, where keyboardDidShow came late and a tall panel rode up past the top before it shrank.
+  // iOS does not resize the window, so there the keyboard's height is taken off, as soon as the keyboard says it will show.
+  const [areaH, setAreaH] = React.useState(0);
   const [kb, setKb] = React.useState(0);
   React.useEffect(() => {
-    if (!render) return undefined;
+    if (!render || Platform.OS !== 'ios') return undefined;
     // a keyboard already up as the sheet arrives counts too
     setKb(Keyboard.isVisible() ? Keyboard.metrics()?.height ?? 0 : 0);
-    const shown = Keyboard.addListener('keyboardDidShow', (e) => setKb(e.endCoordinates.height));
-    const hidden = Keyboard.addListener('keyboardDidHide', () => setKb(0));
+    const shown = Keyboard.addListener('keyboardWillShow', (e) => setKb(e.endCoordinates.height));
+    const hidden = Keyboard.addListener('keyboardWillHide', () => setKb(0));
     return () => { shown.remove(); hidden.remove(); };
   }, [render]);
+  const avail = Platform.OS !== 'ios' && areaH > 0 ? areaH : winH - kb;
   // the panel's fixed chrome (padding 22 + paddingBottom 36 + handle 21 +
   // title 38, about 120dp) sits OUTSIDE this scroller, so the cap has to come
   // off the room left — a flat 540 pushed the primary button below a short display, and with the keyboard up a full
   // panel pushed its handle and title (the pull that closes it) off the top
-  const room = Math.min(winH * 0.72, winH - kb - insets.top - 24);
+  const room = Math.min(winH * 0.72, avail - insets.top - 24);
   const scrollMax = Math.min(540, Math.max(160, room - 120));
   // set while the sheet leaves: it takes no taps until it is gone, or opened again
   const [closing, setClosing] = React.useState(false);
@@ -1604,21 +1708,41 @@ export function Sheet({
   const risen = React.useCallback(() => { setUp(true); risenRef.current?.(); }, []);
   React.useEffect(() => { if (!visible) setUp(false); }, [visible]);
   const riseCtx = React.useMemo(() => ({ inSheet: true, risen: up }), [up]);
-  // The body's height: it eases to what its content needs (up to the room there is), so a part that opens or closes
-  // inside an open sheet (a time, the days to repeat on) grows or shrinks the panel smoothly, its top edge gliding
-  // instead of jumping. Its first height, and any while the panel is still rising or motion is off, is simply taken.
+  // The body's height: what its content needs, up to the room there is. A part that opens or closes inside an open
+  // sheet (a time, the days to repeat on) changes it, and the panel's top edge glides there instead of jumping; only a
+  // transform moves, never the height itself, which is taken in one step. Growing, the panel takes its new height at
+  // once and starts as far down as it grew, then rises; shrinking, it slides down by what it loses (the empty foot of
+  // the body going below the screen's edge) and then takes its new height in that same frame. Its first height, any
+  // while the panel is still rising, any with less than full motion, and a change in the room (the keyboard, a turn of
+  // the phone: the window itself jumps then) are simply taken.
   const bodyH = useSharedValue(-1);
+  const fit = useSharedValue(0);
   const contentH = React.useRef(0);
   const upRef = React.useRef(false);
   upRef.current = up;
   const fitBody = React.useCallback((animate: boolean) => {
     const to = Math.min(contentH.current, scrollMax);
     if (to <= 0) return;
-    if (!animate || bodyH.value < 0 || level === 'none') bodyH.value = to;
-    else bodyH.value = withTiming(to, { duration: 260, easing: EASE_OUT });
+    const from = bodyH.value;
+    if (!animate || from < 0 || level !== 'full') {
+      bodyH.value = to;
+      fit.value = 0;
+      return;
+    }
+    // how tall the panel looks now (a glide under way included)
+    const shown = from - fit.value;
+    if (to >= from) {
+      bodyH.value = to;
+      fit.value = to - shown;
+      fit.value = withTiming(0, BODY_GLIDE);
+    } else {
+      fit.value = withTiming(from - to, BODY_GLIDE, (fin) => {
+        if (fin) { bodyH.value = to; fit.value = 0; }
+      });
+    }
   }, [scrollMax, level]);
-  React.useEffect(() => { fitBody(upRef.current); }, [scrollMax]);
-  React.useEffect(() => { if (!render) bodyH.value = -1; }, [render]);
+  React.useEffect(() => { fitBody(false); }, [scrollMax]);
+  React.useEffect(() => { if (!render) { bodyH.value = -1; fit.value = 0; setAreaH(0); } }, [render]);
   const bodyStyle = useAnimatedStyle(() => (bodyH.value < 0 ? {} : { height: bodyH.value }));
   const finishClose = React.useCallback(() => {
     leaving.current = false;
@@ -1711,8 +1835,8 @@ export function Sheet({
   // NOTE: with full motion the panel keeps full opacity and only slides. (An animated opacity on top of the slide read
   // as a "transparent popup" bug on device.) With some motion nothing slides, so it fades in place instead.
   const panelStyle = useAnimatedStyle(() => (slides
-    ? { opacity: 1, transform: [{ translateY: (1 - prog.value) * (panelH.value + 24) + drag.value }] }
-    : { opacity: prog.value, transform: [{ translateY: drag.value }] }));
+    ? { opacity: 1, transform: [{ translateY: (1 - prog.value) * (panelH.value + 24) + drag.value + fit.value }] }
+    : { opacity: prog.value, transform: [{ translateY: drag.value + fit.value }] }));
   // a pull on the handle or the title follows the finger; far enough, or flicked, it closes the sheet
   const closeRef = React.useRef(onClose);
   closeRef.current = onClose;
@@ -1734,7 +1858,13 @@ export function Sheet({
       {/* a modal is its own window: gestures inside it need their own root */}
       <GestureHandlerRootView style={{ flex: 1 }}>
       {/* the dim covers the whole window, beside a narrow panel on a wide screen too; the panel stands at its foot */}
-      <View style={{ flex: 1, justifyContent: 'flex-end' }} pointerEvents={closing ? 'none' : 'box-none'}>
+      <View
+        style={{ flex: 1, justifyContent: 'flex-end' }} pointerEvents={closing ? 'none' : 'box-none'}
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          setAreaH((was) => (was === h ? was : h));
+        }}
+      >
       <Animated.View style={[StyleSheet.absoluteFill, st.sheetOverlay, backdropStyle]}>
         <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" />
       </Animated.View>
@@ -1771,8 +1901,11 @@ export function Sheet({
             onContentSizeChange={(_w, h) => { contentH.current = h; fitBody(upRef.current); }}
           >
             {/* rows that fold out of a sheet never outlive it: when the modal goes, its content leaves at once (the
-                ambient screen does the same), so no exit animation runs on in a window that is being torn down */}
-            <LayoutAnimationConfig skipExiting><SheetRise.Provider value={riseCtx}>{children}</SheetRise.Provider></LayoutAnimationConfig>
+                ambient screen does the same), so no exit animation runs on in a window that is being torn down. The
+                guard reaches only its first view, so one wrapper holds the whole body */}
+            <LayoutAnimationConfig skipExiting>
+              <View collapsable={false}><SheetRise.Provider value={riseCtx}>{children}</SheetRise.Provider></View>
+            </LayoutAnimationConfig>
           </ScrollView>
           </Animated.View>
         </Animated.View>
@@ -1845,6 +1978,11 @@ const SLICE_OVERLAP = 40;
 /**
  * One raised card that holds a whole list, with hairlines between its rows, so a list reads as one object instead of
  * a stack of cards. Rows fold in and out, and the card follows their height.
+ *
+ * A row leaving on its own fades out (its exit animation). A caller that swaps the whole card for something else (an
+ * empty state, another list under a new key) or removes it with its screen must wrap it in
+ * `<LayoutAnimationConfig skipExiting>` (keyed, when a key swap is what replaces it): otherwise the departing rows keep
+ * the old card alive on screen while they fade, over whatever takes its place.
  */
 export function ListCard({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
   const theme = useTheme();
@@ -2100,6 +2238,7 @@ const st = StyleSheet.create({
     width: RING_W, height: RING_H, borderRadius: RING_H / 2,
     backgroundColor: C.card, alignItems: 'center', justifyContent: 'center',
   },
+  ringHover: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: RING_H / 2 },
   // the ring's, the track's and the knob's shadows are set where they are drawn (Toggle): a StyleSheet would freeze
   // Elite's at import, and Cheerful would show its pale highlight
   track: {
@@ -2144,10 +2283,10 @@ const st = StyleSheet.create({
   sheetHead: { flexDirection: 'row', alignItems: 'flex-start' },
   sheetAction: { marginLeft: 12, minHeight: 26, justifyContent: 'center', marginBottom: 18 },
   sheetWide: { width: '100%', maxWidth: 560, alignSelf: 'center' },
+  // its carve is set where it is drawn (Sheet): a StyleSheet would freeze Elite's at import, in Cheerful too
   sheetHandle: {
     alignSelf: 'center', width: 44, height: 5, borderRadius: 3,
     backgroundColor: C.inset, marginBottom: 18,
-    ...neuInset('hairline'),
   },
   sheetTitle: { color: C.text, fontFamily: F.semi, fontSize: 20, lineHeight: 26, letterSpacing: TRACK.large, marginBottom: 18 },
   menuRow: {

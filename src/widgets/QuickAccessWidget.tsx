@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, BackHandler, PixelRatio, useWindowDi
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
 import Animated, {
-  FadeIn, FadeOut, ZoomIn, ZoomOut, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
+  FadeIn, FadeOut, LayoutAnimationConfig, ZoomIn, ZoomOut, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming,
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -282,30 +282,35 @@ function QuickAddSheet({ visible, onClose, archived, editing }: {
   return (
     <Sheet visible={visible} onClose={onClose} title={editing ? 'Edit shortcut' : 'Add to quick access'}>
       {/* once every in-app page is a shortcut, the section goes rather than standing empty. A chip picked fades as the
-          ones after it glide into its place, and the heading fades with the last one */}
+          ones after it glide into its place; the last one goes at once with its heading, since a chip's fade cannot
+          outlive the section it sits in */}
       {catalog.length > 0 ? (
-        <Animated.View exiting={rowOut(level)}>
-          <Text style={st.sheetSection}>In-app</Text>
-          <Row style={{ flexWrap: 'wrap' }}>
-            {catalog.map((r) => (
-              <Animated.View key={r.kind + r.target} exiting={rowOut(level)} layout={glide(level)}>
-                <Chip label={r.label} color={colorOf(r.color)} onPress={() => addQuick(r)} />
-              </Animated.View>
-            ))}
-          </Row>
-        </Animated.View>
+        <LayoutAnimationConfig skipExiting>
+          <View>
+            <Text style={st.sheetSection}>In-app</Text>
+            <Row style={{ flexWrap: 'wrap' }}>
+              {catalog.map((r) => (
+                <Animated.View key={r.kind + r.target} exiting={rowOut(level)} layout={glide(level)}>
+                  <Chip label={r.label} color={colorOf(r.color)} onPress={() => addQuick(r)} />
+                </Animated.View>
+              ))}
+            </Row>
+          </View>
+        </LayoutAnimationConfig>
       ) : null}
       {actions.length > 0 ? (
-        <Animated.View exiting={rowOut(level)}>
-          <Text style={st.sheetSection}>Actions</Text>
-          <Row style={{ flexWrap: 'wrap' }}>
-            {actions.map((r) => (
-              <Animated.View key={r.kind + r.target} exiting={rowOut(level)} layout={glide(level)}>
-                <Chip label={r.label} color={colorOf(r.color)} onPress={() => addQuick(r)} />
-              </Animated.View>
-            ))}
-          </Row>
-        </Animated.View>
+        <LayoutAnimationConfig skipExiting>
+          <View>
+            <Text style={st.sheetSection}>Actions</Text>
+            <Row style={{ flexWrap: 'wrap' }}>
+              {actions.map((r) => (
+                <Animated.View key={r.kind + r.target} exiting={rowOut(level)} layout={glide(level)}>
+                  <Chip label={r.label} color={colorOf(r.color)} onPress={() => addQuick(r)} />
+                </Animated.View>
+              ))}
+            </Row>
+          </View>
+        </LayoutAnimationConfig>
       ) : null}
       {editing ? null : <Text style={st.sheetSection}>A website</Text>}
       {/* the name is optional, so the address's own key can add the site */}
@@ -632,21 +637,25 @@ const QuickGrid = React.memo(function QuickGrid({ items, metas, edit, onRun, onR
     next.splice(idx, 0, moved);
     onReorder(next);
   };
+  // a tile removed on its own shrinks away; when the whole grid goes (the widget taken off the board, Today closed)
+  // the tiles and Add go with it at once instead of animating out over a grid that is already gone
   return (
-    <View style={{ height: boxH, marginBottom: 6 }} onLayout={(e) => setBoxW(e.nativeEvent.layout.width)}>
-      {items.map((q, i) => (
-        <QuickTile
-          key={q.id} q={q} meta={metas[q.id] ?? null} index={i} last={i === items.length - 1} rect={layout[i]}
-          wide={layout[i].w > colW + 1} rects={rects}
-          isDragging={dragId === q.id}
-          onDragState={setDragId}
-          onCross={reorder}
-          onDrop={() => setDragId(null)}
-          onRun={onRun} edit={edit} onRemove={onRemove} fadeIn={painted.current}
-        />
-      ))}
-      {showAdd && <QuickAdd y={addY} onAdd={onAdd} />}
-    </View>
+    <LayoutAnimationConfig skipExiting>
+      <View style={{ height: boxH, marginBottom: 6 }} onLayout={(e) => setBoxW(e.nativeEvent.layout.width)}>
+        {items.map((q, i) => (
+          <QuickTile
+            key={q.id} q={q} meta={metas[q.id] ?? null} index={i} last={i === items.length - 1} rect={layout[i]}
+            wide={layout[i].w > colW + 1} rects={rects}
+            isDragging={dragId === q.id}
+            onDragState={setDragId}
+            onCross={reorder}
+            onDrop={() => setDragId(null)}
+            onRun={onRun} edit={edit} onRemove={onRemove} fadeIn={painted.current}
+          />
+        ))}
+        {showAdd && <QuickAdd y={addY} onAdd={onAdd} />}
+      </View>
+    </LayoutAnimationConfig>
   );
 });
 

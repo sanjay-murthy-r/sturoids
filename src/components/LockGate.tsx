@@ -5,9 +5,9 @@ import { NavigationContext } from '@react-navigation/native';
 import { allowScreenCaptureAsync, preventScreenCaptureAsync } from 'expo-screen-capture';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
-  Easing, FadeIn, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming,
+  Easing, FadeIn, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming,
 } from 'react-native-reanimated';
-import { AnimLevel, C, CHROME_FONT_MAX, F, LX, LY, MIN, NEU, S, T, TRACK, darkSh, liteSh, oneLine } from '../theme';
+import { AnimLevel, C, CHROME_FONT_MAX, F, LX, LY, MIN, S, T, TRACK, darkSh, liteSh, neuInset, neuRaised, oneLine } from '../theme';
 import { Field, PillButton, ScreenBG, Sheet, useTheme } from './UI';
 import { Bouncy, EASE_OUT, FadeSwap, useAnimLevel } from './Motion';
 import { useStore } from '../store';
@@ -24,6 +24,13 @@ const ROWS = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['side', '0', '
 const KEY_GAP_X = 26;
 const KEY_GAP_Y = 14;
 const KEY_MAX = 72;
+/** the smallest a key gets to fit a short space: still an easy target for a thumb */
+const KEY_MIN = 52;
+/**
+ * The pad's height apart from its four rows of keys: the prompt, the hint, the wells, the status line, the gaps
+ * between the rows and the link under them. Four rows of keys at full size on top of it need about 515 dp.
+ */
+const PAD_CHROME = 232;
 /** what TalkBack says for the keys that show an icon; a digit says itself */
 const KEY_LABEL: Record<string, string> = { del: 'Delete digit', ok: 'Done', bio: 'Use screen lock' };
 
@@ -67,10 +74,12 @@ const pageIn = (level: AnimLevel) => FadeIn.duration(level === 'full' ? 320 : 20
  * the owner choose a new PIN (the locks stay on, and backing out before the new PIN is confirmed changes nothing);
  * signed out, it says what the way out is.
  */
-export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other }: {
+export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other, maxH }: {
   mode: 'enter' | 'set'; tint: string; onDone: () => void; onScreenLock?: () => void; active?: boolean;
   /** another profile whose PIN is asked for (before it is deleted from here): no forgot link, no screen lock */
   other?: { id: string; name: string };
+  /** the height the pad has to fit in, when it is short (a sheet, a small phone): the keys shrink to fit it */
+  maxH?: number;
 }) {
   const theme = useTheme();
   const level = useAnimLevel();
@@ -299,15 +308,19 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other 
   }, [resting, level]);
   const keysStyle = useAnimatedStyle(() => ({ opacity: keysOn.value }));
   const wells = stage === 'legacy' ? Math.max(LEGACY_MIN, digits.length) : PIN_LEN;
-  const key = Math.min(KEY_MAX, Math.floor((width - 2 * S.pad - 2 * KEY_GAP_X - 24) / 3));
+  // as wide as three fit across, and as tall as four rows fit in the room given (never under KEY_MIN for that)
+  const fitH = maxH ? Math.max(KEY_MIN, Math.floor((maxH - PAD_CHROME) / 4)) : KEY_MAX;
+  const key = Math.min(KEY_MAX, fitH, Math.floor((width - 2 * S.pad - 2 * KEY_GAP_X - 24) / 3));
   const well = theme === 'minimal'
     ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
-    : { backgroundColor: C.inset, ...NEU.insetHairline };
+    : { backgroundColor: C.inset, ...neuInset('hairline') };
   const keyFace = theme === 'minimal'
     ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
-    : { backgroundColor: C.card, ...NEU.raisedLow };
+    : { backgroundColor: C.card, ...neuRaised('low') };
 
   return (
+    // a pad that goes as a whole (its gate opening, its sheet closing) takes its dots with it, none left fading
+    <LayoutAnimationConfig skipExiting>
     <View ref={padRef} style={st.pad}>
       {/* a new step (choose, then confirm) changes its words in place: they dip out and come back */}
       <FadeSwap swapKey={prompt}>
@@ -331,13 +344,16 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other 
             exiting={level === 'none' || i < LEGACY_MIN ? undefined : dotOut}
             style={[st.dotWell, well]}
           >
-            {i < digits.length ? (
-              <Animated.View
-                entering={level === 'none' ? undefined : dotIn}
-                exiting={level === 'none' ? undefined : dotOut}
-                style={[st.dot, { backgroundColor: tint }]}
-              />
-            ) : null}
+            {/* a digit deleted empties its well; a well that goes (an older code's extra ones) takes its dot with it */}
+            <LayoutAnimationConfig skipExiting>
+              {i < digits.length ? (
+                <Animated.View
+                  entering={level === 'none' ? undefined : dotIn}
+                  exiting={level === 'none' ? undefined : dotOut}
+                  style={[st.dot, { backgroundColor: tint }]}
+                />
+              ) : null}
+            </LayoutAnimationConfig>
           </Animated.View>
         ))}
       </Animated.View>
@@ -410,6 +426,7 @@ export function PinPad({ mode, tint, onDone, onScreenLock, active = true, other 
         email={forgot?.email ?? ''} visible={!!forgot} onClose={() => setForgot(null)} onVerified={startReset}
       />
     </View>
+    </LayoutAnimationConfig>
   );
 }
 
@@ -507,9 +524,14 @@ export function PinSheet({ visible, mode, tint = C.accent, onClose, onDone, onSc
   visible: boolean; mode: 'enter' | 'set'; tint?: string; onClose: () => void; onDone: () => void;
   onScreenLock?: () => void; other?: { id: string; name: string };
 }) {
+  // the sheet's scroll is at most 72% of the window, less its handle and padding
+  const { height: winH } = useWindowDimensions();
   return (
     <Sheet visible={visible} onClose={onClose}>
-      <PinPad mode={mode} tint={tint} active={visible} onDone={onDone} onScreenLock={onScreenLock} other={other} />
+      <PinPad
+        mode={mode} tint={tint} active={visible} onDone={onDone} onScreenLock={onScreenLock} other={other}
+        maxH={winH * 0.72 - 120}
+      />
     </Sheet>
   );
 }
@@ -549,6 +571,9 @@ function LockPage({ scope, alsoOpenedBy, locked, screenLock, title, reason, tint
   const turn = useSharedValue(0);
   const gateStyle = useAnimatedStyle(() => ({ opacity: fade.value }));
   const lockStyle = useAnimatedStyle(() => ({ transform: [{ scale: 1 + 0.08 * turn.value }] }));
+  // the gate's height and its title's, as laid out: what is left under them is the keypad's room on a short phone
+  const [gateH, setGateH] = React.useState(0);
+  const [titleH, setTitleH] = React.useState(0);
 
   React.useEffect(() => {
     if (!screenLock) { setDeviceOk(false); return undefined; }
@@ -599,8 +624,11 @@ function LockPage({ scope, alsoOpenedBy, locked, screenLock, title, reason, tint
     const page = fromGate.current && level !== 'none'
       ? <Animated.View entering={pageIn(level)} style={st.page}>{children}</Animated.View>
       : <View style={st.page}>{children}</View>;
-    return locked ? <Shielded>{page}</Shielded> : page;
+    // the page goes as a whole when it locks again or closes: nothing in it is left fading after it
+    return <LayoutAnimationConfig skipExiting>{locked ? <Shielded>{page}</Shielded> : page}</LayoutAnimationConfig>;
   }
+  // the scroll's padding, the lock's well and the title's margins stand above and below the keypad
+  const padRoom = gateH && titleH ? gateH - (12 + 56 + 14 + titleH + 18 + 28) : undefined;
 
   // a PIN given for the Notes tool also opens its locked notes: the same owner has just proved it
   const unlockWithPin = () => {
@@ -612,21 +640,24 @@ function LockPage({ scope, alsoOpenedBy, locked, screenLock, title, reason, tint
     <ScreenBG guard={guard}>
       {header}
       <Animated.View style={[st.page, gateStyle]}>
-        <ScrollView contentContainerStyle={st.lockScroll} bounces={false} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={st.lockScroll} bounces={false} showsVerticalScrollIndicator={false}
+          onLayout={(e) => setGateH(e.nativeEvent.layout.height)}
+        >
           <Animated.View
             style={[
               st.lockWell, lockStyle,
               theme === 'minimal'
                 ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
-                : { backgroundColor: C.inset, ...NEU.insetLow },
+                : { backgroundColor: C.inset, ...neuInset('low') },
             ]}
           >
             <Ionicons name={open ? 'lock-open-outline' : 'lock-closed-outline'} size={24} color={tint} />
           </Animated.View>
-          <Text style={st.lockTitle}>{title}</Text>
+          <Text style={st.lockTitle} onLayout={(e) => setTitleH(e.nativeEvent.layout.height)}>{title}</Text>
           <PinPad
             mode="enter" tint={tint} active={!open} onDone={unlockWithPin}
-            onScreenLock={deviceOk ? tryScreenLock : undefined}
+            onScreenLock={deviceOk ? tryScreenLock : undefined} maxH={padRoom}
           />
         </ScrollView>
       </Animated.View>

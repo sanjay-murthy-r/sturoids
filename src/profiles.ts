@@ -522,10 +522,20 @@ export const takenMessage = (p: ProfileInfo) =>
 
 // ---------------------------------------------------------------- changes
 
-/** Adds a profile and switches to it. 'name' when the name is empty, 'full' at MAX_PROFILES, 'error' when it could not be saved. */
-export async function addProfile(name: string, color: string): Promise<'ok' | 'full' | 'name' | 'error'> {
+/**
+ * Adds a profile and switches to it. 'name' when the name is empty, 'full' at MAX_PROFILES, 'error' when it could not be
+ * saved, 'refused' when the switch could not happen (it says why), and then no profile is left behind.
+ */
+export async function addProfile(name: string, color: string): Promise<'ok' | 'full' | 'name' | 'error' | 'refused'> {
   const clean = cleanName(name);
   if (!clean) return 'name';
+  // a switch that would be refused is asked about before anything is written, so it leaves no empty profile
+  if (useProfiles.getState().switching) return 'refused';
+  const block = switchBlock();
+  if (block) {
+    say(block);
+    return 'refused';
+  }
   await flushRegistry();
   if (!(await ensureRegistry())) return 'error';
   const { list } = useProfiles.getState();
@@ -537,7 +547,12 @@ export async function addProfile(name: string, color: string): Promise<'ok' | 'f
   const next = [...list, entry];
   if (!(await writeRegistry(next))) return 'error';
   useProfiles.setState({ list: next });
-  await switchProfile(entry.id);
+  if ((await switchProfile(entry.id)) === 'refused') {
+    // refused on the way (the changes could not be saved, say): the new profile goes again rather than wait unused
+    const back = useProfiles.getState().list.filter((p) => p.id !== entry.id);
+    if (await writeRegistry(back)) useProfiles.setState({ list: back });
+    return 'refused';
+  }
   return 'ok';
 }
 
@@ -617,6 +632,13 @@ export function closeToFinish() {
   BackHandler.exitApp();
 }
 
+/** Why a switch cannot start just now, as it is said; null when it can. */
+function switchBlock(): string | null {
+  if (storeModule().useStore.getState().deepWork) return 'End the Deep Work session first';
+  if (cloudModule()?.useCloud.getState().status === 'syncing') return 'Wait for the backup to finish';
+  return null;
+}
+
 /**
  * Switches to another profile: everything waiting is saved, every reminder is cancelled (the other profile lays out its
  * own as it starts), the keystore names the new profile, and the app restarts into it. Refused while a Deep Work
@@ -628,12 +650,9 @@ export async function switchProfile(id: ProfileId): Promise<'ok' | 'same' | 'ref
   const to = state.list.find((p) => p.id === id);
   if (!to || state.switching) return 'refused';
   const store = storeModule();
-  if (store.useStore.getState().deepWork) {
-    say('End the Deep Work session first');
-    return 'refused';
-  }
-  if (cloudModule()?.useCloud.getState().status === 'syncing') {
-    say('Wait for the backup to finish');
+  const block = switchBlock();
+  if (block) {
+    say(block);
     return 'refused';
   }
   useProfiles.setState({ switching: { to } });

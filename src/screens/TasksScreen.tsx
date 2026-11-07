@@ -2,26 +2,27 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
+import { useIsFocused } from '@react-navigation/native';
+import { C, F, MIN, S, T, TRACK, neuRaised, oneLine } from '../theme';
 import { useStore, DailyTask, Mission, TodoReminder } from '../store';
 import { yesterdayKey, daysUntil, fmtShortDate, fmtClockTime, toMinutes, indexAfterNeighbours, daysLabel, todoDueOn } from '../utils';
 import {
-  ScreenBG, Card, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, useTheme, useToolHeader, contextLine,
+  ScreenBG, CheckCircle, Sheet, Field, PillButton, EmptyState, Row, IconBtn, Toggle, useTheme, useToolHeader, contextLine,
   ListCard, ListRow, StrikeText, TimeField, ArrivalPulse, DotMenu,
 } from '../components/UI';
 import type { ContextPart } from '../components/UI';
 import { useExport } from '../reports';
 import { SegmentedControl } from '../components/SegmentedControl';
 import {
-  CHANGE, EASE_OUT, Enter, Bouncy, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useBuilt, useEntrance, useFocusKey,
+  CHANGE, EASE_OUT, Enter, Bouncy, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useAppActive, useBuilt, useEntrance, useFocusKey,
 } from '../components/Motion';
 import { useSwapIn } from '../components/Swap';
 import { tap } from '../haptics';
 import { rightClick } from '../web/rightClick';
 import { rescheduleAllReminders, turnOnReminders } from '../notifications';
-import { toast } from '../components/Toast';
+import { setToastLift, toast } from '../components/Toast';
 import { useNow, useToday } from '../hooks/useNow';
 import { useKeyboardOpen } from '../hooks/useKeyboard';
 import { QuickTaskSheet, shortClock } from '../components/QuickTaskSheet';
@@ -57,6 +58,11 @@ const minutesToDue = (deadline: string, now: Date, time?: string) => {
   return Math.round((end.getTime() - now.getTime()) / 60000);
 };
 
+/** the add button's size */
+const FAB_SIZE = 58;
+/** the done tasks the fold shows at first: a term's worth would mount thousands of views on one tap */
+const DONE_FIRST = 30;
+
 /** Something due within the hour: a ToDo or a long-term task, with the time it is due by ('' for the end of its day). */
 interface DueSoon { title: string; time: string }
 
@@ -69,9 +75,9 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const [tab, setTab] = useState<Tab>('daily');
 
   // Arrivals. Today's Coming up row opens the long-term list (`list`); Sift opens a ToDo or a task (`item`: the list it
-  // is on, scrolled to it, with one pulse) or the reminders sheet (`sheet`). Each param is cleared once followed, so the
-  // same link works again.
-  const params = useLocalSearchParams<{ list?: string; item?: string; sheet?: string }>();
+  // is on, scrolled to it, with one pulse) or the reminders sheet (`sheet`). A step's link also names the step (`step`),
+  // so its task opens with the steps folded out. Each param is cleared once followed, so the same link works again.
+  const params = useLocalSearchParams<{ list?: string; item?: string; step?: string; sheet?: string }>();
   const [arrive, setArrive] = useState<string | null>(null);
   const [remindSheet, setRemindSheet] = useState(false);
   useFocusEffect(useCallback(() => {
@@ -82,11 +88,14 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
       if (s.missions.some((m) => m.id === params.item)) setTab('missions');
       else if (s.dailyTasks.some((t) => t.id === params.item)) setTab('daily');
       setArrive(params.item);
+      // the step searched for is shown, not left folded away under its task
+      if (params.step && s.missions.some((m) => m.id === params.item)) setExpanded(params.item);
       clear.item = undefined;
     }
+    if (params.step) clear.step = undefined;
     if (params.sheet === 'reminders') { setRemindSheet(true); clear.sheet = undefined; }
     if (Object.keys(clear).length) router.setParams(clear);
-  }, [params.list, params.item, params.sheet]));
+  }, [params.list, params.item, params.step, params.sheet]));
   // the pulse is given once; after it the same item can be arrived at again
   React.useEffect(() => {
     if (!arrive) return undefined;
@@ -184,7 +193,11 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     return x === y ? 0 : x < y ? -1 : 1;
   };
   const openMissions = useMemo(() => missions.filter((m) => !m.done).sort(byDeadline), [missions]);
-  const doneMissions = useMemo(() => missions.filter((m) => m.done).sort(byDeadline), [missions]);
+  // the done ones newest first, so a task just ticked (perhaps by mistake) is at the top of the fold, not at its far end
+  const doneMissions = useMemo(
+    () => missions.filter((m) => m.done).sort((a, b) => (b.doneOn || '').localeCompare(a.doneOn || '') || byDeadline(a, b)),
+    [missions],
+  );
   // a task's steps are found by tapping it: said once, under the list, until a task has some
   const anySteps = useMemo(() => missions.some((m) => m.subtasks.length > 0), [missions]);
 
@@ -209,8 +222,11 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const toggleOpen = useCallback((id: string) => setExpanded((x) => (x === id ? null : id)), []);
   // A task's pill moves its deadline in one tap more: tomorrow, in three days or in a week (or any day, in the task's
   // own sheet). The toast's Undo puts the deadline back.
+  // What the menu shows is kept apart from whether it is open, so its title and rows stay while it slides away. The
+  // sheet gives the one tap as it opens.
   const [moving, setMoving] = useState<Mission | null>(null);
-  const onMove = useCallback((m: Mission) => { tap(); setMoving(m); }, []);
+  const [moveShown, setMoveShown] = useState<Mission | null>(null);
+  const onMove = useCallback((m: Mission) => { setMoving(m); setMoveShown(m); }, []);
   const moveTo = (m: Mission, dateKey: string) => {
     const was = useStore.getState().missions.find((x) => x.id === m.id);
     if (!was) return;
@@ -221,13 +237,15 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
       onPress: () => { if (useStore.getState().missions.some((x) => x.id === m.id)) updateMission(m.id, { deadline: before }); },
     });
   };
-  const moveItems = moving ? [
-    ...deadlineMoves(today, moving.deadline).map((mv) => ({
+  // 'Another day' opens the task's sheet on its calendar, with no keyboard over it
+  const [pickDay, setPickDay] = useState(false);
+  const moveItems = moveShown ? [
+    ...deadlineMoves(today, moveShown.deadline).map((mv) => ({
       label: mv.label + ', ' + new Date(mv.dateKey + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }),
       icon: 'calendar-outline',
-      onPress: () => moveTo(moving, mv.dateKey),
+      onPress: () => moveTo(moveShown, mv.dateKey),
     })),
-    { label: 'Another day', icon: 'create-outline', onPress: () => editMission(moving) },
+    { label: 'Another day', icon: 'create-outline', onPress: () => { setPickDay(true); editMission(moveShown); } },
   ] : [];
   const clearDone = () => {
     const done = useStore.getState().missions.filter((m) => m.done);
@@ -252,17 +270,26 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // scroll, and the bar lies over the scroll's top, so a field tapped half under it stays there. It is moved to just
   // below the bar. (With the keyboard up, the window shrinks from below and the field is kept in view.)
   const scrollRef = React.useRef<Animated.ScrollView>(null);
-  const reveal = React.useRef<{ tab: boolean; barH: number; still: boolean; y: { value: number } | null }>({
-    tab: false, barH: 0, still: false, y: null,
+  const reveal = React.useRef<{
+    tab: boolean; barH: number; padTop: number; still: boolean; y: { value: number } | null; top: React.RefObject<View | null> | null;
+  }>({
+    tab: false, barH: 0, padTop: 0, still: false, y: null, top: null,
   });
   const revealStep = useCallback((field: View | null) => {
     const r = reveal.current;
-    if (!r.tab || !field || !r.y) return;
-    const y0 = r.y.value;
-    field.measureInWindow((_x, y) => {
-      const clear = r.barH + 8;
-      if (y >= clear) return;
-      scrollRef.current?.scrollTo({ y: Math.max(0, y0 - (clear - y)), animated: !r.still });
+    const top = r.top?.current;
+    if (!r.tab || !field || !r.y || !top) return;
+    // Android's window y leaves out the translucent status bar, which the bar's height takes in, so the field is
+    // placed against the top of the scroll's content, measured the same way: the difference holds on every platform
+    top.measureInWindow((_tx, ty) => {
+      field.measureInWindow((_x, y) => {
+        const y0 = r.y ? r.y.value : 0;
+        const clear = r.barH + 8;
+        // the field's top in the scroll as it is shown
+        const shown = r.padTop + (y - ty) - y0;
+        if (shown >= clear) return;
+        scrollRef.current?.scrollTo({ y: Math.max(0, y0 - (clear - shown)), animated: !r.still });
+      });
     });
   }, []);
 
@@ -352,12 +379,12 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
       onPress: () => setRemindSheet(true),
     }, exp.action],
   });
-  reveal.current = { tab: tabMode, barH: header.barH, still: level === 'none', y: header.scrollY };
   // a row Sift opened is brought into view
   const { topRef, bring } = useBringIntoView({
     scrollTo: (y, animated) => scrollRef.current?.scrollTo({ y, animated }),
     scrollY: header.scrollY, padTop: header.padTop, barH: header.barH, still: level === 'none',
   });
+  reveal.current = { tab: tabMode, barH: header.barH, padTop: header.padTop, still: level === 'none', y: header.scrollY, top: topRef };
 
   // the add button arrives with the screen, and sinks out of the way while the keyboard is up: it would sit over the
   // end of the step being typed, where its own add button is
@@ -371,7 +398,19 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const sinkStyle = useAnimatedStyle(() => ({ opacity: 1 - sink.value, transform: [{ translateY: drop * sink.value }] }));
 
   const arrowsLift = useArrowsLift();
-  const empty = tab === 'daily' ? dailyTasks.length === 0 : missions.length === 0;
+  // Cheerful's ring on the add button loops only while it can be seen: a tab stays built behind the others
+  const focused = useIsFocused();
+  const inFront = useAppActive();
+  const loopsOn = focused && inFront;
+  // In tab mode the add button stands on the line where toasts land (just above the bar, or the window's foot beside
+  // the rail), so while this screen is in view its toasts rise clear of the button instead of covering it
+  const toastLift = tabMode ? FAB_SIZE + 10 + arrowsLift : 0;
+  React.useEffect(() => {
+    if (!focused) return undefined;
+    setToastLift(toastLift);
+    return () => setToastLift(0);
+  }, [focused, toastLift]);
+  const empty =tab === 'daily' ? dailyTasks.length === 0 : missions.length === 0;
   // switching lists, or a list filling or emptying, brings the new body into the old one's place: the other list comes
   // in from the side its segment is on, and a list that fills or empties rises where the other stood
   const bodyKey = tab + (empty ? ':empty' : ':list');
@@ -380,26 +419,39 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const dailyBody = (
               <>
                 {leftovers.length > 0 && (
-                  // the card fades away once the last leftover is decided, and the list below glides up
-                  <Animated.View exiting={rowOut(level)}>
-                    <Card>
+                  // the card fades away once the last leftover is decided, and the list below glides up. It is drawn here
+                  // with a card's surface, not as a Card, so its own frame glides shorter with its rows (as a ListCard's
+                  // does) instead of snapping and leaving a fading row below its edge
+                  <Animated.View
+                    exiting={rowOut(level)} layout={glide(level)}
+                    style={[
+                      st.triageCard,
+                      theme === 'minimal'
+                        ? { backgroundColor: MIN.card, borderWidth: 1, borderColor: MIN.border }
+                        : { backgroundColor: C.card, ...neuRaised('mid') },
+                    ]}
+                  >
                       {/* a ToDo can be left from several days back, not only from yesterday */}
                       <Text style={st.triageTitle}>Still open from before</Text>
-                      {leftovers.map((t) => (
-                        <Animated.View key={t.id} exiting={rowOut(level)} layout={glide(level)}>
-                          <Row style={{ paddingVertical: 6 }}>
-                            <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{t.title}</Text>
-                            <PillButton small label="Keep" color={C.green} onPress={() => keepOne(t.id)} style={{ marginRight: 6 }} />
-                            <PillButton small label="Drop" color={C.danger} outline onPress={() => dropOne(t.id)} />
-                          </Row>
-                        </Animated.View>
-                      ))}
+                      {/* a leftover decided on its own fades; the card going takes its rows with it in its own fade */}
+                      <LayoutAnimationConfig skipExiting>
+                        <View collapsable={false}>
+                          {leftovers.map((t) => (
+                            <Animated.View key={t.id} exiting={rowOut(level)} layout={glide(level)}>
+                              <Row style={{ paddingVertical: 6 }}>
+                                <Text style={[T.body, { flex: 1 }]} numberOfLines={1}>{t.title}</Text>
+                                <PillButton small label="Keep" color={C.green} onPress={() => keepOne(t.id)} style={{ marginRight: 6 }} />
+                                <PillButton small label="Drop" color={C.danger} outline onPress={() => dropOne(t.id)} />
+                              </Row>
+                            </Animated.View>
+                          ))}
+                        </View>
+                      </LayoutAnimationConfig>
                       <Animated.View layout={glide(level)}>
                         <Pressable onPress={() => setLastTriage(today)} hitSlop={14} accessibilityRole="button">
                           <Text style={[T.caption, { textAlign: 'center', marginTop: 8 }]}>Keep all & dismiss</Text>
                         </Pressable>
                       </Animated.View>
-                    </Card>
                   </Animated.View>
                 )}
                 {dailyTasks.length === 0 ? (
@@ -408,16 +460,19 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                     body="A ToDo stays until it is ticked. Switch on Every day for one that comes back each morning."
                   />
                 ) : (
-                  <Animated.View layout={glide(level)}>
-                    <ListCard>
-                      {todoRows.map(({ task: t, done, due }) => (
-                        <DailyRow
-                          key={t.id} task={t} done={done} due={due} hour24={hour24} arrive={arrive === t.id}
-                          onToggle={toggleDaily} onEdit={editDaily} onDelete={deleteDaily} onArrive={bring}
-                        />
-                      ))}
-                    </ListCard>
-                  </Animated.View>
+                  // the last ToDo going swaps the card for the empty note: the card goes with its rows, not after them
+                  <LayoutAnimationConfig skipExiting>
+                    <Animated.View layout={glide(level)}>
+                      <ListCard>
+                        {todoRows.map(({ task: t, done, due }) => (
+                          <DailyRow
+                            key={t.id} task={t} done={done} due={due} hour24={hour24} arrive={arrive === t.id}
+                            onToggle={toggleDaily} onEdit={editDaily} onDelete={deleteDaily} onArrive={bring}
+                          />
+                        ))}
+                      </ListCard>
+                    </Animated.View>
+                  </LayoutAnimationConfig>
                 )}
               </>
   );
@@ -425,12 +480,16 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
     missions.length === 0 ? (
               <EmptyState icon="flag-outline" title="Deadline-bound work lives here" body="Mock tests, revision targets, projects." />
             ) : (
-              <MissionList
-                open={openMissions} done={doneMissions} expanded={expanded} today={today} hint={!anySteps} hour24={hour24}
-                arrive={arrive} onArrive={bring}
-                onToggle={toggleMission} onToggleOpen={toggleOpen} onEdit={editMission} onDelete={deleteMission} onMove={onMove}
-                onStepFocus={revealStep} onClearDone={clearDone}
-              />
+              // the last task going swaps the list for the empty note: its groups go at once rather than fading in a
+              // list that is already leaving
+              <LayoutAnimationConfig skipExiting>
+                <MissionList
+                  open={openMissions} done={doneMissions} expanded={expanded} today={today} hint={!anySteps} hour24={hour24}
+                  arrive={arrive} onArrive={bring}
+                  onToggle={toggleMission} onToggleOpen={toggleOpen} onEdit={editMission} onDelete={deleteMission} onMove={onMove}
+                  onStepFocus={revealStep} onClearDone={clearDone}
+                />
+              </LayoutAnimationConfig>
     )
   );
 
@@ -451,16 +510,19 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         <Enter index={0}>
           {header.hero}
           {twoCol ? (
-            <View style={st.twoCol}>
-              <View style={st.col}>
-                <Text style={st.colHead}>ToDos</Text>
-                {dailyBody}
+            // a window turned past the width swaps both columns out whole, so their rows' exits are skipped
+            <LayoutAnimationConfig skipExiting>
+              <View style={st.twoCol} collapsable={false}>
+                <View style={st.col}>
+                  <Text style={st.colHead}>ToDos</Text>
+                  {dailyBody}
+                </View>
+                <View style={st.col}>
+                  <Text style={st.colHead}>Long-term</Text>
+                  {missionBody}
+                </View>
               </View>
-              <View style={st.col}>
-                <Text style={st.colHead}>Long-term</Text>
-                {missionBody}
-              </View>
-            </View>
+            </LayoutAnimationConfig>
           ) : (
             <>
               <SegmentedControl
@@ -470,9 +532,13 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 stretch
                 style={{ marginBottom: 16 }}
               />
-              <Animated.View key={bodyKey} entering={bodyIn}>
-                {tab === 'daily' ? dailyBody : missionBody}
-              </Animated.View>
+              {/* keyed on the config, not the view: the old list goes at once, card and all, instead of its card standing
+                  under the incoming one while only its rows fade */}
+              <LayoutAnimationConfig key={bodyKey} skipExiting>
+                <Animated.View entering={bodyIn}>
+                  {tab === 'daily' ? dailyBody : missionBody}
+                </Animated.View>
+              </LayoutAnimationConfig>
             </>
           )}
         </Enter>
@@ -483,8 +549,9 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         style={[st.fabWrap, { bottom: (tabMode ? 24 : insets.bottom + 20) + arrowsLift }, fabIn]}
       >
         <Animated.View style={sinkStyle}>
+          {/* the sheet gives the one tap as it opens */}
           <Bouncy
-            onPress={() => { tap(); setEditTask(null); setAddSheet(true); }}
+            onPress={() => { setEditTask(null); setAddSheet(true); }}
             scaleTo={0.9}
             radius={999}
             accessibilityLabel={twoCol ? 'Add a task' : tab === 'daily' ? 'Add a ToDo' : 'Add a task'}
@@ -496,8 +563,9 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
                 : { backgroundColor: C.card, ...neuRaised('high') },
             ]}
           >
-            {/* Cheerful: a soft ring swells out of the button now and then */}
-            <Halo radius={999} />
+            {/* Cheerful: a soft ring swells out of the button now and then, only while this screen is in view and the
+                app in front, so it never loops on a tab left behind */}
+            {loopsOn ? <Halo radius={999} /> : null}
             <Ionicons name="add" size={30} color={C.accent} />
           </Bouncy>
         </Animated.View>
@@ -505,15 +573,16 @@ export function TasksScreen({ mode }: { mode: 'tab' | 'stack' }) {
 
       <QuickTaskSheet
         visible={addSheet}
-        onClose={() => setAddSheet(false)}
+        onClose={() => { setAddSheet(false); setPickDay(false); }}
         initialKind={daysFirst ? 'daily' : 'mission'}
         editing={editTask}
+        openCalendar={pickDay}
       />
 
       <RemindersSheet visible={remindSheet} onClose={() => setRemindSheet(false)} />
       <DotMenu
         visible={!!moving} onClose={() => setMoving(null)} items={moveItems}
-        title={moving ? 'Move ' + moving.title : undefined}
+        title={moveShown ? 'Move ' + moveShown.title : undefined}
       />
       {exp.sheet}
     </ScreenBG>
@@ -599,7 +668,18 @@ function MissionList({
   const level = useAnimLevel();
   const built = useBuilt();
   const [showDone, setShowDone] = useState(false);
-  React.useEffect(() => { if (arrive && done.some((m) => m.id === arrive)) setShowDone(true); }, [arrive]);
+  // the fold shows the newest done tasks first and the rest on a tap, so opening it never mounts a term's worth at once
+  const [allDone, setAllDone] = useState(false);
+  React.useEffect(() => { if (!showDone) setAllDone(false); }, [showDone]);
+  React.useEffect(() => {
+    if (!arrive) return;
+    const at = done.findIndex((m) => m.id === arrive);
+    if (at < 0) return;
+    setShowDone(true);
+    if (at >= DONE_FIRST) setAllDone(true);
+  }, [arrive]);
+  const doneShown = allDone ? done : done.slice(0, DONE_FIRST);
+  const doneMore = done.length - doneShown.length;
   const turn = useSharedValue(0);
   React.useEffect(() => {
     turn.value = level === 'none' ? (showDone ? 1 : 0) : withTiming(showDone ? 1 : 0, CHANGE);
@@ -612,8 +692,10 @@ function MissionList({
       onToggle={onToggle} onToggleOpen={onToggleOpen} onEdit={onEdit} onDelete={onDelete} onMove={onMove} onStepFocus={onStepFocus}
     />
   ));
+  // one host view, kept off view flattening, holds both groups: a LayoutAnimationConfig around the list then reaches
+  // all of it, not only its first group
   return (
-    <>
+    <View collapsable={false}>
       {open.length > 0 && (
         <Animated.View entering={enter} exiting={rowOut(level)} layout={glide(level)}>
           <ListCard>{rows(open)}</ListCard>
@@ -633,7 +715,15 @@ function MissionList({
           </Pressable>
           {showDone && (
             <Animated.View entering={rowIn(level)} exiting={rowOut(level)}>
-              <ListCard>{rows(done)}</ListCard>
+              <ListCard>{rows(doneShown)}</ListCard>
+              {doneMore > 0 ? (
+                <Pressable
+                  onPress={() => setAllDone(true)} hitSlop={12} style={st.clearDone} accessibilityRole="button"
+                  accessibilityLabel={'Show ' + doneMore + ' more done tasks'}
+                >
+                  <Text style={[st.linkText, { color: C.textDim }]}>Show {doneMore} more</Text>
+                </Pressable>
+              ) : null}
               <Pressable onPress={onClearDone} hitSlop={12} style={st.clearDone} accessibilityRole="button">
                 <Text style={[st.linkText, { color: C.accent }]}>Clear done</Text>
               </Pressable>
@@ -641,7 +731,7 @@ function MissionList({
           )}
         </Animated.View>
       )}
-    </>
+    </View>
   );
 }
 
@@ -692,6 +782,24 @@ const MissionRow = React.memo(function MissionRow({ m, open, hour24, arrive, onA
     });
   }, [removeSubtask, restoreSubtask]);
 
+  // Ticking an open task moves it into the folded Done list, which would take the row away before its circle could
+  // fill: the tick lands here first (filled, struck through), and the task moves a moment later. With motion off it
+  // moves at once. Unticking a done task needs no wait.
+  const [ticking, setTicking] = useState(false);
+  const tickTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  React.useEffect(() => () => { if (tickTimer.current) clearTimeout(tickTimer.current); }, []);
+  const toggle = () => {
+    if (m.done || level === 'none') { onToggle(m.id); return; }
+    if (tickTimer.current) return;
+    setTicking(true);
+    tickTimer.current = setTimeout(() => {
+      tickTimer.current = null;
+      setTicking(false);
+      onToggle(m.id);
+    }, 450);
+  };
+  const shownDone = m.done || ticking;
+
   const d = daysUntil(m.deadline);
   // the line below gives the date, so an overdue task's pill says only that it is
   const pillText = m.done ? 'DONE' : d < 0 ? 'OVERDUE' : d === 0 ? 'TODAY' : 'D-' + d;
@@ -708,14 +816,14 @@ const MissionRow = React.memo(function MissionRow({ m, open, hour24, arrive, onA
   return (
     <View style={st.missionRow} ref={arriveRef} collapsable={false}>
       <Row>
-        <CheckCircle done={m.done} color={C.amber} onPress={() => onToggle(m.id)} label={m.title} />
+        <CheckCircle done={shownDone} color={C.amber} onPress={toggle} label={m.title} />
         {/* a tap folds the steps out; a long press (a right click on the PC) opens the task for editing, as a ToDo's does */}
         <Pressable
           style={st.taskWrap} onPress={() => onToggleOpen(m.id)} onLongPress={() => onEdit(m)} {...rightClick(() => onEdit(m))}
           accessibilityRole="button" accessibilityState={{ expanded: open }} accessibilityLabel={'Steps for ' + m.title + ', ' + line}
           accessibilityHint="Double tap and hold to edit"
         >
-          <StrikeText done={m.done} style={st.taskText}>{m.title}</StrikeText>
+          <StrikeText done={shownDone} style={st.taskText}>{m.title}</StrikeText>
           <Text style={[T.caption, { marginTop: 2 }]}>{line}</Text>
         </Pressable>
         {/* an open task's pill moves its deadline; a done one's only says so */}
@@ -770,8 +878,11 @@ function Steps({ m, onToggle, onRemove }: {
 }) {
   const level = useAnimLevel();
   const built = useBuilt();
+  // the steps folding away go with their panel, which fades as one: their own exits are skipped then. One host view,
+  // kept off view flattening, holds them so the config reaches every step
   return (
-    <>
+    <LayoutAnimationConfig skipExiting>
+    <View collapsable={false}>
       {m.subtasks.map((sub) => (
         <Animated.View key={sub.id} entering={built.current ? rowIn(level) : undefined} exiting={rowOut(level)} layout={glide(level)}>
           <Row style={{ paddingVertical: 5 }}>
@@ -781,7 +892,8 @@ function Steps({ m, onToggle, onRemove }: {
           </Row>
         </Animated.View>
       ))}
-    </>
+    </View>
+    </LayoutAnimationConfig>
   );
 }
 
@@ -911,6 +1023,8 @@ function CheckInRows({ list, hour24, onRemove }: { list: TodoReminder[]; hour24:
 }
 
 const st = StyleSheet.create({
+  // a Card's frame and padding (its surface is set at render time, for the look in use)
+  triageCard: { borderRadius: S.radius, marginBottom: S.gap, padding: S.cardPad },
   triageTitle: { color: C.amber, fontFamily: F.smSemi, fontSize: 13, marginBottom: 10, letterSpacing: TRACK.small },
   taskWrap: { flex: 1, marginLeft: 12 },
   taskText: { color: C.text, fontFamily: F.reg, fontSize: 15, lineHeight: 21, letterSpacing: TRACK.body },
@@ -923,7 +1037,8 @@ const st = StyleSheet.create({
   stepWrap: { flex: 1, marginLeft: 10 },
   stepText: { color: C.textDim, fontFamily: F.reg, fontSize: 14, letterSpacing: TRACK.small, lineHeight: 20 },
   pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginHorizontal: 6 },
-  pillText: { fontSize: 11, fontFamily: F.smSemi, letterSpacing: TRACK.caps },
+  // one line of caps in a padded pill: without Android's font padding it centres as the chips around it do
+  pillText: { ...oneLine(11), fontFamily: F.smSemi, letterSpacing: TRACK.caps },
   // under a list card (which keeps S.gap below it), nearer the list it speaks of
   listHint: { ...T.caption, marginTop: -4, marginBottom: 14, paddingHorizontal: 4 },
   doneRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, paddingVertical: 10, paddingHorizontal: 4 },
@@ -936,7 +1051,7 @@ const st = StyleSheet.create({
   twoCol: { flexDirection: 'row', alignItems: 'flex-start', gap: 20 },
   col: { flex: 1, minWidth: 0 },
   colHead: { ...T.kicker, marginBottom: 12, marginLeft: 4 },
-  fab: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center' },
+  fab: { width: FAB_SIZE, height: FAB_SIZE, borderRadius: FAB_SIZE / 2, alignItems: 'center', justifyContent: 'center' },
   sheetSection: {
     color: C.textFaint, fontSize: 11, fontFamily: F.smSemi,
     textTransform: 'uppercase', letterSpacing: TRACK.caps, marginTop: 18, marginBottom: 8,

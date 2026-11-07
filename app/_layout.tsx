@@ -31,7 +31,7 @@ import {
 } from '../src/store';
 import type { LoadNotice } from '../src/store';
 import { useHydrated } from '../src/hooks/useHydrated';
-import { markAppDrawn, noteAppFonts, setIntroPhase } from '../src/intro';
+import { afterEntrance, markAppDrawn, noteAppFonts, setIntroPhase } from '../src/intro';
 import { useDesktopKeys } from '../src/web/keys';
 import { AlertHost } from '../src/web/alert';
 import { ShortcutsHost } from '../src/web/shortcutsSheet';
@@ -52,6 +52,7 @@ import { ShareIntake } from '../src/shareIntake';
 import { noteTransitionStart, pageTransition, useAnimLevel, useOsReduceMotion } from '../src/components/Motion';
 import { startAutoUpdate } from '../src/autoUpdate';
 import { MascotHost } from '../src/components/Mascot';
+import { WindowTopProbe } from '../src/mascot/room';
 
 /** Starts the quiet look for updates once the app is shown. */
 function AutoUpdate() {
@@ -224,15 +225,25 @@ export default function RootLayout() {
   const profilesLoaded = useProfiles((p) => p.loaded);
   const [profilesLate, setProfilesLate] = useState(false);
   useEffect(() => {
-    if (!hydrated) return undefined;
+    if (!hydrated || profilesLoaded) return undefined;
     loadProfiles().catch(() => {});
+    // only while the registry has not answered: once it has, no late re-render of the whole root
     const t = setTimeout(() => setProfilesLate(true), PROFILES_WAIT_MS);
     return () => clearTimeout(t);
-  }, [hydrated]);
+  }, [hydrated, profilesLoaded]);
   // With motion off there is no intro to paint first: the app is built as soon as the data and its fonts are in, and the
   // splash stays up until the app's own first frame, so it never fades onto empty material. A launch a switch started
   // skips the intro the same way, straight to the app.
   const instant = level === 'none' || arrived === true;
+  // made once for each look and motion level: a new object on every root render (fonts, the intro's end) made the
+  // navigator re-render every screen
+  const screenOptions = React.useMemo(() => ({
+    // headers are app-owned (NeuHeader): status-bar spacing is padded explicitly inside each screen
+    headerShown: false,
+    contentStyle: { backgroundColor: bg },
+    // a page dissolves in while its own content rises; with motion off it simply appears (see pageTransition)
+    ...pageTransition(level),
+  }), [bg, level]);
   const showApp = (revealed || instant) && appFonts;
 
   // arriving from a switch: no intro, the app is built at once beneath the arrival moment (the profile's photo and
@@ -259,16 +270,43 @@ export default function RootLayout() {
     requestAnimationFrame(() => requestAnimationFrame(() => markAppDrawn()));
   }, []);
 
-  // notifications and reminder rescheduling never compete with the intro
+  // While the pen writes (the screen is drawn on the UI thread; the JS thread is free), the heavy modules are loaded
+  // one at a time, a beat apart, so the app's first uses later (Sift, the calculator's maths, the cloud) never wait for
+  // them. JS only: nothing is drawn or mounted here.
   useEffect(() => {
-    if (!revealed) return;
-    const task = InteractionManager.runAfterInteractions(() => {
+    if (!hydrated) return undefined;
+    const warm: (() => unknown)[] = [
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      () => require('../src/search/engine'),
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      () => require('../src/calcEngine'),
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      () => require('../src/notifications'),
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      () => require('../src/cloud'),
+    ];
+    let i = 0;
+    let t: ReturnType<typeof setTimeout>;
+    const next = () => {
+      const step = warm[i++];
+      if (!step) return;
+      try { step(); } catch { /* loaded when first used instead */ }
+      t = setTimeout(next, 160);
+    };
+    t = setTimeout(next, 500);
+    return () => clearTimeout(t);
+  }, [hydrated]);
+
+  // notifications (reminders laid out again) and the cloud (which may bring in a newer copy and replace the data) start
+  // only once the intro is gone and the app's entrance has played: nothing they write ever lands on the intro or on it
+  useEffect(() => {
+    if (!revealed) return undefined;
+    return afterEntrance(() => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       require('../src/notifications').initNotifications().catch(() => {});
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       require('../src/cloud').initCloud().catch(() => {});
     });
-    return () => task.cancel();
   }, [revealed]);
 
   // a load that failed or finished late is never silent: once the intro is gone, say what happened and what is
@@ -318,22 +356,13 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: bg }} onLayout={instant ? undefined : hideSplash}>
       <StatusBar style="light" />
+      <WindowTopProbe />
       <ReduceMotionSync />
       {showApp && (
         <AppFrame>
         <View style={{ flex: 1 }} onLayout={onAppLayout}>
           <ErrorBoundary>
-          <Stack
-            screenListeners={noteTransitionStart}
-            screenOptions={{
-              // headers are app-owned (NeuHeader) — status-bar spacing is padded
-              // explicitly inside each screen, consistent everywhere
-              headerShown: false,
-              contentStyle: { backgroundColor: bg },
-              // a page dissolves in while its own content rises; with motion off it simply appears (see pageTransition)
-              ...pageTransition(level),
-            }}
-          />
+          <Stack screenListeners={noteTransitionStart} screenOptions={screenOptions} />
           </ErrorBoundary>
           {/* a wide screen with its tabs in the side rail: back and forward at the bottom right */}
           <NavArrows />

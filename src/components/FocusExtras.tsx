@@ -6,7 +6,7 @@
 
 import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import Animated from 'react-native-reanimated';
+import Animated, { LayoutAnimationConfig } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { C, F, MIN, T, TRACK } from '../theme';
 import { FocusSession } from '../store';
@@ -19,10 +19,14 @@ import { fmtMins as fmt } from '../deepWork';
 import { cheer } from '../cheerSound';
 import { Flicker } from './Cheer';
 
-export function TodayCard({ sessions, today, liveMin, goalMin, next }: {
+export function TodayCard({ sessions, today, liveMin, running, paused, goalMin, next }: {
   sessions: FocusSession[]; today: string;
   /** the session running, in whole minutes, counted in */
   liveMin: number;
+  /** a session is under way and its clock moving: "one running" even in its first minute, while liveMin is still 0 */
+  running: boolean;
+  /** a session is under way with its clock paused: "one paused" */
+  paused: boolean;
   goalMin: number;
   /** the Planner's next block today: "Chemistry at 4:30 PM" */
   next?: string;
@@ -64,7 +68,7 @@ export function TodayCard({ sessions, today, liveMin, goalMin, next }: {
         </View>
       ) : null}
       <Text style={st.line}>
-        {[todays.length ? todays.length + (todays.length === 1 ? ' session' : ' sessions') : '', liveMin ? 'one running' : '', next ? 'next, ' + next : '']
+        {[todays.length ? todays.length + (todays.length === 1 ? ' session' : ' sessions') : '', running ? 'one running' : paused ? 'one paused' : '', next ? 'next, ' + next : '']
           .filter(Boolean).join(' · ') || 'Your first session today counts from Start.'}
       </Text>
       {subjects.length > 1 ? (
@@ -104,31 +108,36 @@ export function ParkedCard({ parked, onPark, onUnpark }: { parked: string[]; onP
     setText('');
   };
   return (
-    <Card pad={16}>
-      <Text style={T.kicker}>Park a thought</Text>
-      <Text style={st.lede}>{lede}</Text>
-      <View style={[st.field, theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset }]}>
-        <TextInput
-          value={text} onChangeText={setText} placeholder="Email the teacher, look up…" placeholderTextColor={C.textFaint}
-          returnKeyType="done" blurOnSubmit={false} onSubmitEditing={park} maxLength={140}
-          selectionColor={C.accent} cursorColor={C.accent} style={st.input} accessibilityLabel="Park a thought"
-        />
-        {text.trim() ? (
-          <Pressable onPress={park} hitSlop={8} accessibilityRole="button" accessibilityLabel="Park it">
-            <Text style={[st.parkKey, { color: C.accent }]}>Park</Text>
-          </Pressable>
-        ) : null}
-      </View>
-      {parked.map((p, i) => (
-        <Animated.View key={p + i} entering={rowIn(level)} exiting={rowOut(level)} layout={glide(level)} style={st.item}>
-          <View style={[st.dot, { backgroundColor: C.accent }]} />
-          <Text style={st.itemText} numberOfLines={2}>{p}</Text>
-          <Pressable onPress={() => { tick(); onUnpark(i); }} hitSlop={10} accessibilityRole="button" accessibilityLabel={'Remove ' + p}>
-            <Ionicons name="close" size={15} color={C.textFaint} />
-          </Pressable>
-        </Animated.View>
-      ))}
-    </Card>
+    // a thought removed folds away on its own; the card leaving as a whole (the session ends) takes its rows at once,
+    // or Fabric would keep the whole card on screen while they fade
+    <LayoutAnimationConfig skipExiting>
+      <Card pad={16}>
+        <Text style={T.kicker}>Park a thought</Text>
+        <Text style={st.lede}>{lede}</Text>
+        <View style={[st.field, theme === 'minimal' ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border } : { backgroundColor: C.inset }]}>
+          <TextInput
+            value={text} onChangeText={setText} placeholder="Email the teacher, look up…" placeholderTextColor={C.textFaint}
+            returnKeyType="done" blurOnSubmit={false} onSubmitEditing={park} maxLength={140}
+            selectionColor={C.accent} cursorColor={C.accent} style={st.input} accessibilityLabel="Park a thought"
+          />
+          {text.trim() ? (
+            <Pressable onPress={park} hitSlop={8} accessibilityRole="button" accessibilityLabel="Park it">
+              <Text style={[st.parkKey, { color: C.accent }]}>Park</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        {/* keyed by the thought and which time it is parked, so removing one above leaves the rows below where they are */}
+        {parked.map((p, i) => (
+          <Animated.View key={p + '#' + parked.slice(0, i).filter((x) => x === p).length} entering={rowIn(level)} exiting={rowOut(level)} layout={glide(level)} style={st.item}>
+            <View style={[st.dot, { backgroundColor: C.accent }]} />
+            <Text style={st.itemText} numberOfLines={2}>{p}</Text>
+            <Pressable onPress={() => { tick(); onUnpark(i); }} hitSlop={14} accessibilityRole="button" accessibilityLabel={'Remove ' + p}>
+              <Ionicons name="close" size={15} color={C.textFaint} />
+            </Pressable>
+          </Animated.View>
+        ))}
+      </Card>
+    </LayoutAnimationConfig>
   );
 }
 

@@ -12,7 +12,7 @@ import { NavigationContext, NavigationRouteContext, useIsFocused } from '@react-
 import { create } from 'zustand';
 import { useStore } from '../store';
 import { useIntro } from '../intro';
-import { AnimLevel, C, neuPressedInner } from '../theme';
+import { AnimLevel, C, neuKey, neuPressedInner } from '../theme';
 import { rightClick } from '../web/rightClick';
 import { justGestured } from '../dragGuard';
 
@@ -103,6 +103,8 @@ const ENTER = { duration: 540, easing: Easing.out(Easing.cubic) };
 const ENTER_CHEER = { damping: 17, stiffness: 150, mass: 0.9 };
 /** Cheerful's release: a touch more give than Elite's, never a wobble */
 const RISE_OUT_CHEER = { damping: 13, stiffness: 260, mass: 0.75 };
+/** Elite's release: a quick, exact ease back up, never past its place */
+const RISE_EXACT = { duration: 200, easing: Easing.out(Easing.cubic) };
 /** Whether the app is in its Cheerful makeover (read here, not from Cheer.tsx, which builds on this file) */
 const useCheer = () => useStore((s) => s.settings.mood === 'cheerful');
 
@@ -543,7 +545,7 @@ export type PressRole = AccessibilityRole;
  * faint light on it, so what a click would press is plain before the click.
  */
 export function Bouncy({
-  onPress, onLongPress, children, style, disabled, scaleTo = 0.975, radius = 22, hitSlop, sink = true,
+  onPress, onLongPress, children, style, disabled, scaleTo = 0.975, radius = 22, hitSlop, sink = true, raised,
   accessibilityLabel, accessibilityHint, accessibilityRole, accessibilityState,
 }: {
   onPress?: () => void; onLongPress?: () => void; children: React.ReactNode;
@@ -553,6 +555,12 @@ export function Bouncy({
   hitSlop?: PressableProps['hitSlop'];
   /** false keeps the element in place while pressed (a row inside a card): only the carve shows */
   sink?: boolean;
+  /**
+   * A raised surface's elevation, when the caller gives it neuBase() (its contact shadow) in place of neuRaised(): the key
+   * shadow and the lit rim are then drawn here, on a layer inside it, and fade as it is pressed into the material, so the
+   * surface really sinks (only its contact shadow stays) and rises again on release. Leave it out for anything flat.
+   */
+  raised?: 'low' | 'mid' | 'high';
   accessibilityLabel?: string;
   accessibilityHint?: string;
   accessibilityRole?: PressRole;
@@ -571,6 +579,8 @@ export function Bouncy({
     ] as const,
   }));
   const dimStyle = useAnimatedStyle(() => ({ opacity: p.value }));
+  // pressed in, the key shadow and the rim are almost gone: only the contact shadow is left under it
+  const keyStyle = useAnimatedStyle(() => ({ opacity: 1 - 0.9 * p.value }));
   const hv = useSharedValue(0); // 0 = no pointer over it, 1 = a pointer resting on it
   const hoverStyle = useAnimatedStyle(() => ({ opacity: hv.value * (1 - p.value) }));
   const hovers = HOVERS && !disabled && !!(onPress || onLongPress);
@@ -587,16 +597,26 @@ export function Bouncy({
       {...rightClick(onLongPress)}
       disabled={disabled}
       hitSlop={hitSlop}
+      // Android presses at once on touch down, so a scroll that starts on a pressable flashed its carve first; a short
+      // wait lets the scroll claim the touch before the press shows
+      unstable_pressDelay={Platform.OS === 'android' ? 50 : undefined}
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={accessibilityHint}
       accessibilityRole={role}
       accessibilityState={state}
       onPressIn={still ? undefined : () => { p.value = withTiming(1, SINK_IN); }}
-      onPressOut={still ? undefined : () => { p.value = withSpring(0, cheerful ? RISE_OUT_CHEER : RISE_OUT); }}
+      // Cheerful lifts back with a soft spring; Elite with a quick, exact ease and no overshoot
+      onPressOut={still ? undefined : () => { p.value = cheerful ? withSpring(0, RISE_OUT_CHEER) : withTiming(0, RISE_EXACT); }}
       onHoverIn={hovers ? () => { hv.value = still ? 1 : withTiming(1, HOVER_IN); } : undefined}
       onHoverOut={hovers ? () => { hv.value = still ? 0 : withTiming(0, HOVER_OUT); } : undefined}
       style={[style, aStyle]}
     >
+      {raised ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: radius }, neuKey(raised), keyStyle]}
+        />
+      ) : null}
       {children}
       {hovers ? (
         <Animated.View

@@ -31,9 +31,23 @@ export interface Pose {
   blush: boolean;
   /** Pip's headphones are on (only with the headphones among its gear) */
   phones: boolean;
+  /**
+   * leaning over the book on the floor: everything from the eyes up sits one square further toward the side it faces
+   * (the grid's right), so the head bends over the page in the art itself, crisp, while the feet stay where they stand
+   */
+  lean?: boolean;
 }
 
-export const REST: Pose = { eyes: 'open', mouth: 'none', l: 'rest', r: 'rest', feet: 'stand', book: 'none', blush: false, phones: false };
+export const REST: Pose = { eyes: 'open', mouth: 'none', l: 'rest', r: 'rest', feet: 'stand', book: 'none', blush: false, phones: false, lean: false };
+
+/** the lowest row that leans with the head: the eyes' row (rows 10 and 11 hold every pair of eyes) */
+const LEAN_ROW = 11;
+
+/**
+ * How far into its grid each companion's body starts, at the floor, in squares: the book on the floor tucks in that
+ * far, just under the front foot, so it lies right at its feet instead of a few squares away.
+ */
+export const BOOK_TUCK: Record<Kind, number> = { sprout: 5, pip: 4 };
 
 const mirror = (cells: Cell[]): Cell[] => cells.map(([c, r, k]) => [COLS - 1 - c, r, k]);
 const row = (r: number, from: number, to: number, k: string): Cell[] => {
@@ -276,6 +290,7 @@ export function compose(kind: Kind, pose: Pose, gear: string[], bud: number): Ce
   out.push(...limbs[pose.l], ...mirror(limbs[pose.r]));
   // the ear cups sit over a raised arm (the arm goes up behind the head)
   if (kind === 'pip' && has('phones') && pose.phones) out.push(...PHONE_CUPS);
+  if (pose.lean) return out.map(([c, r, k]) => (r <= LEAN_ROW ? [c + 1, r, k] : [c, r, k]) as Cell);
   return out;
 }
 

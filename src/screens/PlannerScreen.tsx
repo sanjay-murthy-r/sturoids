@@ -1,9 +1,10 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { C, CHROME_FONT_MAX, F, S, T, TRACK, BLOCK_COLORS } from '../theme';
+import { useIsFocused } from '@react-navigation/native';
+import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, BLOCK_COLORS, oneLine } from '../theme';
 import { useStore, PlannerBlock, PlannerWeek, Habit } from '../store';
 import {
   DAY_NAMES, DayName, dayName, toMinutes, fmtClockTime, todayKey, streaks, indexAfterNeighbours, blockOnNow, cleanDays,
@@ -11,7 +12,8 @@ import {
 } from '../utils';
 import { indexScores, topExams } from '../scores';
 import { openScoreNode } from '../scoresNav';
-import { useSubjects } from '../subjects';
+import { SubjectSuggest } from '../components/SubjectSuggest';
+import { SheetGlide } from '../components/QuickTaskSheet';
 import { blockFocusParams, clashIn, colorForSubject, fmtDayShort, nextDateOf, repeatsOf } from '../blocks';
 import { ALL_DAYS, DayToggles, toggledDay } from '../components/DayToggles';
 import { toastTrashed } from '../trashToast';
@@ -27,7 +29,7 @@ import { defaultTime } from '../components/TimeWheel';
 import { Ionicons } from '@expo/vector-icons';
 import { Wheel } from '../components/Wheel';
 import {
-  Bouncy, CHANGE, EASE_OUT, Enter, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useBuilt, useFocusKey, useLoop,
+  Bouncy, CHANGE, EASE_OUT, Enter, FadeSwap, glide, rowIn, rowOut, useAnimLevel, useAppActive, useBuilt, useFocusKey, useLoop,
 } from '../components/Motion';
 import { slideIn, useSwapIn } from '../components/Swap';
 import { tick } from '../haptics';
@@ -169,6 +171,9 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const params = useLocalSearchParams<{ day?: string; item?: string; sheet?: string }>();
   const router = useRouter();
   const [arrive, setArrive] = useState<string | null>(null);
+  const [visitStreaks, setVisitStreaks] = useState(false);
+  // the streaks brought out for a habit's arrival go back once the page is left
+  useFocusEffect(useCallback(() => () => setVisitStreaks(false), []));
   useFocusEffect(useCallback(() => {
     const clear: Record<string, undefined> = {};
     let target = (DAY_NAMES as readonly string[]).includes(params.day || '') ? params.day as DayName : undefined;
@@ -180,6 +185,8 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         target = DAY_NAMES.find((d) => (week[d] || []).some((b) => b.id === params.item));
       }
       setArrive(params.item);
+      // a habit opened while the streaks are put away (Arrange) has nowhere to be shown: they come out for this visit
+      if (useStore.getState().habits.some((h) => h.id === params.item)) setVisitStreaks(true);
       clear.item = undefined;
     }
     if (target) { pickedOn.current = todayKey(); goTo(target); }
@@ -271,6 +278,10 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   const exp = useExport(['habits', 'planner'], { range: '30d' });
   const scrollRef = React.useRef<Animated.ScrollView>(null);
   const sections = useSections('planner', 'Planner', PLANNER_SECTIONS);
+  const shownSections = useMemo(
+    () => (visitStreaks && !sections.shown.includes('streaks') ? [...sections.shown, 'streaks'] : sections.shown),
+    [visitStreaks, sections.shown],
+  );
   const header = useToolHeader({ contentPull: 'all', scrollRef,
     title: 'Planner',
     mode: tabMode ? 'tab' : 'page',
@@ -308,12 +319,16 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
   // blocks: the day's own entrance is for a day change; the screen's rises with the rest, every visit
   const blocksPart = (
     <Enter index={1} style={twoCol ? st.col : undefined}>
-      <Animated.View key={day} entering={dayIn}>
-        <DayBlocks
-          day={day} blocks={blocks} hour24={hour24} nowMin={viewingToday ? nowMin : -1} deepWork={deepWork}
-          arrive={arrive} onArrive={bring} onEdit={openEdit} onDelete={deleteBlock}
-        />
-      </Animated.View>
+      {/* the key is on the config, not the view: the old day goes at once, card and all, instead of its card standing
+          under the new day while only its rows fade */}
+      <LayoutAnimationConfig key={day} skipExiting>
+        <Animated.View entering={dayIn}>
+          <DayBlocks
+            day={day} blocks={blocks} hour24={hour24} nowMin={viewingToday ? nowMin : -1} deepWork={deepWork}
+            arrive={arrive} onArrive={bring} onEdit={openEdit} onDelete={deleteBlock}
+          />
+        </Animated.View>
+      </LayoutAnimationConfig>
       {/* the wheel names the day, so the button's label never changes while the blocks slide */}
       <PillButton label="Add block" icon="add" onPress={openAdd} style={{ marginTop: 4 }} />
     </Enter>
@@ -330,21 +345,24 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
       >
         Streaks
       </SectionTitle>
-      <Animated.View key={habits.length === 0 ? 'none' : 'list'} entering={habitsIn}>
-        {habits.length === 0 ? (
-          <EmptyState compact icon="repeat-outline" title="No habits yet" body="Habits for the days you choose, each with its streak." />
-        ) : (
-          <ListCard>
-            {habits.map((h) => (
-              <HabitRow
-                key={h.id} h={h} today={today} hour24={hour24} arrive={arrive === h.id} onArrive={bring}
-                onToggle={toggleHabitToday} onToggleDay={toggleHabitDay} onEdit={openHabit} onRemind={setRemindEdit}
-                onDelete={deleteHabit}
-              />
-            ))}
-          </ListCard>
-        )}
-      </Animated.View>
+      {/* keyed on the config so the last habit's card goes with the list instead of lingering while its row fades */}
+      <LayoutAnimationConfig key={habits.length === 0 ? 'none' : 'list'} skipExiting>
+        <Animated.View entering={habitsIn}>
+          {habits.length === 0 ? (
+            <EmptyState compact icon="repeat-outline" title="No habits yet" body="Habits for the days you choose, each with its streak." />
+          ) : (
+            <ListCard>
+              {habits.map((h) => (
+                <HabitRow
+                  key={h.id} h={h} today={today} hour24={hour24} arrive={arrive === h.id} onArrive={bring}
+                  onToggle={toggleHabitToday} onToggleDay={toggleHabitDay} onEdit={openHabit} onRemind={setRemindEdit}
+                  onDelete={deleteHabit}
+                />
+              ))}
+            </ListCard>
+          )}
+        </Animated.View>
+      </LayoutAnimationConfig>
     </Enter>
   );
 
@@ -391,10 +409,10 @@ export function PlannerScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {/* the day's blocks and the streaks, in the order chosen (Arrange), the streaks put away if not wanted */}
         {twoCol ? (
           <View style={st.pair}>
-            {sections.shown.map((k) => (k === 'blocks' ? <React.Fragment key={k}>{blocksPart}</React.Fragment> : <React.Fragment key={k}>{streaksPart}</React.Fragment>))}
+            {shownSections.map((k) => (k === 'blocks' ? <React.Fragment key={k}>{blocksPart}</React.Fragment> : <React.Fragment key={k}>{streaksPart}</React.Fragment>))}
           </View>
         ) : (
-          <InOrder shown={sections.shown}>
+          <InOrder shown={shownSections}>
             <React.Fragment key="blocks">{blocksPart}</React.Fragment>
             <React.Fragment key="streaks">{streaksPart}</React.Fragment>
           </InOrder>
@@ -455,7 +473,10 @@ function DayBlocks({ day, blocks, hour24, nowMin, deepWork, arrive, onArrive, on
   if (blocks.length === 0) {
     return <EmptyState compact icon="calendar-outline" title={'No blocks on ' + fullDay(day)} body="Add subjects with start and end times below." />;
   }
+  // the last block going swaps the whole card for the empty note, so its rows' exits are skipped: the card goes with
+  // them rather than standing until they fade
   return (
+    <LayoutAnimationConfig skipExiting>
     <Animated.View entering={built.current ? rowIn(level) : undefined}>
       <ListCard>
         {blocks.map((b) => (
@@ -472,6 +493,7 @@ function DayBlocks({ day, blocks, hour24, nowMin, deepWork, arrive, onArrive, on
       {/* said once for the list, not on every row */}
       {deepWork && !knownBlockTap ? <Text style={st.blocksHint}>Tap a block to start Deep Work on it.</Text> : null}
     </Animated.View>
+    </LayoutAnimationConfig>
   );
 }
 
@@ -494,7 +516,8 @@ function BlockProgress({ progress }: { progress: number }) {
   React.useEffect(() => {
     p.value = level === 'full' ? withTiming(progress, { duration: 600, easing: EASE_OUT }) : progress;
   }, [progress, level]);
-  const fill = useAnimatedStyle(() => ({ transform: [{ translateX: (p.value - 1) * w }] }));
+  // hidden until measured: with no width yet the full-width fill would flash whole on the first frame
+  const fill = useAnimatedStyle(() => ({ opacity: w > 0 ? 1 : 0, transform: [{ translateX: (p.value - 1) * w }] }));
   return (
     <View
       pointerEvents="none" style={st.blockGauge} onLayout={(e) => setW(e.nativeEvent.layout.width)}
@@ -618,7 +641,9 @@ const DateLine = React.memo(function DateLine({ dayIdx, today }: { dayIdx: numbe
   }, [scores, missions, archived, key]);
   const shown = parts.slice(0, DATE_PARTS_MAX);
   const more = parts.length - shown.length;
+  // a new day's date and parts cross over in place, as the header's line does, while the wheel and the blocks move
   return (
+    <FadeSwap swapKey={key + ':' + parts.map((p) => p.id).join()}>
     <View style={st.dateLine}>
       <Text style={st.dateText} maxFontSizeMultiplier={CHROME_FONT_MAX}>{fmtDayShort(date)}</Text>
       {shown.map((p) => (
@@ -633,6 +658,7 @@ const DateLine = React.memo(function DateLine({ dayIdx, today }: { dayIdx: numbe
         <Text style={st.dateText} maxFontSizeMultiplier={CHROME_FONT_MAX}>{' · ' + more + ' more'}</Text>
       ) : null}
     </View>
+    </FadeSwap>
   );
 });
 
@@ -723,13 +749,17 @@ const HabitRow = React.memo(function HabitRow({ h, today, hour24, arrive, onArri
  */
 function Flame({ atRisk }: { atRisk: boolean }) {
   const flicker = useLoop(atRisk, 1800);
+  // Cheerful's own flicker loops only while the Planner is in view and the app in front: the tab stays built behind others
+  const focused = useIsFocused();
+  const inFront = useAppActive();
   const style = useAnimatedStyle(() => ({
     opacity: 1 - 0.4 * flicker.value,
     transform: [{ scale: 1 - 0.04 * flicker.value }],
   }));
+  const icon = <Ionicons name="flame-outline" size={13} color={C.textFaint} />;
   return (
     <Animated.View style={[st.subIcon, style]}>
-      <Flicker><Ionicons name="flame-outline" size={13} color={C.textFaint} /></Flicker>
+      {focused && inFront ? <Flicker>{icon}</Flicker> : icon}
     </Animated.View>
   );
 }
@@ -747,7 +777,9 @@ const WeekStrip = React.memo(function WeekStrip({ id, title, doneDates, days: du
   id: string; title: string; doneDates: string[]; days?: number[]; today: string;
   onToggleDay: (id: string, dateKey: string) => void;
 }) {
-  useTheme(); // a memo part: today's initial is the accent, which its props do not change with
+  // a memo part: today's initial is the accent, which its props do not change with; Minimal draws its rings in its own
+  // border, as its chips do
+  const minimal = useTheme() === 'minimal';
   const days = useMemo(() => {
     const [y, m, d] = today.split('-').map(Number);
     const done = new Set(doneDates);
@@ -765,15 +797,15 @@ const WeekStrip = React.memo(function WeekStrip({ id, title, doneDates, days: du
   return (
     <View style={st.strip}>
       {days.map((c) => (
-        <DayCell key={c.key} {...c} onPress={() => { tick(); onToggleDay(id, c.key); }} habit={title} />
+        <DayCell key={c.key} {...c} minimal={minimal} onPress={() => { tick(); onToggleDay(id, c.key); }} habit={title} />
       ))}
     </View>
   );
 });
 
 /** One day of the strip: flat, its dot filling in green as the day is ticked; a rest day's ring is fainter and smaller. */
-function DayCell({ initial, spoken, done, isToday, rest, habit, onPress }: {
-  initial: string; spoken: string; done: boolean; isToday: boolean; rest: boolean; habit: string; onPress: () => void;
+function DayCell({ initial, spoken, done, isToday, rest, habit, minimal, onPress }: {
+  initial: string; spoken: string; done: boolean; isToday: boolean; rest: boolean; habit: string; minimal: boolean; onPress: () => void;
 }) {
   const level = useAnimLevel();
   const fill = useSharedValue(done ? 1 : 0);
@@ -792,7 +824,12 @@ function DayCell({ initial, spoken, done, isToday, rest, habit, onPress }: {
       accessibilityLabel={habit + ', ' + (isToday ? 'today' : spoken) + (rest ? ', rest day' : '')}
     >
       <Text style={[st.cellDay, isToday && { color: C.accent, fontFamily: F.smSemi }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{initial}</Text>
-      <View style={[st.cellDot, rest ? [st.cellRest, { borderColor: C.hairline }] : { borderColor: C.outline }]}>
+      <View
+        style={[
+          st.cellDot,
+          rest ? [st.cellRest, { borderColor: minimal ? MIN.hairline : C.hairline }] : { borderColor: minimal ? MIN.border : C.outline },
+        ]}
+      >
         <Animated.View style={[st.cellFill, { backgroundColor: C.green }, dotStyle]} />
       </View>
     </Pressable>
@@ -809,7 +846,7 @@ function Swatch({ color, active, onPress }: { color: string; active: boolean; on
   const ringStyle = useAnimatedStyle(() => ({ opacity: on.value }));
   return (
     <Bouncy
-      radius={20} scaleTo={0.88} onPress={onPress} style={st.swatchWell}
+      radius={18} scaleTo={0.88} onPress={onPress} style={st.swatchWell} hitSlop={4}
       accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={COLOR_NAMES[color] ?? 'Colour'}
     >
       <Animated.View pointerEvents="none" style={[st.swatchRing, { borderColor: color }, ringStyle]} />
@@ -817,11 +854,6 @@ function Swatch({ color, active, onPress }: { color: string; active: boolean; on
     </Bouncy>
   );
 }
-
-/** "  Physics " and "physics" are one subject. */
-const subjectKeyOf = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
-/** at most this many subject suggestions under the block's subject */
-const SUGGEST_MAX = 5;
 
 /** The days a block was added to, and its new id on each: what Undo takes back. */
 type AddedBlocks = { day: DayName; id: string }[];
@@ -840,7 +872,6 @@ function BlockSheet({ visible, day, editing, onClose, onClosed, onSaved }: {
 }) {
   const addBlock = useStore((s) => s.addBlock);
   const updateBlock = useStore((s) => s.updateBlock);
-  const subjects = useSubjects();
   const [subj, setSubj] = useState('');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
@@ -880,12 +911,6 @@ function BlockSheet({ visible, day, editing, onClose, onClosed, onSaved }: {
     const c = colorForSubject(useStore.getState().planner, v, day);
     if (c) setColor(c);
   };
-  // the subjects in use elsewhere (Focus, notes, the week, Scores), most used first, narrowed by what is typed
-  const typed = subjectKeyOf(subj);
-  const suggestions = useMemo(
-    () => subjects.filter((n) => { const k = subjectKeyOf(n); return k !== typed && k.startsWith(typed); }).slice(0, SUGGEST_MAX),
-    [subjects, typed],
-  );
 
   // A start picked with no end yet gives the block an hour, kept inside the day, so most blocks need one turn of the
   // wheel. A start moved up to or past the end takes the end along, keeping the block's length
@@ -987,25 +1012,32 @@ function BlockSheet({ visible, day, editing, onClose, onClosed, onSaved }: {
   const n = repeatDays.length;
   const repeatCaption = lastDay ? 'At least one day' : n === 1 ? 'Only ' + fullDay(DAY_NAMES[repeatDays[0]]) : daysLabel(repeatDays);
   return (
-    <Sheet visible={visible} onClose={onClose} onClosed={onClosed} title={editing ? 'Edit block' : 'New block for ' + fullDay(day)}>
+    <Sheet
+      visible={visible} onClose={onClose} onClosed={onClosed}
+      // a new block names the day it goes on: the one picked under Repeat on, or none once it goes on several
+      title={editing ? 'Edit block' : n === 1 ? 'New block for ' + fullDay(DAY_NAMES[repeatDays[0]]) : 'New block'}
+    >
       <Field label="Subject" value={subj} onChangeText={pickSubject} placeholder="e.g. Physics" autoFocus maxLength={40} />
-      {suggestions.length ? (
-        <Row style={st.suggest}>
-          {suggestions.map((name) => (
-            <Chip key={name} small label={name} onPress={() => { tick(); pickSubject(name); }} accessibilityHint="Uses this subject" />
+      {/* the subjects in use elsewhere (Focus, notes, the week, Scores), narrowed by what is typed; worked out only while
+          the sheet is up, since the chips mount with it */}
+      <SubjectSuggest value={subj} onPick={pickSubject} style={st.suggest} />
+      {/* the end may be midnight, the end of the day; a start never is. What follows a part that opens or closes glides
+          with the panel's top, so it holds still on screen */}
+      <SheetGlide>
+        <Row style={{ gap: 14, alignItems: 'flex-start' }}>
+          <TimeField label="Starts" value={start} onChange={pickStart} placeholder="Pick a time" style={{ flex: 1 }} />
+          <TimeField label="Ends" value={end} onChange={setEnd} placeholder="Pick a time" allowEndOfDay style={{ flex: 1 }} />
+        </Row>
+      </SheetGlide>
+      {/* one line of colours even on a 360 dp phone: 36 dp wells, each reaching 44 dp with its slop */}
+      <SheetGlide>
+        <Row style={{ gap: 2, justifyContent: 'space-between', marginBottom: 12, marginTop: 2 }}>
+          {BLOCK_COLORS.map((c) => (
+            <Swatch key={c} color={c} active={color === c} onPress={() => { tick(); colorPicked.current = true; setColor(c); }} />
           ))}
         </Row>
-      ) : null}
-      {/* the end may be midnight, the end of the day; a start never is */}
-      <Row style={{ gap: 14, alignItems: 'flex-start' }}>
-        <TimeField label="Starts" value={start} onChange={pickStart} placeholder="Pick a time" style={{ flex: 1 }} />
-        <TimeField label="Ends" value={end} onChange={setEnd} placeholder="Pick a time" allowEndOfDay style={{ flex: 1 }} />
-      </Row>
-      <Row style={{ flexWrap: 'wrap', gap: 2, justifyContent: 'space-between', marginBottom: 12, marginTop: 2 }}>
-        {BLOCK_COLORS.map((c) => (
-          <Swatch key={c} color={c} active={color === c} onPress={() => { tick(); colorPicked.current = true; setColor(c); }} />
-        ))}
-      </Row>
+      </SheetGlide>
+      <SheetGlide>
       {editing ? (
         repeats.length ? (
           <View style={st.everyDay}>
@@ -1025,10 +1057,13 @@ function BlockSheet({ visible, day, editing, onClose, onClosed, onSaved }: {
           <Text style={[T.caption, st.repeatCaption]} accessibilityLiveRegion="polite">{repeatCaption}</Text>
         </>
       )}
-      <PillButton
-        label={editing ? 'Save' : n > 1 ? 'Add to ' + n + ' days' : 'Add block'}
-        onPress={submit}
-      />
+      </SheetGlide>
+      <SheetGlide>
+        <PillButton
+          label={editing ? 'Save' : n > 1 ? 'Add to ' + n + ' days' : 'Add block'}
+          onPress={submit}
+        />
+      </SheetGlide>
     </Sheet>
   );
 }
@@ -1250,17 +1285,23 @@ function HabitSheet({ visible, editing, onClose }: { visible: boolean; editing: 
         value={habitTitle} onChangeText={setHabitTitle} placeholder="e.g. Revise formula sheet" autoFocus maxLength={80}
       />
       <TimeField label="Reminder" value={habitTime} onChange={setHabitTime} placeholder="No reminder" clearable />
-      <Text style={st.repeatLabel} importantForAccessibility="no">Repeat</Text>
-      <DayToggles value={days} onToggle={toggleDay} label="Repeat" />
-      <Text style={[T.caption, st.repeatCaption]} accessibilityLiveRegion="polite">
-        {lastDay ? 'At least one day' : daysLabel(days)}
-      </Text>
-      <PillButton label={editing ? 'Save' : 'Add habit'} onPress={submit} />
-      {!remindersEnabled && (
-        <Text style={[T.caption, { marginTop: 10 }]}>
-          Reminders are off in Settings. A time set here asks for notification permission and switches them on.
+      {/* below the time, which opens and closes: it glides with the panel's top, so it holds still on screen */}
+      <SheetGlide>
+        <Text style={st.repeatLabel} importantForAccessibility="no">Repeat</Text>
+        <DayToggles value={days} onToggle={toggleDay} label="Repeat" />
+        <Text style={[T.caption, st.repeatCaption]} accessibilityLiveRegion="polite">
+          {lastDay ? 'At least one day' : daysLabel(days)}
         </Text>
-      )}
+      </SheetGlide>
+      <SheetGlide>
+        {/* greyed until there is a name, as a tap would do nothing */}
+        <PillButton label={editing ? 'Save' : 'Add habit'} color={habitTitle.trim() ? undefined : C.textFaint} onPress={submit} />
+        {!remindersEnabled && (
+          <Text style={[T.caption, { marginTop: 10 }]}>
+            Reminders are off in Settings. A time set here asks for notification permission and switches them on.
+          </Text>
+        )}
+      </SheetGlide>
     </Sheet>
   );
 }
@@ -1335,18 +1376,20 @@ const st = StyleSheet.create({
   turnOff: { alignSelf: 'center', marginTop: 16, paddingHorizontal: 8, paddingVertical: 4 },
   colorBar: { width: 4, height: 36, borderRadius: 2, marginRight: 12 },
   nowPill: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 3, marginRight: 4 },
-  nowText: { fontFamily: F.smSemi, fontSize: 11, letterSpacing: TRACK.caps },
+  // one line of caps in a padded pill: without Android's font padding it centres as the chips do
+  nowText: { ...oneLine(11), fontFamily: F.smSemi, letterSpacing: TRACK.caps },
   // the block on now: a 2 dp gauge along the foot of its row, inset from the corners, filled by sliding its bar in
   blockGauge: { position: 'absolute', left: 14, right: 14, bottom: 0, height: 2, borderRadius: 1, overflow: 'hidden' },
   blockGaugeFill: { width: '100%', height: 2, borderRadius: 1 },
   // a block's times line up from row to row: tabular figures, so Inter Tight
   span: { marginTop: 2, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
-  // flat: a ring in the block's own colour marks the chosen one
+  // flat: a ring in the block's own colour marks the chosen one. Eight of them with their gaps (8 x 36 + 7 x 2 = 302 dp)
+  // keep to one line in a 360 dp phone's 312 dp sheet
   swatchWell: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 36, height: 36, borderRadius: 18,
     alignItems: 'center', justifyContent: 'center',
   },
-  swatchRing: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 20, borderWidth: 2 },
+  swatchRing: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 18, borderWidth: 2 },
   swatchDisc: { width: 24, height: 24, borderRadius: 12 },
   // a habit: its own line on top, its week beneath
   habitRow: { flexDirection: 'column', alignItems: 'stretch', paddingVertical: 12 },

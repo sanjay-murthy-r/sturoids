@@ -17,9 +17,36 @@ export interface IntroState {
   appDrawn: boolean;
   /** the app's faces have loaded (noteAppFonts): until then the app cannot draw, so a skip may wait longer for it */
   appFonts: boolean;
+  /**
+   * The intro's composed scene is holding still just before it hands over: a moment where building a screen out of
+   * sight never shows as a stutter (Today prepares the other tabs then).
+   */
+  resting: boolean;
 }
 
-export const useIntro = create<IntroState>(() => ({ phase: 'playing', appDrawn: false, appFonts: false }));
+export const useIntro = create<IntroState>(() => ({ phase: 'playing', appDrawn: false, appFonts: false, resting: false }));
+
+/** The intro says when its scene is holding still before the hand-over (StartScreen). */
+export function setResting(on: boolean) {
+  if (useIntro.getState().resting !== on) useIntro.setState({ resting: on });
+}
+
+/** How long after the intro is gone the app's entrance is left to play with nothing else scheduled. */
+export const QUIET_MS = 900;
+
+/**
+ * Runs `fn` once the intro is gone and the app's entrance has had QUIET_MS to itself: the moment for work that writes
+ * the store or builds out of sight (the cloud, reminders, screens made ahead), so none of it lands on the entrance.
+ * Returns a cancel.
+ */
+export function afterEntrance(fn: () => void): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let off: (() => void) | null = null;
+  const arm = () => { timer = setTimeout(fn, QUIET_MS); };
+  if (useIntro.getState().phase === 'done') arm();
+  else off = useIntro.subscribe((s) => { if (s.phase === 'done' && off) { off(); off = null; arm(); } });
+  return () => { off?.(); if (timer) clearTimeout(timer); };
+}
 
 /** Moves the intro forward; it never goes back, so a late or repeated call is harmless. */
 export function setIntroPhase(phase: IntroPhase) {

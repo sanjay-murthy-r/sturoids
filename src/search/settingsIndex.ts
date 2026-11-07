@@ -53,9 +53,11 @@ const DEFS: Record<SettingsPage, Def[]> = {
     ['Appearance', 'Theme, accent colour and writing font', 'look style colours'],
     ['Makeover', 'Elite or Cheerful: calm, or warm motion, little sounds and celebrations', 'mood cheerful elite fun playful animation celebrate confetti'],
     ['Cheerful sounds', 'Soft notes in Cheerful', 'sound audio chime note music haptic cheerful'],
+    ['Companion', 'A small friend on your screens, in Cheerful', 'mascot pet friend buddy character pip sprout cheerful'],
     ['Theme', 'Default or Minimalistic', 'dark theme minimal contrast look'],
     ['Accent colour', 'The colour of what is picked out', 'color accent iris aqua sky rose amber mint terracotta'],
     ['Writing font', 'Sans or Serif, for Notes and the Journal', 'font serif sans typeface writing'],
+    ['Wallpaper', 'A photo of your own behind the pages, for each look', 'wallpaper background photo picture image backdrop'],
   ],
   tools: [
     ['Tabs and tools', 'What sits in the tab bar', 'tab bar slots tools'],
@@ -79,7 +81,8 @@ const DEFS: Record<SettingsPage, Def[]> = {
     ['Exam reminders', 'The evening before each dated exam', 'exam reminders notifications evening'],
   ],
   deepwork: [
-    ['Deep Work', 'The chime and the ambient screen', 'focus timer pomodoro'],
+    ['Deep Work', 'Your goal, the chime and the ambient screen', 'focus timer pomodoro'],
+    ['Daily focus goal', 'Hours of focus to aim for each day', 'goal target daily hours focus streak'],
     ['Chime when a block ends', 'A soft chime as well as the buzz', 'sound chime focus block end'],
     ['Drop sessions under a minute', 'Short starts are not kept', 'short session minute delete drop focus history'],
     ['Ambient screen', 'The dark screen while a block runs', 'ambient screen focus black'],

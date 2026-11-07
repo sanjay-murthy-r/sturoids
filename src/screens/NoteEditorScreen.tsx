@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useDeferredValue, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, Alert, Keyboard, AppState, Modal, Platform, useWindowDimensions,
 } from 'react-native';
@@ -7,18 +7,20 @@ import { Ionicons } from '@expo/vector-icons';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   useAnimatedStyle, useSharedValue, withRepeat, withTiming, Easing, cancelAnimation, FadeIn, FadeOut, runOnJS,
+  LayoutAnimationConfig,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as CachedImage } from 'expo-image';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { C, F, MIN, NO_SHADOW, S, T, TRACK, neuInset, neuPressedInner, neuRaised, NEU, wellFor, writingFace } from '../theme';
+import { C, F, MIN, NO_SHADOW, S, T, TRACK, cheerSkinOn, neuInset, neuPressedInner, neuRaised, wellFor, writingFace } from '../theme';
 import { columnWidth } from '../layout';
 import { useStore, Attachment, Note, flushSaves } from '../store';
 import { fmtClockTime, todayKey, yesterdayKey } from '../utils';
 import {
   ScreenBG, Sheet, Chip, Row, IconBtn, NeuIconBtn, PillButton, DotMenu, EmptyState, GateHeader, Field, useTheme, useToolHeader,
+  ToolAction,
 } from '../components/UI';
 import { SubjectSuggest } from '../components/SubjectSuggest';
 import { tick } from '../haptics';
@@ -29,7 +31,7 @@ import { Bouncy, EASE_OUT, Enter, glide, rowIn, rowOut, useAnimLevel, useBuilt }
 import { voiceAvailable, startVoice, VoiceSession } from '../voice';
 import { shareMessage } from '../share';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { NOT_KEPT, keepFile, viewUri } from '../attachments';
+import { NOT_KEPT, filesPending, keepFile, mimeOf, viewUri } from '../attachments';
 
 import { toastTrashed } from '../trashToast';
 import { useToday } from '../hooks/useNow';
@@ -209,6 +211,8 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const [viewing, setViewing] = useState<string | null>(null);
   const [newFolder, setNewFolder] = useState(false);
   const [metaSheet, setMetaSheet] = useState(false);
+  // the toolbar's height as laid out (0 until then): the dictation strip stands just above it
+  const [toolH, setToolH] = useState(0);
   const newFolderNext = useRef(false);
 
   // a dictation still running when the note closes is stopped, never left listening
@@ -309,7 +313,9 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     () => linesFrom.current.split('\n').map((l) => l.trim().replace(/^[•☐☑✓]\s*/, '').trim()).filter((l) => l.length > 2),
     [linesFrom.current]
   );
-  const words = useMemo(() => countWords(body), [body]);
+  // the count splits the whole note: it follows the words a beat behind, so a keystroke in a long note never waits on it
+  const countedBody = useDeferredValue(body);
+  const words = useMemo(() => countWords(countedBody), [countedBody]);
 
   const noteId = note?.id ?? '';
   // A removed attachment goes to Recently deleted, and its file stays on the phone until it is deleted for good there.
@@ -372,33 +378,42 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
   const edited = note ? editedLine(note.updatedAt, today, hour24) : '';
   const [editedHeld, setEditedHeld] = useState(edited);
   React.useEffect(() => { if (!keyboardOpen) setEditedHeld(edited); }, [keyboardOpen, edited]);
+  // the handlers are made again every render (every keystroke); the header's buttons reach the latest through here, so
+  // its list is only made again when what it shows changes
+  const acts = useRef({ toggleLock, deleteThis, blankNow });
+  acts.current = { toggleLock, deleteThis, blankNow };
+  const hasNote = !!note;
+  const noteLocked = !!note?.locked;
+  const notePinned = !!note?.pinned;
+  const actions = useMemo((): ToolAction[] | undefined => (hasNote ? [
+    {
+      icon: noteLocked ? 'lock-closed' : 'lock-open-outline', label: noteLocked ? 'Unlock note' : 'Lock note',
+      color: noteLocked ? C.gold : undefined, onPress: () => acts.current.toggleLock(),
+    },
+    {
+      icon: notePinned ? 'pin' : 'pin-outline', label: notePinned ? 'Unpin note' : 'Pin note',
+      onPress: () => updateNote(noteId, { pinned: !notePinned }, { touch: false }),
+    },
+    { icon: 'folder-outline', label: 'Move to folder', onPress: () => setFolderSheet(true) },
+    ...(noteLocked ? [] : [{
+      icon: 'share-outline' as const, label: 'Share note',
+      // an untitled note shares its words alone, with no blank lines in front; on the PC the text is copied (share.ts).
+      // The draft holds the words as typed, so the share never takes an older copy
+      onPress: () => { shareMessage([draft.current.title.trim(), draft.current.body.trim()].filter(Boolean).join('\n\n')); },
+    }]),
+    {
+      icon: 'trash-outline', label: 'Delete note', color: C.danger,
+      onPress: () => (acts.current.blankNow() ? acts.current.deleteThis() : Alert.alert('Delete note', 'You can restore it from Recently deleted for 30 days.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => acts.current.deleteThis() },
+      ])),
+    },
+  ] : undefined), [hasNote, noteId, noteLocked, notePinned, updateNote]);
   const header = useToolHeader({ scrollRef, scrollMemory: 'keep',
     title: note?.folder ?? 'Note',
     mode: 'page',
     context: editedHeld,
-    actions: note ? [
-      {
-        icon: note.locked ? 'lock-closed' : 'lock-open-outline', label: note.locked ? 'Unlock note' : 'Lock note',
-        color: note.locked ? C.gold : undefined, onPress: toggleLock,
-      },
-      {
-        icon: note.pinned ? 'pin' : 'pin-outline', label: note.pinned ? 'Unpin note' : 'Pin note',
-        onPress: () => updateNote(note.id, { pinned: !note.pinned }, { touch: false }),
-      },
-      { icon: 'folder-outline', label: 'Move to folder', onPress: () => setFolderSheet(true) },
-      ...(note.locked ? [] : [{
-        icon: 'share-outline' as const, label: 'Share note',
-        // an untitled note shares its words alone, with no blank lines in front; on the PC the text is copied (share.ts)
-        onPress: () => { shareMessage([title.trim(), body.trim()].filter(Boolean).join('\n\n')); },
-      }]),
-      {
-        icon: 'trash-outline', label: 'Delete note', color: C.danger,
-        onPress: () => (blankNow() ? deleteThis() : Alert.alert('Delete note', 'You can restore it from Recently deleted for 30 days.', [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Delete', style: 'destructive', onPress: deleteThis },
-        ])),
-      },
-    ] : undefined,
+    actions,
   });
 
   if (!note) {
@@ -495,8 +510,13 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     writeAt(b.slice(0, lineStart) + mark + b.slice(lineStart + oldLen), bodyFocus.current ? caret : b.length + shift);
   };
 
-  /** While dictating, keep the writing edge visible with ~9 free lines below it. */
+  /**
+   * While dictating, keep the writing edge visible with ~9 free lines below it. Only while the words go in at the end
+   * of the note: a phrase dictated at a caret mid-note stays where it is being written, not taken away to the end.
+   */
   const autoScroll = () => {
+    const b = liveBody();
+    if (insertionPoint(b).end < b.length) return;
     const { content, viewport } = sizesRef.current;
     if (!viewport) return;
     const target = Math.max(0, content - viewport + FREE_LINES * LINE_H);
@@ -622,14 +642,23 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
     { label: 'Undo', icon: 'arrow-undo-outline', onPress: undo },
     { label: 'Redo', icon: 'arrow-redo-outline', onPress: redo },
   ];
+  // The toolbar stands in the flow under the words rather than over them: Android brings a new line into view only
+  // inside the scroll's own edge, so with the keyboard up a line written under a toolbar laid over the scroll stayed
+  // hidden. Its height takes in the room under it on a page; until it is laid out, its usual height stands in
+  const footPad = mode === 'tab' ? 0 : insets.bottom;
+  const barH = toolH || 64 + footPad;
 
   return (
+    // a note closing (or locking) takes the strip and the attachments with it, so none of them is left fading after it
+    <LayoutAnimationConfig skipExiting>
     <ScreenBG>
       {header.bar}
       <Animated.ScrollView
         ref={scrollRef}
         {...header.scrollProps}
-        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: 170 + (mode === 'tab' ? 0 : insets.bottom) }}
+        style={{ flex: 1 }}
+        // the same free room under the last line as when the toolbar lay over the end of the scroll
+        contentContainerStyle={{ padding: S.pad, paddingTop: header.padTop, paddingBottom: Math.max(S.pad, 170 + footPad - barH) }}
         keyboardShouldPersistTaps="handled"
         onContentSizeChange={(w, h) => { sizesRef.current.content = h; if (listening) autoScroll(); }}
         onLayout={(e) => { sizesRef.current.viewport = e.nativeEvent.layout.height; }}
@@ -702,7 +731,9 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         <Animated.View
           entering={level === 'none' ? undefined : FadeIn.duration(level === 'full' ? 220 : 160).easing(EASE_OUT)}
           exiting={level === 'none' ? undefined : FadeOut.duration(150)}
-          style={[st.liveBar, { bottom: 66 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, boxShadow: NO_SHADOW }]}
+          style={[st.liveBar, { bottom: barH + 2.5 }, theme === 'minimal'
+            ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border, boxShadow: NO_SHADOW }
+            : { backgroundColor: C.inset, ...neuInset('low') }]}
         >
           <View style={st.liveDot} />
           <Text style={st.liveBarText} numberOfLines={2}>
@@ -712,7 +743,14 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
       )}
 
       {/* editor toolbar */}
-      <View style={[st.toolbar, { paddingBottom: 9 + (mode === 'tab' ? 0 : insets.bottom) }, theme === 'minimal' && { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: NO_SHADOW }]}>
+      <View
+        onLayout={(e) => setToolH(e.nativeEvent.layout.height)}
+        // the look's own lift, read as it is drawn; Cheerful's light comes from above, so its rim lights the top edge
+        // already and the pale line there would only smudge it
+        style={[st.toolbar, { paddingBottom: 9 + footPad }, theme === 'minimal'
+          ? { backgroundColor: MIN.card, borderColor: MIN.border, boxShadow: NO_SHADOW }
+          : { ...neuRaised('mid'), ...(cheerSkinOn() ? { borderTopWidth: 0 } : null) }]}
+      >
         {MIC_SHOWN ? <MicButton listening={listening} onPress={toggleVoice} /> : null}
         <IconBtn name="ellipse-outline" size={20} pad={6} onPress={() => markLine('bullet')} accessibilityLabel="Bullet" />
         <IconBtn name="checkbox-outline" size={20} pad={6} onPress={() => markLine('box')} accessibilityLabel="Checkbox, then tick it" />
@@ -796,13 +834,31 @@ function NoteEditor({ mode }: { mode: 'tab' | 'stack' }) {
         }}
       />
     </ScreenBG>
+    </LayoutAnimationConfig>
   );
 }
 
 async function openFile(a: Attachment) {
+  // on Android the file opens straight in an app that reads it (a PDF reader, a document app); coming back from it
+  // never locks the note. With no such app, the share sheet below offers what there is
+  if (Platform.OS === 'android') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const FileSystem = require('expo-file-system') as typeof import('expo-file-system');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const IntentLauncher = require('expo-intent-launcher') as typeof import('expo-intent-launcher');
+      const data = a.uri.startsWith('content:') ? a.uri : await FileSystem.getContentUriAsync(a.uri);
+      // FLAG_GRANT_READ_URI_PERMISSION: the other app may read the file from the app's own folder
+      await expectAway(() => IntentLauncher.startActivityAsync('android.intent.action.VIEW', { data, type: mimeOf(a), flags: 1 }));
+      return;
+    } catch {
+      // nothing on the phone opens this kind of file: the share sheet offers what there is instead
+    }
+  }
   try {
-    // the share sheet offers the apps that can open the file; coming back from it never locks the note
-    if (await Sharing.isAvailableAsync()) await expectAway(() => Sharing.shareAsync(a.uri));
+    // the PC's stand-in saves the file under its own name (src/web/shims/sharing.ts); a phone's share sheet ignores it
+    const opts: Sharing.SharingOptions & { fileName?: string } = { mimeType: mimeOf(a), fileName: a.name };
+    if (await Sharing.isAvailableAsync()) await expectAway(() => Sharing.shareAsync(a.uri, opts));
   } catch {
     toast('Could not open ' + a.name);
   }
@@ -962,18 +1018,32 @@ const Attachments = React.memo(function Attachments({ items, width, onRemove, on
   const level = useAnimLevel();
   const built = useBuilt();
   const enter = built.current || live ? rowIn(level) : undefined;
+  // on the PC the files load a moment after launch: until then a picture has no address yet, and it is drawn once they
+  // are in rather than marked as not found
+  const [waiting, setWaiting] = useState(() => filesPending() != null);
+  React.useEffect(() => {
+    const pending = filesPending();
+    if (!pending) { setWaiting(false); return; }
+    let on = true;
+    pending.then(() => { if (on) setWaiting(false); });
+    return () => { on = false; };
+  }, []);
   // The remove badge sits over each one's corner. Android only answers a touch inside the parent, so each one keeps
   // a little room above and to its right for the badge, and is that much narrower: the whole badge can be tapped,
   // and two still fit across
   const inner = width - BADGE_ROOM;
   return (
+    // the last one removed takes the whole block with it: it simply goes, rather than fading in a block already gone
+    <LayoutAnimationConfig skipExiting>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
-      {items.map((a) => (
+      {items.map((a) => {
+        const shownUri = a.kind === 'file' ? null : viewUri(a.uri);
+        return (
         <Animated.View key={a.id} entering={enter} exiting={rowOut(level)} layout={glide(level)} style={{ paddingTop: BADGE_ROOM, paddingRight: BADGE_ROOM }}>
           {a.kind === 'image' && (
-            <AttachedImage uri={viewUri(a.uri)} width={inner} onPress={() => onView(viewUri(a.uri))} />
+            <AttachedImage uri={shownUri} waiting={waiting} width={inner} onPress={() => { if (shownUri) onView(shownUri); }} />
           )}
-          {a.kind === 'video' && <AttachedVideo uri={viewUri(a.uri)} name={a.name} width={inner} />}
+          {a.kind === 'video' && <AttachedVideo uri={shownUri} name={a.name} width={inner} />}
           {a.kind === 'file' && (
             <Bouncy onPress={() => openFile(a)} style={[st.fileRow, { borderColor: C.accent + '44', backgroundColor: C.accent + '18' }]}>
               <Ionicons name="document-attach-outline" size={18} color={C.accent} />
@@ -989,8 +1059,10 @@ const Attachments = React.memo(function Attachments({ items, width, onRemove, on
             accessibilityLabel="Remove attachment"
           />
         </Animated.View>
-      ))}
+        );
+      })}
     </View>
+    </LayoutAnimationConfig>
   );
 });
 
@@ -998,11 +1070,19 @@ const Attachments = React.memo(function Attachments({ items, width, onRemove, on
  * An attached picture, which a tap opens across the whole screen; when its file is gone, a carved placeholder says so
  * instead of an empty box.
  */
-function AttachedImage({ uri, width, onPress }: { uri: string; width: number; onPress: () => void }) {
+function AttachedImage({ uri, waiting, width, onPress }: {
+  /** null on the PC while the files load, or when the file is not there */
+  uri: string | null;
+  /** the PC's files are still loading: a picture with no address yet is not a missing one */
+  waiting: boolean;
+  width: number; onPress: () => void;
+}) {
   const theme = useTheme();
-  const [failed, setFailed] = React.useState(false);
+  // the address that failed, not a flag: on the PC an address can change (the files come in), and a new one is tried
+  const [failedAt, setFailedAt] = React.useState<string | null>(null);
   const box = { width, height: width * 0.75, borderRadius: 14 };
-  if (failed) {
+  if (uri == null && waiting) return <View style={[box, wellFor(theme)]} />;
+  if (uri == null || failedAt === uri) {
     return (
       <View
         style={[box, { alignItems: 'center', justifyContent: 'center' }, wellFor(theme)]}
@@ -1015,7 +1095,7 @@ function AttachedImage({ uri, width, onPress }: { uri: string; width: number; on
   }
   return (
     <Bouncy onPress={onPress} scaleTo={0.98} radius={14} accessibilityRole="button" accessibilityLabel="Open the picture">
-      <CachedImage source={{ uri }} style={box} contentFit="cover" cachePolicy="memory" transition={180} onError={() => setFailed(true)} />
+      <CachedImage source={{ uri }} style={box} contentFit="cover" cachePolicy="memory" transition={180} onError={() => setFailedAt(uri)} />
     </Bouncy>
   );
 }
@@ -1024,10 +1104,11 @@ function AttachedImage({ uri, width, onPress }: { uri: string; width: number; on
  * An attached video. Until it is tapped it is a carved well with its name and a play mark, and no player, so a note
  * with several clips keeps no decoders alive while it is written in. A tap makes the player and starts it.
  */
-function AttachedVideo({ uri, name, width }: { uri: string; name: string; width: number }) {
+function AttachedVideo({ uri, name, width }: { uri: string | null; name: string; width: number }) {
   const theme = useTheme();
   const [on, setOn] = React.useState(false);
-  if (on) return <InlineVideo uri={uri} width={width} />;
+  // on the PC a clip has no address until the files are in: the well stays until it has one
+  if (on && uri) return <InlineVideo uri={uri} width={width} />;
   return (
     <Bouncy
       onPress={() => setOn(true)} scaleTo={0.98} radius={14} accessibilityRole="button" accessibilityLabel={'Play ' + name}
@@ -1041,9 +1122,15 @@ function AttachedVideo({ uri, name, width }: { uri: string; name: string; width:
 
 function InlineVideo({ uri, width }: { uri: string; width: number }) {
   const player = useVideoPlayer(uri, (p) => { p.loop = false; p.play(); });
+  // a note left for another tab or page stays open behind it: its clip stops there rather than playing on unseen
+  useFocusEffect(React.useCallback(() => () => {
+    try { player.pause(); } catch { /* the player has already been let go */ }
+  }, [player]));
   return (
     <VideoView
       player={player}
+      // a texture moves and clips with the rounded card as the note scrolls; a surface view is drawn apart from it
+      surfaceType="textureView"
       style={{ width, height: width * 0.62, borderRadius: 14, backgroundColor: C.inset }}
       allowsFullscreen
       nativeControls
@@ -1128,12 +1215,10 @@ const st = StyleSheet.create({
   // the count moves as the note is written, so its figures are the text face's tabular ones
   words: { marginBottom: 12, fontFamily: F.reg, fontVariant: ['tabular-nums'] },
   toolbar: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 12, paddingVertical: 9,
     backgroundColor: C.card,
     borderTopWidth: 1.5, borderColor: C.lite,
-    boxShadow: NEU.raisedMid.boxShadow,
     gap: 6,
   },
   micBtn: {
@@ -1143,7 +1228,6 @@ const st = StyleSheet.create({
   liveBar: {
     position: 'absolute', bottom: 66, left: 12, right: 12,
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.inset, ...neuInset('low'),
     borderRadius: 14,
     paddingHorizontal: 12, paddingVertical: 9,
   },

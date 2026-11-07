@@ -6,16 +6,17 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  LinearTransition, runOnJS, useAnimatedScrollHandler, useAnimatedStyle,
+  LinearTransition, runOnJS, useAnimatedReaction, useAnimatedScrollHandler, useAnimatedStyle,
   useSharedValue, withTiming,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, bgFor, neuInset, neuRaised, oneLine } from '../theme';
+import { C, CHROME_FONT_MAX, F, MIN, S, T, TRACK, ThemeMode, bgFor, neuBase, neuInset, neuRaised, oneLine } from '../theme';
 import { useStore } from '../store';
 import { Chip, useTheme } from './UI';
 import { Backdrop, useCheerful } from './Cheer';
-import { EASE_EXIT, EASE_OUT, Sheen, useAnimLevel } from './Motion';
+import { WallpaperLayer, useWallpaper } from './Wallpaper';
+import { Bouncy, EASE_EMPHASISED, EASE_EXIT, EASE_OUT, Sheen, useAnimLevel } from './Motion';
 import { PinSheet } from './LockGate';
 import { toast } from './Toast';
 import { tick } from '../haptics';
@@ -30,10 +31,10 @@ import { startVoice, voiceAvailable, VoiceSession } from '../voice';
 import { Range, SearchResult, fold, highlight, parseDay, queryTerms, snippet } from '../search/engine';
 import { SiftDoc, addTodo, inScope, newNote, restoreDocs, useSiftSources } from '../search/sources';
 import {
-  ENTER_HINT_MS, OpenedRef, PinnedRef, SiftScope, SiftScopes, closeSift, forgetOpened, forgetQuery, loadSiftMemory, queryPinKey,
-  rememberOpen, rememberQuery, siftPull, siftShown, togglePin, unpin, useSearch, useSiftMemory,
+  ENTER_HINT_MS, OpenedRef, PinnedRef, SiftRect, SiftScope, SiftScopes, closeSift, forgetOpened, forgetQuery, loadSiftMemory,
+  measureSiftAnchor, queryPinKey, rememberOpen, rememberQuery, siftAnchorOut, siftAnchorOwner, siftPull, siftShown, togglePin,
+  unpin, useSearch, useSiftMemory,
 } from '../search/store';
-import { rightClick } from '../web/rightClick';
 import { router } from 'expo-router';
 
 /** the companion's actions wear Cheerful's pink */
@@ -48,6 +49,9 @@ const CHEER_PINK = '#FF8FB1';
 
 const OPEN_MS = 260;
 const CLOSE_MS = 200;
+/** the field's way out of a page's bar and back into it: long enough to follow, quick off the mark */
+const LIFT_MS = 360;
+const LAND_MS = 280;
 /** how far Sift's parts travel to settle into their places */
 const SETTLE = 10;
 /** results are worked out this long after the last keystroke, then on the next frame */
@@ -112,27 +116,30 @@ const wellOf = (theme: ThemeMode) => (theme === 'minimal'
   ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
   : { backgroundColor: C.inset });
 
+/** A body's window around its first match, worked out once per result and query (see the list's items) */
+type Snip = ReturnType<typeof snippet>;
+
 /** A result's row: flat, its icon in a small well, the title (matches in the accent), a sub-line, a snippet. */
-function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onLongPress, pinned, onRemove, theme, trailing }: {
-  icon: string; color?: string; title: string; subtitle?: string; terms: string[]; body?: string; onPress: () => void;
+const ResultRow = React.memo(function ResultRow({ icon, color, title, subtitle, terms, snip, onPress, onLongPress, pinned, onRemove, theme, trailing }: {
+  icon: string; color?: string; title: string; subtitle?: string; terms: string[];
+  /** the body's snippet, already worked out */
+  snip?: Snip; onPress: () => void;
   /** a hold pins the row (or unpins it) */
   onLongPress?: () => void; pinned?: boolean;
   onRemove?: () => void; theme: ThemeMode; trailing?: string;
 }) {
-  const snip = body && terms.length ? snippet(body, terms) : null;
   // a snippet only when the title itself does not already show the match
   const titleRanges = highlight(title, terms);
+  // pressed, it carves in where it stands, as a list row does everywhere else in the app (ListRow)
   return (
-    <Pressable
+    <Bouncy
       onPress={onPress}
       onLongPress={onLongPress}
-      {...rightClick(onLongPress)}
-      delayLongPress={420}
+      scaleTo={1} sink={false} radius={14}
       accessibilityRole="button"
       accessibilityLabel={[title, subtitle, pinned ? 'pinned' : ''].filter(Boolean).join(', ')}
       accessibilityHint={onLongPress ? (pinned ? 'Hold to unpin' : 'Hold to pin to the top of Sift') : undefined}
-      android_ripple={{ color: theme === 'minimal' ? MIN.border : 'rgba(250,249,245,0.07)' }}
-      style={({ pressed }) => [st.row, pressed && Platform.OS !== 'android' && { backgroundColor: theme === 'minimal' ? MIN.inset : C.pressDim }]}
+      style={st.row}
     >
       <View style={[st.rowWell, wellOf(theme)]}>
         <Ionicons name={icon as any} size={18} color={color || C.textDim} />
@@ -150,9 +157,12 @@ function ResultRow({ icon, color, title, subtitle, terms, body, onPress, onLongP
           <Ionicons name="close" size={16} color={C.textFaint} />
         </Pressable>
       ) : null}
-    </Pressable>
+    </Bouncy>
   );
-}
+});
+
+/** "+N more" is a short word in small type: its reach grows to a finger's size */
+const MORE_SLOP = { top: 14, bottom: 14, left: 12, right: 12 };
 
 /** A section's head: a kicker, sticky at the top of the list while its rows scroll under it. */
 function SectionHead({ label, theme, more, onMore }: { label: string; theme: ThemeMode; more?: number; onMore?: () => void }) {
@@ -166,7 +176,7 @@ function SectionHead({ label, theme, more, onMore }: { label: string; theme: The
       ) : null}
       <Text style={T.kicker} maxFontSizeMultiplier={CHROME_FONT_MAX}>{label}</Text>
       {more && onMore ? (
-        <Pressable onPress={onMore} hitSlop={10} accessibilityRole="button" accessibilityLabel={'Show more ' + label}>
+        <Pressable onPress={onMore} hitSlop={MORE_SLOP} accessibilityRole="button" accessibilityLabel={'Show more ' + label}>
           <Text style={[st.headMore, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>{'+' + more + ' more'}</Text>
         </Pressable>
       ) : more ? <Text style={st.headMore} maxFontSizeMultiplier={CHROME_FONT_MAX}>{'+' + more + ' more'}</Text> : null}
@@ -187,13 +197,17 @@ function TopCard({ kicker, children, theme, onPress, onLongPress, label }: {
       {children}
     </>
   );
+  // one that opens something sinks into the material under the finger, as a Card does: it keeps only its contact shadow
+  // here, and Bouncy draws the rest on a layer that fades as it is pressed in
+  const minimal = theme === 'minimal';
   return onPress ? (
-    <Pressable
-      onPress={onPress} onLongPress={onLongPress} {...rightClick(onLongPress)} delayLongPress={420} accessibilityRole="button" accessibilityLabel={label}
-      style={({ pressed }) => [st.top, face, pressed && { opacity: 0.85 }]}
+    <Bouncy
+      onPress={onPress} onLongPress={onLongPress} radius={S.radius} raised={minimal ? undefined : 'mid'}
+      accessibilityRole="button" accessibilityLabel={label}
+      style={[st.top, minimal ? face : { backgroundColor: C.card, ...neuBase() }]}
     >
       {body}
-    </Pressable>
+    </Bouncy>
   ) : (
     <View style={[st.top, face]}>{body}</View>
   );
@@ -203,8 +217,8 @@ function TopCard({ kicker, children, theme, onPress, onLongPress, label }: {
 
 type Item =
   | { t: 'head'; key: string; label: string; more?: number; onMore?: () => void }
-  | { t: 'doc'; key: string; doc: SiftDoc; index: number }
-  | { t: 'top'; key: string; doc: SiftDoc }
+  | { t: 'doc'; key: string; doc: SiftDoc; index: number; snip: Snip }
+  | { t: 'top'; key: string; doc: SiftDoc; snip: Snip }
   | { t: 'math'; key: string; expr: string; answer: string }
   | { t: 'day'; key: string; day: DayCard }
   | {
@@ -355,11 +369,55 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     setScopes(s.scopes);
   }, [open]);
 
-  /* ---- in and out: one fade and a short settle, the same however Sift was opened */
+  /*
+   * ---- in and out. Opened from a page's own bar (More's, Settings') at full motion, the field lifts out of that bar: it
+   * starts exactly over it and glides to its place, by transforms alone (its background scales from the bar's size, its
+   * glyph and words only move, so nothing stretches), while the ground fades in behind it and the filters and results
+   * settle after it; the bar hides in the frame the field takes its place. Going, the field glides back into the bar,
+   * measured again, and the bar shows in the frame it lands. Opened any other way, it fades in with a short settle.
+   */
+  const anchorRect = useSearch((s) => s.anchor);
+  const anchorOwner = useSearch((s) => s.anchorOwner);
+  const wellRef = React.useRef<View>(null);
+  const wellRect = React.useRef<SiftRect | null>(null);
+  /** 1 while the field travels between the bar and its place; the offset and scales it starts from */
+  const lift = useSharedValue(0);
+  const from = useSharedValue({ dx: 0, dy: 0, sx: 1, sy: 1 });
+  const fromBar = (bar: SiftRect, well: SiftRect) => ({
+    dx: bar.x - well.x, dy: bar.y - well.y, sx: bar.w / Math.max(1, well.w), sy: bar.h / Math.max(1, well.h),
+  });
   React.useEffect(() => {
     if (open) {
       tick();
-      siftShown.value = level === 'none' ? 1 : withTiming(1, { duration: OPEN_MS, easing: EASE_OUT });
+      const bar = anchorRect;
+      const owner = anchorOwner;
+      const plain = () => {
+        lift.value = 0;
+        siftShown.value = level === 'none' ? 1 : withTiming(1, { duration: OPEN_MS, easing: EASE_OUT });
+      };
+      if (bar && owner && level === 'full') {
+        siftShown.value = 0;
+        // the field's own place, once laid out (the next frame): measured the same way as the bar, so the status bar
+        // Android leaves out of both cancels
+        let started = false;
+        const start = (well: SiftRect | null) => {
+          if (started) return;
+          started = true;
+          if (!well || well.w <= 0) { plain(); return; }
+          wellRect.current = well;
+          from.value = fromBar(bar, well);
+          lift.value = 1;
+          siftAnchorOwner.value = owner;
+          siftAnchorOut.value = 1;
+          siftShown.value = withTiming(1, { duration: LIFT_MS, easing: EASE_EMPHASISED });
+        };
+        requestAnimationFrame(() => wellRef.current?.measureInWindow((x, y, w, h) => start({ x, y, w, h })));
+        const late = setTimeout(() => start(null), 120);
+        // the keyboard comes once the field has landed, so it never rides the lift
+        const t = setTimeout(() => inputRef.current?.focus(), LIFT_MS + 40);
+        return () => { clearTimeout(late); clearTimeout(t); };
+      }
+      plain();
       // the keyboard comes once the motion has settled, so it never rides the opening
       const t = setTimeout(() => inputRef.current?.focus(), level === 'none' ? 30 : OPEN_MS);
       return () => clearTimeout(t);
@@ -373,8 +431,26 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       done();
       return undefined;
     }
-    const fade = () => {
+    const plainOut = () => {
+      lift.value = 0;
+      siftAnchorOut.value = 0;
       siftShown.value = withTiming(0, { duration: CLOSE_MS, easing: EASE_EXIT }, (fin) => { if (fin) runOnJS(done)(); });
+    };
+    const fade = () => {
+      const owner = anchorOwner;
+      const well = wellRect.current;
+      if (!(lift.value > 0.5 && owner && well)) { plainOut(); return; }
+      // back into the bar, measured again where it is now (the page behind may have moved under the keyboard)
+      measureSiftAnchor(owner, (bar) => {
+        if (!bar || bar.w <= 0 || bar.y + bar.h <= 0) { plainOut(); return; }
+        from.value = fromBar(bar, well);
+        siftShown.value = withTiming(0, { duration: LAND_MS, easing: EASE_EMPHASISED }, (fin) => {
+          if (!fin) return;
+          // the bar shows in the frame the field lands in it
+          siftAnchorOut.value = 0;
+          runOnJS(done)();
+        });
+      });
     };
     if (!kbUp) { fade(); return undefined; }
     // Android: the keyboard goes down first, and the page behind takes its full height back while Sift still covers it;
@@ -386,12 +462,17 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     return () => { if (!went) { sub.remove(); clearTimeout(t); } };
   }, [open]);
 
-  // Back closes Sift first
+  // Back closes Sift first; while it fades out (until it is gone and this panel unmounts) Back does nothing, so a second
+  // press never pops the page behind it
   React.useEffect(() => {
-    if (!open) return undefined;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => { closeSift(); return true; });
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { if (open) closeSift(); return true; });
     return () => sub.remove();
   }, [open]);
+
+  // while it fades out it still takes touches, and swallows them, until it is mostly gone: a second tap (Cancel again,
+  // a result) never lands on the page behind it while that page still looks covered
+  const [held, setHeld] = React.useState(true);
+  useAnimatedReaction(() => siftShown.value >= 0.3, (now, was) => { if (now !== was) runOnJS(setHeld)(now); });
 
   /* ---- typing: worked out a frame after a pause, the old results kept until then */
   React.useEffect(() => {
@@ -472,11 +553,22 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   // a sum's answer, worked out once per query (mathjs is not free)
   const math = React.useMemo(() => (dq.trim() ? quickMath(dq.trim()) : null), [dq]);
   const { index, journalLoading, notesLocked, journalLocked, archived, subjects } = sources;
+  // each result's snippet, worked out once per document and query: a new list (another section opened, a pin) never
+  // walks every body again
+  const snips = React.useRef({ dq: '', map: new Map<string, Snip>() });
 
   const items: Item[] = React.useMemo(() => {
     const out: Item[] = [];
     const query = dq.trim();
     let n = 0;
+    if (snips.current.dq !== dq) snips.current = { dq, map: new Map() };
+    const snipOf = (doc: SiftDoc): Snip => {
+      if (!doc.body || !terms.length) return null;
+      const k = doc.key + '|' + doc.body.length;
+      const known = snips.current.map;
+      if (!known.has(k)) known.set(k, snippet(doc.body, terms));
+      return known.get(k) ?? null;
+    };
     const row = (x: Omit<Extract<Item, { t: 'row' }>, 't' | 'index'>) => out.push({ t: 'row', index: n++, ...x });
 
     if (!query) {
@@ -562,7 +654,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     // the top hit leads the list as its own card, or, with a sum or a day above it, goes down into its section (decided
     // before the card is added, so a top hit is never listed twice)
     const topCard = !!result?.top && !out.length;
-    if (topCard) out.push({ t: 'top', key: 'top:' + result!.top!.doc.key, doc: result!.top!.doc });
+    if (topCard) out.push({ t: 'top', key: 'top:' + result!.top!.doc.key, doc: result!.top!.doc, snip: snipOf(result!.top!.doc) });
     const rest = result ? (!topCard && result.top ? [{ section: result.top.doc.section, hits: [result.top], more: 0 }, ...result.sections] : result.sections) : [];
     // a top hit pushed down by a sum or a day joins its own section, at its head
     const merged = new Map<string, { hits: SiftDoc[]; more: number }>();
@@ -580,7 +672,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
         t: 'head', key: 'h:' + section, label: section, more: more || undefined,
         onMore: more ? () => { tick(); setExtra((x) => ({ ...x, [section]: (x[section] || 0) + 25 })); } : undefined,
       });
-      for (const doc of hits.slice(0, shown)) out.push({ t: 'doc', key: doc.key, doc, index: n++ });
+      for (const doc of hits.slice(0, shown)) out.push({ t: 'doc', key: doc.key, doc, index: n++, snip: snipOf(doc) });
     }
 
     // the journal's texts are still being read
@@ -676,7 +768,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
       });
     }
     return out;
-  }, [dq, scopes, isAll, extra, has, result, math, memory, pinnedKeys, index, journalLoading, notesLocked, journalLocked, archived, subjects, hour24, aiLinks, go, run, openRecent]);
+  }, [dq, terms, scopes, isAll, extra, has, result, math, memory, pinnedKeys, index, journalLoading, notesLocked, journalLocked, archived, subjects, hour24, aiLinks, go, run, openRecent]);
 
   /**
    * Enter: a sum goes to the Calculator, written in (even one with no answer yet, to be finished there); anything else
@@ -748,11 +840,36 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   }, [hintOn, dq, enterTarget]);
 
   /* ---- the panel's motion: the ground fades in; the field, filters and results settle down a few points with it */
-  const panelStyle = useAnimatedStyle(() => ({ opacity: siftShown.value }));
-  const settleStyle = useAnimatedStyle(() => ({
-    opacity: siftShown.value,
-    transform: [{ translateY: level === 'full' ? -SETTLE * (1 - siftShown.value) : 0 }],
-  }));
+  const span = (p: number, a: number, b: number) => {
+    'worklet';
+    return Math.min(1, Math.max(0, (p - a) / (b - a)));
+  };
+  // lifting out of a bar, the ground comes in just behind the field, so the field is seen leaving the page first
+  const panelStyle = useAnimatedStyle(() => ({ opacity: lift.value > 0.5 ? span(siftShown.value, 0.08, 0.55) : siftShown.value }));
+  // the filters and results (and, opened any other way, the field too) settle a few points down into their places
+  const settleStyle = useAnimatedStyle(() => {
+    const p = lift.value > 0.5 ? span(siftShown.value, 0.35, 1) : siftShown.value;
+    return { opacity: p, transform: [{ translateY: level === 'full' ? -SETTLE * (1 - p) : 0 }] };
+  });
+  const fieldRowStyle = useAnimatedStyle(() => {
+    if (lift.value > 0.5) return { opacity: 1, transform: [{ translateY: 0 }] };
+    const p = siftShown.value;
+    return { opacity: p, transform: [{ translateY: level === 'full' ? -SETTLE * (1 - p) : 0 }] };
+  });
+  // the field itself, travelling from the bar's place to its own
+  const wellMove = useAnimatedStyle(() => {
+    const q = lift.value > 0.5 ? 1 - siftShown.value : 0;
+    return { transform: [{ translateX: from.value.dx * q }, { translateY: from.value.dy * q }] as const };
+  });
+  // its background taking the bar's size on the way (scaled from its left edge); the glyph and words never scale
+  const wellBg = useAnimatedStyle(() => {
+    const q = lift.value > 0.5 ? 1 - siftShown.value : 0;
+    return { transform: [{ scaleX: 1 + (from.value.sx - 1) * q }, { scaleY: 1 + (from.value.sy - 1) * q }] as const };
+  });
+  const cancelStyle = useAnimatedStyle(() => {
+    const p = lift.value > 0.5 ? span(siftShown.value, 0.5, 1) : 1;
+    return { opacity: p, transform: [{ translateX: 12 * (1 - p) }] };
+  });
   const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: drag.value }] }));
 
   /* ---- pull the list down at its top to close */
@@ -798,7 +915,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
         return (
           <ResultRow
             icon={x.doc.payload.icon} color={x.doc.payload.color} title={x.doc.title} subtitle={x.doc.subtitle} terms={terms}
-            body={x.doc.body} onPress={() => go(x.doc)} theme={theme}
+            snip={x.snip} onPress={() => go(x.doc)} theme={theme}
             pinned={pinnedKeys.has(x.doc.key)} onLongPress={() => pinToggle(docPin(x.doc), x.doc.title)}
           />
         );
@@ -812,7 +929,7 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
         );
       case 'top': {
         const d = x.doc;
-        const snip = d.body ? snippet(d.body, terms) : null;
+        const snip = x.snip;
         return (
           <TopCard
             kicker={pinnedKeys.has(d.key) ? 'Top hit · pinned' : 'Top hit'} theme={theme} onPress={() => go(d)}
@@ -847,13 +964,13 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
         return (
           <TopCard kicker={x.day.title} theme={theme}>
             {x.day.lines.length ? x.day.lines.slice(0, 8).map((l) => (
-              <Pressable
-                key={l.key} onPress={() => run(l.open)} accessibilityRole="button" accessibilityLabel={l.text}
-                style={({ pressed }) => [st.dayLine, pressed && { opacity: 0.7 }]}
+              <Bouncy
+                key={l.key} onPress={() => run(l.open)} scaleTo={1} sink={false} radius={10}
+                accessibilityRole="button" accessibilityLabel={l.text} style={st.dayLine}
               >
                 <Ionicons name={l.icon as any} size={15} color={l.color || C.textDim} />
                 <Text style={st.dayText} numberOfLines={1}>{l.text}</Text>
-              </Pressable>
+              </Bouncy>
             )) : <Text style={T.caption}>Nothing planned, due or dated that day.</Text>}
             {x.day.lines.length > 8 ? <Text style={[T.caption, { marginTop: 4 }]}>{'+' + (x.day.lines.length - 8) + ' more'}</Text> : null}
           </TopCard>
@@ -899,21 +1016,25 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
 
   const column = width > PANEL_MAX + S.pad * 2 ? { width: PANEL_MAX, alignSelf: 'center' as const } : null;
   const cheerful = useCheerful();
+  const photo = useWallpaper();
   const fieldWell = theme === 'minimal'
     ? { backgroundColor: MIN.inset, borderWidth: 1, borderColor: MIN.border }
     : { backgroundColor: C.inset, ...neuInset('mid') };
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents={open ? 'auto' : 'none'} accessibilityViewIsModal>
+    <View style={StyleSheet.absoluteFill} pointerEvents={open ? 'auto' : held ? 'box-only' : 'none'} accessibilityViewIsModal>
       {/* Sift's ground (Cheerful's glows on it), opaque once in: nothing of the app behind shows through */}
       <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: bgFor(theme) }, panelStyle]}>
-        {cheerful ? <Backdrop minimal={theme === 'minimal'} /> : null}
+        {/* with a photo behind the pages, Sift's ground is its frosted copy, dimmed so the results read */}
+        {photo ? <WallpaperLayer bar /> : null}
+        {cheerful && (!photo || photo.glows) ? <Backdrop minimal={theme === 'minimal'} /> : null}
       </Animated.View>
-      <Animated.View style={[StyleSheet.absoluteFill, settleStyle]} pointerEvents="box-none">
+      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
         <View style={[{ flex: 1, paddingTop: insets.top + 8 }, column]}>
           {/* the field: a carved well, with the glyph, the words, a clear key, the mic; Cancel beside it */}
-          <View style={st.fieldRow}>
-            <View style={[st.field, fieldWell]}>
+          <Animated.View style={[st.fieldRow, fieldRowStyle]}>
+            <Animated.View ref={wellRef as any} collapsable={false} style={[st.field, wellMove]}>
+              <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, st.fieldBg, fieldWell, wellBg]} />
               <Ionicons name="search" size={18} color={C.textFaint} />
               <TextInput
                 ref={inputRef}
@@ -943,11 +1064,15 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
                   <Ionicons name={listening ? 'mic' : 'mic-outline'} size={19} color={listening ? C.accent : C.textFaint} />
                 </Pressable>
               ) : null}
-            </View>
-            <Pressable onPress={closeSift} hitSlop={8} accessibilityRole="button" accessibilityLabel="Cancel" style={st.cancel}>
-              <Text style={[st.cancelText, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Cancel</Text>
-            </Pressable>
-          </View>
+            </Animated.View>
+            <Animated.View style={cancelStyle}>
+              <Pressable onPress={closeSift} hitSlop={8} accessibilityRole="button" accessibilityLabel="Cancel" style={st.cancel}>
+                <Text style={[st.cancelText, { color: C.accent }]} maxFontSizeMultiplier={CHROME_FONT_MAX}>Cancel</Text>
+              </Pressable>
+            </Animated.View>
+          </Animated.View>
+
+          <Animated.View style={[{ flex: 1 }, settleStyle]}>
 
           {/* the first week: a quiet line under the field, saying what Enter will open. Its room is kept all week, so the
               list below never jumps as the line comes and goes */}
@@ -995,8 +1120,9 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
               </Animated.ScrollView>
             </GestureDetector>
           </Animated.View>
+          </Animated.View>
         </View>
-      </Animated.View>
+      </View>
 
       <PinSheet
         visible={pinFor != null}
@@ -1017,7 +1143,9 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
 
 const st = StyleSheet.create({
   fieldRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: S.pad, paddingBottom: 12 },
-  field: { flex: 1, minHeight: 48, borderRadius: 16, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 6, gap: 8, overflow: 'hidden' },
+  // not clipped: its background scales out to the bar's width while it lifts out of a page's bar
+  field: { flex: 1, minHeight: 48, borderRadius: 16, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 6, gap: 8 },
+  fieldBg: { borderRadius: 16, transformOrigin: 'left' } as any,
   input: { flex: 1, color: C.text, fontFamily: F.reg, fontSize: 16, letterSpacing: TRACK.body, paddingVertical: 0, includeFontPadding: false },
   fieldBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
   cancel: { marginLeft: 14, height: 44, justifyContent: 'center' },
@@ -1047,7 +1175,8 @@ const st = StyleSheet.create({
   topTitle: { color: C.text, fontFamily: F.semi, fontSize: 17, letterSpacing: TRACK.title },
   mathExpr: { color: C.textDim, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body },
   mathAnswer: { color: C.text, fontFamily: F.med, fontSize: 28, letterSpacing: TRACK.large, marginTop: 4, fontVariant: ['tabular-nums'] },
-  dayLine: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7 },
+  // reaching a little past the card's text on both sides, so a press carves a pill round the line, not tight to its words
+  dayLine: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7, paddingHorizontal: 8, marginHorizontal: -8 },
   dayText: { flex: 1, color: C.text, fontFamily: F.reg, fontSize: 15, letterSpacing: TRACK.body },
   loadBar: { height: 8, borderRadius: 4, marginTop: 6, width: '60%', overflow: 'hidden' },
   note: { paddingHorizontal: S.pad, paddingVertical: 18 },

@@ -263,7 +263,8 @@ export default function More() {
               onPress={() => (attention === 'ok' ? openPage('/settings') : openPage('/settings', { page: 'account' }))}
             >
               <View style={[st.iconWell, wellFor(theme)]}>
-                <Ionicons name="settings-outline" size={21} color={C.accent} />
+                {/* the attention colour as on the tile, so the grid and the list say the same */}
+                <Ionicons name="settings-outline" size={21} color={attention === 'ok' ? C.accent : C.amber} />
               </View>
               <View style={{ flex: 1, marginLeft: 14 }}>
                 <Text style={st.title}>Settings</Text>

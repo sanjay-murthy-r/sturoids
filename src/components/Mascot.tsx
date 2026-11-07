@@ -29,7 +29,7 @@ import React from 'react';
 import { AppState, PixelRatio, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
-  Easing, FadeIn, FadeOut, SharedValue, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat,
+  Easing, FadeIn, SharedValue, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat,
   withSequence, withSpring, withTiming,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -40,15 +40,16 @@ import { create } from 'zustand';
 import { usePathname } from 'expo-router';
 import { useStore } from '../store';
 import { useAnimLevel } from './Motion';
+import { useIntro } from '../intro';
 import { daysUntil, todayKey, todoDueOn } from '../utils';
 import { WIDE_AT } from '../layout';
 import { indexScores, upcoming } from '../scores';
 import { pkey } from '../profiles';
 import { knock } from '../cheerSound';
-import { Room, setWindowTop, useRoom } from '../mascot/room';
+import { Room, setWindowTop, useBarPerches, useRoom } from '../mascot/room';
 import {
-  BALLOON_HAND, BOOK_PAL, BOOK_PROP, COLS, Cell, FLIERS, HAND, Kind, Limb, NAMES, PROPS, Palette, Pose, REST, ROWS, colorSet,
-  compose, runs,
+  BALLOON_HAND, BOOK_PAL, BOOK_PROP, BOOK_TUCK, COLS, Cell, FLIERS, HAND, Kind, Limb, NAMES, PROPS, Palette, Pose, REST, ROWS,
+  colorSet, compose, runs,
 } from '../mascot/art';
 import {
   Ctx, Memory, Moment, beats, choose, chooseIdle, dayNo, fill, freshMemory, maySpeak, newDay, poolFor, remember,
@@ -62,10 +63,9 @@ export const CUTE_BOLD = 'Nunito_800ExtraBold';
 const PX = Math.max(2, Math.round(2.25 * PixelRatio.get()) / PixelRatio.get());
 const SW = COLS * PX;
 const SH = ROWS * PX;
-/** the book on the floor, at the companion's own squares; it overlaps the companion's edge by a square */
+/** the book on the floor, at the companion's own squares; it tucks in under the front foot (art.ts BOOK_TUCK) */
 const BOOK_W = BOOK_PROP.open[0].length * PX;
 const BOOK_H = BOOK_PROP.open.length * PX;
-const BOOK_IN = PX;
 /** the balloon: its squares, and its size at rest */
 const BALLOON_PX = 2.5;
 const BW = PROPS.balloon.grid[0].length * BALLOON_PX;
@@ -135,6 +135,31 @@ function keepMemory(next: Memory) {
   memoryTimer = setTimeout(() => { AsyncStorage.setItem(MEMORY_KEY(), JSON.stringify(memory)).catch(() => {}); }, 800);
 }
 
+/**
+ * Where the user last set it down, on this device: on the header or on the tab bar, and how far across the window (0
+ * to 1). Every screen then places it at the nearest good spot to that; null until it is first carried, which leaves it
+ * at the header's right end, by the buttons.
+ */
+type Zone = 'header' | 'bar';
+type SpotPref = { zone: Zone; fx: number };
+let spotPref: SpotPref | null = null;
+let spotRead = false;
+const SPOT_KEY = () => pkey('sturoids-companion-spot');
+function readSpot(): Promise<void> {
+  if (spotRead) return Promise.resolve();
+  spotRead = true;
+  return AsyncStorage.getItem(SPOT_KEY()).then((raw) => {
+    try {
+      const p = raw ? JSON.parse(raw) : null;
+      if (p && (p.zone === 'header' || p.zone === 'bar') && typeof p.fx === 'number') spotPref = { zone: p.zone, fx: Math.min(1, Math.max(0, p.fx)) };
+    } catch { /* none kept */ }
+  }).catch(() => {});
+}
+function keepSpot(p: SpotPref) {
+  spotPref = p;
+  AsyncStorage.setItem(SPOT_KEY(), JSON.stringify(p)).catch(() => {});
+}
+
 /** What is true right now, for what it says. */
 function context(kind: Kind, name: string, gear: string[]): Ctx {
   const s = useStore.getState();
@@ -184,7 +209,13 @@ const CANCEL = { cancelled: true };
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 type Step = (ms: number) => Promise<void>;
 type Side = 'left' | 'right';
-type Spot = { x: number; y: number };
+type Spot = { x: number; y: number; zone?: Zone };
+/** a place it may stand on the screen in front: a stretch along x at a floor y (a bar perch is a single point) */
+type Perch = { zone: Zone; lo: number; hi: number; y: number; scroll?: SharedValue<number> };
+/** how much further a tab bar perch counts as being, so a drop picks the header unless it was clearly by the bar */
+const BAR_PENALTY = 80;
+/** how close (pt) the companion's drawn body may come to the bottom of the status bar */
+const HEAD_ROOM = 8;
 type Bubble = { text: string; aside: boolean; key: number; size?: { w: number; h: number } };
 type Fx = { bulb: boolean; notes: boolean; cloud: boolean; heart: number; sparks: number };
 const NO_FX: Fx = { bulb: false, notes: false, cloud: false, heart: 0, sparks: 0 };
@@ -227,9 +258,14 @@ function Companion({ kind }: { kind: Kind }) {
   const inSession = useStore((s) => !!s.deepWork);
   const path = usePathname();
   const { room, n: roomN } = useRoom();
+  // the tab bar's perches count only while a tab is in front (a full page covers the bar)
+  const barPerches = useBarPerches((s) => s.perches);
+  const bar = tabOf(path) >= 0 ? barPerches : null;
+  const barKey = bar ? bar.map((p) => Math.round(p.x) + ',' + Math.round(p.y)).join(';') : '';
   // the layer measures itself as the headers measure their rooms, so a measured room lands where it was measured
   const layer = React.useRef<View>(null);
   const scroll = room?.scroll;
+  const bookIn = BOOK_TUCK[kind] * PX;
   const rail = W >= WIDE_AT && settings.tabNav === 'side' ? 88 : 0;
 
   /* ---------------- moving parts */
@@ -241,7 +277,20 @@ function Companion({ kind }: { kind: Kind }) {
   const tilt = useSharedValue(0);
   const shown = useSharedValue(0);
   const breath = useSharedValue(0);
+  /** 1 while it stands on a header that scrolls with its page (Today's): its y is then in that page's coordinates */
+  const rides = useSharedValue(1);
+  /** where it would land if let go now (the soft shadow shown while it is held), and whether it is shown */
+  const aimX = useSharedValue(0);
+  const aimY = useSharedValue(0);
+  const aim = useSharedValue(0);
+  /** the bubble's measured size, and the left end of the room it may not cover past (the title's end) */
+  const bw = useSharedValue(0);
+  const bh = useSharedValue(0);
+  const roomL = useSharedValue(0);
+  const bookGap = useSharedValue(0);
   const [pose, setPoseState] = React.useState<Pose>(REST);
+  /** counts carried flights that have landed, so its place on the screen in front is checked once it is down */
+  const [landed, setLanded] = React.useState(0);
   const poseRef = React.useRef<Pose>(REST);
   const setPose = React.useCallback((p: Partial<Pose>) => {
     poseRef.current = { ...poseRef.current, ...p };
@@ -298,6 +347,13 @@ function Companion({ kind }: { kind: Kind }) {
   const lastIdle = React.useRef<string[]>([]);
   const roomRef = React.useRef(room);
   roomRef.current = room;
+  const barRef = React.useRef(bar);
+  barRef.current = bar;
+  React.useEffect(() => { roomL.value = room ? room.left : 0; }, [room]);
+  /** where it stands now: on the header or on the tab bar */
+  const zone = React.useRef<Zone>('header');
+  /** while a carried flight is under way, nothing but the screen changing may break into it */
+  const flying = React.useRef(false);
   const outRef = React.useRef(out);
   outRef.current = out;
   // read fresh at each word, never from the render a timer was set up in: a new name, new gear or a new choice of how
@@ -326,20 +382,60 @@ function Companion({ kind }: { kind: Kind }) {
   const span = (r: Room) => {
     let lo = r.left + SW / 2;
     const hi = Math.max(lo, r.right - SW / 2 - edge());
-    if (reading.current && bookFits(r)) lo = Math.min(hi, lo + BOOK_W - BOOK_IN);
+    if (reading.current && bookFits(r)) lo = Math.min(hi, lo + BOOK_W - bookIn);
     return { lo, hi };
   };
-  /** its place in the room in front, along that stretch. Null with no room fit for it. */
-  const home = (r = roomRef.current): Spot | null => {
-    if (!r || r.right - r.left < SW * 0.8) return null;
-    const { lo, hi } = span(r);
-    // where it was set down on this screen, if it was carried; else the room's right end, by the buttons
-    const f = placed.current.get(useRoom.getState().key ?? '');
-    return { x: f == null ? hi : lo + (hi - lo) * f, y: r.y };
+  /**
+   * Every place it may stand on the screen in front: the header's room (when long enough), and while a tab is in
+   * front, the tab bar's perches. The floor of a header that rides its page's scroll (Today's) is in that page's
+   * coordinates; a bar perch's is the screen's.
+   */
+  const perchesNow = (): Perch[] => {
+    const out: Perch[] = [];
+    const r = roomRef.current;
+    if (r && r.right - r.left >= SW * 0.8) { const { lo, hi } = span(r); out.push({ zone: 'header', lo, hi, y: r.y, scroll: r.scroll }); }
+    for (const p of barRef.current ?? []) out.push({ zone: 'bar', lo: p.x, hi: p.x, y: p.y });
+    return out;
   };
-  /** whether the room is long enough for the book to lie beside it (to its left, toward the title) */
-  const bookFits = (r = roomRef.current) => !!r && r.right - r.left >= SW + BOOK_W - BOOK_IN + edge();
-  const placed = React.useRef(new Map<string, number>());
+  /**
+   * Its place on the screen in front: the nearest good spot to where the user last set it down (on the header, or on
+   * the tab bar when they put it there and this screen has one), else the header's right end by the buttons; the
+   * header before the bar whenever the kept zone is not here. Null with nowhere fit for it.
+   */
+  const home = (): Spot | null => {
+    const list = perchesNow();
+    if (!list.length) return null;
+    const pref = spotPref;
+    const headers = list.filter((p) => p.zone === 'header');
+    const pool = (pref ? list.filter((p) => p.zone === pref.zone) : []).length
+      ? list.filter((p) => p.zone === pref!.zone)
+      : headers.length ? headers : list;
+    if (!pref) {
+      const p = pool.find((c) => c.zone === 'header') ?? pool[pool.length - 1];
+      return { x: p.hi, y: p.y, zone: p.zone };
+    }
+    const want = pref.fx * W;
+    let best: { p: Perch; x: number; d: number } | null = null;
+    for (const p of pool) {
+      const x = Math.max(p.lo, Math.min(p.hi, want));
+      const d = Math.abs(x - want);
+      if (!best || d < best.d) best = { p, x, d };
+    }
+    return { x: best!.x, y: best!.p.y, zone: best!.p.zone };
+  };
+  /** whether the room is long enough for the book to lie beside it (to its left, toward the title); never on the bar */
+  const bookFits = (r = roomRef.current) => zone.current === 'header' && !!r && r.right - r.left >= SW + BOOK_W - bookIn + edge();
+  /**
+   * Switches whether its y rides the header's page scroll (Today's), keeping it where it is on the screen: on a page's
+   * header it scrolls with the page, anywhere else (the bar, a held drag) it keeps to the screen.
+   */
+  const ride = (on: boolean) => {
+    const sv = roomRef.current?.scroll;
+    if (!sv) { rides.value = on ? 1 : 0; return; }
+    if ((rides.value > 0.5) === on) return;
+    y.value = on ? y.value + sv.value : y.value - sv.value;
+    rides.value = on ? 1 : 0;
+  };
   // the middle of the screen, read fresh: a long-lived timer (the idle one, the welcome back) still sees a PC window
   // resized since, or the side bar turned on
   const middle = React.useRef(0);
@@ -374,6 +470,11 @@ function Companion({ kind }: { kind: Kind }) {
     doorOpen.value = 0;
     setFxState(NO_FX);
     stopFlap();
+    // a flight cut short (the screen changed under it) stops where it is; the next action takes it on from there
+    flying.current = false;
+    aim.value = 0;
+    cancelAnimation(x);
+    cancelAnimation(y);
     setAir('none');
     cancelAnimation(inflate);
     inflate.value = withTiming(0, { duration: 160 });
@@ -385,6 +486,8 @@ function Companion({ kind }: { kind: Kind }) {
     // gone behind its wall, it is out of the way too: never an unseen something over the header's buttons
     if (outRef.current || !h) { shown.value = 0; away.current = true; x.value = W + SW; return; }
     if (away.current || shown.value < 1) {
+      zone.current = h.zone ?? 'header';
+      rides.value = zone.current === 'header' ? 1 : 0;
       x.value = h.x;
       y.value = h.y;
       away.current = false;
@@ -399,10 +502,12 @@ function Companion({ kind }: { kind: Kind }) {
   const settle = () => {
     if (reading.current) {
       const book = bookFits();
-      // the book lies on its left, toward the title, where its place leaves room for it (never over the buttons)
-      if (book && facing.current > 0) turn(-1, 160);
-      tilt.value = withTiming(book ? facing.current * 3 : 0, { duration: 260 });
-      setPose({ ...REST, book: book ? 'open' : 'none', eyes: book ? 'read' : 'focus', phones: true });
+      // the book lies on its left, toward the title, where its place leaves room for it (never over the buttons). It
+      // turns at once when the book is about to appear, so the book is never seen on the wrong side mid-turn
+      if (book && facing.current > 0) turn(-1);
+      // it bends over the page in the art (lean), with only a touch of tilt toward it
+      tilt.value = withTiming(book ? facing.current * 2 : 0, { duration: 260 });
+      setPose({ ...REST, book: book ? 'open' : 'none', eyes: book ? 'read' : 'focus', phones: true, lean: book });
     } else {
       tilt.value = withTiming(0, { duration: 200 });
       setPose(REST);
@@ -424,6 +529,9 @@ function Companion({ kind }: { kind: Kind }) {
       if (!alive.current) return;
       const b = parts[i++];
       if (!b) { setBubble(null); return; }
+      // the next bubble is measured afresh before it shows
+      bw.value = 0;
+      bh.value = 0;
       setBubble({ text: b.text, aside: b.aside, key: Date.now() + i });
       bubbleTimer.current = setTimeout(next, beatMs(b));
     };
@@ -438,6 +546,8 @@ function Companion({ kind }: { kind: Kind }) {
     if (!opts.always && talk === 'asked') return false;
     const now = Date.now();
     if (opts.spontaneous && !maySpeak(memory, talk, now)) return false;
+    // scrolled up out of sight with Today's header, it says nothing of its own accord
+    if (opts.spontaneous && scrolledAway()) return false;
     const ctx = ctxNow();
     const today = dayNo(todayKey());
     const line = m === 'idle' ? chooseIdle(ctx, memory, today) : choose(poolFor(m, ctx, opts.extra), ctx, memory, today);
@@ -447,6 +557,13 @@ function Companion({ kind }: { kind: Kind }) {
     return true;
   };
   const hush = () => { if (bubbleTimer.current) clearTimeout(bubbleTimer.current); setBubble(null); };
+  /** standing on a header that has scrolled most of the way out of view */
+  const scrolledAway = () => {
+    const sv = roomRef.current?.scroll;
+    return zone.current === 'header' && rides.value > 0.5 && !!sv && sv.value > SH * 0.5;
+  };
+  // the bubble keeps clear of the book on the floor beside it (on its left, toward the title)
+  React.useEffect(() => { bookGap.value = pose.book !== 'none' ? BOOK_W - bookIn : 0; }, [pose.book]);
 
   /* ---------------- moves */
 
@@ -648,9 +765,10 @@ function Companion({ kind }: { kind: Kind }) {
     setDoor(null);
   };
   /** walks to the wall on `side`, through its door, and is gone behind it */
-  const exitBy = async (side: Side, step: Step) => {
-    hush();
-    setPose({ book: 'none' });
+  const exitBy = async (side: Side, step: Step, keepWords = false) => {
+    // a goodbye said on the way out is left to finish (its aside comes from behind the door)
+    if (!keepWords) hush();
+    setPose({ book: 'none', lean: false });
     const atY = y.value;
     const inside = side === 'left' ? wallX(side) + SW * 0.75 : wallX(side) - SW * 0.75;
     // across the header's buttons it hops; along an empty row it walks
@@ -665,6 +783,8 @@ function Companion({ kind }: { kind: Kind }) {
   };
   /** comes out of the wall on `side` by its door, then goes to `to` */
   const enterBy = async (side: Side, to: Spot, step: Step) => {
+    zone.current = to.zone ?? 'header';
+    rides.value = zone.current === 'header' ? 1 : 0;
     x.value = side === 'left' ? wallX(side) - SW * 0.6 : wallX(side) + SW * 0.6;
     y.value = to.y;
     turn(side === 'left' ? 1 : -1);
@@ -683,13 +803,36 @@ function Companion({ kind }: { kind: Kind }) {
   const started = React.useRef(false);
   const lastPath = React.useRef(path);
   const noRoomTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** the scroll the header it last stood on rode (Today's), to leave it cleanly */
+  const lastScroll = React.useRef<SharedValue<number> | undefined>(undefined);
+  // it first comes in once the start screen has gone, so its entrance by its door is seen, not played under the intro
+  const introDone = useIntro((s) => s.phase === 'done');
   React.useEffect(() => {
-    const h = home(room);
+    if (!introDone) return;
+    const h = home();
     const before = lastPath.current;
     lastPath.current = path;
     if (noRoomTimer.current) { clearTimeout(noRoomTimer.current); noRoomTimer.current = null; }
     // sent off or hidden: coming back is the knock's (or the timer's) to start, below
     if (outRef.current) return;
+    // leaving a header that rode its page's scroll (Today's): its y goes back to the screen's, with no jump; scrolled
+    // well out of view, it is simply at its new place, fading in there, instead of popping up where it had gone
+    const prev = lastScroll.current;
+    lastScroll.current = room?.scroll;
+    if (prev && prev !== room?.scroll && zone.current === 'header' && rides.value > 0.5 && !away.current && h && !flying.current) {
+      if (prev.value > SH * 0.5) {
+        zone.current = h.zone ?? 'header';
+        rides.value = zone.current === 'header' ? 1 : 0;
+        cancelAnimation(x);
+        cancelAnimation(y);
+        x.value = h.x;
+        y.value = h.y;
+        shown.value = 0;
+        shown.value = withTiming(1, { duration: 220 });
+        return;
+      }
+      y.value -= prev.value;
+    }
     if (!h) {
       // no room on this screen (or not measured yet): it waits a moment, then steps out until there is one
       if (!away.current) {
@@ -701,7 +844,7 @@ function Companion({ kind }: { kind: Kind }) {
     }
     if (!started.current) {
       started.current = true;
-      void readMemory().then(() => {
+      void Promise.all([readMemory(), readSpot()]).then(() => {
         const today = todayKey();
         const firstToday = memory.hello !== today;
         keepMemory(newDay(memory, today));
@@ -710,10 +853,12 @@ function Companion({ kind }: { kind: Kind }) {
           const at = home();
           if (!at) return;
           await enterBy(nearWall(at.x), at, step);
-          if (firstToday && !focusing) {
+          // read now, not from the render this was set up in: a session may have started meanwhile
+          const studying = !!useStore.getState().deepWork?.running;
+          if (firstToday && !studying) {
             keepMemory({ ...memory, hello: today });
             if (say('hello')) await wave(step);
-          } else if (Math.random() < 0.3 && !focusing) {
+          } else if (Math.random() < 0.3 && !studying) {
             await wave(step);
           }
         }, true);
@@ -724,35 +869,44 @@ function Companion({ kind }: { kind: Kind }) {
       act(async (step) => { const at = home(); if (at) await enterBy(nearWall(at.x), at, step); }, true);
       return;
     }
-    const moved = Math.abs(h.x - x.value) > 3 || Math.abs(h.y - y.value) > 3;
+    // a carried flight lands where it was going: the next screen's place is worked out once it is down
+    if (flying.current) return;
+    const sameZone = (h.zone ?? 'header') === zone.current;
+    const screenY = (yy: number, z: Zone) => (z === 'header' && rides.value > 0.5 && room?.scroll ? yy - room.scroll.value : yy);
+    const moved = !sameZone || Math.abs(h.x - x.value) > 3 || Math.abs(screenY(h.y, h.zone ?? 'header') - screenY(y.value, zone.current)) > 3;
     if (!moved) return;
     const from = tabOf(before);
     const to = tabOf(path);
     act(async (step) => {
       hush();
       // studying, it picks its book up to go, and sets it down again where it lands
-      if (reading.current) setPose({ book: 'none' });
+      if (reading.current) setPose({ book: 'none', lean: false });
       if (from >= 0 && to >= 0 && from !== to && full) {
         // a tab over: it looks the way the screen went, then goes along to its new place
         setPose({ eyes: lookToward(to > from ? 'right' : 'left') });
         await step(160);
       }
       const at = home();
-      if (at) await goTo(at, step);
+      if (at) {
+        // on a header that rides its page it moves in the page's coordinates; on the bar in the screen's
+        ride(at.zone !== 'bar');
+        zone.current = at.zone ?? 'header';
+        await goTo(at, step);
+      }
       turn(-1, 160);
       await step(160);
     }, true);
-  }, [roomN]);
+  }, [roomN, barKey, introDone, landed]);
 
   /* ---------------- sent off, and knocked for */
 
   const sendOff = () => {
-    if (away.current) return;
+    if (away.current || flying.current) return;
     act(async (step) => {
       say('bye', { always: true });
       await wave(step);
       await step(300);
-      await exitBy(nearWall(x.value), step);
+      await exitBy(nearWall(x.value), step, true);
       useStore.getState().setSetting('mascotOut', true);
     }, true);
   };
@@ -894,6 +1048,8 @@ function Companion({ kind }: { kind: Kind }) {
 
   const tickIdle = () => {
     if (busy.current || away.current || AppState.currentState !== 'active') return;
+    // open past midnight: the new day's talk budget and hello start now
+    if (memory.day !== todayKey()) keepMemory(newDay(memory, todayKey()));
     const hour = new Date().getHours();
     const late = hour >= 23 || hour < 5;
     // now and then, a word: within the day's budget
@@ -907,7 +1063,7 @@ function Companion({ kind }: { kind: Kind }) {
     }
     const r = roomRef.current;
     const h = home();
-    const roomy = !!r && !!h && r.right - r.left > SW * 2.2;
+    const roomy = zone.current === 'header' && !!r && !!h && r.right - r.left > SW * 2.2;
     const today = todayKey();
     const options: [string, number][] = [
       ['glance', 5], ['think', 3], ['stretch', 2], ['wiggle', 3], ['wander', roomy ? 3 : 0],
@@ -978,6 +1134,8 @@ function Companion({ kind }: { kind: Kind }) {
   const firstCue = React.useRef(cue.n);
   React.useEffect(() => {
     if (cue.n === firstCue.current || !cue.cue) return;
+    // nothing breaks into a carried flight; the cue's moment has passed by the time it lands
+    if (flying.current) return;
     const c = cue.cue;
     setBud(budOf());
     if (away.current) return;
@@ -1026,7 +1184,7 @@ function Companion({ kind }: { kind: Kind }) {
 
   const taps = React.useRef<number[]>([]);
   const onTap = () => {
-    if (away.current) return;
+    if (away.current || flying.current) return;
     hush();
     const now = Date.now();
     taps.current = [...taps.current.filter((t) => now - t < 2600), now];
@@ -1110,13 +1268,16 @@ function Companion({ kind }: { kind: Kind }) {
     flap.current = setTimeout(beat, flapEvery.current);
   };
   const onLift = () => {
-    if (away.current) return;
+    // leaving (hidden from Sift, sent off) it cannot be picked up: it is on its way out by its door
+    if (away.current || outRef.current) return;
     if (busy.current) tidy();
     token.current++;
     busy.current = true;
     hush();
     cancelAnimation(x); cancelAnimation(y); cancelAnimation(lift);
     lift.value = 0;
+    // held, it keeps to the screen, wherever the page under it scrolls
+    ride(false);
     if (kind === 'pip') {
       // its balloon (or one from nowhere) puffs up in its raised back hand and holds it up
       if (!holdsBalloon()) { drift.value = 0; setAir('held'); }
@@ -1130,20 +1291,44 @@ function Companion({ kind }: { kind: Kind }) {
     flapStart();
     if (Math.random() < 0.6) say('carry', { always: true });
   };
+  /**
+   * Where a drop at (px, py) on the screen goes: the nearest place it may stand, a tab bar perch counting as a little
+   * further than it is, so the header is chosen unless the drop was clearly by the bar. Its y is the screen's.
+   */
+  const target = (px: number, py: number) => {
+    let best: { p: Perch; x: number; y: number; cost: number } | null = null;
+    for (const p of perchesNow()) {
+      const tx = Math.max(p.lo, Math.min(p.hi, px));
+      const ty = p.scroll ? p.y - p.scroll.value : p.y;
+      const cost = Math.hypot(tx - px, (ty - py) * 0.6) + (p.zone === 'bar' ? BAR_PENALTY : 0);
+      if (!best || cost < best.cost) best = { p, x: tx, y: ty, cost };
+    }
+    return best;
+  };
   const onCarry = (dx: number, dy: number) => {
     const d = drag.current;
     if (!d) return;
-    const sy = scroll ? scroll.value : 0;
     x.value = Math.max(rail + SW / 2, Math.min(W - SW / 2, d.x + dx));
-    y.value = Math.max(insets.top + SH + sy + (kind === 'pip' ? BH : 0), Math.min(H - 8 + sy, d.y + dy));
+    y.value = Math.max(insets.top + SH + (kind === 'pip' ? BH : 0), Math.min(H - 8, d.y + dy));
     tilt.value = Math.max(-14, Math.min(14, dx * 0.04));
+    // a soft shadow where it would land if let go now
+    const t = target(x.value, y.value);
+    if (t) {
+      aimX.value = t.x;
+      aimY.value = t.y;
+      if (aim.value === 0) aim.value = withTiming(1, { duration: 160 });
+    } else if (aim.value > 0) {
+      aim.value = withTiming(0, { duration: 120 });
+    }
   };
   const onDrop = () => {
     const d = drag.current;
     if (!d) return;
     drag.current = null;
-    const r = roomRef.current;
+    aim.value = withTiming(0, { duration: 160 });
+    const goal = target(x.value, y.value);
     const my = ++token.current;
+    flying.current = true;
     busy.current = true;
     const step: Step = (ms) => new Promise<void>((res, rej) => setTimeout(() => (alive.current && token.current === my ? res() : rej(CANCEL)), ms));
     /** down: its own balloon goes back to its size; a borrowed one is let go, and floats up and away */
@@ -1157,25 +1342,25 @@ function Companion({ kind }: { kind: Kind }) {
       }
     };
     const flight = async () => {
-      // no room here (or sent off while it was held): it goes out by its door
-      if (outRef.current || !r || r.right - r.left < SW * 0.8) {
+      // nowhere to stand here (or sent off while it was held): it goes out by its door
+      if (outRef.current || !goal) {
         stopFlap();
         landBalloon();
         await exitBy(nearWall(x.value), step);
         return;
       }
-      // the nearest place along the room's row (studying, with room left for the book beside it)
-      const { lo, hi } = span(r);
-      const tx = Math.max(lo, Math.min(hi, x.value));
-      placed.current.set(useRoom.getState().key ?? '', hi > lo ? (tx - lo) / (hi - lo) : 1);
-      const dist = Math.hypot(tx - x.value, r.y - y.value);
+      // the nearest good place, kept as where the user wants it: every screen places it as near to this as it can
+      const tx = goal.x;
+      const ty = goal.y;
+      keepSpot({ zone: goal.p.zone, fx: tx / Math.max(1, W) });
+      const dist = Math.hypot(tx - x.value, ty - y.value);
       // A flight in three parts, as something small and light really flies: it gets up first (a little rise, hardly moving
       // along), then makes its way, gathering speed and easing off again, and last sets itself down slowly. Far or near,
       // it is never quick; each part has its own curve, so the speed changes the whole way and never all at once.
       const x0 = x.value;
       const y0 = y.value;
       const dx = tx - x0;
-      const dy = r.y - y0;
+      const dy = ty - y0;
       const dir = dx >= 0 ? 1 : -1;
       if (Math.abs(dx) > 6) turn(dir);
       setPose({ eyes: 'happy', mouth: 'smile' });
@@ -1193,7 +1378,7 @@ function Companion({ kind }: { kind: Kind }) {
         y.value = withSequence(
           withTiming(y0 + Math.min(0, dy) * 0.05, { duration: up, easing: Easing.out(Easing.quad) }),
           withTiming(y0 + dy * 0.9, { duration: way, easing: glide }),
-          withTiming(r.y, { duration: down, easing: Easing.out(Easing.cubic) }),
+          withTiming(ty, { duration: down, easing: Easing.out(Easing.cubic) }),
         );
         // up off the ground, a soft rise and dip as it goes, then down onto its feet
         lift.value = withSequence(
@@ -1229,7 +1414,7 @@ function Companion({ kind }: { kind: Kind }) {
         y.value = withSequence(
           withTiming(y0 + Math.min(0, dy) * 0.08, { duration: up, easing: Easing.inOut(Easing.sin) }),
           withTiming(y0 + dy * 0.85, { duration: way, easing: glide }),
-          withTiming(r.y, { duration: down, easing: Easing.out(Easing.cubic) }),
+          withTiming(ty, { duration: down, easing: Easing.out(Easing.cubic) }),
         );
         lift.value = withSequence(
           withTiming(12, { duration: up, easing: Easing.out(Easing.sin) }),
@@ -1250,6 +1435,9 @@ function Companion({ kind }: { kind: Kind }) {
         await step(180);
       }
       stopFlap();
+      // down: on a header that rides its page it scrolls with the page from now on
+      zone.current = goal.p.zone;
+      if (goal.p.zone === 'header') ride(true);
       tilt.value = withTiming(0, { duration: 160 });
       setPose({ ...REST, eyes: 'happy', mouth: 'smile', feet: 'stand' });
       sq.value = withSequence(withTiming(0.86, { duration: 90 }), withTiming(1, { duration: 160 }));
@@ -1259,9 +1447,12 @@ function Companion({ kind }: { kind: Kind }) {
       await step(500);
     };
     flight().catch(() => {}).finally(() => {
+      flying.current = false;
       if (token.current !== my || !alive.current) return;
       busy.current = false;
       settle();
+      // the screen may have changed while it flew: its place there is worked out now it is down
+      setLanded((n) => n + 1);
     });
   };
 
@@ -1281,13 +1472,19 @@ function Companion({ kind }: { kind: Kind }) {
 
   const topLimit = insets.top;
   const anchor = useAnimatedStyle(() => {
-    const sy = scroll ? scroll.value : 0;
+    const riding = !!scroll && rides.value > 0.5;
+    const sy = riding ? scroll!.value : 0;
     const feet = y.value - sy;
-    // scrolling away with its row (Today's), it fades as it reaches the top of the screen
-    const fade = scroll ? Math.max(0, Math.min(1, (feet - SH * 0.5 - topLimit) / (SH * 0.6))) : 1;
+    // scrolling away with its row (Today's), it fades out over the first part of the scroll
+    const fade = riding ? Math.max(0, Math.min(1, 1 - sy / (SH * 0.8))) : 1;
+    const o = shown.value * fade;
+    // its little jumps never take its head into the status bar: near the top a lift goes only as high as there is room
+    const headTop = topLimit + HEAD_ROOM - 4 * PX;
+    const up = Math.min(lift.value, Math.max(0, feet - SH - headTop));
     return {
-      opacity: shown.value * fade,
-      transform: [{ translateX: x.value - SW / 2 }, { translateY: feet - SH - lift.value }] as const,
+      opacity: o,
+      // faded right out, it is moved off the screen too, so it never takes a touch meant for the page
+      transform: [{ translateX: o < 0.05 ? -10000 : x.value - SW / 2 }, { translateY: feet - SH - up }] as const,
     };
   }, [scroll, topLimit]);
   const body = useAnimatedStyle(() => {
@@ -1301,37 +1498,61 @@ function Companion({ kind }: { kind: Kind }) {
       ] as const,
     };
   });
+  // the soft shadow on the floor where it would land if let go now
+  const aimStyle = useAnimatedStyle(() => ({
+    opacity: aim.value * 0.85,
+    transform: [{ translateX: aimX.value - SW * 0.32 }, { translateY: aimY.value - 3 }] as const,
+  }));
 
   /*
-   * ---------------- the bubble's place: beside it, on its own row (to its left, toward the title, or to its right when
-   * it stands near the left), so a word never covers the page's heading or its first card
+   * ---------------- the bubble's place, worked out on the UI thread every frame, so it goes along with the companion:
+   * beside it on its own row toward the title, never past the end of the title (the room's left end); where that is
+   * too short, under its feet (or over its head, on the tab bar), centred on it
    */
-
-  const bubbleAt = (b: Bubble) => {
-    if (!b.size) return null;
-    const { w, h } = b.size;
-    const sy = scroll ? scroll.value : 0;
+  const placeBubble = () => {
+    'worklet';
+    const w = bw.value;
+    const h = bh.value;
+    const riding = !!scroll && rides.value > 0.5;
+    const sy = riding ? scroll!.value : 0;
     const mx = x.value;
-    const mid = y.value - sy - SH / 2;
-    const top = Math.max(insets.top + 2, mid - h / 2);
-    const tailAt = Math.max(8, Math.min(h - 8, mid - top));
-    // beside it, clear of the book on the floor while it studies (the book lies on the left at its place)
-    const gap = 8 + (poseRef.current.book !== 'none' && facing.current < 0 ? BOOK_W - BOOK_IN : 0);
-    const leftOf = mx - SW / 2 - gap - w;
-    if (leftOf >= rail + 8) return { left: leftOf, top, side: 'right' as const, tailAt };
-    return { left: Math.min(W - w - 8, mx + SW / 2 + 8), top, side: 'left' as const, tailAt };
+    const feet = y.value - sy - lift.value;
+    const mid = feet - SH / 2;
+    const left = mx - SW / 2 - 8 - bookGap.value - w;
+    if (left >= Math.max(rail + 8, roomL.value)) {
+      const top = Math.max(topLimit + 2, mid - h / 2);
+      return { side: 0, left, top, tx: w - 5, ty: Math.max(8, Math.min(h - 8, mid - top)) - 4 };
+    }
+    const bl = Math.max(rail + 8, Math.min(W - w - 8, mx - w / 2));
+    const tx = Math.max(10, Math.min(w - 10, mx - bl)) - 4;
+    // low on the screen (the tab bar) it speaks over its head; on a header, under its feet
+    if (feet > H * 0.6) return { side: 2, left: bl, top: feet - SH - 8 - h, tx, ty: h - 5 };
+    return { side: 1, left: bl, top: feet + 8, tx, ty: -3 };
   };
-  const place = bubble ? bubbleAt(bubble) : null;
+  const bubbleStyle = useAnimatedStyle(() => {
+    if (!bw.value) return { opacity: 0, transform: [{ translateX: -10000 }, { translateY: 0 }] as const };
+    const p = placeBubble();
+    return { opacity: 1, transform: [{ translateX: p.left }, { translateY: p.top }] as const };
+  }, [scroll, W, H, rail, topLimit]);
+  const tailStyle = useAnimatedStyle(() => {
+    if (!bw.value) return { opacity: 0 };
+    const p = placeBubble();
+    return { opacity: 1, transform: [{ translateX: p.tx }, { translateY: p.ty }, { rotate: '45deg' }] as const };
+  }, [scroll, W, H, rail, topLimit]);
 
   const flier = gear.find((g) => FLIERS.includes(g));
   const showBalloon = kind === 'pip' && (ownBalloon || air !== 'none');
+  // the lean belongs to the book: put away, it stands straight again
+  const drawn = React.useMemo(() => (pose.lean && pose.book === 'none' ? { ...pose, lean: false } : pose), [pose]);
+  const leavesResting = pose.l === 'rest' && pose.r === 'rest' && pose.feet !== 'tuck';
 
   return (
     <View
       ref={layer} collapsable={false} pointerEvents="box-none" style={StyleSheet.absoluteFill}
       onLayout={() => layer.current?.measureInWindow((_x, top) => setWindowTop(top))}
     >
-      {door ? <WallDoor side={door.side} wall={wallX(door.side)} y={door.y - (scroll ? scroll.value : 0)} open={doorOpen} /> : null}
+      {door ? <WallDoor side={door.side} wall={wallX(door.side)} y={door.y - (scroll && rides.value > 0.5 ? scroll.value : 0)} open={doorOpen} /> : null}
+      <Animated.View pointerEvents="none" style={[st.aim, aimStyle]} />
       <Animated.View pointerEvents="box-none" style={[st.anchor, anchor]}>
         <Effects fx={fx} />
         {showBalloon ? (
@@ -1340,7 +1561,7 @@ function Companion({ kind }: { kind: Kind }) {
             face={face} sq={sq} breath={breath} tilt={tilt} inflate={inflate} drift={drift}
           />
         ) : null}
-        {pose.book !== 'none' ? <FloorBook page={pose.book} face={face} lift={lift} /> : null}
+        {pose.book !== 'none' ? <FloorBook page={pose.book} face={face} lift={lift} tuck={BOOK_TUCK[kind]} /> : null}
         <GestureDetector gesture={gesture}>
           <Animated.View
             style={body} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -1349,34 +1570,29 @@ function Companion({ kind }: { kind: Kind }) {
             accessibilityActions={[{ name: 'activate' }, { name: 'longpress' }]}
             onAccessibilityAction={(e) => (e.nativeEvent.actionName === 'longpress' ? sendOff() : onTap())}
           >
-            <Sprite kind={kind} pose={pose} gear={gear} bud={bud} pal={pal} />
+            <Sprite kind={kind} pose={drawn} gear={gear} bud={bud} pal={pal} />
           </Animated.View>
         </GestureDetector>
-        {flier === 'ladybug' ? <Ladybug resting={focusing} full={full} /> : null}
+        {flier === 'ladybug' ? <Ladybug resting={focusing} full={full} perched={leavesResting} /> : null}
         {flier === 'firefly' ? <Firefly full={full} /> : null}
       </Animated.View>
       {bubble ? (
-        <View
-          key={bubble.key} pointerEvents="box-none"
-          style={[st.bubbleWrap, place ? { left: place.left, top: place.top } : { left: -999, top: -999, opacity: 0 }]}
+        <Animated.View
+          key={bubble.key} pointerEvents="box-none" style={[st.bubbleWrap, bubbleStyle]}
           onLayout={(e) => {
             // measured once, and only for the bubble it belongs to (never a late measure over the next one's words)
-            const { width, height } = e.nativeEvent.layout;
-            const key = bubble.key;
-            setBubble((b) => (b && b.key === key && !b.size ? { ...b, size: { w: width, h: height } } : b));
+            if (bw.value) return;
+            bw.value = e.nativeEvent.layout.width;
+            bh.value = e.nativeEvent.layout.height;
           }}
         >
-          {place ? (
-            <Animated.View entering={FadeIn.duration(180)}>
-              <View pointerEvents="none" style={[st.tail, place.side === 'right' ? { right: -3 } : { left: -3 }, { top: place.tailAt - 4 }]} />
-              <Pressable onPress={hush} accessibilityRole="text" accessibilityLabel={name + ' says: ' + bubble.text} style={st.bubble}>
-                <Text style={[st.bubbleText, bubble.aside && st.aside]}>{bubble.text}</Text>
-              </Pressable>
-            </Animated.View>
-          ) : (
-            <View style={st.bubble}><Text style={[st.bubbleText, bubble.aside && st.aside]}>{bubble.text}</Text></View>
-          )}
-        </View>
+          <Animated.View entering={FadeIn.duration(180)}>
+            <Animated.View pointerEvents="none" style={[st.tail, tailStyle]} />
+            <Pressable onPress={hush} accessibilityRole="text" accessibilityLabel={name + ' says: ' + bubble.text} style={st.bubble}>
+              <Text style={[st.bubbleText, bubble.aside && st.aside]}>{bubble.text}</Text>
+            </Pressable>
+          </Animated.View>
+        </Animated.View>
       ) : null}
       {out ? <KnockDoor name={name} bottom={rail ? 24 : 64 + Math.max(insets.bottom, 10)} /> : null}
     </View>
@@ -1446,7 +1662,9 @@ function KnockDoor({ name, bottom }: { name: string; bottom: number }) {
   };
   const style = useAnimatedStyle(() => ({ transform: [{ translateX: -2 * wob.value }, { rotate: -3 * wob.value + 'deg' }] as const }));
   return (
-    <Animated.View entering={FadeIn.duration(400)} exiting={FadeOut.duration(200)} style={[st.knockWrap, { bottom: bottom + 92 }]}>
+    // no exit animation: the whole companion can go in the same moment (a mood or companion change), and an exit on a
+    // view removed with its parent is what takes Android down
+    <Animated.View entering={FadeIn.duration(400)} style={[st.knockWrap, { bottom: bottom + 92 }]}>
       <Pressable
         onPress={onKnock} hitSlop={12} accessibilityRole="button" accessibilityLabel={'Knock: bring ' + name + ' back'}
         style={({ pressed }) => [pressed && { opacity: 0.75 }]}
@@ -1518,7 +1736,11 @@ function Cloud() {
 const BUG_SQ = 1.75;
 const BUG_Y = 4 * PX - PROPS.ladybug.grid.length * BUG_SQ + 0.5;
 const BUG_AT = [4.2 * PX, (COLS - 4.2) * PX - PROPS.ladybug.grid[0].length * BUG_SQ];
-function Ladybug({ resting, full }: { resting: boolean; full: boolean }) {
+function Ladybug({ resting, full, perched }: {
+  resting: boolean; full: boolean;
+  /** Sprout's leaves are at rest (not waving, flapping or turning a page): only then is there a leaf to sit on */
+  perched: boolean;
+}) {
   // the leaf it lands on next, turn and turn about
   const leaf = React.useRef(0);
   const bx = useSharedValue(BUG_AT[0]);
@@ -1526,6 +1748,12 @@ function Ladybug({ resting, full }: { resting: boolean; full: boolean }) {
   const flap = useSharedValue(0);
   const [landed, setLanded] = React.useState(true);
   React.useEffect(() => {
+    if (!perched) {
+      // its leaf moved: it hovers just above it until the leaf is still again
+      setLanded(false);
+      by.value = withTiming(BUG_Y - 7, { duration: 220, easing: Easing.out(Easing.quad) });
+      return undefined;
+    }
     if (!full || resting) {
       setLanded(true);
       bx.value = withTiming(BUG_AT[leaf.current], { duration: 700 });
@@ -1551,7 +1779,7 @@ function Ladybug({ resting, full }: { resting: boolean; full: boolean }) {
     };
     t = setTimeout(() => { setLanded(false); fly(Math.round(rnd(3, 7))); }, rnd(2500, 6000));
     return () => { live = false; clearTimeout(t); };
-  }, [resting, full]);
+  }, [resting, full, perched]);
   React.useEffect(() => {
     if (landed) { cancelAnimation(flap); flap.value = 0; return undefined; }
     flap.value = withRepeat(withTiming(1, { duration: 70 }), -1, true);
@@ -1662,8 +1890,10 @@ function Balloon({ pal, hand, mirror, rise, face, sq, breath, tilt, inflate, dri
  * reads as right there in front of it. It stays on the floor through the companion's little lifts (it is drawn in the
  * companion's own frame, so it takes the lift back off), and it is set down and picked up with a quick fade.
  */
-export function FloorBook({ page, face, lift, px = PX }: {
+export function FloorBook({ page, face, lift, px = PX, tuck = BOOK_TUCK.sprout }: {
   page: 'open' | 'turn'; face: SharedValue<number>; lift?: SharedValue<number>; px?: number;
+  /** how far the book tucks in under the front foot, in squares (art.ts BOOK_TUCK, by companion) */
+  tuck?: number;
 }) {
   const w = BOOK_PROP.open[0].length * px;
   const h = BOOK_PROP.open.length * px;
@@ -1671,10 +1901,10 @@ export function FloorBook({ page, face, lift, px = PX }: {
   const sh = ROWS * px;
   const style = useAnimatedStyle(() => ({
     transform: [
-      { translateX: face.value >= 0 ? sw - px : -w + px },
+      { translateX: face.value >= 0 ? sw - tuck * px : -w + tuck * px },
       { translateY: sh - h + (lift ? lift.value : 0) },
     ] as const,
-  }), [w, h, sw, sh, px]);
+  }), [w, h, sw, sh, px, tuck]);
   return (
     <Animated.View pointerEvents="none" entering={FadeIn.duration(200)} style={[st.book, style]}>
       <GridArt grid={BOOK_PROP[page]} pal={BOOK_PAL} px={px} />
@@ -1687,14 +1917,15 @@ const PAPER = '#FFF8EE';
 const WOOD = '#B9814F';
 const st = StyleSheet.create({
   anchor: { position: 'absolute', left: 0, top: 0, width: SW, height: SH },
-  bubbleWrap: { position: 'absolute', maxWidth: 164 },
+  bubbleWrap: { position: 'absolute', left: 0, top: 0, maxWidth: 164 },
+  aim: { position: 'absolute', left: 0, top: 0, width: SW * 0.64, height: 6, borderRadius: 3, backgroundColor: 'rgba(8, 6, 4, 0.32)' },
   bubble: {
     backgroundColor: PAPER, borderRadius: 11, paddingHorizontal: 9, paddingVertical: 4,
     shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3,
   },
   bubbleText: { color: INK, fontFamily: CUTE, fontSize: 12, lineHeight: 15 },
   aside: { color: '#8C7466', fontFamily: CUTE, fontSize: 11, lineHeight: 14 },
-  tail: { position: 'absolute', width: 8, height: 8, backgroundColor: PAPER, transform: [{ rotate: '45deg' }], borderRadius: 1.5 },
+  tail: { position: 'absolute', left: 0, top: 0, width: 8, height: 8, backgroundColor: PAPER, borderRadius: 1.5 },
   balloonAt: { position: 'absolute', left: 0, top: 0, width: 0, height: 0 },
   string: { position: 'absolute', left: -0.5, top: 0, width: 1, backgroundColor: 'rgba(120,110,100,0.75)' },
   ball: { position: 'absolute', left: -BW / 2, top: 0, width: BW, height: BH },

@@ -15,9 +15,12 @@ import { tick } from '../haptics';
  * (`manage`) it carries a switch; from More, a tap opens the tool as it is and Restore brings it back to More.
  */
 const ArchiveRow = React.memo(function ArchiveRow({
-  tool, first, manage, on, slot, sessionGoing, onToggle, onOpen, onRestore,
+  tool, last, manage, on, slot, sessionGoing, onToggle, onOpen, onRestore,
 }: {
-  tool: Tool; first: boolean; manage: boolean;
+  tool: Tool;
+  /** the list's last row, which draws no line under it */
+  last: boolean;
+  manage: boolean;
   /** archived now */
   on: boolean;
   /** its tab slot, or -1 */
@@ -40,9 +43,10 @@ const ArchiveRow = React.memo(function ArchiveRow({
       </View>
     </>
   );
+  // the line between two rows belongs to the one above: a row restored from the top takes its own line with it as it
+  // fades, instead of the row under it losing a line at once
   return (
     <View>
-      {first ? null : <Hairline />}
       {manage ? (
         <View style={st.row}>
           {body}
@@ -66,6 +70,7 @@ const ArchiveRow = React.memo(function ArchiveRow({
           </Bouncy>
         </View>
       )}
+      {last ? null : <Hairline />}
     </View>
   );
 });
@@ -109,7 +114,7 @@ function ArchiveList({ manage, onOpen, onEmpty }: { manage: boolean; onOpen: (ke
       {tools.map((t, i) => (
         <Animated.View key={t.key} entering={built.current ? rowIn(level) : undefined} exiting={rowOut(level)} layout={glide(level)}>
           <ArchiveRow
-            tool={t} first={i === 0} manage={manage} on={archived.includes(t.key)} slot={slots.indexOf(t.key)}
+            tool={t} last={i === tools.length - 1} manage={manage} on={archived.includes(t.key)} slot={slots.indexOf(t.key)}
             sessionGoing={sessionGoing} onToggle={toggle} onOpen={onOpen} onRestore={restore}
           />
         </Animated.View>

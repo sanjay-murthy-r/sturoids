@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, View, ViewStyle } from 'react-native';
-import Animated, { Easing, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, LayoutAnimationConfig, withTiming } from 'react-native-reanimated';
 import { C, F, NUM_COLON_W, NUM_DIGIT_W } from '../theme';
 import { useAnimLevel, useBuilt } from './Motion';
 
@@ -61,20 +61,21 @@ export const ClockDigits = React.memo(function ClockDigits({ text, size, lineHei
       {text.split('').map((ch, i) => {
         const colon = ch === ':';
         return (
-          <View
-            key={(colon ? 'c' : 'd') + (text.length - i)}
-            style={{ width: (colon ? NUM_COLON_W : NUM_DIGIT_W) * size, height: h, overflow: 'hidden' }}
-          >
-            <Animated.Text
-              key={ch}
-              allowFontScaling={false}
-              entering={animate && built.current ? rollIn(h, travel) : undefined}
-              exiting={animate ? rollOut(h, travel) : undefined}
-              style={[st.glyph, { fontSize: size, lineHeight: h, color }]}
-            >
-              {ch}
-            </Animated.Text>
-          </View>
+          // a digit replaced in its cell rolls away; a cell that goes (the hours drop off) or a clock that goes takes
+          // its digit at once, or Fabric would hold the cell, and the clock, on screen while it rolls
+          <LayoutAnimationConfig key={(colon ? 'c' : 'd') + (text.length - i)} skipExiting>
+            <View style={{ width: (colon ? NUM_COLON_W : NUM_DIGIT_W) * size, height: h, overflow: 'hidden' }}>
+              <Animated.Text
+                key={ch}
+                allowFontScaling={false}
+                entering={animate && built.current ? rollIn(h, travel) : undefined}
+                exiting={animate ? rollOut(h, travel) : undefined}
+                style={[st.glyph, { fontSize: size, lineHeight: h, color }]}
+              >
+                {ch}
+              </Animated.Text>
+            </View>
+          </LayoutAnimationConfig>
         );
       })}
     </View>

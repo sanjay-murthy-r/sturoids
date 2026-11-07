@@ -62,21 +62,24 @@ export function ProfileAvatar({ profile, size = 36 }: { profile: ProfileInfo; si
   const initial = profileInitial(profile);
   return (
     <View style={[st.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: profile.color + '38' }]}>
-      {uri && failed !== key ? (
-        <Image
-          key={key}
-          source={own ? { uri } : { uri, cacheKey: 'profile-avatar:' + profile.id + ':' + rev }}
-          style={{ width: size, height: size }} contentFit="cover" transition={level === 'none' ? 0 : 160}
-          onError={() => setFailed(key)}
-          accessibilityIgnoresInvertColors
-        />
-      ) : initial ? (
+      {/* the initial is always drawn, and a photo lies over it: while the photo is read and fades in, the disc is
+          never empty */}
+      {initial ? (
         <Text style={{ color: profile.color, fontFamily: F.semi, fontSize: Math.round(size * 0.42) }} maxFontSizeMultiplier={1.2}>
           {initial}
         </Text>
       ) : (
         <Ionicons name="person" size={Math.round(size * 0.46)} color={profile.color} />
       )}
+      {uri && failed !== key ? (
+        <Image
+          key={key}
+          source={own ? { uri } : { uri, cacheKey: 'profile-avatar:' + profile.id + ':' + rev }}
+          style={StyleSheet.absoluteFill} contentFit="cover" transition={level === 'none' ? 0 : 160}
+          onError={() => setFailed(key)}
+          accessibilityIgnoresInvertColors
+        />
+      ) : null}
     </View>
   );
 }

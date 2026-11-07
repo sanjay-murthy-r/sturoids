@@ -7,7 +7,7 @@ import { C, F, MIN, S, T, TRACK, neuRaised } from '../theme';
 import { useStore, AiLink } from '../store';
 import { uid } from '../utils';
 import { ScreenBG, Card, Sheet, Field, PillButton, Row, IconBtn, useTheme, useToolHeader, EmptyState } from '../components/UI';
-import Animated from 'react-native-reanimated';
+import Animated, { LayoutAnimationConfig } from 'react-native-reanimated';
 import { toast } from '../components/Toast';
 import { Appear, Enter, glide, rowOut, useAnimLevel, useEntrance, useTabReturns } from '../components/Motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -248,14 +248,18 @@ export function AiLinksScreen({ mode }: { mode: 'tab' | 'stack' }) {
         {/* the hero is the first tile's own entrance, so the title and the launchers rise as one */}
         <Enter index={0}>{header.hero}</Enter>
 
-        <View style={st.grid}>
-          {aiLinks.map((l, i) => (
-            <LinkTile
-              key={l.id} link={l} index={i} count={aiLinks.length} edit={edit} style={itemStyle}
-              onOpen={open} onMove={move} onRemove={remove}
-            />
-          ))}
-        </View>
+        {/* a tile removed on its own fades; when the whole screen goes (closed, or its bar slot given to another
+            tool) the tiles go with it at once instead of fading over a grid that is already gone */}
+        <LayoutAnimationConfig skipExiting>
+          <View style={st.grid}>
+            {aiLinks.map((l, i) => (
+              <LinkTile
+                key={l.id} link={l} index={i} count={aiLinks.length} edit={edit} style={itemStyle}
+                onOpen={open} onMove={move} onRemove={remove}
+              />
+            ))}
+          </View>
+        </LayoutAnimationConfig>
 
         {aiLinks.length === 0 ? (
           <EmptyState

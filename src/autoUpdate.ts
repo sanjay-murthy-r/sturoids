@@ -10,12 +10,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { create } from 'zustand';
 import { useStore } from './store';
-import { Release, UpdateError, installKind, isNewer, latestRelease } from './updates';
+import { APK_PATH, Release, UpdateError, apkDownloadInFlight, downloadApk, installKind, isNewer, latestRelease, useApkDownload } from './updates';
 import { toast } from './components/Toast';
 
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 const LAST_KEY = 'sturoids-update-checked';
-const APK_PATH = 'sturoids-update.apk';
 
 /**
  * The version running: app.json's, bundled with the code itself, so it is always this build's. (The config a build
@@ -46,13 +45,18 @@ async function fetchApk(release: Release): Promise<string | null> {
   const FileSystem = require('expo-file-system') as typeof import('expo-file-system');
   const target = (FileSystem.cacheDirectory || '') + APK_PATH;
   try {
+    // an install from Settings may be writing the same file now: wait for it rather than delete it from under it, and
+    // take its file when it is this version (Android's installer may be reading it)
+    const busy = apkDownloadInFlight();
+    if (busy) {
+      const same = useApkDownload.getState().rel?.version === release.version;
+      const got = await busy.catch(() => null);
+      if (same && got) return got;
+    }
     const have = await FileSystem.getInfoAsync(target);
     // the same version fetched before (its size matches) is not fetched again
     if (have.exists && (have as any).size === release.apk.size && useUpdateReady.getState().version === release.version) return target;
-    await FileSystem.deleteAsync(target, { idempotent: true });
-    const done = await FileSystem.downloadAsync(release.apk.url, target);
-    if (!done || (done.status && done.status >= 400)) return null;
-    return done.uri;
+    return await downloadApk(release);
   } catch {
     return null;
   }

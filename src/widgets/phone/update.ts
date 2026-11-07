@@ -151,10 +151,11 @@ export function startPhoneWidgetUpdates() {
       const prev = last;
       last = s;
       for (const k of PHONE_ROWS) {
-        if (s[k] !== prev[k]) {
-          soon();
-          return;
-        }
+        if (s[k] === prev[k]) continue;
+        // nor does a change to this phone's own settings alone (Today's visit stamp, a screen lock): no widget shows them
+        if (k === 'settings' && store.isDeviceOnlyChange({ settings: s.settings } as any, { settings: prev.settings } as any)) continue;
+        soon();
+        return;
       }
     });
   });

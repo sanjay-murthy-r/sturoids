@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { router } from 'expo-router';
 import { useStore } from './store';
-import { navReady, openTool } from './toolNav';
+import { navReady, openTool, openVideoPage } from './toolNav';
 import { markFreshNote } from './freshNotes';
 import { openSift } from './search/store';
 import { toolByKey } from './tools';
@@ -109,7 +109,7 @@ export function runAppLink(link: AppLink) {
       return;
     }
     if (tool.key === 'vault') {
-      router.push({ pathname: '/vault/[id]', params: rest.t ? { id: item, t: rest.t, n: Date.now().toString(36) } : { id: item } }, { dangerouslySingular: true });
+      openVideoPage(item, rest.t);
       return;
     }
     if (tool.key === 'journal' && /^\d{4}-\d{2}-\d{2}$/.test(item)) {
