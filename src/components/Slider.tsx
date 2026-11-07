@@ -57,11 +57,12 @@ export function Slider({ value, onChange, onDone, min = 0, max = 1, step = 0.05,
     const pan = Gesture.Pan()
       // a sideways drag only: an up or down one is the page's scroll
       .activeOffsetX([-6, 6]).failOffsetY([-12, 12])
-      .onBegin((e) => { press.value = withTiming(1, { duration: 90 }); runOnJS(began)(); follow(e.x); })
+      // it follows only once the drag is sideways (a page scroll that starts on it changes nothing)
+      .onStart((e) => { press.value = withTiming(1, { duration: 90 }); runOnJS(began)(); follow(e.x); })
       .onUpdate((e) => follow(e.x))
-      .onFinalize(() => {
+      .onFinalize((_e, success) => {
         press.value = withSpring(0, { damping: 18, stiffness: 260 });
-        runOnJS(released)(p.value);
+        if (success) runOnJS(released)(p.value);
       });
     const tap = Gesture.Tap().onEnd((e, ok) => {
       if (!ok) return;

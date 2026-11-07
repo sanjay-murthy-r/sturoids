@@ -411,11 +411,12 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
           siftAnchorOut.value = 1;
           siftShown.value = withTiming(1, { duration: LIFT_MS, easing: EASE_EMPHASISED });
         };
-        requestAnimationFrame(() => wellRef.current?.measureInWindow((x, y, w, h) => start({ x, y, w, h })));
+        const raf = requestAnimationFrame(() => wellRef.current?.measureInWindow((x, y, w, h) => start({ x, y, w, h })));
         const late = setTimeout(() => start(null), 120);
         // the keyboard comes once the field has landed, so it never rides the lift
         const t = setTimeout(() => inputRef.current?.focus(), LIFT_MS + 40);
-        return () => { clearTimeout(late); clearTimeout(t); };
+        // closed again before the field was measured: the lift never starts over the way out
+        return () => { started = true; cancelAnimationFrame(raf); clearTimeout(late); clearTimeout(t); };
       }
       plain();
       // the keyboard comes once the motion has settled, so it never rides the opening

@@ -48,14 +48,28 @@ export async function importWallpaper(): Promise<string | null> {
   const web = Platform.OS === 'web';
   await FileSystem.makeDirectoryAsync(dir(), { intermediates: true }).catch(() => {});
   const id = newId();
-  const full = await manipulateAsync(asset.uri, [{ resize: fit(long) }], { compress: 0.86, format: SaveFormat.JPEG, base64: web });
+  try {
+    await keepSizes(id, asset.uri, fit, long, web, manipulateAsync, SaveFormat);
+  } catch (e) {
+    // a photo half kept would show as a blank choice: what was written goes
+    await removeWallpaper(id);
+    throw e;
+  }
+  return id;
+}
+
+/** The three sizes of a new photo, written one after another. */
+async function keepSizes(
+  id: string, uri: string, fit: (px: number) => { width?: number; height?: number }, long: number, web: boolean,
+  manipulateAsync: typeof import('expo-image-manipulator').manipulateAsync, SaveFormat: typeof import('expo-image-manipulator').SaveFormat,
+) {
+  const full = await manipulateAsync(uri, [{ resize: fit(long) }], { compress: 0.86, format: SaveFormat.JPEG, base64: web });
   await keep(full, fileOf(id, 'full'));
   // the frosted bars blur it heavily, so a small copy is all they need (and cheap to blur)
   const bar = await manipulateAsync(full.uri, [{ resize: fit(Math.round(long / 4)) }], { compress: 0.8, format: SaveFormat.JPEG, base64: web });
   await keep(bar, fileOf(id, 'bar'));
   const thumb = await manipulateAsync(full.uri, [{ resize: fit(360) }], { compress: 0.8, format: SaveFormat.JPEG, base64: web });
   await keep(thumb, fileOf(id, 'thumb'));
-  return id;
 }
 
 /** The photos kept on this device, newest first. */
@@ -78,7 +92,8 @@ export async function removeWallpaper(photo: string) {
 /** Keeps the newest KEEP photos, and always the ones a look shows. */
 export async function trimWallpapers(inUse: string[]) {
   const all = await listWallpapers();
-  const extra = all.filter((p) => !inUse.includes(p)).slice(Math.max(0, KEEP - inUse.length));
+  const keep = new Set(inUse);
+  const extra = all.filter((p) => !keep.has(p)).slice(Math.max(0, KEEP - keep.size));
   await Promise.all(extra.map(removeWallpaper));
 }
 
