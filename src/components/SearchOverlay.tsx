@@ -425,7 +425,8 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
     const kbUp = Platform.OS === 'android' && Keyboard.isVisible();
     Keyboard.dismiss();
     voice.current?.stop();
-    const done = () => { siftPull.value = 0; onGone(); };
+    // however it went, the page's bar is shown again as Sift goes: it can never be left hidden
+    const done = () => { siftPull.value = 0; siftAnchorOut.value = 0; onGone(); };
     if (level === 'none') {
       siftShown.value = 0;
       done();
@@ -473,6 +474,9 @@ function SiftPanel({ open, onGone }: { open: boolean; onGone: () => void }) {
   // a result) never lands on the page behind it while that page still looks covered
   const [held, setHeld] = React.useState(true);
   useAnimatedReaction(() => siftShown.value >= 0.3, (now, was) => { if (now !== was) runOnJS(setHeld)(now); });
+
+  // and if Sift is taken down any other way (a profile switch, a reload), the bar comes back too
+  React.useEffect(() => () => { siftAnchorOut.value = 0; }, []);
 
   /* ---- typing: worked out a frame after a pause, the old results kept until then */
   React.useEffect(() => {

@@ -60,6 +60,8 @@ function loopAt(at: number, ms: number, delay: number) {
 }
 /** a glow coming back to the front eases onto the clock over this long, instead of jumping to its place */
 const JOIN_MS = 600;
+/** how many times smaller a glow is drawn than it is shown (see Glow) */
+const GLOW_SCALE = 8;
 
 /** One soft glow: a radial fade of a colour, drifting on a long loop. */
 function Glow({ color, size, from, to, ms, delay, strength, still }: {
@@ -91,18 +93,23 @@ function Glow({ color, size, from, to, ms, delay, strength, still }: {
   // an id of its own: every mounted screen draws a backdrop, and on the PC a gradient's id is looked up across the
   // whole page, so a shared one would paint with a hidden tab's gradient, which shows nothing
   const id = 'g' + color.replace('#', '') + React.useId().replace(/[^a-zA-Z0-9]/g, '');
+  // drawn small and scaled up: a glow is a soft gradient with no detail, so it looks the same, while a phone keeps a
+  // bitmap the size of what is drawn for each one (page-sized glows on every screen and bar ran to hundreds of MB)
+  const g = Math.max(8, Math.ceil(size / GLOW_SCALE));
   return (
     <Animated.View style={[{ position: 'absolute', left: 0, top: 0, width: size, height: size }, style]}>
-      <Svg width={size} height={size}>
-        <Defs>
-          <RadialGradient id={id} cx="50%" cy="50%" r="50%">
-            <Stop offset="0" stopColor={color} stopOpacity={strength} />
-            <Stop offset="0.55" stopColor={color} stopOpacity={strength * 0.35} />
-            <Stop offset="1" stopColor={color} stopOpacity={0} />
-          </RadialGradient>
-        </Defs>
-        <Rect x="0" y="0" width={size} height={size} fill={`url(#${id})`} />
-      </Svg>
+      <View style={{ position: 'absolute', left: (size - g) / 2, top: (size - g) / 2, width: g, height: g, transform: [{ scale: size / g }] }}>
+        <Svg width={g} height={g}>
+          <Defs>
+            <RadialGradient id={id} cx="50%" cy="50%" r="50%">
+              <Stop offset="0" stopColor={color} stopOpacity={strength} />
+              <Stop offset="0.55" stopColor={color} stopOpacity={strength * 0.35} />
+              <Stop offset="1" stopColor={color} stopOpacity={0} />
+            </RadialGradient>
+          </Defs>
+          <Rect x="0" y="0" width={g} height={g} fill={`url(#${id})`} />
+        </Svg>
+      </View>
     </Animated.View>
   );
 }

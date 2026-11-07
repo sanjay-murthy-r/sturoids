@@ -1551,7 +1551,7 @@ function Companion({ kind }: { kind: Kind }) {
       ref={layer} collapsable={false} pointerEvents="box-none" style={StyleSheet.absoluteFill}
       onLayout={() => layer.current?.measureInWindow((_x, top) => setWindowTop(top))}
     >
-      {door ? <WallDoor side={door.side} wall={wallX(door.side)} y={door.y - (scroll && rides.value > 0.5 ? scroll.value : 0)} open={doorOpen} /> : null}
+      {door ? <WallDoor side={door.side} wall={wallX(door.side)} y={door.y} open={doorOpen} scroll={scroll} rides={rides} /> : null}
       <Animated.View pointerEvents="none" style={[st.aim, aimStyle]} />
       <Animated.View pointerEvents="box-none" style={[st.anchor, anchor]}>
         <Effects fx={fx} />
@@ -1606,7 +1606,11 @@ function Companion({ kind }: { kind: Kind }) {
  * nothing shows; opening, it swings out on its hinge at the wall toward the room, and warm light spills from the
  * doorway behind it. Drawn as a real panel turned in 3D about its hinge.
  */
-function WallDoor({ side, wall, y, open }: { side: Side; wall: number; y: number; open: { value: number } }) {
+function WallDoor({ side, wall, y, open, scroll, rides }: {
+  side: Side; wall: number; y: number; open: { value: number };
+  /** a door on a header that rides its page's scroll (Today's) goes with the page, read on the UI thread */
+  scroll?: SharedValue<number>; rides: SharedValue<number>;
+}) {
   const DW = 22;
   const DH = SH + 8;
   const right = side === 'right';
@@ -1620,8 +1624,9 @@ function WallDoor({ side, wall, y, open }: { side: Side; wall: number; y: number
     };
   });
   const glow = useAnimatedStyle(() => ({ opacity: open.value * 0.9 }));
+  const ride = useAnimatedStyle(() => ({ transform: [{ translateY: scroll && rides.value > 0.5 ? -scroll.value : 0 }] }), [scroll]);
   return (
-    <View pointerEvents="none" style={[st.doorBox, { top: y - DH, height: DH, width: DW * 2, left: right ? wall - DW * 2 : wall }]}>
+    <Animated.View pointerEvents="none" style={[st.doorBox, { top: y - DH, height: DH, width: DW * 2, left: right ? wall - DW * 2 : wall }, ride]}>
       <Animated.View style={[StyleSheet.absoluteFill, glow]}>
         <LinearGradient
           colors={['rgba(255,214,150,0.55)', 'rgba(255,214,150,0)']}
@@ -1636,7 +1641,7 @@ function WallDoor({ side, wall, y, open }: { side: Side; wall: number; y: number
         <View style={[st.doorInset, { bottom: 4, top: DH * 0.52 }]} />
         <View style={[st.doorKnob, right ? { left: 3 } : { right: 3 }]} />
       </Animated.View>
-    </View>
+    </Animated.View>
   );
 }
 
